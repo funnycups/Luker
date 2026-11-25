@@ -1,9 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
 import express from 'express';
 import { promises as fsPromises } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
+import { ensureRun, trackScope } from './harness/jest-run.js';
 import { getConfigValue, reloadConfigCache, setConfigFilePath } from '../src/util.js';
 import { router as usersAdminRouter } from '../src/endpoints/users-admin.js';
 
@@ -45,15 +45,13 @@ describe('users-admin /backups/config/{get,save}', () => {
     let savedEnv;
 
     beforeAll(async () => {
-        tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'luker-admin-backups-'));
+        const run = await ensureRun();
+        const scope = trackScope(await run.scope({ kind: 'scenario', label: 'admin-backup-config-endpoint' }));
+        tmpDir = (await scope.directory('luker-admin-backups')).path;
         configPath = path.join(tmpDir, 'config.yaml');
         await fsPromises.writeFile(configPath, SAMPLE_CONFIG, 'utf8');
         setConfigFilePath(configPath);
         reloadConfigCache();
-    });
-
-    afterAll(async () => {
-        await fsPromises.rm(tmpDir, { recursive: true, force: true });
     });
 
     beforeEach(async () => {

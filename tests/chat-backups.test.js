@@ -1,7 +1,9 @@
-import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from '@jest/globals';
+import { beforeAll, afterAll, beforeEach, describe, test, expect } from '@jest/globals';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { createHook } from 'node:async_hooks';
+import { ensureRun, trackScope } from './harness/jest-run.js';
+import { currentScopeForResources } from './harness/storage-scope.js';
 import { reloadConfigCache, setConfigFilePath } from '../src/util.js';
 
 // chats.js reads these config values at module load. Environment variables take
@@ -21,11 +23,15 @@ let workDir;
 
 beforeAll(async () => {
     chats = await import('../src/endpoints/chats.js');
-    workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-backups-'));
+    const run = await ensureRun();
+    const scope = trackScope(await run.scope({ kind: 'scenario', label: 'chat-backups' }));
+    workDir = (await scope.directory('st-backups')).path;
 });
 
 afterAll(() => {
-    fs.rmSync(workDir, { recursive: true, force: true });
+    for (const name of ['first-backups', 'second-backups', 'timer-backups', 'backups']) {
+        chats.flushChatBackups(path.join(workDir, name));
+    }
 });
 
 /**
@@ -56,6 +62,38 @@ describe('getBackupKey', () => {
 });
 
 describe('chat backups', () => {
+    test('directory drain destroys its native throttle timer', async () => {
+        const directory = path.join(workDir, 'timer-backups');
+        fs.mkdirSync(directory);
+        const timers = [];
+        const hook = createHook({ init(_id, type, _trigger, resource) {
+            if (type === 'Timeout' && resource._idleTimeout === 200) timers.push(resource);
+        } });
+        hook.enable();
+        try {
+            await chats.trySaveChat(makeChat('timer ownership'), path.join(workDir, 'timer.jsonl'), true, 'timer-user', 'Timer Chat', directory);
+            expect(timers).toHaveLength(1);
+            expect(timers[0]._destroyed).toBe(false);
+            chats.flushChatBackups(directory);
+            expect(timers[0]._destroyed).toBe(true);
+        } finally {
+            hook.disable();
+            for (const timer of timers) clearTimeout(timer);
+        }
+    });
+
+    test('equal user and chat names retain independent backup directories', async () => {
+        const first = path.join(workDir, 'first-backups');
+        const second = path.join(workDir, 'second-backups');
+        fs.mkdirSync(first);
+        fs.mkdirSync(second);
+        await chats.trySaveChat(makeChat('first directory'), path.join(workDir, 'first.jsonl'), true, 'same-user', 'Same Chat', first);
+        await chats.trySaveChat(makeChat('second directory'), path.join(workDir, 'second.jsonl'), true, 'same-user', 'Same Chat', second);
+        expect(fs.readdirSync(first)).toHaveLength(1);
+        expect(fs.readdirSync(second)).toHaveLength(1);
+        expect(fs.readFileSync(path.join(second, fs.readdirSync(second)[0]), 'utf8')).toContain('second directory');
+    });
+
     test('chats with equal-length CJK names get independent backups and quotas', async () => {
         const backupsDir = path.join(workDir, 'backups');
         const chatsDir = path.join(workDir, 'chats');
@@ -113,10 +151,12 @@ describe('live backup config reload', () => {
         reloadConfigCache();
     }
 
-    beforeAll(() => {
+    beforeAll(async () => {
         savedEnv = Object.fromEntries(envKeys.map(k => [k, process.env[k]]));
         for (const k of envKeys) delete process.env[k];
-        configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-backups-live-'));
+        const run = await ensureRun();
+        const scope = trackScope(await run.scope({ kind: 'scenario', label: 'chat-backups-live' }));
+        configDir = (await scope.directory('st-backups-live')).path;
         configPath = path.join(configDir, 'config.yaml');
         fs.writeFileSync(configPath, 'backups:\n  common:\n    numberOfBackups: 50\n', 'utf8');
         setConfigFilePath(configPath);
@@ -128,23 +168,18 @@ describe('live backup config reload', () => {
             if (savedEnv[k] === undefined) delete process.env[k];
             else process.env[k] = savedEnv[k];
         }
-        fs.rmSync(configDir, { recursive: true, force: true });
     });
 
     let caseDir;
     let backupsDir;
     let chatsDir;
 
-    beforeEach(() => {
-        caseDir = fs.mkdtempSync(path.join(configDir, 'case-'));
+    beforeEach(async () => {
+        caseDir = (await currentScopeForResources().directory('case')).path;
         backupsDir = path.join(caseDir, 'backups');
         chatsDir = path.join(caseDir, 'chats');
         fs.mkdirSync(backupsDir, { recursive: true });
         fs.mkdirSync(chatsDir, { recursive: true });
-    });
-
-    afterEach(() => {
-        fs.rmSync(caseDir, { recursive: true, force: true });
     });
 
     test('toggling backups.chat.enabled off and back on takes effect immediately after reloadConfigCache', async () => {

@@ -37,7 +37,11 @@ function assertExistingSpelling(boundary, absolutePath, operation, listings) {
 }
 
 function probeDestinations(parent, destinations, operation) {
-    const prefix = `.luker-staging-identity-${randomBytes(12).toString('hex')}`;
+    // Keep the probe prefix short: records may encode names into deeply nested
+    // path segments, and macOS APFS rejects a complete path above 1024 bytes.
+    // It still starts with the shared staging prefix so a crashed probe is
+    // never treated as sync data.
+    const prefix = `.luker-staging-p-${randomBytes(8).toString('hex')}`;
     const scratch = fs.mkdtempSync(path.join(parent, `${prefix}-`));
     const owned = [];
     const manifest = path.join(scratch, 'ownership.ndjson');

@@ -30,9 +30,6 @@ describe.each(ENDPOINT_HARNESSES)('GET /api/storage/health on $name', ({ mode })
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('returns 200 with kind, schemaVersion, and latencyMs when engine is healthy', async () => {
         const res = await request(harness.server).get('/api/storage/health');
@@ -41,19 +38,13 @@ describe.each(ENDPOINT_HARNESSES)('GET /api/storage/health on $name', ({ mode })
         expect(res.body.kind).toBe(mode);
         expect(typeof res.body.latencyMs).toBe('number');
         expect(res.body.latencyMs).toBeGreaterThanOrEqual(0);
-        // schemaVersion is best-effort: engines without getSchemaVersion()
-        // surface 0. All four engines currently return 0 — the value
-        // is not yet publicly exposed (that's a future task).
-        expect(typeof res.body.schemaVersion).toBe('number');
+        expect(res.body.schemaVersion).toBe(0);
     });
 });
 
 describe('GET /api/storage/health with broken engine', () => {
     let harness;
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('returns 503 with redacted error when ping throws', async () => {
         harness = await makeEndpointHarness({

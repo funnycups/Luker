@@ -68,3 +68,11 @@ export class InvalidArgumentError extends Error {
         this.code = 'invalid_argument';
     }
 }
+
+export class RestoreDumpInvalidError extends Error {
+    constructor(detail) {
+        super(`Backup engine dump is invalid: ${detail}`);
+        this.name = 'RestoreDumpInvalidError';
+        this.code = 'restore_dump_invalid';
+    }
+}

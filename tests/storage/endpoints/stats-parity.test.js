@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { testWithResources } from '../../harness/jest.js';
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
 import { recreateStats } from '../../../src/endpoints/stats.js';
 import { getChatRepo, getStatsRepo } from '../../../src/storage/index.js';
@@ -11,20 +12,8 @@ import { getChatRepo, getStatsRepo } from '../../../src/storage/index.js';
 const HEADER = { user_name: 'tester', character_name: 'Alice', chat_metadata: {} };
 
 describe.each(ENDPOINT_HARNESSES)('stats.recreateStats on $name', ({ mode }) => {
-    let harness;
-
-    beforeEach(async () => {
-        harness = await makeEndpointHarness({
-            mode,
-            mount: () => {},
-        });
-    });
-
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
-
-    test('REGRESSION: recreateStats walks Repo chats and produces non-empty per-character stats', async () => {
+    testWithResources('REGRESSION: recreateStats walks Repo chats and produces non-empty per-character stats', async (scope) => {
+        const harness = await makeEndpointHarness({ scope, mode, mount: () => {} });
         // Plant a fake character PNG (recreateStats walks character dir for
         // .png names and uses each name as a key).
         fs.mkdirSync(harness.dirs.characters, { recursive: true });
@@ -52,7 +41,8 @@ describe.each(ENDPOINT_HARNESSES)('stats.recreateStats on $name', ({ mode }) => 
         expect(ent.date_last_chat).toBeGreaterThan(0);
     });
 
-    test('REGRESSION: recreateStats survives engine restart (data fully in Repo, not on disk)', async () => {
+    testWithResources('REGRESSION: recreateStats survives engine restart (data fully in Repo, not on disk)', async (scope) => {
+        const harness = await makeEndpointHarness({ scope, mode, mount: () => {} });
         fs.mkdirSync(harness.dirs.characters, { recursive: true });
         fs.writeFileSync(path.join(harness.dirs.characters, 'Alice.png'), 'stub');
         await getChatRepo().save(harness.handle, 'Alice', 'm', HEADER, [

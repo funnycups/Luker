@@ -24,8 +24,10 @@ import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migra
 import { listForUser, mergeReadIds } from '../announcements.js';
 import { evaluateWhatsNew, getRuntimeIdentity, shouldApplyAck } from '../whats-new.js';
 import { getStorageEngine } from '../storage/index.js';
+import { RestoreDumpInvalidError } from '../storage/errors.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../storage/engine-backup-entries.js';
 import { crossModeRestore } from '../storage/migration/cross-mode-restore.js';
+import { selectionToRunnerCategories } from '../storage/migration/selection-mapping.js';
 import {
     CrossModeScratchCredsRequiredError,
     CrossModeScratchConnectionError,
@@ -47,43 +49,19 @@ import { getAdminSettings } from '../admin-settings.js';
 
 // Two sentinel filenames the backup ZIP carries when the storage engine isn't
 // fs (spec §5.1/§5.2). The meta entry is captured during the analyze pass for
-// engine-kind validation; the dump entry is consumed during extract by
-// `engine.restoreUser(handle, stream)` instead of being written to disk.
-// Defined in src/storage/engine-backup-entries.js so the writer side
+// engine-kind validation; the dump entry is consumed by `engine.restoreUser`
+// instead of being written to disk. Defined in
+// src/storage/engine-backup-entries.js so the writer side
 // (createBackupArchive, snapshotUser) and the reader side here cannot drift.
 
 /**
- * Thrown when an uploaded backup's engine kind does not match the engine the
- * server is currently running. The route handler converts this into a 400 so
- * the operator sees an actionable message instead of an opaque 500. Migrating
- * a backup across engines requires the explicit storage-migrate tool, not
- * silent restore.
+ * True when the restore failed on an engine dump the engine rejected. The
+ * overwrite path wraps the engine error after rolling back its snapshots,
+ * so the original travels as `cause`.
+ * @param {unknown} error
  */
-class RestoreEngineKindMismatchError extends Error {
-    constructor(backupKind, currentKind) {
-        super(`Backup engine kind ${backupKind} does not match current engine ${currentKind}. Run storage-migrate to convert the backup first.`);
-        this.name = 'RestoreEngineKindMismatchError';
-        this.backupKind = backupKind;
-        this.currentKind = currentKind;
-    }
-}
-
-/**
- * Thrown when an uploaded backup lacks `_engine_meta.json` (a legacy fs-only
- * archive, produced before engine-dump injection existed) but the server
- * is currently running on a db engine (sqlite/mysql/postgres). Silently
- * extracting such a ZIP would unpack the disk tree but leave the engine slot
- * empty — every Repo read returns null, every chat appears deleted.
- * Missing engineMeta on a non-fs server is a 400 with an actionable
- * message: the operator must run `storage-migrate` to convert the legacy
- * backup before restore can proceed.
- */
-class RestoreLegacyFsOnDbModeError extends Error {
-    constructor(currentKind) {
-        super(`Legacy fs-only backup uploaded to ${currentKind}-mode server. Run storage-migrate to convert the backup first.`);
-        this.name = 'RestoreLegacyFsOnDbModeError';
-        this.currentKind = currentKind;
-    }
+function isRestoreDumpInvalid(error) {
+    return error instanceof RestoreDumpInvalidError || error?.cause instanceof RestoreDumpInvalidError;
 }
 
 const RESET_POINTS = getConfigValue('rateLimiting.accountsResetMaxAttempts', 5, 'number');
@@ -470,6 +448,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                 }
                 finished = true;
                 if (error) {
+                    try { zipfile.close(); } catch { /* already closed */ }
                     reject(error);
                 } else {
                     resolve();
@@ -591,6 +570,9 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
 
 async function discardRestoreSnapshots(snapshots) {
     await Promise.all(snapshots.map(async (snap) => {
+        if (snap.type === 'created') {
+            return;
+        }
         try {
             if (snap.type === 'file') {
                 await fsPromises.rm(snap.snapshot, { force: true });
@@ -605,6 +587,16 @@ async function discardRestoreSnapshots(snapshots) {
 
 async function rollbackRestoreSnapshots(snapshots) {
     const results = await Promise.all(snapshots.map(async (snap) => {
+        if (snap.type === 'created') {
+            try {
+                await fsPromises.rm(snap.original, { recursive: true, force: true });
+                return null;
+            } catch (error) {
+                console.error(`Failed to remove newly created restore target ${snap.original} during rollback:`, error);
+                return snap;
+            }
+        }
+
         try {
             if (snap.type === 'file') {
                 await fsPromises.rm(snap.original, { force: true });
@@ -624,6 +616,61 @@ async function rollbackRestoreSnapshots(snapshots) {
         }
     }));
     return results.filter((snap) => snap !== null);
+}
+
+async function restoreEngineDumpEntry(uploadPath, engine, handle) {
+    await new Promise((resolve, reject) => {
+        yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
+            if (openError) {
+                reject(openError);
+                return;
+            }
+            let settled = false;
+            const finish = (error) => {
+                if (settled) return;
+                settled = true;
+                try { zipfile.close(); } catch { /* already closed */ }
+                if (error) reject(error);
+                else resolve();
+            };
+            zipfile.readEntry();
+            zipfile.on('entry', (entry) => {
+                if (entry.fileName !== ENGINE_DUMP_ENTRY) {
+                    zipfile.readEntry();
+                    return;
+                }
+                zipfile.openReadStream(entry, async (streamError, readStream) => {
+                    if (streamError) {
+                        finish(streamError);
+                        return;
+                    }
+                    if (settled) {
+                        if (!readStream.destroyed) {
+                            readStream.on('error', () => {});
+                            readStream.destroy();
+                        }
+                        return;
+                    }
+                    try {
+                        await engine.restoreUser(handle, readStream);
+                        if (!readStream.destroyed && !readStream.readableEnded) {
+                            readStream.on('error', () => {});
+                            readStream.destroy();
+                        }
+                        finish();
+                    } catch (error) {
+                        if (!readStream.destroyed) {
+                            readStream.on('error', () => {});
+                            readStream.destroy();
+                        }
+                        finish(error);
+                    }
+                });
+            });
+            zipfile.on('end', () => finish(new RestoreDumpInvalidError(`backup archive is missing ${ENGINE_DUMP_ENTRY}`)));
+            zipfile.on('error', finish);
+        });
+    });
 }
 
 async function restoreUserBackupArchive(uploadPath, directories, selection, mode, options = {}) {
@@ -703,22 +750,29 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
             preflight: analysis.report,
         };
     }
-    // Note: the legacy-fs-on-db-server path now goes through crossModeRestore
-    // above (synthesized engineMeta = fs). The `RestoreLegacyFsOnDbModeError`
-    // type is kept exported for defensive backward compat with consumers that
-    // still match on it, but the throw site has been removed.
+    const selectsEngineCategories = Object.values(selectionToRunnerCategories(selection)).some(Boolean);
+    const willRestoreEngineDump = Boolean(analysis.engineMeta && currentEngine.kind !== 'fs' && selectsEngineCategories);
 
-    if (mode === 'overwrite' && analysis.report.targetableEntries === 0 && !analysis.engineMeta) {
+    if (willRestoreEngineDump) {
+        if (analysis.report.engineDumpEntries > 1) {
+            throw new RestoreDumpInvalidError(`backup archive contains multiple ${ENGINE_DUMP_ENTRY} entries`);
+        }
+        if (analysis.report.engineDumpEntries === 0) {
+            throw new RestoreDumpInvalidError(`backup archive is missing ${ENGINE_DUMP_ENTRY}`);
+        }
+    }
+
+    if (mode === 'overwrite' && analysis.report.targetableEntries === 0 && !willRestoreEngineDump) {
         throw new Error('Archive does not match selected restore categories. Overwrite was cancelled to protect existing data.');
     }
 
-    /** @type {{type: 'file'|'directory', original: string, snapshot: string}[]} */
+    /** @type {{type: 'file'|'directory'|'created', original: string, snapshot?: string|null}[]} */
     const snapshots = [];
+    const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     let snapshotMs = 0;
 
     if (mode === 'overwrite') {
         const tSnap = Date.now();
-        const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
         const snapshotTotal = targetFiles.size + targetDirectories.length;
         let snapshotCurrent = 0;
         reportProgress({ phase: 'snapshot', current: 0, total: snapshotTotal });
@@ -727,6 +781,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
             for (const filePath of targetFiles) {
                 snapshotCurrent += 1;
                 if (!fs.existsSync(filePath)) {
+                    snapshots.push({ type: 'created', original: filePath, snapshot: null });
                     reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
                     continue;
                 }
@@ -742,6 +797,8 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                     const snapshot = directoryPath + snapshotSuffix;
                     await fsPromises.rename(directoryPath, snapshot);
                     snapshots.push({ type: 'directory', original: directoryPath, snapshot });
+                } else {
+                    snapshots.push({ type: 'created', original: directoryPath, snapshot: null });
                 }
                 ensureDirectory(directoryPath);
                 reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
@@ -750,7 +807,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
             const orphaned = await rollbackRestoreSnapshots(snapshots);
             const baseMessage = snapshotError instanceof Error ? snapshotError.message : String(snapshotError);
             if (orphaned.length > 0) {
-                const paths = orphaned.map(snap => snap.snapshot).join(', ');
+                const paths = orphaned.map(snap => snap.snapshot ?? snap.original).join(', ');
                 throw new Error(`Failed to snapshot existing data before overwrite: ${baseMessage}. Manual recovery required for: ${paths}`);
             }
             throw new Error(`Failed to snapshot existing data before overwrite: ${baseMessage}`);
@@ -780,6 +837,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         lastExtractProgressAt = now;
         reportProgress({ phase: 'extract', current: result.restoredCount + result.failedCount, total: extractTotal });
     };
+    const touchedMergeTargets = new Set();
     try {
         await new Promise((resolve, reject) => {
             yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
@@ -795,6 +853,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                     }
                     finished = true;
                     if (error) {
+                        try { zipfile.close(); } catch { /* already closed */ }
                         reject(error);
                     } else {
                         resolve();
@@ -805,36 +864,13 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
                 zipfile.on('entry', (entry) => {
                     (async () => {
-                        // Engine sentinel entries (spec §5.2). _engine_meta.json
-                        // was already consumed during analyze for kind
-                        // validation, so skip it on disk. _engine_dump.bin is
-                        // routed to engine.restoreUser(handle, stream) and
-                        // never lands as a file under the user's data root —
-                        // it's the opaque payload the engine ingests itself.
-                        if (entry.fileName === ENGINE_META_ENTRY) {
+                        // Engine sentinel entries never land on disk.
+                        // _engine_meta.json was consumed during analyze;
+                        // _engine_dump.bin is ingested atomically after FS
+                        // extraction succeeds so an FS failure never leaves
+                        // the DB overwritten.
+                        if (entry.fileName === ENGINE_META_ENTRY || entry.fileName === ENGINE_DUMP_ENTRY) {
                             zipfile.readEntry();
-                            return;
-                        }
-                        if (entry.fileName === ENGINE_DUMP_ENTRY) {
-                            if (!analysis.engineMeta) {
-                                // Defensive: dump without meta is a malformed
-                                // archive — discard the bytes and move on
-                                // rather than risk a half-restore.
-                                zipfile.readEntry();
-                                return;
-                            }
-                            zipfile.openReadStream(entry, async (streamError, readStream) => {
-                                if (streamError) {
-                                    finish(streamError);
-                                    return;
-                                }
-                                try {
-                                    await currentEngine.restoreUser(handle, readStream);
-                                    zipfile.readEntry();
-                                } catch (error) {
-                                    finish(error);
-                                }
-                            });
                             return;
                         }
 
@@ -864,6 +900,26 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                         const targetPath = targetMapping.targetPath;
                         ensureDirectory(path.dirname(targetPath));
 
+                        // In merge mode when a DB restore follows, record an undo
+                        // snapshot for each touched FS file so an invalid DB dump
+                        // or mid-extract failure rolls back FS mutations cleanly.
+                        if (mode !== 'overwrite' && willRestoreEngineDump && !touchedMergeTargets.has(targetPath)) {
+                            touchedMergeTargets.add(targetPath);
+                            let stat = null;
+                            try {
+                                stat = await fsPromises.lstat(targetPath);
+                            } catch (statErr) {
+                                if (statErr?.code !== 'ENOENT') throw statErr;
+                            }
+                            if (!stat) {
+                                snapshots.push({ type: 'created', original: targetPath });
+                            } else if (stat.isFile() || stat.isSymbolicLink()) {
+                                const snapshot = targetPath + snapshotSuffix;
+                                await fsPromises.rename(targetPath, snapshot);
+                                snapshots.push({ type: 'file', original: targetPath, snapshot });
+                            }
+                        }
+
                         zipfile.openReadStream(entry, async (streamError, readStream) => {
                             if (streamError) {
                                 finish(streamError);
@@ -890,6 +946,10 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                                 reportExtractProgress(false);
                                 zipfile.readEntry();
                             } catch (error) {
+                                if (!readStream.destroyed) {
+                                    readStream.on('error', () => {});
+                                    readStream.destroy();
+                                }
                                 result.failedCount += 1;
                                 if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
                                     result.preflight.categoryStats[targetMapping.category].failedEntries += 1;
@@ -910,9 +970,18 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         extractMs = Date.now() - tExtract;
         reportExtractProgress(true);
 
-        if (mode === 'overwrite') {
+        // Commit the DB dump only after FS snapshot and extraction succeeded.
+        // Engine-side restoreUser is atomic; any failure rolls back FS
+        // snapshots/undo entries in the catch block below.
+        if (willRestoreEngineDump) {
+            await restoreEngineDumpEntry(uploadPath, currentEngine, handle);
+        }
+
+        if (snapshots.length > 0) {
             const tDiscard = Date.now();
-            reportProgress({ phase: 'finalize' });
+            if (mode === 'overwrite') {
+                reportProgress({ phase: 'finalize' });
+            }
             await discardRestoreSnapshots(snapshots);
             discardMs = Date.now() - tDiscard;
         }
@@ -920,14 +989,16 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         extractMs = Date.now() - tExtract;
         const totalMs = Date.now() - restoreStart;
         console.warn(`[user-backup] Restore failed after ${totalMs}ms (analyze=${analyzeMs}ms snapshot=${snapshotMs}ms extract=${extractMs}ms): ${extractError?.message || extractError}`);
-        if (mode === 'overwrite' && snapshots.length > 0) {
+        if (snapshots.length > 0) {
             const orphaned = await rollbackRestoreSnapshots(snapshots);
             const baseMessage = extractError instanceof Error ? extractError.message : String(extractError);
             if (orphaned.length > 0) {
-                const paths = orphaned.map(snap => snap.snapshot).join(', ');
-                throw new Error(`Restore failed; previous data partially rolled back from snapshot. Manual recovery required for: ${paths}. Original error: ${baseMessage}`);
+                const paths = orphaned.map(snap => snap.snapshot ?? snap.original).join(', ');
+                throw new Error(`Restore failed; previous data partially rolled back from snapshot. Manual recovery required for: ${paths}. Original error: ${baseMessage}`, { cause: extractError });
             }
-            throw new Error(`Restore failed; previous data restored from snapshot. Original error: ${baseMessage}`);
+            if (mode === 'overwrite') {
+                throw new Error(`Restore failed; previous data restored from snapshot. Original error: ${baseMessage}`, { cause: extractError });
+            }
         }
         throw extractError;
     }
@@ -1366,6 +1437,7 @@ function readEngineMetaFromZip(zipPath) {
             zipfile.on('error', (err) => {
                 if (settled) return;
                 settled = true;
+                try { zipfile.close(); } catch { /* already closed */ }
                 reject(err);
             });
         });
@@ -1498,8 +1570,7 @@ router.post('/restore-backup', async (request, response) => {
                 },
             });
         }
-        const isValidationError = error instanceof RestoreEngineKindMismatchError
-            || error instanceof RestoreLegacyFsOnDbModeError
+        const isValidationError = isRestoreDumpInvalid(error)
             || message.includes('Archive does not match selected restore categories');
         const statusCode = isValidationError ? 400 : 500;
         return response.status(statusCode).json({ error: message });
@@ -1599,8 +1670,7 @@ router.post('/lan-migration/import', async (request, response) => {
                 crossModeFailure: { rollback: error.rollback, snapshotPath: error.snapshotPath },
             });
         }
-        const isValidationError = error instanceof RestoreEngineKindMismatchError
-            || error instanceof RestoreLegacyFsOnDbModeError
+        const isValidationError = isRestoreDumpInvalid(error)
             || message.includes('Migration link')
             || message.includes('No migration link provided')
             || message.includes('At least one restore category')
@@ -1623,12 +1693,12 @@ router.post('/import/data-zip', async (request, response) => {
             return response.status(400).json({ error: 'No backup file uploaded' });
         }
 
+        uploadPath = request.file.path;
         const originalName = String(request.file.originalname || '');
         if (!originalName.toLowerCase().endsWith('.zip')) {
             return response.status(400).json({ error: 'Backup file must be a .zip archive' });
         }
 
-        uploadPath = request.file.path;
         const mode = String(request.body.mode || 'merge').toLowerCase() === 'overwrite' ? 'overwrite' : 'merge';
         const scratchCreds = parseScratchCreds(request.body);
         const restoreResult = await restoreUserBackupArchive(
@@ -1660,17 +1730,19 @@ router.post('/import/data-zip', async (request, response) => {
                 crossModeFailure: { rollback: error.rollback, snapshotPath: error.snapshotPath },
             });
         }
-        // Mirror /restore-backup and /lan-migration/import: typed errors for
-        // engine-kind mismatch and legacy-fs-on-db (spec §5.2) plus the
-        // legacy preflight string surface as 400 — operator-correctable.
-        const isValidationError = error instanceof RestoreEngineKindMismatchError
-            || error instanceof RestoreLegacyFsOnDbModeError
+        // Mirror /restore-backup and /lan-migration/import: invalid engine dump
+        // and preflight category mismatch surface as 400 — operator-correctable.
+        const isValidationError = isRestoreDumpInvalid(error)
             || message.includes('Archive does not match selected restore categories');
         const statusCode = isValidationError ? 400 : 500;
         return response.status(statusCode).json({ error: message });
     } finally {
         if (uploadPath) {
-            await fsPromises.rm(uploadPath, { force: true });
+            try {
+                fs.rmSync(uploadPath, { force: true });
+            } catch (cleanupErr) {
+                console.warn('Failed to clean up uploaded data ZIP:', uploadPath, cleanupErr);
+            }
         }
     }
 });

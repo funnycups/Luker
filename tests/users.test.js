@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
 import http from 'node:http';
-import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
+import { ensureRun, trackScope } from './harness/jest-run.js';
+import { currentScopeForResources } from './harness/storage-scope.js';
 
 import cookieSession from 'cookie-session';
 import express from 'express';
@@ -18,7 +17,7 @@ import {
     toKey,
 } from '../src/users.js';
 
-const TEST_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-users-test-'));
+let testDataRoot;
 const PREV_DATA_ROOT = globalThis.DATA_ROOT;
 
 async function seedUser({ handle, password, enabled = true, admin = false }) {
@@ -49,8 +48,11 @@ function requestWith(headers = {}, session) {
 
 describe('resolveUserFromBasicAuth', () => {
     beforeAll(async () => {
-        globalThis.DATA_ROOT = TEST_DATA_ROOT;
-        await initUserStorage(TEST_DATA_ROOT);
+        const run = await ensureRun();
+        const scope = trackScope(await run.scope({ kind: 'scenario', label: 'users-basic-auth' }));
+        testDataRoot = (await scope.directory('luker-users-test')).path;
+        globalThis.DATA_ROOT = testDataRoot;
+        await initUserStorage(testDataRoot);
     });
 
     beforeEach(async () => {
@@ -61,7 +63,6 @@ describe('resolveUserFromBasicAuth', () => {
 
     afterAll(async () => {
         await storage.clear();
-        fs.rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
         globalThis.DATA_ROOT = PREV_DATA_ROOT;
     });
 
@@ -113,7 +114,7 @@ describe('resolveUserFromBasicAuth', () => {
         expect(result.profile.handle).toBe('alice');
         expect(result.profile.password).toBe(seeded.password);
         expect(typeof result.directories.root).toBe('string');
-        expect(result.directories.root.startsWith(TEST_DATA_ROOT)).toBe(true);
+        expect(result.directories.root.startsWith(testDataRoot)).toBe(true);
     });
 
     test('does not mutate request.session on success', async () => {
@@ -208,44 +209,39 @@ describe('getCookieSessionName', () => {
     });
 
     test('keeps sessions valid across restarts sharing a data root while isolating other data roots', async () => {
-        const dataRootA = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-session-a-'));
-        const dataRootB = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-session-b-'));
+        const dataRootA = (await currentScopeForResources().directory('luker-session-a')).path;
+        const dataRootB = (await currentScopeForResources().directory('luker-session-b')).path;
 
-        try {
-            let cookieHeader = '';
-            let nameA = '';
+        let cookieHeader = '';
+        let nameA = '';
 
-            await withSessionServer(dataRootA, async ({ baseUrl, cookieName }) => {
-                nameA = cookieName;
-                const loginRes = await fetch(`${baseUrl}/login`, { method: 'POST' });
-                expect(loginRes.status).toBe(200);
-                const setCookies = loginRes.headers.getSetCookie();
-                expect(setCookies.some(c => c.startsWith(`${cookieName}=`))).toBe(true);
-                cookieHeader = setCookies.map(c => c.split(';')[0]).join('; ');
+        await withSessionServer(dataRootA, async ({ baseUrl, cookieName }) => {
+            nameA = cookieName;
+            const loginRes = await fetch(`${baseUrl}/login`, { method: 'POST' });
+            expect(loginRes.status).toBe(200);
+            const setCookies = loginRes.headers.getSetCookie();
+            expect(setCookies.some(c => c.startsWith(`${cookieName}=`))).toBe(true);
+            cookieHeader = setCookies.map(c => c.split(';')[0]).join('; ');
+        });
+
+        // A fresh server instance using the same persisted dataRoot recognizes the cookie.
+        await withSessionServer(dataRootA, async ({ baseUrl, cookieName }) => {
+            expect(cookieName).toBe(nameA);
+            const whoamiRes = await fetch(`${baseUrl}/whoami`, {
+                headers: { Cookie: cookieHeader },
             });
+            expect(whoamiRes.status).toBe(200);
+            expect(await whoamiRes.json()).toEqual({ handle: 'alice' });
+        });
 
-            // A fresh server instance using the same persisted dataRoot recognizes the cookie.
-            await withSessionServer(dataRootA, async ({ baseUrl, cookieName }) => {
-                expect(cookieName).toBe(nameA);
-                const whoamiRes = await fetch(`${baseUrl}/whoami`, {
-                    headers: { Cookie: cookieHeader },
-                });
-                expect(whoamiRes.status).toBe(200);
-                expect(await whoamiRes.json()).toEqual({ handle: 'alice' });
+        // A separate dataRoot derives its own cookie name and does not accept dataRootA's cookie.
+        await withSessionServer(dataRootB, async ({ baseUrl, cookieName }) => {
+            expect(cookieName).not.toBe(nameA);
+            const whoamiRes = await fetch(`${baseUrl}/whoami`, {
+                headers: { Cookie: cookieHeader },
             });
-
-            // A separate dataRoot derives its own cookie name and does not accept dataRootA's cookie.
-            await withSessionServer(dataRootB, async ({ baseUrl, cookieName }) => {
-                expect(cookieName).not.toBe(nameA);
-                const whoamiRes = await fetch(`${baseUrl}/whoami`, {
-                    headers: { Cookie: cookieHeader },
-                });
-                expect(whoamiRes.status).toBe(200);
-                expect(await whoamiRes.json()).toEqual({ handle: null });
-            });
-        } finally {
-            fs.rmSync(dataRootA, { recursive: true, force: true });
-            fs.rmSync(dataRootB, { recursive: true, force: true });
-        }
+            expect(whoamiRes.status).toBe(200);
+            expect(await whoamiRes.json()).toEqual({ handle: null });
+        });
     });
 });

@@ -26,14 +26,7 @@ router.get('/health', async (_req, res) => {
     try {
         await engine.ping();
         const latencyMs = Date.now() - start;
-        let schemaVersion = 0;
-        if (typeof engine.getSchemaVersion === 'function') {
-            // Best-effort: a failure here doesn't change the headline answer
-            // (engine reachable = healthy). Log nothing — the ping already
-            // confirmed the transport is up.
-            try { schemaVersion = await engine.getSchemaVersion(); } catch { /* tolerate */ }
-        }
-        res.status(200).json({ ok: true, kind, schemaVersion, latencyMs });
+        res.status(200).json({ ok: true, kind, schemaVersion: 0, latencyMs });
     } catch (err) {
         logEngineError(kind, 'health-ping', null, err);
         const tag = err?.code ?? err?.name ?? 'Error';

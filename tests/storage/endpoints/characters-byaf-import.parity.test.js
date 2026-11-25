@@ -83,6 +83,10 @@ function mountMulterShim(app, uploadProvider) {
     });
 }
 
+// Writing the imported card opens the character disk cache, which starts a
+// sync interval that keeps the worker alive.
+afterAll(() => diskCache.dispose());
+
 describe.each(ENDPOINT_HARNESSES)('BYAF character import on $name', ({ mode }) => {
     let harness;
     let uploadPayload;
@@ -98,9 +102,6 @@ describe.each(ENDPOINT_HARNESSES)('BYAF character import on $name', ({ mode }) =
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: BYAF import writes the scenario chat through ChatRepo', async () => {
         uploadPayload = {

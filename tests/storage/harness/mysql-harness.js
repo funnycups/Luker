@@ -1,21 +1,13 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import mysql from 'mysql2/promise';
 import { MysqlEngine } from '../../../src/storage/engines/mysql-engine.js';
-
-// Local dev container default. Override with LUKER_TEST_MYSQL_ROOT_URL if the
-// docker-compose port mapping changes.
-const ROOT_URL = process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306';
+import { acquireMysqlDatabase, MYSQL_ROOT_URL } from '../../harness/database.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 // Stub directory map. MysqlEngine stores nothing on disk, but the Repo contract
 // tests share their beforeEach with FsEngine, which means they call
 // `fs.mkdirSync(h.dirs.<bucket>, { recursive: true })` to pre-create the FS
-// scaffold. Mirror the SqliteEngine harness's behavior: hand back paths under
-// a per-harness temp root so the mkdirSync calls succeed as no-ops. Tests that
-// actually assert on FS state are isolated in their own `describe` blocks that
-// use makeTempFsEngineHarness directly, so they never reach this harness.
+// scaffold. Hand back paths under a managed directory so those calls succeed;
+// tests that assert on FS state use the FS harness instead.
 const USER_DIR_KEYS = Object.freeze([
     'root', 'thumbnails', 'thumbnailsBg', 'thumbnailsAvatar', 'thumbnailsPersona',
     'worlds', 'user', 'avatars', 'userImages', 'groups', 'groupChats', 'chats',
@@ -31,39 +23,32 @@ function buildStubDirs(rootDir) {
     return dirs;
 }
 
-// Each call creates a unique database so parallel tests don't collide and a
-// crashed test doesn't leak state into the next run. Cleanup drops the DB.
-export async function makeTempMysqlEngineHarness() {
-    const dbName = `luker_test_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-    const rootConn = await mysql.createConnection(ROOT_URL);
-    try {
-        await rootConn.query(
-            `CREATE DATABASE \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,
-        );
-    } finally {
-        await rootConn.end();
-    }
-    const url = `${ROOT_URL}/${dbName}`;
-    const engine = new MysqlEngine({ url });
-    const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-contract-mysql-'));
+// Each call leases its own database, so parallel tests don't collide. The
+// managed scope owns the namespace; the harness only closes its engine.
+export async function makeTempMysqlEngineHarness({ scope = currentScopeForResources(), fresh = false } = {}) {
+    if (!scope || typeof scope.directory !== 'function') throw new TypeError('MySQL contract harness requires a managed resource scope');
+    const lease = await acquireMysqlDatabase(scope, MYSQL_ROOT_URL, { fresh, reuse: !fresh });
+    const engine = new MysqlEngine({ url: lease.url });
+    const stubRoot = (await scope.directory('mysql contract')).path;
     const dirs = buildStubDirs(stubRoot);
-    const backupRoot = path.join(stubRoot, '_storage-migrations');
+    let closed = false;
+    const close = async () => {
+        if (closed) return;
+        closed = true;
+        await engine.close();
+    };
+    await scope.onFinalize({ label: 'close mysql contract engine', stage: 'capture', callback: close });
     return {
         engine,
         kind: 'mysql',
         handle: 'u',
-        dbName,
+        dbName: lease.namespace,
+        url: lease.url,
         dataRoot: stubRoot,
-        backupRoot,
+        backupRoot: path.join(stubRoot, '_storage-migrations'),
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,
-        cleanup: async () => {
-            try { await engine.close(); } catch { /* pool may already be dead */ }
-            const c = await mysql.createConnection(ROOT_URL);
-            try { await c.query(`DROP DATABASE IF EXISTS \`${dbName}\``); }
-            finally { await c.end(); }
-            try { fs.rmSync(stubRoot, { recursive: true, force: true }); } catch { /* ignore */ }
-        },
+        cleanup: close,
     };
 }

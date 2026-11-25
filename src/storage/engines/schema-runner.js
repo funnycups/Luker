@@ -88,7 +88,7 @@ export async function runMigrations({ kind, executor, migrationsDir, readVersion
  *
  * Semantics match `runMigrations` exactly; only the I/O is `*Sync`.
  */
-export function runMigrationsSync({ kind, executor, migrationsDir, readVersion, writeVersion }) {
+export function runMigrationsSync({ kind, executor, migrationsDir, readVersion, writeVersion, targetVersion = Infinity }) {
     const dir = path.join(migrationsDir, kind);
     let entries;
     try {
@@ -103,7 +103,7 @@ export function runMigrationsSync({ kind, executor, migrationsDir, readVersion, 
     checkVersionFloor(kind, current, files);
 
     for (const f of files) {
-        if (f.number <= current) continue;
+        if (f.number <= current || f.number > targetVersion) continue;
         const sql = fsSync.readFileSync(path.join(dir, f.name), 'utf8');
         executor(sql);
         writeVersion(f.number);

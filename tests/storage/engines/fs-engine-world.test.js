@@ -1,7 +1,9 @@
+import { jest } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { makeTempFsEngine } from '../harness/fs-harness.js';
+import { ConflictError } from '../../../src/storage/errors.js';
 
 describe('FsEngine world handler', () => {
     let h;
@@ -180,6 +182,89 @@ describe('FsEngine world handler', () => {
                     tx.getResource({ kind: 'world', handle: h.handle, name: resolved }));
                 expect(file?.entries?.['0']?.content).toBe(label);
             });
+        }
+    });
+
+    test('case-variant lookup matches host filesystem case semantics consistently across identity and conditional delete', async () => {
+        const version = await h.engine.withTransaction(h.handle, (tx) =>
+            tx.putResource({ kind: 'world', handle: h.handle, name: 'AlphaBook' }, { doc: { entries: { '0': { content: 'v1' } } } }));
+        const canonicalPath = path.join(h.dirs.worlds, 'AlphaBook.json');
+        const lowerPath = path.join(h.dirs.worlds, 'alphabook.json');
+        let isCaseInsensitive = false;
+        try {
+            const a = fs.lstatSync(canonicalPath, { bigint: true });
+            const b = fs.lstatSync(lowerPath, { bigint: true });
+            isCaseInsensitive = a.dev === b.dev && a.ino === b.ino;
+        } catch {
+            isCaseInsensitive = false;
+        }
+
+        const identity = await h.engine.withTransaction(h.handle, (tx) => tx.captureWorldInfoIdentity(h.handle));
+        const resolvedName = await h.engine.withTransaction(h.handle, (tx) =>
+            tx.resolveWorldName({ kind: 'world', handle: h.handle, name: 'alphabook' }));
+
+        if (isCaseInsensitive) {
+            expect(resolvedName).toBe('AlphaBook');
+            expect(identity.resolve('alphabook')).toEqual({ name: 'AlphaBook', locator: 'AlphaBook.json' });
+            expect(identity.has('alphabook.json')).toBe(true);
+            expect(identity.has('AlphaBook.json')).toBe(true);
+
+            // Conditional delete with wrong version must reject with ConflictError even on case variant.
+            await expect(h.engine.withTransaction(h.handle, (tx) =>
+                tx.deleteResource({ kind: 'world', handle: h.handle, name: 'alphabook' }, { expectedVersion: 'stale-version' }),
+            )).rejects.toThrow(ConflictError);
+            expect(fs.existsSync(canonicalPath)).toBe(true);
+
+            // Conditional delete with matching version deletes the canonical file.
+            const deleted = await h.engine.withTransaction(h.handle, (tx) =>
+                tx.deleteResource({ kind: 'world', handle: h.handle, name: 'alphabook' }, { expectedVersion: version }));
+            expect(deleted).toBe(true);
+            expect(fs.existsSync(canonicalPath)).toBe(false);
+        } else {
+            expect(resolvedName).toBeNull();
+            expect(identity.resolve('alphabook')).toBeNull();
+            expect(identity.has('alphabook.json')).toBe(false);
+            expect(identity.has('AlphaBook.json')).toBe(true);
+        }
+    });
+
+    test('REGRESSION: readWorldCatalog sorts directory entries deterministically for tolerant matching', async () => {
+        const first = 'Archive  Ledger.json';
+        const second = 'Archive   Ledger.json';
+        fs.writeFileSync(path.join(h.dirs.worlds, first), JSON.stringify({ entries: { '1': { content: 'two-spaces' } } }));
+        fs.writeFileSync(path.join(h.dirs.worlds, second), JSON.stringify({ entries: { '2': { content: 'three-spaces' } } }));
+
+        const originalReaddirSync = fs.readdirSync.bind(fs);
+        let mockedOrder = [first, second];
+        const spy = jest.spyOn(fs, 'readdirSync').mockImplementation((targetPath, options) => {
+            if (path.resolve(String(targetPath)) === path.resolve(h.dirs.worlds) && !options) {
+                return [...mockedOrder];
+            }
+            return originalReaddirSync(targetPath, options);
+        });
+
+        try {
+            const resolvedForward = await h.engine.withTransaction(h.handle, (tx) =>
+                tx.resolveWorldName({ kind: 'world', handle: h.handle, name: 'Archive Ledger' }));
+            const identityForward = await h.engine.withTransaction(h.handle, (tx) =>
+                tx.captureWorldInfoIdentity(h.handle));
+
+            mockedOrder = [second, first];
+            const resolvedReverse = await h.engine.withTransaction(h.handle, (tx) =>
+                tx.resolveWorldName({ kind: 'world', handle: h.handle, name: 'Archive Ledger' }));
+            const identityReverse = await h.engine.withTransaction(h.handle, (tx) =>
+                tx.captureWorldInfoIdentity(h.handle));
+
+            // Code-unit sort puts "Archive   Ledger.json" (space 0x20 < 'L' 0x4C) before "Archive  Ledger.json".
+            expect(resolvedForward).toBe('Archive   Ledger');
+            expect(resolvedReverse).toBe(resolvedForward);
+            expect(identityForward.resolve('Archive Ledger')).toEqual({
+                name: 'Archive   Ledger',
+                locator: second,
+            });
+            expect(identityReverse.resolve('Archive Ledger')).toEqual(identityForward.resolve('Archive Ledger'));
+        } finally {
+            spy.mockRestore();
         }
     });
 });

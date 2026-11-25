@@ -144,7 +144,6 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
     });
 
     afterEach(async () => {
-        if (harness) await harness.cleanup();
         // Restore the DATA_ROOT the suite set in jest.setup.js so later
         // tests in the same Jest worker keep seeing the public/ fixture.
         globalThis.DATA_ROOT = prevDataRoot;

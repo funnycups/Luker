@@ -1,9 +1,10 @@
 import { ConflictError, NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
-import { normalizeLookupText } from '../../util.js';
 import { chatHeaderWithIntegrity, chatLocation, parseChatDocument, parseChatJson } from './chat-record.js';
 import { registerSqlChatMove } from './chat-move.js';
 import { toSqlJsonPath } from './json-field-path.js';
+import { randomUUID } from 'node:crypto';
+import { findNameMatch } from '../../util.js';
 
 export class SqliteTransaction {
     constructor({ db, handle, directoriesByHandle }) {
@@ -29,7 +30,7 @@ export class SqliteTransaction {
     async getResource(key)       { return this._h(key.kind, 'getResource').get(key); }
     async readResource(key)      { return this._h(key.kind, 'readResource').read(key); }
     async putResource(key, rec)  { return this._h(key.kind, 'putResource').put(key, rec); }
-    async deleteResource(key)    { return this._h(key.kind, 'deleteResource').delete(key); }
+    async deleteResource(key, options) { return this._h(key.kind, 'deleteResource').delete(key, options); }
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
@@ -80,10 +81,6 @@ export function registerChatHandler(tx) {
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(handle, char_dir, name, is_group, group_id) DO NOTHING`),
         del: db.prepare('DELETE FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?'),
-        listByUpdated: db.prepare(`SELECT char_dir, name, is_group, group_id, updated_at, created_at
-                                   FROM chats WHERE handle=? ORDER BY updated_at DESC`),
-        listByName: db.prepare(`SELECT char_dir, name, is_group, group_id, updated_at, created_at
-                                FROM chats WHERE handle=? ORDER BY name ASC`),
         countMatchingParent: db.prepare(`SELECT 1 FROM chats
                                          WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?`),
         getSidecar: db.prepare(`SELECT doc FROM chat_states
@@ -252,12 +249,20 @@ export function registerSettingsHandler(tx) {
         get(key) {
             const row = stmt.get.get(key.handle);
             if (!row) return null;
-            try { return JSON.parse(row.doc); } catch { return null; }
+            try {
+                return JSON.parse(row.doc);
+            } catch (err) {
+                throw new SyntaxError(`Corrupt settings JSON for handle "${key.handle}": ${err.message}`, { cause: err });
+            }
         },
         read(key) {
             const row = stmt.get.get(key.handle);
             if (!row) return { exists: false };
-            return { exists: true, valid: true, value: JSON.parse(row.doc) };
+            try {
+                return { exists: true, valid: true, value: JSON.parse(row.doc) };
+            } catch (err) {
+                throw new SyntaxError(`Corrupt settings JSON for handle "${key.handle}": ${err.message}`, { cause: err });
+            }
         },
         getResourceField(key, segments) {
             const path = toSqlJsonPath(segments);
@@ -398,24 +403,17 @@ export function registerWorldInfoHandler(tx) {
     const db = tx._db;
     const stmt = {
         get: db.prepare('SELECT doc FROM worlds WHERE handle=? AND name=?'),
-        upsert: db.prepare(`INSERT INTO worlds (handle, name, doc, updated_at) VALUES (?, ?, ?, ?)
-                            ON CONFLICT(handle, name) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at`),
+        upsert: db.prepare(`INSERT INTO worlds (handle, name, doc, updated_at, revision) VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(handle, name) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at, revision = excluded.revision`),
         del: db.prepare('DELETE FROM worlds WHERE handle=? AND name=?'),
+        delIfMatch: db.prepare('DELETE FROM worlds WHERE handle=? AND name=? AND revision=?'),
+        version: db.prepare('SELECT revision FROM worlds WHERE handle=? AND name=?'),
         listNames: db.prepare('SELECT name FROM worlds WHERE handle=? ORDER BY name ASC'),
         listAll: db.prepare('SELECT name, doc FROM worlds WHERE handle=? ORDER BY name ASC'),
     };
 
-    function resolveCanonical(handle, requested) {
-        const trimmed = String(requested || '').trim();
-        if (!trimmed) return null;
-        // Exact match first.
-        const exact = stmt.listNames.all(handle).find((r) => r.name === trimmed);
-        if (exact) return exact.name;
-        // Tolerant fallback via normalizeLookupText (NFC + variation-selector strip).
-        const normalizedRequested = normalizeLookupText(trimmed);
-        if (!normalizedRequested) return null;
-        const tolerant = stmt.listNames.all(handle).find((r) => normalizeLookupText(r.name) === normalizedRequested);
-        return tolerant ? tolerant.name : null;
+    function resolveCanonical(handle, requested, catalog = stmt.listNames.all(handle).map(row => row.name)) {
+        return findNameMatch(catalog, requested) || null;
     }
 
     tx._handlers.set('world', {
@@ -436,12 +434,20 @@ export function registerWorldInfoHandler(tx) {
             const canonical = resolveCanonical(key.handle, key.name);
             const targetName = canonical ?? String(key.name || '').trim();
             if (!targetName) throw new Error(`world put: invalid name ${key.name}`);
-            stmt.upsert.run(key.handle, targetName, JSON.stringify(record.doc), Date.now());
+            const revision = randomUUID();
+            stmt.upsert.run(key.handle, targetName, JSON.stringify(record.doc), Date.now(), revision);
+            return revision;
         },
-        delete(key) {
-            const canonical = resolveCanonical(key.handle, key.name);
-            if (canonical == null) return false;
-            const result = stmt.del.run(key.handle, canonical);
+        delete(key, { expectedVersion, resolvedTarget } = {}) {
+            const canonical = resolvedTarget === undefined ? resolveCanonical(key.handle, key.name) : resolvedTarget?.locator ?? null;
+            if (canonical == null) {
+                if (expectedVersion !== undefined) throw new ConflictError('world_changed');
+                return false;
+            }
+            const result = expectedVersion === undefined
+                ? stmt.del.run(key.handle, canonical)
+                : stmt.delIfMatch.run(key.handle, canonical, expectedVersion);
+            if (expectedVersion !== undefined && !result.changes) throw new ConflictError('world_changed');
             return result.changes > 0;
         },
         list(filter) {
@@ -470,6 +476,20 @@ export function registerWorldInfoHandler(tx) {
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = (key) => resolveCanonical(key.handle, key.name);
+    tx.captureWorldInfoIdentity = handle => {
+        const names = stmt.listNames.all(handle).map(row => row.name);
+        return {
+            resolve: requested => {
+                const name = resolveCanonical(handle, requested, names);
+                return name === null ? null : { name, locator: name };
+            },
+            has: locator => names.includes(locator),
+        };
+    };
+    tx.getWorldInfoVersion = (key) => {
+        const canonical = resolveCanonical(key.handle, key.name);
+        return canonical == null ? null : stmt.version.get(key.handle, canonical)?.revision ?? null;
+    };
 }
 
 export function registerNamedDocHandler(tx) {

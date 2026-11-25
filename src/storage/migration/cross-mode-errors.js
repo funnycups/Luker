@@ -58,6 +58,7 @@ export class CrossModeScratchConnectionError extends Error {
  *
  * `rollback` carries the rollback outcome the orchestrator was able to
  * achieve before bubbling up:
+ *  - `'not-started'`   : no destination data mutation was attempted.
  *  - `'ok'`            : snapshot was restored cleanly; live data is at
  *                        pre-restore state.
  *  - `'partial'`       : restoreFromSnapshot itself failed; live data may
@@ -74,12 +75,14 @@ export class CrossModeScratchConnectionError extends Error {
 export class CrossModeConversionFailedError extends Error {
     /**
      * @param {unknown} cause
-     * @param {{ rollback: 'ok'|'partial'|'merge-no-snapshot', rollbackError?: unknown, snapshotPath?: string|null }} info
+     * @param {{ rollback: 'not-started'|'ok'|'partial'|'merge-no-snapshot', rollbackError?: unknown, snapshotPath?: string|null }} info
      */
     constructor(cause, info) {
         const inner = cause instanceof Error ? cause.message : String(cause);
         let suffix;
-        if (info.rollback === 'ok') {
+        if (info.rollback === 'not-started') {
+            suffix = 'Live data was not modified.';
+        } else if (info.rollback === 'ok') {
             suffix = 'Live data restored from snapshot.';
         } else if (info.rollback === 'partial') {
             const rbInner = info.rollbackError instanceof Error

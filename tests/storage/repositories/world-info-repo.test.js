@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { CONTRACT_HARNESSES, makeTempFsEngineHarness } from '../harness/contract-harness.js';
 import { WorldInfoRepo } from '../../../src/storage/repositories/world-info-repo.js';
-import { PatchTestFailedError } from '../../../src/storage/errors.js';
+import { ConflictError, PatchTestFailedError } from '../../../src/storage/errors.js';
 import { normalizeWorldInfoFile } from '../../../src/endpoints/worldinfo.js';
 
 describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — basic CRUD', ({ make }) => {
@@ -48,6 +48,41 @@ describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — basic CRUD', ({ ma
 
     test('delete returns false when missing', async () => {
         expect(await repo.delete(h.handle, 'Missing')).toBe(false);
+    });
+
+    test('the original save version permits conditional deletion', async () => {
+        const version = await repo.save(h.handle, 'Owned', { entries: {} });
+        expect(typeof version).toBe('string');
+        expect(await repo.getVersion(h.handle, 'Owned')).toBe(version);
+        expect(await repo.delete(h.handle, 'Owned', { expectedVersion: version })).toBe(true);
+        expect(await repo.get(h.handle, 'Owned')).toBeNull();
+    });
+
+    test.each(['save', 'patch', 'recreate'])('%s expires the original deletion ownership', async change => {
+        const original = { entries: { '7': { content: 'Original' } }, extensions: { retained: ['sibling'] } };
+        const version = await repo.save(h.handle, 'Owned', original);
+        const expected = structuredClone(original);
+        if (change === 'patch') {
+            expected.entries['7'].content = 'External edit';
+            await repo.patch(h.handle, 'Owned', [{ op: 'replace', path: '/entries/7/content', value: 'External edit' }]);
+        } else {
+            if (change === 'recreate') await repo.delete(h.handle, 'Owned');
+            await repo.save(h.handle, 'Owned', original);
+        }
+        await expect(repo.delete(h.handle, 'Owned', { expectedVersion: version })).rejects.toBeInstanceOf(ConflictError);
+        expect(await repo.get(h.handle, 'Owned')).toEqual(expected);
+        expect(await repo.getVersion(h.handle, 'Owned')).not.toBe(version);
+    });
+
+    test('conditional deletion checks adoption at the storage boundary', async () => {
+        const original = { entries: {}, extensions: { retained: true } };
+        const version = await repo.save(h.handle, 'Owned', original);
+        await expect(repo.delete(h.handle, 'Owned', {
+            expectedVersion: version,
+            beforeDelete: () => { throw new ConflictError('world_in_use'); },
+        })).rejects.toMatchObject({ code: 'world_in_use' });
+        expect(await repo.get(h.handle, 'Owned')).toEqual(original);
+        expect(await repo.delete(h.handle, 'Owned', { expectedVersion: version })).toBe(true);
     });
 
     test('exists is true after save and false otherwise', async () => {

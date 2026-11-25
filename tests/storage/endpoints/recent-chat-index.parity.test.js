@@ -25,9 +25,6 @@ describe.each(ENDPOINT_HARNESSES)('recent chat index on $name', ({ mode }) => {
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: /api/chats/recent surfaces group chat whose group lives in GroupRepo', async () => {
         const groupId = 'grp-1';

@@ -1,7 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
 import { promises as fsPromises } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { ensureRun, trackScope } from './harness/jest-run.js';
 import { reloadConfigCache, setConfigFilePath } from '../src/util.js';
 import {
     BACKUP_CONFIG_DEFAULTS,
@@ -166,15 +166,13 @@ describe('readBackupConfigState & persistBackupConfig — file IO', () => {
     let savedEnv;
 
     beforeAll(async () => {
-        tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'luker-backup-cfg-'));
+        const run = await ensureRun();
+        const scope = trackScope(await run.scope({ kind: 'scenario', label: 'backup-config' }));
+        tmpDir = (await scope.directory('luker-backup-cfg')).path;
         configPath = path.join(tmpDir, 'config.yaml');
         await fsPromises.writeFile(configPath, SAMPLE, 'utf8');
         setConfigFilePath(configPath);
         reloadConfigCache();
-    });
-
-    afterAll(async () => {
-        await fsPromises.rm(tmpDir, { recursive: true, force: true });
     });
 
     beforeEach(async () => {

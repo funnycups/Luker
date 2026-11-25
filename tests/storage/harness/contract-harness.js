@@ -1,10 +1,10 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
 import { SqliteEngine } from '../../../src/storage/engines/sqlite-engine.js';
 import { makeTempMysqlEngineHarness } from './mysql-harness.js';
 import { makeTempPgEngineHarness } from './pg-harness.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 // Mirror src/constants.js USER_DIRECTORY_TEMPLATE — keep keys in sync with
 // fs-harness.js so any Repo that targets a directory can find it on the stub.
@@ -52,8 +52,9 @@ function buildDirs(userDir) {
     return dirs;
 }
 
-export async function makeTempFsEngineHarness() {
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-contract-fs-'));
+export async function makeTempFsEngineHarness({ scope = currentScopeForResources() } = {}) {
+    if (!scope || typeof scope.directory !== 'function') throw new TypeError('FS contract harness requires a managed resource scope');
+    const dataRoot = (await scope.directory('fs contract')).path;
     const handle = 'u';
     const userDir = path.join(dataRoot, handle);
     const dirs = buildDirs(userDir);
@@ -82,12 +83,13 @@ export async function makeTempFsEngineHarness() {
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,
-        cleanup: () => fs.rmSync(dataRoot, { recursive: true, force: true }),
+        cleanup: () => {},
     };
 }
 
-export async function makeTempSqliteEngineHarness() {
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-contract-sqlite-'));
+export async function makeTempSqliteEngineHarness({ scope = currentScopeForResources() } = {}) {
+    if (!scope || typeof scope.directory !== 'function') throw new TypeError('SQLite contract harness requires a managed resource scope');
+    const dataRoot = (await scope.directory('sqlite contract')).path;
     const handle = 'u';
     const userDir = path.join(dataRoot, handle);
     const dirs = buildDirs(userDir);
@@ -116,10 +118,7 @@ export async function makeTempSqliteEngineHarness() {
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,
-        cleanup: () => {
-            engine.close();
-            fs.rmSync(dataRoot, { recursive: true, force: true });
-        },
+        cleanup: () => engine.close(),
     };
 }
 

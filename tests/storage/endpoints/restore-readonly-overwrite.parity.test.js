@@ -76,7 +76,6 @@ describe.each(ENDPOINT_HARNESSES)('same-mode restore over read-only file on $nam
 
     afterEach(async () => {
         globalThis.DATA_ROOT = previousDataRoot;
-        if (harness) await harness.cleanup();
     });
 
     test('REGRESSION: merge restore overwrites a pre-existing read-only file', async () => {

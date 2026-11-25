@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 // Mirror src/constants.js USER_DIRECTORY_TEMPLATE — keep keys in sync so any
 // future Repo that targets a directory can find it on the harness's stub.
@@ -41,8 +41,9 @@ const USER_DIRS = Object.freeze({
     states: 'states',
 });
 
-export async function makeTempFsEngine() {
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-engine-test-'));
+export async function makeTempFsEngine({ scope = currentScopeForResources() } = {}) {
+    if (!scope || typeof scope.directory !== 'function') throw new TypeError('FS engine harness requires a managed resource scope');
+    const dataRoot = (await scope.directory('fs engine')).path;
     const handle = 'u';
     const userDir = path.join(dataRoot, handle);
     const dirs = {};
@@ -68,6 +69,6 @@ export async function makeTempFsEngine() {
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,
-        cleanup: () => fs.rmSync(dataRoot, { recursive: true, force: true }),
+        cleanup: () => {},
     };
 }

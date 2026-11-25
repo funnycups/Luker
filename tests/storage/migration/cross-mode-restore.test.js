@@ -38,6 +38,8 @@ import { SettingsRepo } from '../../../src/storage/repositories/settings-repo.js
 import { WorldInfoRepo } from '../../../src/storage/repositories/world-info-repo.js';
 import { acquireMigrationLock, releaseMigrationLock, makeHolderId } from '../../../src/storage/migration/lock.js';
 import { setReadOnly, isReadOnly } from '../../../src/storage/read-only-mode.js';
+import { RestoreDumpInvalidError } from '../../../src/storage/errors.js';
+import { snapshotUser } from '../../../src/storage/migration/backup.js';
 import { makeMultiHandleFsEngine } from '../harness/contract-harness.js';
 
 function makeTempRoot() {
@@ -192,6 +194,104 @@ describe('crossModeRestore — happy path sqlite→fs', () => {
 });
 
 describe('crossModeRestore — error paths', () => {
+    test('typed failures cannot conceal a real snapshot rollback failure', async () => {
+        const { recoverCrossModeFailure } = await import('../../../src/storage/migration/cross-mode-restore.js');
+        const dirs = dirsForHandle('realuser');
+        const backupPath = await snapshotUser({ handle: 'realuser', userRoot: dirs.root, backupRoot: path.join(dataRoot, 'backups'), engine: dstEngine });
+        const held = backupPath + '-held';
+        fs.renameSync(backupPath, held);
+        const original = new RestoreDumpInvalidError('typed failure after destination mutation');
+        const error = await recoverCrossModeFailure(original, {
+            destinationStarted: true, snapshotPath: backupPath, handle: 'realuser', dirs, currentEngine: dstEngine,
+        }).then(() => null, err => err);
+        expect(error).toBeInstanceOf(CrossModeConversionFailedError);
+        expect(error.cause).toBe(original);
+        expect(error.rollback).toBe('partial');
+        expect(error.snapshotPath).toBe(backupPath);
+        expect(fs.existsSync(held)).toBe(true);
+    });
+
+    test('typed failures remain typed when real rollback succeeds', async () => {
+        const { recoverCrossModeFailure } = await import('../../../src/storage/migration/cross-mode-restore.js');
+        const dirs = dirsForHandle('realuser');
+        const settings = new SettingsRepo({ engine: dstEngine });
+        await settings.save('realuser', { protected: true });
+        const backupPath = await snapshotUser({ handle: 'realuser', userRoot: dirs.root, backupRoot: path.join(dataRoot, 'backups'), engine: dstEngine });
+        await settings.save('realuser', { changed: true });
+        const original = new RestoreDumpInvalidError('typed failure after destination mutation');
+        await expect(recoverCrossModeFailure(original, {
+            destinationStarted: true, snapshotPath: backupPath, handle: 'realuser', dirs, currentEngine: dstEngine,
+        })).rejects.toBe(original);
+        expect(await settings.get('realuser')).toEqual({ protected: true });
+    });
+    test.each(['overwrite', 'merge'])('real destination filesystem failure reports %s recovery state', async (mode) => {
+        const zipPath = path.join(dataRoot, 'src.zip');
+        await buildSqliteSourceZip(zipPath, path.join(dataRoot, 'src'), 'alice');
+        const settings = new SettingsRepo({ engine: dstEngine });
+        await settings.save('realuser', { protected: true });
+        const dirs = dirsForHandle('realuser');
+        const blocker = path.join(dirs.chats, 'Alice');
+        fs.writeFileSync(blocker, 'not a directory');
+        const error = await crossModeRestore(zipPath, { engineKind: 'sqlite', handle: 'alice' }, dirs,
+            { settings: true, chats: true }, mode, { dataRoot, currentEngine: dstEngine }).then(() => null, err => err);
+        expect(error).toBeInstanceOf(CrossModeConversionFailedError);
+        expect(error.rollback).toBe(mode === 'overwrite' ? 'ok' : 'merge-no-snapshot');
+        expect(await settings.get('realuser')).toEqual(mode === 'overwrite' ? { protected: true } : { user_name: 'crossModeUser', custom: 'val' });
+        expect(isReadOnly()).toBe(false);
+    });
+
+    test('a real rollback filesystem failure preserves the recovery path and partial warning', async () => {
+        const zipPath = path.join(dataRoot, 'src.zip');
+        await buildSqliteSourceZip(zipPath, path.join(dataRoot, 'src'), 'alice');
+        const dirs = dirsForHandle('realuser');
+        fs.writeFileSync(path.join(dirs.chats, 'Alice'), 'not a directory');
+        let movedSnapshot;
+        const error = await crossModeRestore(zipPath, { engineKind: 'sqlite', handle: 'alice' }, dirs,
+            { settings: true, chats: true }, 'overwrite', { dataRoot, currentEngine: dstEngine,
+                onProgress: event => {
+                    if (event.stage !== 'settings-copied') return;
+                    const backupRoot = path.join(dataRoot, '_storage-migrations');
+                    const snapshot = fs.readdirSync(backupRoot).find(name => name.endsWith('-realuser'));
+                    movedSnapshot = path.join(backupRoot, snapshot + '-held');
+                    fs.renameSync(path.join(backupRoot, snapshot), movedSnapshot);
+                },
+            }).then(() => null, err => err);
+        expect(error.rollback).toBe('partial');
+        expect(error.rollbackError).toBeInstanceOf(Error);
+        expect(error.snapshotPath).toBeTruthy();
+        expect(fs.existsSync(movedSnapshot)).toBe(true);
+        expect(isReadOnly()).toBe(false);
+    });
+
+    test('a real snapshot copy failure leaves destination data untouched', async () => {
+        const zipPath = path.join(dataRoot, 'src.zip');
+        await buildSqliteSourceZip(zipPath, path.join(dataRoot, 'src'), 'alice');
+        const settings = new SettingsRepo({ engine: dstEngine });
+        await settings.save('realuser', { protected: true });
+        const dirs = dirsForHandle('realuser');
+        fs.writeFileSync(path.join(dirs.root, 'luker-storage.sqlite'), 'unreadable SQLite database');
+        const brokenEngine = new SqliteEngine({ directoriesByHandle: () => dirs });
+        try {
+            const error = await crossModeRestore(zipPath, { engineKind: 'sqlite', handle: 'alice' }, dirs,
+                { settings: true }, 'overwrite', { dataRoot, currentEngine: brokenEngine }).then(() => null, err => err);
+            expect(error.rollback).toBe('not-started');
+            expect(error.snapshotPath).toBeNull();
+            expect(await settings.get('realuser')).toEqual({ protected: true });
+            expect(isReadOnly()).toBe(false);
+        } finally { brokenEngine.close(); }
+    });
+    test.each(['overwrite', 'merge'])('generic materialization failure leaves %s destination untouched', async (mode) => {
+        const live = new SettingsRepo({ engine: dstEngine });
+        await live.save('realuser', { protected: true });
+        const error = await crossModeRestore(path.join(dataRoot, 'missing.zip'),
+            { engineKind: 'sqlite', handle: 'source' }, dirsForHandle('realuser'),
+            { settings: true }, mode, { dataRoot, currentEngine: dstEngine }).then(() => null, err => err);
+        expect(error).toBeInstanceOf(CrossModeConversionFailedError);
+        expect(error.rollback).toBe('not-started');
+        expect(error.snapshotPath).toBeNull();
+        expect(await live.get('realuser')).toEqual({ protected: true });
+        expect(isReadOnly()).toBe(false);
+    });
     let dataRoot, dstRoot, dstEngine, dirsForHandle;
     beforeEach(() => {
         dataRoot = makeTempRoot();
@@ -495,5 +595,23 @@ describe('extractFsTreeCategories', () => {
         });
         const result = await extractFsTreeCategories(zipPath, buildDirs(path.join(dataRoot, 'x')), {}, {});
         expect(result.restoredCount).toBe(0);
+    });
+
+    test('rejects cleanly on obstructed write path without hanging or leaking open zip handle', async () => {
+        const zipPath = path.join(dataRoot, 'obstructed.zip');
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append('{"k":"v"}', { name: 'secrets.json' });
+            arc.finalize();
+        });
+        const liveRoot = path.join(dataRoot, 'live-obstructed');
+        const dirs = buildDirs(liveRoot);
+        fs.mkdirSync(path.join(liveRoot, 'secrets.json'), { recursive: true });
+
+        await expect(extractFsTreeCategories(zipPath, dirs, { secrets: true }, {})).rejects.toThrow(/EISDIR|directory/i);
     });
 });

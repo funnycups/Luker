@@ -43,7 +43,6 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         });
         globalThis.DATA_ROOT = harness.dataRoot;
     });
-    afterEach(async () => { if (harness) await harness.cleanup(); });
 
     test('400 + crossModeScratchRequired when mysql ZIP arrives without creds', async () => {
         const zipPath = path.join(harness.dataRoot, 'mysql.zip');

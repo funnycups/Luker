@@ -89,9 +89,6 @@ describe('restore path classifier: built-in extension paths', () => {
         globalThis.DATA_ROOT = harness.dataRoot;
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('source-tree built-in extension paths are not imported as user extensions', async () => {
         const zipPath = path.join(harness.dataRoot, `src-tree-${randomBytes(4).toString('hex')}.zip`);

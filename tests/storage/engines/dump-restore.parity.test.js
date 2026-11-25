@@ -4,8 +4,14 @@
 // mysql / postgres return a text stream of newline-separated JSON-encoded INSERTs.
 // restoreUser of the SAME kind round-trips dump+restore to recreate all user rows.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { Readable } from 'node:stream';
+import Database from 'better-sqlite3';
 import { CONTRACT_HARNESSES } from '../harness/contract-harness.js';
+import { RestoreDumpInvalidError } from '../../../src/storage/errors.js';
+import { SqliteEngine, SQLITE_USER_TABLES } from '../../../src/storage/engines/sqlite-engine.js';
+import { MysqlEngine } from '../../../src/storage/engines/mysql-engine.js';
 
 const HEADER = { user_name: 'tester', character_name: 'Alice', chat_metadata: {} };
 // Multi-byte UTF-8 content guards against silent mojibake in the restore
@@ -206,4 +212,398 @@ describe.each(CONTRACT_HARNESSES)('engine.dumpUser/restoreUser on $name', ({ mak
         // sprinkled them through the multi-byte regions.
         expect(JSON.stringify(restored.body)).not.toMatch(/�/);
     });
+
+    test('restoreUser rolls back without retrying when the dump stream fails transiently', async () => {
+        // mysql/pg replay the dump inside one transaction. A transient-coded
+        // error raised by the dump stream must roll the restore back, not
+        // retry against a drained stream and commit an empty restore.
+        if (h.kind === 'fs' || h.kind === 'sqlite') return;
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' },
+                { header: HEADER, body: MESSAGES });
+        });
+        const before = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' }));
+        const dumpText = (await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8');
+        const firstLine = dumpText.slice(0, dumpText.indexOf('\n') + 1);
+        expect(firstLine.length).toBeGreaterThan(1);
+
+        // Re-iterable source: the first pass yields one valid record and then
+        // fails with a transient code; any later pass yields nothing, like a
+        // stream that has already been consumed.
+        let passes = 0;
+        const source = {
+            async *[Symbol.asyncIterator]() {
+                passes += 1;
+                if (passes > 1) return;
+                yield Buffer.from(firstLine);
+                throw Object.assign(new Error('socket reset mid-restore'), { code: 'ECONNRESET' });
+            },
+        };
+
+        await expect(h.engine.restoreUser(h.handle, source)).rejects.toMatchObject({ code: 'ECONNRESET' });
+        expect(passes).toBe(1);
+        const after = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' }));
+        expect(after).toEqual(before);
+    });
+
+    test('restoreUser rejects a corrupt dump and keeps the existing data', async () => {
+        if (h.kind === 'fs') return; // fs has no engine dump
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' },
+                { header: HEADER, body: MESSAGES });
+        });
+        const before = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' }));
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from('not a real dump'))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const after = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' }));
+        expect(after).toEqual(before);
+    });
+
+    test('restoreUser rejects a dump statement that is not an engine INSERT and keeps every user\'s data', async () => {
+        if (h.kind === 'fs' || h.kind === 'sqlite') return; // only mysql/pg replay SQL records
+
+        const otherHandle = 'other-user';
+        for (const handle of [h.handle, otherHandle]) {
+            await h.engine.withTransaction(handle, async (tx) => {
+                await tx.putResource({ kind: 'chat', handle, charDir: 'Alice', name: 'c1' },
+                    { header: HEADER, body: MESSAGES });
+            });
+        }
+        const before = await readChat(h.engine, h.handle);
+        const otherBefore = await readChat(h.engine, otherHandle);
+        const dumpText = (await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8');
+        const injected = JSON.stringify({ sql: `DELETE FROM chats WHERE handle = '${otherHandle}'`, params: [] });
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from(`${dumpText}${injected}\n`))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        expect(await readChat(h.engine, otherHandle)).toEqual(otherBefore);
+        expect(await readChat(h.engine, h.handle)).toEqual(before);
+    });
+
+    test('restoreUser rejects an INSERT into a table outside the engine dump', async () => {
+        if (h.kind === 'fs' || h.kind === 'sqlite') return; // only mysql/pg replay SQL records
+
+        await h.engine._pool.query('CREATE TABLE dump_probe (handle VARCHAR(64), v VARCHAR(64))');
+        const placeholders = h.kind === 'postgres' ? '$1, $2' : '?, ?';
+        const injected = JSON.stringify({ sql: `INSERT INTO dump_probe (handle, v) VALUES (${placeholders})`, params: [h.handle, 'x'] });
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from(`${injected}\n`))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const result = await h.engine._pool.query('SELECT COUNT(*) AS n FROM dump_probe');
+        const rows = h.kind === 'postgres' ? result.rows : result[0];
+        expect(Number(rows[0].n)).toBe(0);
+    });
+
+    test('restoreUser rejects an engine INSERT whose param count does not match its columns', async () => {
+        if (h.kind === 'fs' || h.kind === 'sqlite') return; // only mysql/pg replay SQL records
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'kept' } });
+        });
+        const dumpText = (await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8').trim();
+        const record = JSON.parse(dumpText.split('\n')[0]);
+        record.params.push('extra');
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from(`${JSON.stringify(record)}\n`))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const settings = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'settings', handle: h.handle }));
+        expect(settings?.user_name).toBe('kept');
+    });
+
+    test('restoreUser rejects dump rows that collide once moved onto the target handle and keeps the data', async () => {
+        if (h.kind === 'fs' || h.kind === 'sqlite') return; // only mysql/pg replay SQL records
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'kept' } });
+        });
+        const record = JSON.parse((await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8').trim().split('\n')[0]);
+        const fromOtherAccount = { ...record, params: ['other-user', ...record.params.slice(1)] };
+        const dump = `${JSON.stringify(record)}\n${JSON.stringify(fromOtherAccount)}\n`;
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from(dump))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const settings = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'settings', handle: h.handle }));
+        expect(settings?.user_name).toBe('kept');
+    });
+
+    // settings params: [handle, doc JSON, updated_at BIGINT]; worlds params: [handle, name VARCHAR(128), doc, updated_at].
+    test.each([
+        ['a doc that is not JSON', 'settings', (params) => [params[0], 'not json {', params[2]]],
+        ['an updated_at that is not a number', 'settings', (params) => [params[0], params[1], 'not a number']],
+        ['an updated_at outside the BIGINT range', 'settings', (params) => [params[0], params[1], 1e30]],
+        ['a name longer than its column', 'worlds', (params) => [params[0], 'w'.repeat(129), params[2], params[3]]],
+    ])('restoreUser rejects a dump row with %s and keeps the data', async (_label, table, craft) => {
+        if (h.kind === 'fs' || h.kind === 'sqlite') return; // only mysql/pg replay SQL records
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'kept' } });
+            await tx.putResource({ kind: 'world', handle: h.handle, name: 'w1' }, { doc: { entries: { kept: true } } });
+        });
+        const records = (await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8').trim().split('\n').map(line => JSON.parse(line));
+        const record = records.find(r => r.sql.startsWith(`INSERT INTO ${table} `));
+        const crafted = { ...record, params: craft(record.params) };
+
+        await expect(h.engine.restoreUser(h.handle, bufferToStream(Buffer.from(`${JSON.stringify(crafted)}\n`))))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const kept = await h.engine.withTransaction(h.handle, async (tx) => ({
+            settings: await tx.getResource({ kind: 'settings', handle: h.handle }),
+            world: await tx.getResource({ kind: 'world', handle: h.handle, name: 'w1' }),
+        }));
+        expect(kept.settings?.user_name).toBe('kept');
+        expect(kept.world).toEqual({ entries: { kept: true } });
+    });
+
+    test('restoreUser writes a dump from another handle under the target handle', async () => {
+        if (h.kind === 'fs') return; // fs has no engine dump
+
+        const source = await makeSourceEngine(h);
+        try {
+            await seedEveryTable(source.engine, source.handle, 'source');
+            await seedEveryTable(h.engine, h.handle, 'MUTATED');
+            const sourceBefore = await readEveryTable(source.engine, source.handle);
+            expect(sourceBefore.stats?.tag).toBe('source');
+            const dumpBuf = await streamToBuffer(await source.engine.dumpUser(source.handle));
+
+            await h.engine.restoreUser(h.handle, bufferToStream(dumpBuf));
+
+            expect(await readEveryTable(h.engine, h.handle)).toEqual(sourceBefore);
+            expect(await readEveryTable(source.engine, source.handle)).toEqual(sourceBefore);
+        } finally {
+            source.cleanup();
+        }
+    });
+
+    test('sqlite restoreUser rejects a database without the Luker tables', async () => {
+        if (h.kind !== 'sqlite') return;
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' },
+                { header: HEADER, body: MESSAGES });
+        });
+        const before = await readChat(h.engine, h.handle);
+        const foreignPath = path.join(h.dataRoot, 'foreign.sqlite');
+        const foreign = new Database(foreignPath);
+        foreign.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)');
+        foreign.close();
+
+        await expect(h.engine.restoreUser(h.handle, fs.createReadStream(foreignPath)))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        expect(await readChat(h.engine, h.handle)).toEqual(before);
+    });
+
+    test('sqlite restoreUser rejects rows of several accounts that collide on one handle and keeps the data', async () => {
+        if (h.kind !== 'sqlite') return;
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'kept' } });
+        });
+        const payloadPath = path.join(h.dataRoot, 'two-accounts.sqlite');
+        fs.writeFileSync(payloadPath, await streamToBuffer(await h.engine.dumpUser(h.handle)));
+        const payload = new Database(payloadPath);
+        payload.exec(`
+            CREATE TEMP TABLE copy AS SELECT * FROM settings;
+            UPDATE copy SET handle = 'other-user';
+            INSERT INTO settings SELECT * FROM copy;
+        `);
+        payload.close();
+
+        await expect(h.engine.restoreUser(h.handle, fs.createReadStream(payloadPath)))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        const settings = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'settings', handle: h.handle }));
+        expect(settings?.user_name).toBe('kept');
+    });
+
+    test('sqlite restoreUser rejects a database whose Luker tables lack the handle column', async () => {
+        if (h.kind !== 'sqlite') return;
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' },
+                { header: HEADER, body: MESSAGES });
+        });
+        const before = await readChat(h.engine, h.handle);
+        const craftedPath = path.join(h.dataRoot, 'no-handle.sqlite');
+        const crafted = new Database(craftedPath);
+        for (const table of SQLITE_USER_TABLES) {
+            crafted.exec(table === 'chats'
+                ? 'CREATE TABLE chats (id INTEGER PRIMARY KEY, body TEXT)'
+                : `CREATE TABLE ${table} (handle TEXT, doc TEXT)`);
+        }
+        crafted.close();
+
+        await expect(h.engine.restoreUser(h.handle, fs.createReadStream(craftedPath)))
+            .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+        expect(await readChat(h.engine, h.handle)).toEqual(before);
+    });
+
+    test('restoreUser round-trips quotes and backslashes byte-identical', async () => {
+        if (h.kind === 'fs') return; // fs has no engine dump
+
+        await seedQuotedValues(h.engine, h.handle);
+        const before = await readQuotedValues(h.engine, h.handle);
+        const dumpBuf = await streamToBuffer(await h.engine.dumpUser(h.handle));
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'MUTATED' } });
+        });
+
+        await h.engine.restoreUser(h.handle, bufferToStream(dumpBuf));
+
+        expect(await readQuotedValues(h.engine, h.handle)).toEqual(before);
+        expect(before.settings.user_name).toBe(QUOTED_VALUE);
+    });
+
+    test.each(['not a number', '12abc'])('mysql restoreUser rejects %s when the server runs without strict mode and leaves the session mode as it was', async (invalidValue) => {
+        if (h.kind !== 'mysql') return; // strict mode is a mysql sql_mode
+
+        await h.engine.withTransaction(h.handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle: h.handle }, { doc: { user_name: 'kept' } });
+        });
+        const record = JSON.parse((await streamToBuffer(await h.engine.dumpUser(h.handle))).toString('utf8').trim().split('\n')[0]);
+        const crafted = { ...record, params: [record.params[0], record.params[1], invalidValue] };
+
+        // One connection, so the mode read afterwards is the restore connection's.
+        const lenientEngine = new MysqlEngine({ url: h.url, poolSize: 1 });
+        lenientEngine._pool.on('connection', (conn) => {
+            conn.query('SET SESSION sql_mode = \'\'');
+        });
+        try {
+            const [before] = await lenientEngine._pool.query('SELECT @@SESSION.sql_mode AS mode');
+            expect(before[0].mode).toBe('');
+            await expect(lenientEngine.restoreUser(h.handle, bufferToStream(Buffer.from(`${JSON.stringify(crafted)}\n`))))
+                .rejects.toBeInstanceOf(RestoreDumpInvalidError);
+            const [after] = await lenientEngine._pool.query('SELECT @@SESSION.sql_mode AS mode');
+            expect(after[0].mode).toBe('');
+        } finally {
+            await lenientEngine.close();
+        }
+        const settings = await h.engine.withTransaction(h.handle, async (tx) =>
+            tx.getResource({ kind: 'settings', handle: h.handle }));
+        expect(settings?.user_name).toBe('kept');
+    });
+
+    test('mysql restoreUser keeps quotes and backslashes when the server runs NO_BACKSLASH_ESCAPES', async () => {
+        if (h.kind !== 'mysql') return; // the sql_mode is mysql-specific
+
+        await seedQuotedValues(h.engine, h.handle);
+        const before = await readQuotedValues(h.engine, h.handle);
+        const dumpBuf = await streamToBuffer(await h.engine.dumpUser(h.handle));
+
+        const nbeEngine = new MysqlEngine({ url: h.url });
+        nbeEngine._pool.on('connection', (conn) => {
+            conn.query('SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, \',NO_BACKSLASH_ESCAPES\')');
+        });
+        try {
+            const [modeRows] = await nbeEngine._pool.query('SELECT @@SESSION.sql_mode AS mode');
+            expect(modeRows[0].mode.split(',')).toContain('NO_BACKSLASH_ESCAPES');
+            await nbeEngine.restoreUser(h.handle, bufferToStream(dumpBuf));
+        } finally {
+            await nbeEngine.close();
+        }
+
+        expect(await readQuotedValues(h.engine, h.handle)).toEqual(before);
+    });
+
+    test('sqlite restoreUser removes stale WAL and SHM sidecars before swapping the database file', async () => {
+        if (h.kind !== 'sqlite') return;
+        await seedEveryTable(h.engine, h.handle, 'original');
+        const dumpBuf = await streamToBuffer(await h.engine.dumpUser(h.handle));
+        await seedEveryTable(h.engine, h.handle, 'overwritten');
+
+        const dbPath = path.join(h.dirs.root, 'luker-storage.sqlite');
+        fs.writeFileSync(`${dbPath}-wal`, Buffer.from('stale wal bytes'));
+        fs.writeFileSync(`${dbPath}-shm`, Buffer.from('stale shm bytes'));
+
+        await h.engine.restoreUser(h.handle, bufferToStream(dumpBuf));
+
+        expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
+        expect(fs.existsSync(`${dbPath}-shm`)).toBe(false);
+        const restored = await readEveryTable(h.engine, h.handle);
+        expect(restored.settings.user_name).toBe('original');
+    });
 });
+
+// A single quote, a backslash and a backslash-quote: the characters a
+// client-side escaper rewrites, and the ones that end a string literal when
+// the server reads backslashes literally.
+const QUOTED_VALUE = 'O\'Brien \\ C:\\dir\\ \\\' end';
+// Stored names may not hold a backslash.
+const QUOTED_NAME = 'O\'Brien';
+
+async function seedQuotedValues(engine, handle) {
+    await engine.withTransaction(handle, async (tx) => {
+        await tx.putResource({ kind: 'settings', handle }, { doc: { user_name: QUOTED_VALUE } });
+        await tx.putResource({ kind: 'chat', handle, charDir: 'Alice', name: QUOTED_NAME },
+            { header: HEADER, body: [{ name: 'User', is_user: true, mes: QUOTED_VALUE }] });
+    });
+}
+
+async function readQuotedValues(engine, handle) {
+    return engine.withTransaction(handle, async (tx) => ({
+        settings: await tx.getResource({ kind: 'settings', handle }),
+        chat: await tx.getResource({ kind: 'chat', handle, charDir: 'Alice', name: QUOTED_NAME }),
+    }));
+}
+
+/**
+ * One row in each of the 9 user-data tables the engine dump writes, with
+ * `tag` in every value so rows written for different accounts differ.
+ */
+async function seedEveryTable(engine, handle, tag) {
+    const chat = { kind: 'chat', handle, charDir: 'Alice', name: 'c1' };
+    const preset = { kind: 'preset', handle, dirKey: 'openAI_Settings', name: 'p1' };
+    await engine.withTransaction(handle, async (tx) => {
+        await tx.putResource(chat, { header: HEADER, body: [{ name: 'User', is_user: true, mes: `${tag} 你好 🌍` }] });
+        await tx.putChatState(chat, 'ns', { tag });
+        await tx.putResource(preset, { doc: { tag } });
+        await tx.putPresetState(preset, 'ns', { tag });
+        await tx.putResource({ kind: 'world', handle, name: 'w1' }, { doc: { entries: {}, tag } });
+        await tx.putResource({ kind: 'named-doc', handle, bucket: 'themes', name: 't1' }, { doc: { tag } });
+        await tx.putResource({ kind: 'group', handle, id: 'g1' }, { doc: { id: 'g1', name: tag, chats: [] } });
+        await tx.putResource({ kind: 'settings', handle }, { doc: { user_name: tag } });
+        await tx.putResource({ kind: 'stats', handle }, { doc: { tag } });
+    });
+}
+
+async function readEveryTable(engine, handle) {
+    const chat = { kind: 'chat', handle, charDir: 'Alice', name: 'c1' };
+    const preset = { kind: 'preset', handle, dirKey: 'openAI_Settings', name: 'p1' };
+    return engine.withTransaction(handle, async (tx) => ({
+        chat: (await tx.getResource(chat))?.body,
+        chatState: await tx.getChatState(chat, 'ns'),
+        preset: await tx.getResource(preset),
+        presetState: await tx.getPresetState(preset, 'ns'),
+        world: await tx.getResource({ kind: 'world', handle, name: 'w1' }),
+        namedDoc: await tx.getResource({ kind: 'named-doc', handle, bucket: 'themes', name: 't1' }),
+        group: await tx.getResource({ kind: 'group', handle, id: 'g1' }),
+        settings: await tx.getResource({ kind: 'settings', handle }),
+        stats: await tx.getResource({ kind: 'stats', handle }),
+    }));
+}
+
+async function readChat(engine, handle) {
+    return engine.withTransaction(handle, async (tx) =>
+        tx.getResource({ kind: 'chat', handle, charDir: 'Alice', name: 'c1' }));
+}
+
+/**
+ * A source account for cross-handle restore: mysql/pg share the harness DB
+ * under another handle; sqlite keeps one file per account, so it gets its own
+ * engine and directory.
+ */
+async function makeSourceEngine(h) {
+    if (h.kind !== 'sqlite') {
+        return { engine: h.engine, handle: 'source-user', cleanup: () => {} };
+    }
+    const root = path.join(h.dataRoot, 'source-user');
+    const engine = new SqliteEngine({ directoriesByHandle: () => ({ root }) });
+    return { engine, handle: 'source-user', cleanup: () => engine.close() };
+}

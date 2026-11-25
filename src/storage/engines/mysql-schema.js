@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMigrations } from './schema-runner.js';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 // MySQL 8 schema mirroring sqlite-schema.js. Key dialect choices:
 //   - VARCHAR(128) on PK string columns. The plan called for VARCHAR(128)
@@ -49,16 +49,28 @@ export async function initSchema(pool) {
         executor: async (sql) => {
             // Migration files are author-controlled, no string literals containing
             // semicolons; naive split on `;\n` is sufficient. Each resulting
-            // statement runs independently because MySQL 8 has no `CREATE INDEX
-            // IF NOT EXISTS` and we must tolerate ER_DUP_KEYNAME on re-runs of
-            // CREATE INDEX statements (the rest stay idempotent via
-            // CREATE TABLE IF NOT EXISTS).
+            // statement runs independently because MySQL 8 lacks `CREATE INDEX
+            // IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+            // Guard single-column ADD COLUMN via information_schema (and tolerate
+            // ER_DUP_FIELDNAME on concurrent startup) plus ER_DUP_KEYNAME for
+            // CREATE INDEX so crashing between DDL and the `_storage_meta` version
+            // bump recovers cleanly on restart.
             const stmts = sql.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
             for (const stmt of stmts) {
+                const addColumnMatch = /^ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+COLUMN\s+`?([A-Za-z0-9_]+)`?\b/i.exec(stmt);
+                if (addColumnMatch) {
+                    const [, tableName, columnName] = addColumnMatch;
+                    const [cols] = await pool.query(
+                        'SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+                        [tableName, columnName],
+                    );
+                    if (cols.length > 0) continue;
+                }
                 try {
                     await pool.query(stmt);
                 } catch (err) {
                     if (err && err.code === 'ER_DUP_KEYNAME') continue;
+                    if (addColumnMatch && err && err.code === 'ER_DUP_FIELDNAME') continue;
                     throw err;
                 }
             }

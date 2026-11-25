@@ -38,6 +38,7 @@ import {
     MemoryLimitedMap,
     getLanAddressCandidates,
     buildLanBaseUrlCandidates,
+    createDrainingThrottle,
 } from '../src/util';
 
 describe('keyToEnv', () => {
@@ -887,5 +888,30 @@ describe('buildLanBaseUrlCandidates', () => {
 
     test('returns nothing for an unparsable primary URL', () => {
         expect(buildLanBaseUrlCandidates('not a url', { listen: true }, interfaces)).toEqual([]);
+    });
+});
+
+describe('createDrainingThrottle', () => {
+    test('clears pending args before invoking callback so re-entrant run and throws behave cleanly', () => {
+        const seen = [];
+        const throttle = createDrainingThrottle((value) => {
+            seen.push(value);
+            if (value === 'first') {
+                throttle.run('reentrant');
+            } else if (value === 'boom') {
+                throw new Error('callback failed');
+            }
+        }, 60_000);
+
+        throttle.run('first');
+        // Leading call ran synchronously and re-entrantly queued 'reentrant';
+        // flush must drain 'reentrant' rather than dropping it.
+        throttle.flush();
+        expect(seen).toEqual(['first', 'reentrant']);
+
+        // A throwing callback must not leave stale pending args that replay on flush.
+        expect(() => throttle.run('boom')).toThrow('callback failed');
+        throttle.flush();
+        expect(seen).toEqual(['first', 'reentrant', 'boom']);
     });
 });

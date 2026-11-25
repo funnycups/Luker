@@ -163,7 +163,7 @@ import { router as storageHealthRouter } from './endpoints/storage-health.js';
 import { createRendererCaptureRouter } from './endpoints/renderer-capture.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
-import { init as settingsInit } from './endpoints/settings.js';
+import { flushSettingsBackups, init as settingsInit } from './endpoints/settings.js';
 import { ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { verifyWsTicket } from './ws-ticket-router.js';
 import { createDeliveryServer } from './ws-delivery.js';
@@ -735,6 +735,14 @@ async function preSetupTasks() {
     const exitProcess = async () => {
         if (isExiting) return;
         isExiting = true;
+        try {
+            const outcomes = await Promise.allSettled((await getUserDirectoriesList()).map(directories => flushSettingsBackups(directories.root)));
+            const failures = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+            if (failures.length) throw new globalThis.AggregateError(failures, 'Settings backup shutdown failed');
+        } catch (error) {
+            console.error('Could not drain settings backups before shutdown:', error);
+            process.exitCode = 1;
+        }
         await statsOnExit();
         if (typeof cleanupPlugins === 'function') {
             await cleanupPlugins();

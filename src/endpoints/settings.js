@@ -4,12 +4,12 @@ import path from 'node:path';
 import express from 'express';
 import _ from 'lodash';
 
-import { getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
+import { createDrainingThrottle, getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { getSettingsRepo, getPresetRepo, getNamedDocRepo, getWorldInfoRepo } from '../storage/index.js';
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
-import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { ConflictError, NotFoundError, PatchTestFailedError, PatchMissingParentError, StorageReadOnlyError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { buildSettingsFieldStructure, decodeResourcePointer } from '../../public/scripts/util/resource-fields.js';
 import { resolveJsonResourceRepresentation, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
 import { getBuiltinTheme, isBuiltinThemeName, listBuiltinThemeNames, listBuiltinThemes } from '../themes/builtin-themes.js';
@@ -23,10 +23,17 @@ const ENABLE_ACCOUNTS = !!getConfigValue('enableUserAccounts', false, 'boolean')
 const AUTOSAVE_INTERVAL = 10 * 60 * 1000;
 
 /**
- * Map of functions to trigger settings autosave for a user.
- * @type {Map<string, function>}
+ * Autosave work belonging to a user data root and its storage repository.
+ * @type {Map<string, {run: () => void, flush: () => void, finish: () => Promise<void>}>}
  */
 const AUTOSAVE_FUNCTIONS = new Map();
+
+/**
+ * Active flush promises keyed by user data root so concurrent flush callers
+ * still wait for retiring backups without re-exposing the retiring throttle.
+ * @type {Map<string, Promise<void>>}
+ */
+const ACTIVE_FLUSHES = new Map();
 
 /**
  * Triggers autosave for a user every 10 minutes.
@@ -35,17 +42,60 @@ const AUTOSAVE_FUNCTIONS = new Map();
  * @returns {void}
  */
 function triggerAutoSave(handle, userDirectories) {
-    if (!AUTOSAVE_FUNCTIONS.has(handle)) {
-        const throttledAutoSave = _.throttle(
-            () => { backupUserSettings(handle, userDirectories, true).catch((err) => console.error('autosave failed:', err)); },
-            AUTOSAVE_INTERVAL,
-        );
-        AUTOSAVE_FUNCTIONS.set(handle, throttledAutoSave);
+    let entry = AUTOSAVE_FUNCTIONS.get(userDirectories.root);
+    if (!entry) {
+        const directories = { root: userDirectories.root, backups: userDirectories.backups };
+        const failures = [];
+        let pendingWork = Promise.resolve();
+        const throttle = createDrainingThrottle(() => {
+            pendingWork = pendingWork.then(() => backupUserSettings(handle, directories, true)).catch(error => {
+                failures.push(error);
+                console.error(`Settings autosave failed at ${directories.root}:`, error);
+            });
+        }, AUTOSAVE_INTERVAL);
+        entry = {
+            ...throttle,
+            finish: async () => {
+                await pendingWork;
+                if (failures.length === 1) throw failures[0];
+                if (failures.length > 1) throw new globalThis.AggregateError(failures, `Settings autosaves failed at ${directories.root}`);
+            },
+        };
+        AUTOSAVE_FUNCTIONS.set(directories.root, entry);
     }
+    entry.run();
+}
 
-    const functionToCall = AUTOSAVE_FUNCTIONS.get(handle);
-    if (functionToCall && typeof functionToCall === 'function') {
-        functionToCall();
+/**
+ * Cancels the root's autosave timer and joins its admitted and pending writes.
+ * @param {string} userRoot User data root being closed
+ * @returns {Promise<void>}
+ */
+export async function flushSettingsBackups(userRoot) {
+    const entry = AUTOSAVE_FUNCTIONS.get(userRoot);
+    if (!entry) {
+        const activeFlush = ACTIVE_FLUSHES.get(userRoot);
+        if (activeFlush) {
+            await activeFlush;
+        }
+        return;
+    }
+    // Detach before flushing so a concurrent triggerAutoSave creates a fresh
+    // tracked entry rather than re-arming a timer on this retiring instance.
+    AUTOSAVE_FUNCTIONS.delete(userRoot);
+    entry.flush();
+    const previousFlush = ACTIVE_FLUSHES.get(userRoot);
+    const finishPromise = entry.finish();
+    const combined = previousFlush
+        ? Promise.allSettled([previousFlush, finishPromise]).then(() => finishPromise)
+        : finishPromise;
+    ACTIVE_FLUSHES.set(userRoot, combined);
+    try {
+        await combined;
+    } finally {
+        if (ACTIVE_FLUSHES.get(userRoot) === combined) {
+            ACTIVE_FLUSHES.delete(userRoot);
+        }
     }
 }
 
@@ -335,15 +385,16 @@ async function backupSettings() {
  * @param {string} handle User handle
  * @param {object} userDirectories Per-user directory map (from request.user.directories or getUserDirectories)
  * @param {boolean} preventDuplicates Skip when content matches the latest backup
+ * @param {ReturnType<typeof getSettingsRepo>} repo Repository owning this backup
  * @returns {Promise<void>}
  */
-async function backupUserSettings(handle, userDirectories, preventDuplicates) {
+async function backupUserSettings(handle, userDirectories, preventDuplicates, repo = getSettingsRepo()) {
     if (!fs.existsSync(userDirectories.root)) {
         return;
     }
     fs.mkdirSync(userDirectories.backups, { recursive: true });
 
-    const settingsDoc = await getSettingsRepo().get(handle);
+    const settingsDoc = await repo.get(handle);
     if (settingsDoc == null) return;
     const serialized = JSON.stringify(settingsDoc, null, 4);
 
@@ -514,6 +565,10 @@ router.post('/patch', async function (request, response) {
         triggerAutoSave(handle, request.user.directories);
         return response.send({ result: 'ok', applied: operations.length });
     } catch (error) {
+        if (error instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: error.message });
+        }
+        if (error instanceof ConflictError) return response.status(409).send({ code: error.code, details: error.details, error: error.message });
         if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
             return response.status(409).send({
                 error: 'Settings patch test conflict.',
@@ -540,6 +595,10 @@ router.post('/save', async function (request, response) {
         triggerAutoSave(handle, request.user.directories);
         response.send({ result: 'ok' });
     } catch (err) {
+        if (err instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: err.message });
+        }
+        if (err instanceof ConflictError) return response.status(409).send({ code: err.code, details: err.details, error: err.message });
         console.error(err);
         response.status(500).send({
             error: 'Failed to save settings.',
@@ -658,6 +717,12 @@ router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (r
 
         response.sendStatus(204);
     } catch (error) {
+        if (error instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: error.message });
+        }
+        if (error instanceof ConflictError) {
+            return response.status(409).send({ code: error.code, details: error.details, error: error.message });
+        }
         console.error(error);
         response.sendStatus(500);
     }

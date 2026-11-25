@@ -2,6 +2,7 @@ import _ from 'lodash';
 
 import { assertWritable } from '../read-only-mode.js';
 import { applyJsonPatch } from './json-patch.js';
+import { withWorldDeletion, createWorldIdentityResolver } from '../world-reference-coordination.js';
 
 export class WorldInfoRepo {
     constructor({ engine }) { this._engine = engine; }
@@ -17,12 +18,19 @@ export class WorldInfoRepo {
         if (!_.isObjectLike(doc) || Array.isArray(doc) || !_.isObjectLike(doc.entries) || Array.isArray(doc.entries)) {
             throw new Error('WorldInfoRepo.save: doc must be an object with an entries object');
         }
-        await this._engine.withTransaction(handle, (tx) => tx.putResource(this._key(handle, name), { doc }));
+        return this._engine.withTransaction(handle, (tx) => tx.putResource(this._key(handle, name), { doc }));
     }
 
-    async delete(handle, name) {
+    async getVersion(handle, name) {
+        return this._engine.withTransaction(handle, (tx) => tx.getWorldInfoVersion(this._key(handle, name)));
+    }
+
+    async delete(handle, name, { expectedVersion, beforeDelete } = {}) {
         assertWritable();
-        return this._engine.withTransaction(handle, (tx) => tx.deleteResource(this._key(handle, name)));
+        const remove = resolvedTarget => this._engine.withTransaction(handle, (tx) => tx.deleteResource(this._key(handle, name), { expectedVersion, resolvedTarget }));
+        return expectedVersion !== undefined || beforeDelete
+            ? withWorldDeletion(this._engine, handle, name, remove, beforeDelete)
+            : remove();
     }
 
     async exists(handle, name) {
@@ -30,6 +38,11 @@ export class WorldInfoRepo {
             const canonical = await tx.resolveWorldName(this._key(handle, name));
             return canonical != null;
         });
+    }
+
+    async captureIdentity(handle) {
+        const catalog = await this._engine.withTransaction(handle, tx => tx.captureWorldInfoIdentity(handle));
+        return createWorldIdentityResolver(catalog);
     }
 
     async patch(handle, name, ops) {

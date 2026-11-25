@@ -1,8 +1,12 @@
 import crypto from 'node:crypto';
+import { jest } from '@jest/globals';
 import mysql from 'mysql2/promise';
 import pg from 'pg';
 import { MysqlEngine } from '../../../src/storage/engines/mysql-engine.js';
 import { PgEngine } from '../../../src/storage/engines/postgres-engine.js';
+import { WorldInfoRepo } from '../../../src/storage/repositories/world-info-repo.js';
+import { makeTempMysqlEngineHarness } from '../harness/mysql-harness.js';
+import { makeTempPgEngineHarness } from '../harness/pg-harness.js';
 
 // Match the harness's DB/connection-string defaults; the controller's docker
 // containers expose mysql on 53306 and postgres on 55432 against these roles.
@@ -148,4 +152,205 @@ describePg('PgEngine pool acquire timeout', () => {
             await engine.close();
         }
     }, 5000);
+});
+
+describeMysql('MysqlEngine connection error lifecycle and deterministic ordering', () => {
+    let h;
+
+    beforeEach(async () => {
+        h = await makeTempMysqlEngineHarness();
+        await h.engine.ping(h.handle);
+    });
+
+    afterEach(async () => {
+        if (h) await h.cleanup();
+    });
+
+    test('destroys an errored connection even after BEGIN succeeded', async () => {
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        let firstConnId;
+        let secondConnId;
+        try {
+            await h.engine.withTransaction(h.handle, async (tx) => {
+                const [[{ id }]] = await tx._conn.query('SELECT CONNECTION_ID() AS id');
+                firstConnId = id;
+                tx._conn.emit('error', Object.assign(new Error('synthetic mysql socket drop'), { code: 'ECONNRESET' }));
+            });
+
+            await h.engine.withTransaction(h.handle, async (tx) => {
+                const [[{ id }]] = await tx._conn.query('SELECT CONNECTION_ID() AS id');
+                secondConnId = id;
+            });
+
+            expect(secondConnId).toBeDefined();
+            expect(secondConnId).not.toBe(firstConnId);
+        } finally {
+            errSpy.mockRestore();
+        }
+    });
+
+    test('logs idle raw connection errors via pool connection listener without crashing', async () => {
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            await h.engine.ping(h.handle);
+            const rawPool = h.engine._pool.pool;
+            expect(rawPool._freeConnections.length).toBeGreaterThan(0);
+            const idleConn = rawPool._freeConnections.get(0);
+            expect(idleConn._released).toBe(true);
+
+            expect(() => {
+                idleConn.emit('error', Object.assign(new Error('idle mysql reset'), { code: 'PROTOCOL_CONNECTION_LOST' }));
+            }).not.toThrow();
+
+            expect(errSpy).toHaveBeenCalledWith(
+                expect.stringContaining('[storage:mysql] op=idle-connection'),
+            );
+        } finally {
+            errSpy.mockRestore();
+        }
+    });
+
+    test('destroys errored connection in ping (mysql)', async () => {
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const origGetConnection = h.engine._pool.getConnection.bind(h.engine._pool);
+            let destroyedInPing = false;
+            h.engine._pool.getConnection = async () => {
+                const conn = await origGetConnection();
+                const origQuery = conn.query.bind(conn);
+                const origDestroy = conn.destroy.bind(conn);
+                conn.destroy = () => {
+                    destroyedInPing = true;
+                    return origDestroy();
+                };
+                conn.query = async (...args) => {
+                    conn.emit('error', new Error('ping socket error'));
+                    return origQuery(...args);
+                };
+                h.engine._pool.getConnection = origGetConnection;
+                return conn;
+            };
+            await h.engine.ping(h.handle);
+            expect(destroyedInPing).toBe(true);
+        } finally {
+            errSpy.mockRestore();
+        }
+    });
+
+    test('listAllNames resolves tolerant world lookup deterministically by ORDER BY name ASC (mysql)', async () => {
+        const worlds = new WorldInfoRepo({ engine: h.engine });
+        await h.engine._pool.execute(
+            'INSERT INTO worlds (handle, name, doc, updated_at, revision) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)',
+            [
+                h.handle, 'Beta Book', JSON.stringify({ entries: { '1': { content: 'single-space' } } }), 100, 'r1',
+                h.handle, 'Beta  Book', JSON.stringify({ entries: { '2': { content: 'double-space' } } }), 100, 'r2',
+            ],
+        );
+        expect(await worlds.resolveName(h.handle, 'Beta   Book')).toBe('Beta  Book');
+    });
+});
+
+describePg('PgEngine connection error lifecycle and deterministic ordering', () => {
+    let h;
+
+    beforeEach(async () => {
+        h = await makeTempPgEngineHarness();
+        await h.engine.ping(h.handle);
+    });
+
+    afterEach(async () => {
+        if (h) await h.cleanup();
+    });
+
+    test('destroys an errored client even after BEGIN succeeded', async () => {
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        let firstPid;
+        let secondPid;
+        try {
+            await h.engine.withTransaction(h.handle, async (tx) => {
+                const r = await tx._client.query('SELECT pg_backend_pid() AS pid');
+                firstPid = r.rows[0].pid;
+                tx._client.emit('error', new Error('synthetic pg connection error'));
+            });
+
+            await h.engine.withTransaction(h.handle, async (tx) => {
+                const r = await tx._client.query('SELECT pg_backend_pid() AS pid');
+                secondPid = r.rows[0].pid;
+            });
+
+            expect(secondPid).toBeDefined();
+            expect(secondPid).not.toBe(firstPid);
+        } finally {
+            errSpy.mockRestore();
+        }
+    });
+
+    test('attaches error listener and destroys errored client in ping and dumpUser', async () => {
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const origConnect = h.engine._pool.connect.bind(h.engine._pool);
+            let pingReleaseArg;
+            h.engine._pool.connect = async () => {
+                const client = await origConnect();
+                const origQuery = client.query.bind(client);
+                const origRelease = client.release.bind(client);
+                client.release = (arg) => {
+                    pingReleaseArg = arg;
+                    return origRelease(arg);
+                };
+                client.query = async (...args) => {
+                    client.emit('error', new Error('pg ping socket error'));
+                    return origQuery(...args);
+                };
+                h.engine._pool.connect = origConnect;
+                return client;
+            };
+            await h.engine.ping(h.handle);
+            expect(pingReleaseArg).toBeInstanceOf(Error);
+            expect(pingReleaseArg.message).toBe('pg ping socket error');
+
+            let dumpReleaseArg;
+            h.engine._pool.connect = async () => {
+                const client = await origConnect();
+                const origQuery = client.query.bind(client);
+                const origRelease = client.release.bind(client);
+                let emitted = false;
+                client.release = (arg) => {
+                    dumpReleaseArg = arg;
+                    return origRelease(arg);
+                };
+                client.query = async (...args) => {
+                    if (!emitted) {
+                        emitted = true;
+                        client.emit('error', new Error('pg dump socket error'));
+                    }
+                    return origQuery(...args);
+                };
+                h.engine._pool.connect = origConnect;
+                return client;
+            };
+            const dump = await h.engine.dumpUser(h.handle);
+            const chunks = [];
+            for await (const chunk of dump) { chunks.push(chunk); }
+            expect(chunks.length).toBeGreaterThanOrEqual(0);
+            expect(dumpReleaseArg).toBeInstanceOf(Error);
+            expect(dumpReleaseArg.message).toBe('pg dump socket error');
+        } finally {
+            errSpy.mockRestore();
+        }
+    });
+
+    test('listAllNames resolves tolerant world lookup deterministically by ORDER BY name ASC (postgres)', async () => {
+        const worlds = new WorldInfoRepo({ engine: h.engine });
+        await h.engine._pool.query(
+            'INSERT INTO worlds (handle, name, doc, updated_at, revision) VALUES ($1, $2, $3::jsonb, $4, $5), ($1, $6, $7::jsonb, $4, $8)',
+            [
+                h.handle,
+                'Beta Book', JSON.stringify({ entries: { '1': { content: 'single-space' } } }), 100, 'r1',
+                'Beta  Book', JSON.stringify({ entries: { '2': { content: 'double-space' } } }), 'r2',
+            ],
+        );
+        const expected = (await h.engine._pool.query('SELECT name FROM worlds WHERE handle=$1 ORDER BY name ASC', [h.handle])).rows[0].name;
+        expect(await worlds.resolveName(h.handle, 'Beta   Book')).toBe(expected);
+    });
 });

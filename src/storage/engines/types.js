@@ -40,10 +40,22 @@
  *   Publish the captured native parent/state without encoding parsed values or replacing occupied entries.
  * @property {(token: object) => Promise<void>} deleteChatMoveSource
  *   Verify the captured parent and complete state inventory before deleting only the copied source.
- * @property {(resource: ResourceKey) => Promise<void>} deleteResource
+ * @property {(resource: ResourceKey, options?: {expectedVersion?: string, resolvedTarget?: WorldInfoIdentity | null}) => Promise<boolean>} deleteResource World deletion uses the captured storage locator; null preserves captured absence, while undefined resolves the current name.
  *   Delete a resource. Cascades any sub-records (sidecars in FsEngine; FK CASCADE in SqlEngine).
+ *   World resources accept original-write versions. Repository coordination protects adoption through commit.
+ * @property {(resource: ResourceKey) => Promise<string | null>} getWorldInfoVersion
+ *   Opaque world write version, separate from the document returned by getResource.
+ * @property {(handle: string) => Promise<WorldInfoCatalog>} captureWorldInfoIdentity
+ *   Retain exact-first selection and exact locator membership over the current catalog.
  * @property {(filter: ResourceListFilter) => Promise<ResourceRecord[]>} listResources
  *   List resources matching the filter. Supports limit / orderBy.
+ */
+
+/**
+ * @typedef {{name: string, locator: string}} WorldInfoIdentity
+ *   Semantic reference name and engine storage locator. Filesystem locators
+ *   include the selected extension spelling; SQL locators are exact stored names.
+ * @typedef {{resolve: (name: string) => WorldInfoIdentity | null | Promise<WorldInfoIdentity | null>, has: (locator: string) => boolean}} WorldInfoCatalog
  */
 
 /**

@@ -6,7 +6,8 @@ const describeMysql = process.env.LUKER_DISABLE_MYSQL_TESTS ? describe.skip : de
 describeMysql('MysqlEngine schema bootstrap', () => {
     let harness;
     beforeEach(async () => {
-        harness = await makeTempMysqlEngineHarness();
+        // A database with no tables, so ping runs the bootstrap itself.
+        harness = await makeTempMysqlEngineHarness({ fresh: true });
         // ping triggers _ensureSchema -> initSchema once
         await harness.engine.ping(harness.handle);
     });
@@ -14,8 +15,8 @@ describeMysql('MysqlEngine schema bootstrap', () => {
         if (harness) await harness.cleanup();
     });
 
-    test('CURRENT_SCHEMA_VERSION is 1', () => {
-        expect(CURRENT_SCHEMA_VERSION).toBe(1);
+    test('CURRENT_SCHEMA_VERSION includes world revisions', () => {
+        expect(CURRENT_SCHEMA_VERSION).toBe(2);
     });
 
     test('all expected tables exist (9 storage + _storage_meta)', async () => {
@@ -69,22 +70,22 @@ describeMysql('MysqlEngine schema bootstrap', () => {
         expect(rows[0].integrity).toBe('abc-123');
     });
 
-    test('_storage_meta.schema_version reads "1" after initSchema', async () => {
+    test('_storage_meta.schema_version includes world revisions after initSchema', async () => {
         const [rows] = await harness.engine._pool.query(
             'SELECT value FROM _storage_meta WHERE `key` = \'schema_version\'',
         );
         expect(rows.length).toBe(1);
-        expect(rows[0].value).toBe('1');
+        expect(rows[0].value).toBe('2');
     });
 
     test('initSchema is idempotent — second call is a no-op', async () => {
         // First call already ran via ping. Second direct call must not throw.
         await expect(initSchema(harness.engine._pool)).resolves.toBeUndefined();
-        // And the version row stays at 1 (not duplicated, not bumped).
+        // The version row is not duplicated or advanced on another call.
         const [rows] = await harness.engine._pool.query(
             'SELECT value FROM _storage_meta WHERE `key` = \'schema_version\'',
         );
         expect(rows.length).toBe(1);
-        expect(rows[0].value).toBe('1');
+        expect(rows[0].value).toBe('2');
     });
 });

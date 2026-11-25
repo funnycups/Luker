@@ -97,10 +97,22 @@ router.post('/something', async function (req, res) {
 |---|---|
 | `SettingsRepo` | `get(handle)`, `save(handle, doc)`, `patch(handle, ops)` — `patch` throws `NotFoundError` when settings file missing |
 | `PresetRepo` | `get/save/delete/exists/patch(handle, apiId, name, ...)`, `getState/setState/deleteState/deleteAllStates/listStateNamespaces(... , namespace)`, `renameStates(... , oldName, newName)` |
-| `WorldInfoRepo` | `get/save/delete/exists/patch/list/resolveName(handle, name, ...)` — `save` and `patch` enforce `{entries: object}` invariant; `resolveName` performs tolerant lookup and returns the canonical name (without extension) for direct re-use with `get/save` |
+| `WorldInfoRepo` | `get/save/delete/getVersion/exists/patch/list/resolveName(handle, name, ...)` — `save` and `patch` enforce `{entries: object}` invariant; `save` returns the original write version; `resolveName` performs tolerant lookup and returns the canonical name (without extension) for direct re-use with `get/save` |
 | `NamedDocRepo` | `get/list/listWithDocs/save/patch/delete(handle, bucket, name, {strict?})` — buckets: `themes`, `movingUI`, `quickReplies`, `globalStates` |
 | `GroupRepo` | `get/save/delete/list/listWithChatStats(handle, ...)` — `delete` returns `{deleted, chatsDeleted}` and cascades member chat JSONLs (and their sidecars) via the chat handler |
 | `StatsRepo` | `get(handle)`, `save(handle, doc)` |
+
+## Conditional world cleanup
+
+`WorldInfoRepo.save` returns an opaque version from the actual write. `getVersion` validates that receipt; it must not establish ownership after intervening changes. `delete(handle, name, { expectedVersion, beforeDelete })` runs the adoption inspection inside an engine/user-scoped coordination queue and holds that scope through transaction completion. The actual resource deletion still checks its original version. `beforeDelete` can read persisted settings asynchronously. Conflicts throw `ConflictError` with `world_changed` or `world_in_use`.
+
+The existing character writer and SettingsRepo.save/patch use the same queue. Persisted character adoption includes PNG primary bindings and auxiliary `charLore[].extraBooks` in the active settings repository. A reference write queued behind a committed deletion rejects with `world_deleted` before mutation. A failed deletion releases waiting writes. Receipts exist only for overlapping operations, so ordinary unresolved-name payloads retain their existing storage behavior. Settings documents use `world_info_settings.world_info`; the existing reader also accepts the older top-level `world_info` shape. Coordination is in-process and provides ordering, not a cross-resource transaction.
+
+Filesystem versions include bytes and file identity. Validation and unlink have no asynchronous gap in the handler; this is not a cross-process filesystem lock. SQL writes rotate a nullable `worlds.revision`, and conditional deletion uses a revision predicate in the DELETE statement. Existing documents are unchanged. Legacy rows have no cleanup receipt until saved. SQL text dumps omit cleanup revisions, and SQLite restore clears them, so restoring data does not restore earlier cleanup ownership. Older SQLite schemas are validated against their declared schema before upgrading.
+
+`/api/worldinfo/edit` returns the write version in `X-World-Version`. `/api/characters/merge-attributes` returns `X-Character-Version` captured immediately after its file write. Optional `ifMatch` supplies that original character version and `{ world: { name, version } }` for cleanup restoration. Resource and adoption inspection run in the coordinated character writer; the character file is revalidated immediately before writing. Primary or auxiliary adoption refuses restoration. Conditional world deletion can still fail after restoration succeeds.
+
+Conditional deletion errors report observed `resourceState` as `present`, `missing` or `unknown`. A missing book does not become confirmed retention through a version conflict, and a lost successful response leaves deletion unconfirmed. Client caches remain valid observations of earlier reads, not proof of current resource presence. `/api/settings` returns a typed `world_deleted` refusal for an overtaken reference write; the settings client terminates that captured attempt without repeating a full payload.
 
 ## On-disk conventions (FsEngine)
 
@@ -113,7 +125,7 @@ router.post('/something', async function (req, res) {
 ## What FS mode does NOT provide
 
 - **Cross-resource transactions.** `withTransaction(fn)` on FsEngine runs `fn` sequentially; if a write inside the closure throws after earlier writes succeeded, the earlier writes are NOT rolled back. SqliteEngine provides true transactions.
-- **Concurrent-write linearization.** Chats use the integrity slug (409 → client retries) for safety, not file locks. Other resources have no OCC at all — concurrent writers to the same file race. FS mode introduces no `_journal/`, `_locks/`, or other files that would break vanilla SillyTavern compatibility.
+- **Concurrent-write linearization.** Chat integrity and conditional world deletion detect source conflicts; they do not provide general filesystem write locks. Other concurrent writers can race.
 
 ## Testing
 

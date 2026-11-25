@@ -25,6 +25,9 @@ const allowlist = JSON.parse(
 const ALLOWED = new Set(
     allowlist.allowedFiles.map((p) => path.resolve(__dirname, '..', p)),
 );
+const ALLOWED_SUFFIXES = allowlist.allowedFiles.map(
+    (p) => path.sep + p.split('/').join(path.sep),
+);
 
 const FS_METHODS = new Set([
     'writeFileSync',
@@ -141,7 +144,7 @@ module.exports = {
         if (!resolved.includes(path.sep + 'src' + path.sep + 'endpoints' + path.sep)) {
             return {};
         }
-        if (ALLOWED.has(resolved)) return {};
+        if (ALLOWED.has(resolved) || ALLOWED_SUFFIXES.some((s) => resolved.endsWith(s))) return {};
 
         // Walk each function body; flag when the SAME function body contains
         // both an fs.* call and a request.user.directories.* access.

@@ -12,7 +12,8 @@
 //   2. setUserDataMiddleware-style stub that injects request.user
 //      ({profile: {handle}, directories: {...}}).
 //   3. Whatever router(s) the test wants to mount.
-// Tests drive the app with `supertest`.
+// Tests drive the app with `supertest`, or through the owned IPv4 listener
+// when a route performs a real outbound fetch.
 //
 // Engines covered (matches CONTRACT_HARNESSES used by Repo-layer tests):
 //   - FsEngine            (always on)
@@ -25,20 +26,19 @@
 // down their connection/pool and re-create against the same data root so the
 // next request sees only what is durably persisted.
 
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 
 import bodyParser from 'body-parser';
 import express from 'express';
-import mysql from 'mysql2/promise';
-import pg from 'pg';
 import request from 'supertest';
 
 import { initStorage, getStorageEngine } from '../../../src/storage/index.js';
-import { _resetChatBackupThrottlesForTests } from '../../../src/endpoints/chats.js';
+import { acquireMysqlDatabase, acquirePostgresDatabase, MYSQL_ROOT_URL, PG_ROOT_URL } from '../../harness/database.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
+import { flushChatBackups } from '../../../src/endpoints/chats.js';
+import { flushSettingsBackups } from '../../../src/endpoints/settings.js';
 
 // Mirror src/constants.js USER_DIRECTORY_TEMPLATE — must stay in sync.
 const USER_DIRS = Object.freeze({
@@ -109,11 +109,7 @@ function precreateCommonDirs(dirs) {
     fs.mkdirSync(dirs.cardApps, { recursive: true });
 }
 
-// Local dev container defaults — keep in sync with mysql-harness.js / pg-harness.js.
-const MYSQL_ROOT_URL = process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306';
-const PG_ROOT_URL = process.env.LUKER_TEST_POSTGRES_URL || 'postgresql://luker:postgres@127.0.0.1:55432/luker_test';
-
-function makeEngineFactory({ mode, dataRoot, handle, extraHandles, dbName, pgSchemaUrl }) {
+function makeEngineFactory({ mode, dataRoot, handle, extraHandles, mysqlUrl, pgUrl }) {
     const userDir = path.join(dataRoot, handle);
     const dirs = buildDirs(userDir);
     // Extra handles share the same `dataRoot` (so the same sqlite/mysql/pg
@@ -133,53 +129,9 @@ function makeEngineFactory({ mode, dataRoot, handle, extraHandles, dbName, pgSch
         dirs,
         extraDirs,
         directoriesByHandle,
-        get mysqlUrl() { return mode === 'mysql' ? `${MYSQL_ROOT_URL}/${dbName}` : null; },
-        get pgUrl() { return mode === 'postgres' ? pgSchemaUrl : null; },
+        get mysqlUrl() { return mode === 'mysql' ? mysqlUrl : null; },
+        get pgUrl() { return mode === 'postgres' ? pgUrl : null; },
     };
-}
-
-async function useConnection(connection, run) {
-    let value;
-    const failures = [];
-    try { value = await run(connection); } catch (error) { failures.push(error); }
-    try { await connection.end(); } catch (error) { failures.push(error); }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) throw new AggregateError(failures, 'Connection operation and closure failed');
-    return value;
-}
-
-async function createMysqlDatabase(dbName, acquired) {
-    const conn = await mysql.createConnection(MYSQL_ROOT_URL);
-    await useConnection(conn, async () => {
-        await conn.query(`CREATE DATABASE \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`);
-        acquired();
-    });
-}
-
-async function dropMysqlDatabase(dbName) {
-    const conn = await mysql.createConnection(MYSQL_ROOT_URL);
-    await useConnection(conn, () => conn.query(`DROP DATABASE IF EXISTS \`${dbName}\``));
-}
-
-async function createPgSchema(schema, acquired) {
-    const c = new pg.Client({ connectionString: PG_ROOT_URL });
-    await useConnection(c, async () => {
-        await c.connect();
-        await c.query(`CREATE SCHEMA "${schema}"`);
-        acquired();
-    });
-}
-
-async function dropPgSchema(schema) {
-    const c = new pg.Client({ connectionString: PG_ROOT_URL });
-    await useConnection(c, async () => {
-        await c.connect();
-        await c.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-    });
-}
-
-function pgSchemaConnUrl(schema) {
-    return `${PG_ROOT_URL}?options=-csearch_path%3D${encodeURIComponent(schema)}`;
 }
 
 /**
@@ -201,12 +153,29 @@ function pgSchemaConnUrl(schema) {
  *        be the deletion target.
  * @returns {Promise<{app, server, dataRoot, handle, dirs, extraDirs, mode, engine, reopenEngine, cleanup}>}
  */
-export async function makeEndpointHarness({ mode, mount, profile, extraHandles, handle = 'u' }) {
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), `luker-ep-${mode}-`));
-    const dbName = (mode === 'mysql' || mode === 'postgres')
-        ? `luker_test_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`
-        : null;
-    let engine, factory, server, listening = false, closing = false, databaseCreated = false, cleanupJob;
+export async function makeEndpointHarness({ scope = currentScopeForResources(), mode, mount, profile, extraHandles, handle = 'u' }) {
+    if (!scope || typeof scope.directory !== 'function' || typeof scope.onFinalize !== 'function') throw new TypeError('Endpoint harness requires a managed resource scope');
+    const dataRootReceipt = await scope.directory(`endpoint ${mode}`);
+    const dataRoot = dataRootReceipt.path;
+    let mysqlUrl = null;
+    let pgUrl = null;
+    if (mode === 'mysql') mysqlUrl = (await acquireMysqlDatabase(scope, MYSQL_ROOT_URL)).url;
+    if (mode === 'postgres') pgUrl = (await acquirePostgresDatabase(scope, PG_ROOT_URL)).url;
+
+    const factory = makeEngineFactory({
+        mode, dataRoot, handle, extraHandles, mysqlUrl, pgUrl,
+    });
+    precreateCommonDirs(factory.dirs);
+    for (const h of extraHandles || []) {
+        precreateCommonDirs(factory.extraDirs[h]);
+    }
+
+    let engine;
+    let server;
+    let listening = false;
+    let closing = false;
+    let cleanupJob;
+    let cleanupObserved = false;
     let readiness = Promise.resolve();
     const activeTransport = new Set(), activeWork = new Set(), workFailures = new Set();
     const continuations = new WeakMap();
@@ -221,6 +190,18 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
 
     async function drainActive() {
         while (activeTransport.size || activeWork.size) await Promise.all([...activeTransport, ...activeWork]);
+    }
+
+    async function drainBackups() {
+        const failures = [];
+        for (const dirs of [factory.dirs, ...Object.values(factory.extraDirs)]) {
+            try { flushChatBackups(dirs.backups); }
+            catch (error) { failures.push(error); }
+            try { await flushSettingsBackups(dirs.root); }
+            catch (error) { failures.push(error); }
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, 'Endpoint backup drain failed');
     }
 
     function enterCallback(req) {
@@ -310,8 +291,9 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
             await drainActive();
             const failure = workFailure();
             if (failure) throw failure;
+            await drainBackups();
             const current = engine;
-            await current.close();
+            if (current && typeof current.close === 'function') await current.close();
             engine = undefined;
             await openEngine();
         });
@@ -319,6 +301,7 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
     }
 
     function cleanup() {
+        cleanupObserved = true;
         if (!cleanupJob) cleanupJob = (async () => {
             const failures = [];
             closing = true;
@@ -329,33 +312,36 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
             const settled = await Promise.allSettled([closure, readiness]);
             for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
             await drainActive();
-            // Cancel any deferred trailing backupChat() throttle timers before
-            // tearing down storage and removing dataRoot.
-            _resetChatBackupThrottlesForTests();
             const failure = workFailure();
             if (failure && !failures.includes(failure)) failures.push(failure);
-            if (engine) {
-                try { await engine.close(); } catch (error) { failures.push(error); }
+            try { await drainBackups(); }
+            catch (error) { if (!failures.includes(error)) failures.push(error); }
+            const current = engine;
+            if (current && typeof current.close === 'function') {
+                try { await current.close(); } catch (error) { failures.push(error); }
             }
-            if (databaseCreated) {
-                try {
-                    if (mode === 'mysql') await dropMysqlDatabase(dbName);
-                    else await dropPgSchema(dbName);
-                } catch (error) { failures.push(error); }
-            }
-            try { fs.rmSync(dataRoot, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+            engine = undefined;
+            try { failures.push(...await scope.release(dataRootReceipt)); }
+            catch (error) { failures.push(error); }
             if (failures.length === 1) throw failures[0];
             if (failures.length > 1) throw new AggregateError(failures, 'Endpoint fixture cleanup failed');
         })();
         return cleanupJob;
     }
 
+    async function finalizeCleanup() {
+        if (!cleanupJob) return await cleanup();
+        const failure = await cleanupJob.then(() => null, error => error);
+        if (failure && !cleanupObserved) throw failure;
+    }
+
+    await scope.onFinalize({
+        label: `close ${mode} endpoint fixture`,
+        stage: 'capture',
+        callback: finalizeCleanup,
+    });
+
     try {
-        if (mode === 'mysql') await createMysqlDatabase(dbName, () => { databaseCreated = true; });
-        if (mode === 'postgres') await createPgSchema(dbName, () => { databaseCreated = true; });
-        factory = makeEngineFactory({ mode, dataRoot, handle, extraHandles, dbName, pgSchemaUrl: mode === 'postgres' ? pgSchemaConnUrl(dbName) : null });
-        precreateCommonDirs(factory.dirs);
-        for (const h of extraHandles || []) precreateCommonDirs(factory.extraDirs[h]);
         await openEngine();
 
         const app = express();
@@ -379,21 +365,38 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
         app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
         const userProfile = profile || { handle, admin: true, enabled: true, name: 'Test', created: 0, password: '', salt: '' };
         app.use((req, _res, next) => {
-            req.user = { profile: userProfile, directories: factory.dirs };
+            req.user = {
+                profile: userProfile,
+                directories: factory.dirs,
+            };
             next();
         });
         await mount(app, { handle, dirs: factory.dirs });
+
+        // Observe only this fixture's dispatch graph so in-flight work and
+        // late rejections are known before storage closes.
         app._router = copyRouter(app._router, true);
         server = http.createServer(app);
         await new Promise((resolve, reject) => {
             server.once('error', reject);
             server.listen(0, '127.0.0.1', () => {
-                server.off('error', reject); listening = true; resolve();
+                server.off('error', reject);
+                listening = true;
+                resolve();
             });
         });
+
         return {
-            app, server, dataRoot, handle, dirs: factory.dirs, extraDirs: factory.extraDirs, mode,
-            get engine() { return engine; }, reopenEngine, cleanup,
+            app,
+            server,
+            dataRoot,
+            handle,
+            dirs: factory.dirs,
+            extraDirs: factory.extraDirs,
+            mode,
+            get engine() { return engine; },
+            reopenEngine,
+            cleanup,
         };
     } catch (original) {
         try { await cleanup(); }
@@ -429,7 +432,7 @@ export const DB_ONLY_HARNESSES = ENDPOINT_HARNESSES.filter((e) => e.mode !== 'fs
  * Upload a backup archive through the chunked session endpoints so tests can
  * reference it by uploadId — the same sequence the browser performs.
  *
- * @param {import('node:http').Server} server Owned listening server from makeEndpointHarness
+ * @param {import('node:http').Server | import('express').Express} server Owned listener or app from makeEndpointHarness
  * @param {Buffer} bytes                   raw ZIP bytes
  * @param {{handle: string, chunkSize?: number}} opts
  * @returns {Promise<string>} uploadId

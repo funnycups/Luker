@@ -7,7 +7,7 @@ test.each([
 ])('required sync matrices fail as blocked when disabled through %j', async (...flags) => {
     const disabled = flags.filter(flag => typeof flag === 'string');
     const cwd = fileURLToPath(new URL('../', import.meta.url));
-    const args = [...(process.execArgv.includes('--jitless') ? ['--jitless'] : []), '--experimental-vm-modules', 'node_modules/jest/bin/jest.js', '--config', 'jest.config.json', '--runInBand', '--testPathPattern', '/tests/sync/(materialize-cross-engine|integration/cycle-cross-engine)\\.test\\.js$'];
+    const args = [...(process.execArgv.includes('--jitless') ? ['--jitless'] : []), '--experimental-vm-modules', 'node_modules/jest/bin/jest.js', '--config', 'harness/required-matrix.jest.config.json', '--runInBand'];
     const child = spawn(process.execPath, args, { cwd, env: { ...process.env, ...Object.fromEntries(disabled.map(flag => [flag, '1'])) }, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', bytes => { output += bytes; }); child.stderr.on('data', bytes => { output += bytes; });

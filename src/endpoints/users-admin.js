@@ -14,6 +14,7 @@ import {
     getDirectorySizeBytes,
 } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
+import { flushSettingsBackups } from './settings.js';
 import {
     KEY_PREFIX,
     toKey,
@@ -1287,6 +1288,18 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
     _migrationActive = true;
 
     let destEngine;
+    let readOnlyAcquired = false;
+    const closeDestEngine = async () => {
+        const engineToClose = destEngine;
+        destEngine = null;
+        if (engineToClose?.close) {
+            try {
+                await engineToClose.close();
+            } catch (closeErr) {
+                console.error('Failed to close migration destination engine:', closeErr);
+            }
+        }
+    };
     try {
         const handles = await getAllUserHandles();
         if (decision.kind === 'fresh') {
@@ -1333,44 +1346,39 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         const toRun = pendingHandles(_migrationState);
 
         setReadOnly(true);
-        try {
-            for (const handle of toRun) {
-                markStart(_migrationState, handle, new Date().toISOString());
-                try {
-                    const onProgress = (event) => {
-                        // Each runner-emitted stage carries (stage, counts) so
-                        // /storage/status surfaces per-user progress while the
-                        // migration is mid-flight.
-                        markStage(_migrationState, handle, {
-                            stage: event?.stage ?? null,
-                            counts: event?.counts ?? null,
-                        }, new Date().toISOString());
-                    };
-                    const stats = await runner.migrateUser(handle, { onProgress });
-                    markDone(_migrationState, handle, new Date().toISOString(), {
-                        settings: stats.settings,
-                        presets: stats.presets,
-                        preset_states: stats.preset_states,
-                        worlds: stats.worlds,
-                        chats: stats.chats,
-                        chat_states: stats.chat_states,
-                        named_docs: stats.named_docs,
-                        groups: stats.groups,
-                        stats: stats.stats,
-                    });
-                } catch (err) {
-                    markFailed(_migrationState, handle, err?.message || String(err), new Date().toISOString());
-                    console.error(`Storage migration error for ${handle}:`, err);
-                }
+        readOnlyAcquired = true;
+        for (const handle of toRun) {
+            markStart(_migrationState, handle, new Date().toISOString());
+            try {
+                const onProgress = (event) => {
+                    // Each runner-emitted progress update carries (stage, counts)
+                    // so /storage/status surfaces per-user progress while the
+                    // migration is mid-flight.
+                    markStage(_migrationState, handle, {
+                        stage: event?.stage ?? null,
+                        counts: event?.counts ?? null,
+                    }, new Date().toISOString());
+                };
+                const stats = await runner.migrateUser(handle, { onProgress });
+                markDone(_migrationState, handle, new Date().toISOString(), {
+                    settings: stats.settings,
+                    presets: stats.presets,
+                    preset_states: stats.preset_states,
+                    worlds: stats.worlds,
+                    chats: stats.chats,
+                    chat_states: stats.chat_states,
+                    named_docs: stats.named_docs,
+                    groups: stats.groups,
+                    stats: stats.stats,
+                });
+            } catch (err) {
+                markFailed(_migrationState, handle, err?.message || String(err), new Date().toISOString());
+                console.error(`Storage migration error for ${handle}:`, err);
             }
-        } finally {
-            setReadOnly(false);
         }
 
         if (!isAllDone(_migrationState)) {
-            if (destEngine?.close) {
-                try { await destEngine.close(); } catch { /* best-effort */ }
-            }
+            await closeDestEngine();
             return response.status(500).send({
                 ok: false,
                 perUser: _migrationState.perUser,
@@ -1380,7 +1388,20 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             });
         }
 
-        // All users done — swap engine + persist config.
+        // All users done — drain pending settings autosaves before swapping
+        // storage and closing oldEngine so no queued backup runs against a
+        // closed engine or holds a stale autosave entry.
+        const flushOutcomes = await Promise.allSettled(
+            handles.map(handle => flushSettingsBackups(getUserDirectories(handle).root)),
+        );
+        for (let i = 0; i < flushOutcomes.length; i += 1) {
+            if (flushOutcomes[i].status === 'rejected') {
+                console.error(`Settings autosave flush failed for ${handles[i]} before storage swap:`, flushOutcomes[i].reason);
+            }
+        }
+
+        await closeDestEngine();
+
         const oldEngine = sourceEngine;
         await initStorage({
             mode: targetMode,
@@ -1389,7 +1410,11 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             postgres: postgresConfig,
         });
         if (oldEngine?.close) {
-            try { await oldEngine.close(); } catch { /* best-effort */ }
+            try {
+                await oldEngine.close();
+            } catch (closeErr) {
+                console.error('Failed to close previous storage engine:', closeErr);
+            }
         }
         _lastMigrationAt = new Date().toISOString();
         const finalPerUser = _migrationState.perUser;
@@ -1418,14 +1443,15 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         });
     } catch (err) {
         console.error('Storage migration failed:', err);
-        if (destEngine?.close) {
-            try { await destEngine.close(); } catch { /* best-effort */ }
-        }
+        await closeDestEngine();
         return response.status(500).send({
             error: 'migration_error',
             message: err?.message || String(err),
         });
     } finally {
+        if (readOnlyAcquired) {
+            setReadOnly(false);
+        }
         // Always release the lock, whether the migration ran to completion,
         // returned a 500 partial-failure, threw, or short-circuited via an
         // early `return response.status(...)` from inside the try. Release

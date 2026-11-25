@@ -1087,8 +1087,16 @@ export async function materializeUserDataIntoWorkdir({
     }
     const enabled = new Set((categories || []).filter(id => engine.kind !== 'fs' || Object.hasOwn(PRESET_DIR_KEY_BY_CATEGORY, id)));
     if (enabled.size === 0) return { filesWritten: 0, bytes: 0 };
-    let boundary = path.resolve(directories.root);
-    while (path.relative(boundary, workdir).startsWith(`..${path.sep}`) || path.relative(boundary, workdir) === '..') boundary = path.dirname(boundary);
+    // Confine the projection to the live data root when the workdir lives
+    // inside it, so a symlinked ancestor is rejected. A workdir outside that
+    // root is trusted only at its own parent; ascending to the filesystem
+    // root would reject harmless platform symlinks such as macOS
+    // `/var` -> `/private/var`.
+    const dataRoot = path.resolve(directories.root);
+    const workdirAbs = path.resolve(workdir);
+    const relativeToRoot = path.relative(dataRoot, workdirAbs);
+    const insideDataRoot = relativeToRoot === '' || (!relativeToRoot.startsWith(`..${path.sep}`) && relativeToRoot !== '..' && !path.isAbsolute(relativeToRoot));
+    const boundary = insideDataRoot ? dataRoot : path.dirname(workdirAbs);
     assertSafeProjectionPath(workdir, boundary);
     fs.mkdirSync(workdir, { recursive: true });
     const reuse = await referenceBytesReader({ gitdir, workdir, referenceOids, directories, engine });

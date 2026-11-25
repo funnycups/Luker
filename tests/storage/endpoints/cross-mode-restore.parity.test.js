@@ -281,7 +281,6 @@ describe.each(pairs())('cross-mode restore: $src → $dst', ({ src, dst, sameMod
         });
         globalThis.DATA_ROOT = harness.dataRoot;
     });
-    afterEach(async () => { if (harness) await harness.cleanup(); });
 
     test(`REGRESSION: ${src} ZIP restores into ${dst} engine end-to-end`, async () => {
         const scratchFields = {};

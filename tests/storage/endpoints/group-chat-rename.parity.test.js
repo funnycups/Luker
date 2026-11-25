@@ -4,7 +4,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
-import { router as chatsRouter, invalidateRecentChatIndex, _resetChatBackupThrottlesForTests } from '../../../src/endpoints/chats.js';
+import { router as chatsRouter, invalidateRecentChatIndex } from '../../../src/endpoints/chats.js';
 import { router as groupsRouter } from '../../../src/endpoints/groups.js';
 import { getChatRepo, getGroupRepo } from '../../../src/storage/index.js';
 import { groupOptions as opts, seed, seedNative, ADMITTED_HEADERS, NATIVE_NUMBERS, insertNativeParent, insertNativeState, nativeSelected, numericPredicates, recordPayload, capture, expectMoved, disk, rawResources, chatPath, statePath, corruptDocument, onAsyncEntry, MESSAGES, HEADER } from '../harness/group-rename-fixtures.js';
@@ -33,7 +33,7 @@ describe.each(ENDPOINT_HARNESSES)('group rename route on $name', ({ mode }) => {
             app.use('/api/chats', chatsRouter); app.use('/api/groups', groupsRouter);
         } });
     });
-    afterEach(async () => { _resetChatBackupThrottlesForTests(); if (h) await h.cleanup(); });
+    afterEach(async () => { if (h) await h.cleanup(); });
 
     test.each(NATIVE_NUMBERS)('route moves admitted %s native parent and state without JSON re-encoding after reopen', async (label, literal) => {
         const admitted = mode === 'mysql' && literal === '1e400' ? '7' : literal;

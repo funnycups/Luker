@@ -38,9 +38,6 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         fs.mkdirSync(harness.dirs.userImages, { recursive: true });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('chat scope unions the sidecar index and body-scanned references', async () => {
         await getChatRepo().save(harness.handle, 'Ash', 'main', HEADER, [

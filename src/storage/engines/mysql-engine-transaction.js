@@ -1,9 +1,10 @@
 import { ConflictError, NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
-import { normalizeLookupText } from '../../util.js';
 import { chatHeaderWithIntegrity, chatLocation, parseChatDocument, parseChatJson } from './chat-record.js';
 import { registerSqlChatMove } from './chat-move.js';
 import { toSqlJsonPath } from './json-field-path.js';
+import { randomUUID } from 'node:crypto';
+import { findNameMatch } from '../../util.js';
 
 // MysqlTransaction — mysql2/promise port of SqliteTransaction. Same handler
 // surface and per-kind methods so Repos remain engine-agnostic. Differences
@@ -42,7 +43,7 @@ export class MysqlTransaction {
     async getResource(key)       { return this._h(key.kind, 'getResource').get(key); }
     async readResource(key)      { return this._h(key.kind, 'readResource').read(key); }
     async putResource(key, rec)  { return this._h(key.kind, 'putResource').put(key, rec); }
-    async deleteResource(key)    { return this._h(key.kind, 'deleteResource').delete(key); }
+    async deleteResource(key, options) { return this._h(key.kind, 'deleteResource').delete(key, options); }
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
@@ -473,11 +474,12 @@ export function registerWorldInfoHandler(tx) {
     const conn = tx._conn;
 
     async function listAllNames(handle) {
-        const [rows] = await conn.execute('SELECT name FROM worlds WHERE handle=?', [handle]);
+        const [rows] = await conn.execute('SELECT name FROM worlds WHERE handle=? ORDER BY name ASC', [handle]);
         return rows;
     }
 
-    async function resolveCanonical(handle, requested) {
+    async function resolveCanonical(handle, requested, catalog) {
+        if (catalog) return findNameMatch(catalog, requested) || null;
         const trimmed = String(requested || '').trim();
         if (!trimmed) return null;
         // Exact match first (cheap path: utf8mb4_bin makes WHERE name=? exact).
@@ -487,11 +489,8 @@ export function registerWorldInfoHandler(tx) {
         );
         if (exactRows.length) return exactRows[0].name;
         // Tolerant fallback via normalizeLookupText (NFC + variation-selector strip).
-        const normalizedRequested = normalizeLookupText(trimmed);
-        if (!normalizedRequested) return null;
         const all = await listAllNames(handle);
-        const tolerant = all.find((r) => normalizeLookupText(r.name) === normalizedRequested);
-        return tolerant ? tolerant.name : null;
+        return findNameMatch(all.map(row => row.name), trimmed) || null;
     }
 
     tx._handlers.set('world', {
@@ -515,19 +514,25 @@ export function registerWorldInfoHandler(tx) {
             const canonical = await resolveCanonical(key.handle, key.name);
             const targetName = canonical ?? String(key.name || '').trim();
             if (!targetName) throw new Error(`world put: invalid name ${key.name}`);
+            const revision = randomUUID();
             await conn.execute(
-                `INSERT INTO worlds (handle, name, doc, updated_at) VALUES (?, ?, ?, ?) AS new
-                 ON DUPLICATE KEY UPDATE doc = new.doc, updated_at = new.updated_at`,
-                [key.handle, targetName, JSON.stringify(record.doc), Date.now()],
+                `INSERT INTO worlds (handle, name, doc, updated_at, revision) VALUES (?, ?, ?, ?, ?) AS new
+                 ON DUPLICATE KEY UPDATE doc = new.doc, updated_at = new.updated_at, revision = new.revision`,
+                [key.handle, targetName, JSON.stringify(record.doc), Date.now(), revision],
             );
+            return revision;
         },
-        async delete(key) {
-            const canonical = await resolveCanonical(key.handle, key.name);
-            if (canonical == null) return false;
+        async delete(key, { expectedVersion, resolvedTarget } = {}) {
+            const canonical = resolvedTarget === undefined ? await resolveCanonical(key.handle, key.name) : resolvedTarget?.locator ?? null;
+            if (canonical == null) {
+                if (expectedVersion !== undefined) throw new ConflictError('world_changed');
+                return false;
+            }
             const [result] = await conn.execute(
-                'DELETE FROM worlds WHERE handle=? AND name=?',
-                [key.handle, canonical],
+                'DELETE FROM worlds WHERE handle=? AND name=?' + (expectedVersion === undefined ? '' : ' AND revision=?'),
+                expectedVersion === undefined ? [key.handle, canonical] : [key.handle, canonical, expectedVersion],
             );
+            if (expectedVersion !== undefined && !result.affectedRows) throw new ConflictError('world_changed');
             return result.affectedRows > 0;
         },
         async list(filter) {
@@ -563,6 +568,22 @@ export function registerWorldInfoHandler(tx) {
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = async (key) => resolveCanonical(key.handle, key.name);
+    tx.captureWorldInfoIdentity = async handle => {
+        const names = (await listAllNames(handle)).map(row => row.name);
+        return {
+            resolve: async requested => {
+                const name = await resolveCanonical(handle, requested, names);
+                return name === null ? null : { name, locator: name };
+            },
+            has: locator => names.includes(locator),
+        };
+    };
+    tx.getWorldInfoVersion = async (key) => {
+        const canonical = await resolveCanonical(key.handle, key.name);
+        if (canonical == null) return null;
+        const [rows] = await conn.execute('SELECT revision FROM worlds WHERE handle=? AND name=?', [key.handle, canonical]);
+        return rows[0]?.revision ?? null;
+    };
 }
 
 export function registerNamedDocHandler(tx) {

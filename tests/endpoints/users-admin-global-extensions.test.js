@@ -69,7 +69,6 @@ describe('users-admin /import/global-extensions', () => {
     });
 
     afterEach(async () => {
-        if (harness) await harness.cleanup();
         setGlobalExtensionsDirectory(previousGlobalExtensions);
         fs.rmSync(globalExtensionsDir, { recursive: true, force: true });
     });

@@ -24,9 +24,6 @@ describe.each(ENDPOINT_HARNESSES)('/api/chats/get on $name', ({ mode }) => {
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: probe returns saved chat when only the engine has it', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'c1', HEADER, MESSAGES, null);

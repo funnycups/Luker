@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMigrations } from './schema-runner.js';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 // Postgres 16 schema mirroring sqlite-schema.js / mysql-schema.js. Key dialect
 // choices:

@@ -43,9 +43,6 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('removed chat delta endpoints are no longer routed', async () => {
         await request(harness.server)

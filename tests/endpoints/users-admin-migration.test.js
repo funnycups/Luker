@@ -12,16 +12,38 @@ import path from 'node:path';
 const mockState = {
     handles: [],
     migrateUserBehavior: null,  // (handle) => Promise; throws to simulate failure
+    initStorageBehavior: null,  // () => Promise; throws to simulate swap failure
     initStorageCalled: false,
     persistCalled: false,
     requireAdminPass: true,
+    readOnly: false,
+    destEngineCloseCount: 0,
+    events: [],
 };
 
+jest.unstable_mockModule('../../src/endpoints/settings.js', () => ({
+    flushSettingsBackups: async (userRoot) => {
+        mockState.events.push(`flush:${userRoot}`);
+    },
+}));
+
 jest.unstable_mockModule('../../src/storage/index.js', () => ({
-    getStorageEngine: () => ({ kind: 'fs', close: async () => {} }),
-    initStorage: async () => { mockState.initStorageCalled = true; },
-    isReadOnly: () => false,
-    setReadOnly: () => {},
+    getStorageEngine: () => ({
+        kind: 'fs',
+        close: async () => { mockState.events.push('oldEngine:close'); },
+    }),
+    initStorage: async () => {
+        mockState.initStorageCalled = true;
+        mockState.events.push('initStorage');
+        if (mockState.initStorageBehavior) {
+            await mockState.initStorageBehavior();
+        }
+    },
+    isReadOnly: () => mockState.readOnly,
+    setReadOnly: (value) => {
+        mockState.readOnly = Boolean(value);
+        mockState.events.push(`setReadOnly:${Boolean(value)}`);
+    },
     // Stubs for names destructured by content-manager.js (transitively imported
     // via users-admin.js). The /storage/* routes under test never invoke
     // seedContent, but ESM link fails if any named import resolves to undefined.
@@ -63,17 +85,22 @@ jest.unstable_mockModule('../../src/storage/migration/runner.js', () => ({
     },
 }));
 
+const trackDestClose = async () => {
+    mockState.destEngineCloseCount += 1;
+    mockState.events.push('destEngine:close');
+};
+
 jest.unstable_mockModule('../../src/storage/engines/fs-engine.js', () => ({
-    FsEngine: class { constructor() { this.kind = 'fs'; } async close() {} },
+    FsEngine: class { constructor() { this.kind = 'fs'; } async close() { await trackDestClose(); } },
 }));
 jest.unstable_mockModule('../../src/storage/engines/sqlite-engine.js', () => ({
-    SqliteEngine: class { constructor() { this.kind = 'sqlite'; } async close() {} },
+    SqliteEngine: class { constructor() { this.kind = 'sqlite'; } async close() { await trackDestClose(); } },
 }));
 jest.unstable_mockModule('../../src/storage/engines/mysql-engine.js', () => ({
-    MysqlEngine: class { constructor() { this.kind = 'mysql'; } async close() {} },
+    MysqlEngine: class { constructor() { this.kind = 'mysql'; } async close() { await trackDestClose(); } },
 }));
 jest.unstable_mockModule('../../src/storage/engines/postgres-engine.js', () => ({
-    PgEngine: class { constructor() { this.kind = 'postgres'; } async close() {} },
+    PgEngine: class { constructor() { this.kind = 'postgres'; } async close() { await trackDestClose(); } },
 }));
 
 jest.unstable_mockModule('../../src/storage/repositories/chat-repo.js', () => ({ ChatRepo: class {} }));
@@ -117,9 +144,12 @@ function makeApp() {
 const DEFAULT_MOCK_STATE = {
     handles: [],
     migrateUserBehavior: null,
+    initStorageBehavior: null,
     initStorageCalled: false,
     persistCalled: false,
     requireAdminPass: true,
+    readOnly: false,
+    destEngineCloseCount: 0,
 };
 
 // Top-level isolation: clear module-level _migrationState (and READ_ONLY) in
@@ -136,8 +166,11 @@ let _appForReset;
 let _activeDataRoot = null;
 beforeEach(async () => {
     if (!_appForReset) _appForReset = makeApp();
-    Object.assign(mockState, DEFAULT_MOCK_STATE);
+    Object.assign(mockState, DEFAULT_MOCK_STATE, { events: [] });
     await request(_appForReset).post('/storage/migrate/reset').send({ confirm: true });
+    mockState.events = [];
+    mockState.readOnly = false;
+    mockState.destEngineCloseCount = 0;
     _activeDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-migrate-route-'));
     globalThis.DATA_ROOT = _activeDataRoot;
 });
@@ -167,11 +200,46 @@ describe('POST /storage/migrate — fresh run', () => {
         }
         expect(mockState.initStorageCalled).toBe(true);
         expect(mockState.persistCalled).toBe(true);
+        // Settings autosave backups for every user must be flushed BEFORE swapping/closing oldEngine,
+        // destEngine must close once before initStorage, and read-only mode must remain active
+        // across flush, initStorage, and oldEngine.close before being released.
+        const roTrueIdx = mockState.events.indexOf('setReadOnly:true');
+        const destCloseIdx = mockState.events.indexOf('destEngine:close');
+        const initIdx = mockState.events.indexOf('initStorage');
+        const closeIdx = mockState.events.indexOf('oldEngine:close');
+        const roFalseIdx = mockState.events.indexOf('setReadOnly:false');
+        expect(mockState.destEngineCloseCount).toBe(1);
+        expect(roTrueIdx).toBeGreaterThan(-1);
+        expect(destCloseIdx).toBeGreaterThan(roTrueIdx);
+        expect(initIdx).toBeGreaterThan(destCloseIdx);
+        expect(closeIdx).toBeGreaterThan(initIdx);
+        expect(roFalseIdx).toBeGreaterThan(closeIdx);
+        expect(mockState.readOnly).toBe(false);
+        for (const h of ['a', 'b', 'c']) {
+            const flushIdx = mockState.events.indexOf(`flush:/tmp/${h}`);
+            expect(flushIdx).toBeGreaterThan(roTrueIdx);
+            expect(flushIdx).toBeLessThan(initIdx);
+        }
 
         // /storage/status now reports no migration in progress
         const statusRes = await request(app).post('/storage/status').send({});
         expect(statusRes.body.migrationInProgress).toBe(false);
         expect(statusRes.body.state).toBeNull();
+    });
+
+    test('initStorage error does not double-close destEngine and releases read-only mode', async () => {
+        mockState.initStorageBehavior = async () => {
+            throw new Error('init storage failed');
+        };
+        const app = makeApp();
+        const res = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe('migration_error');
+        expect(mockState.destEngineCloseCount).toBe(1);
+        expect(mockState.readOnly).toBe(false);
+        expect(mockState.events.indexOf('setReadOnly:false')).toBeGreaterThan(mockState.events.indexOf('initStorage'));
     });
 });
 
@@ -194,8 +262,10 @@ describe('POST /storage/migrate — partial failure', () => {
         expect(res.body.perUser.b.status).toBe('failed');
         expect(res.body.perUser.b.error).toMatch(/connection lost/);
         expect(res.body.perUser.c.status).toBe('done');
-        // initStorage NOT called — source engine retained
+        // initStorage NOT called — source engine retained, destEngine closed once, readOnly released
         expect(mockState.initStorageCalled).toBe(false);
+        expect(mockState.destEngineCloseCount).toBe(1);
+        expect(mockState.readOnly).toBe(false);
 
         // state survives for a resume, but no request is executing
         const statusRes = await request(app).post('/storage/status').send({});

@@ -101,9 +101,6 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
         globalThis.DATA_ROOT = harness.dataRoot;
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('probe: same-mode ZIP → crossModeRequired:false', async () => {
         // For fs mode, build a legacy ZIP (no engine_meta) — probe must

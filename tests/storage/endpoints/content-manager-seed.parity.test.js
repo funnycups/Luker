@@ -56,9 +56,6 @@ describe.each(ENDPOINT_HARNESSES)('content-manager seedContentForUser on $name',
         );
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: seedContentForUser writes world via WorldInfoRepo', async () => {
         await seedContentForUser(makeContentIndex(srcDir), harness.dirs, ['world']);

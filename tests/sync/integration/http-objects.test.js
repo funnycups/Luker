@@ -7,7 +7,7 @@
  * Sessions come from authenticated offers against a real router, so every
  * route resolves the shadow the offer's local step created.
  */
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeEach } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

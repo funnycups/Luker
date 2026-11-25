@@ -14,8 +14,13 @@
 //      fs does not.
 //   2. End-to-end backup → engine.deleteUser → restore-backup → every Repo
 //      probe matches the seeded values.
-//   3. Engine-kind mismatch — a hand-crafted ZIP whose engine_meta declares
-//      a foreign kind must 400.
+//   3. Foreign-db source without scratch creds — a hand-crafted ZIP whose
+//      engine_meta declares a different mysql/postgres kind must 400 with
+//      a crossModeScratchRequired payload.
+//   4. Corrupt same-engine dump — must 400 and leave the existing data
+//      untouched in both merge and overwrite modes.
+//   5. Corrupt foreign-engine dump — the cross-mode path must 400 the same
+//      way, without a cross-mode rollback report.
 //
 // The route no longer takes multipart uploads itself: the client first pushes
 // the ZIP through the chunked `/restore-backup/uploads` session endpoints and
@@ -24,6 +29,7 @@
 // `multer().single('avatar')` in src/server-main.js), so the test mounts a thin
 // shim for that route only.
 
+import { jest } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -34,7 +40,10 @@ import yauzl from 'yauzl';
 import archiver from 'archiver';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness, uploadArchiveToSession } from '../harness/endpoint-harness.js';
+import { acquireMysqlDatabase, acquirePostgresDatabase, MYSQL_ROOT_URL, PG_ROOT_URL } from '../../harness/database.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
+import { RestoreDumpInvalidError } from '../../../src/storage/errors.js';
 import {
     getChatRepo,
     getSettingsRepo,
@@ -178,15 +187,52 @@ function readZipFile(zipPath, fileName) {
     });
 }
 
+/**
+ * Hand-crafted backup ZIP carrying `_engine_meta.json` with the given
+ * engine kind and an arbitrary `_engine_dump.bin` payload, or no dump entry
+ * when `dumpBytes` is null.
+ */
+async function buildEngineDumpZip(harness, engineKind, dumpBytes) {
+    const meta = {
+        engineKind,
+        schemaVersion: 1,
+        createdAt: new Date().toISOString(),
+        handle: harness.handle,
+    };
+    const zipPath = path.join(harness.dataRoot, `bk-engine-${randomBytes(4).toString('hex')}.zip`);
+    await new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(zipPath);
+        const arc = archiver('zip');
+        arc.on('error', reject);
+        out.on('close', resolve);
+        arc.pipe(out);
+        arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }, null, 2),
+            { name: 'manifest.json' });
+        arc.append(JSON.stringify(meta, null, 2), { name: '_engine_meta.json' });
+        if (dumpBytes) arc.append(dumpBytes, { name: '_engine_dump.bin' });
+        arc.finalize();
+    });
+    return fs.readFileSync(zipPath);
+}
+
+// `sqlite` is a foreign source on every harness but sqlite; `db` is the
+// mysql/postgres source that needs a scratch database. `dump` is a garbage
+// payload or a ZIP without the dump entry.
+const FOREIGN_INVALID_CASES = ['sqlite', 'db'].flatMap((sourceGroup) =>
+    ['merge', 'overwrite'].flatMap((restoreMode) =>
+        [['garbage', Buffer.from('not a real dump')], ['missing', null]].map(([dumpCase, dumpBytes]) =>
+            ({ sourceGroup, restoreMode, dumpCase, dumpBytes }))));
+
 describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }) => {
     let harness;
+    let uploadsDir;
 
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode,
             handle: `backup-${randomBytes(6).toString('hex')}`,
             mount: (app, { dirs }) => {
-                const uploadsDir = path.join(dirs.root, 'bk-uploads');
+                uploadsDir = path.join(dirs.root, 'bk-uploads');
                 mountMulterShim(app, uploadsDir);
                 app.use('/api/users', usersPrivateRouter);
             },
@@ -194,9 +240,6 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         globalThis.DATA_ROOT = harness.dataRoot;
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: backup ZIP includes engine dump iff kind !== fs', async () => {
         await seedAllRepos(harness.handle);
@@ -333,34 +376,12 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
     test('REGRESSION: restore demands scratch creds when backup engine is foreign db', async () => {
         if (mode === 'fs') return; // fs has no engine_meta-driven validation path
 
-        // Hand-craft a minimal ZIP with engine_meta declaring a foreign db kind
-        // (mysql or postgres — both require operator scratch DB conn). The
-        // sqlite-source-on-foreign-db case CAN succeed when the engine dump is
-        // a valid .sqlite file, so we deliberately use a foreign DB kind here
-        // for the "creds missing" assertion. The cross-mode delegation
-        // detects mysql/postgres source without creds and returns 400 with
-        // crossModeScratchRequired payload.
+        // The ZIP declares a mysql/postgres source that differs from the
+        // harness engine, so restore takes the cross-mode path, which needs
+        // operator-supplied scratch DB creds for that kind. A sqlite source
+        // converts without creds, so it cannot exercise this check.
         const otherKind = mode === 'postgres' ? 'mysql' : 'postgres';
-        const meta = {
-            engineKind: otherKind,
-            schemaVersion: 1,
-            createdAt: new Date().toISOString(),
-            handle: harness.handle,
-        };
-        const zipPath = path.join(harness.dataRoot, `bk-mismatch-${randomBytes(4).toString('hex')}.zip`);
-        await new Promise((resolve, reject) => {
-            const out = fs.createWriteStream(zipPath);
-            const arc = archiver('zip');
-            arc.on('error', reject);
-            out.on('close', resolve);
-            arc.pipe(out);
-            arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }, null, 2),
-                { name: 'manifest.json' });
-            arc.append(JSON.stringify(meta, null, 2), { name: '_engine_meta.json' });
-            arc.append(Buffer.from('not a real dump'), { name: '_engine_dump.bin' });
-            arc.finalize();
-        });
-        const zipBytes = fs.readFileSync(zipPath);
+        const zipBytes = await buildEngineDumpZip(harness, otherKind, Buffer.from('not a real dump'));
 
         const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
         const restoreRes = await request(harness.server)
@@ -417,26 +438,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         if (mode === 'fs') return; // fs has no engine_meta-driven validation path
 
         const otherKind = mode === 'postgres' ? 'mysql' : 'postgres';
-        const meta = {
-            engineKind: otherKind,
-            schemaVersion: 1,
-            createdAt: new Date().toISOString(),
-            handle: harness.handle,
-        };
-        const zipPath = path.join(harness.dataRoot, `bk-mismatch-import-${randomBytes(4).toString('hex')}.zip`);
-        await new Promise((resolve, reject) => {
-            const out = fs.createWriteStream(zipPath);
-            const arc = archiver('zip');
-            arc.on('error', reject);
-            out.on('close', resolve);
-            arc.pipe(out);
-            arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }, null, 2),
-                { name: 'manifest.json' });
-            arc.append(JSON.stringify(meta, null, 2), { name: '_engine_meta.json' });
-            arc.append(Buffer.from('not a real dump'), { name: '_engine_dump.bin' });
-            arc.finalize();
-        });
-        const zipBytes = fs.readFileSync(zipPath);
+        const zipBytes = await buildEngineDumpZip(harness, otherKind, Buffer.from('not a real dump'));
 
         const importRes = await request(harness.server)
             .post('/api/users/import/data-zip')
@@ -446,4 +448,303 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         expect(importRes.body?.crossModeScratchRequired?.kind).toBe(otherKind);
         expect(String(importRes.body?.error || '')).toMatch(new RegExp(`scratch ${otherKind}`, 'i'));
     });
+
+    test.each(['merge', 'overwrite'])('REGRESSION: corrupt same-engine dump on /restore-backup (%s) returns 400 and keeps existing data', async (restoreMode) => {
+        if (mode === 'fs') return; // fs backups carry no engine dump
+
+        await seedAllRepos(harness.handle);
+        const beforeProbe = await probeAllRepos(harness.handle);
+        expect(beforeProbe.chat?.body).toEqual(MESSAGES);
+
+        const zipBytes = await buildEngineDumpZip(harness, mode, Buffer.from('not a real dump'));
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
+        const restoreRes = await request(harness.app)
+            .post('/api/users/restore-backup')
+            .send({ uploadId, handle: harness.handle, mode: restoreMode, selection: ALL_SELECTION });
+        expect(await probeAllRepos(harness.handle)).toEqual(beforeProbe);
+        expect(restoreRes.status).toBe(400);
+    });
+
+    test.each(['merge', 'overwrite'])('REGRESSION: corrupt same-engine dump on /import/data-zip (%s) returns 400 and keeps existing data', async (importMode) => {
+        if (mode === 'fs') return; // fs backups carry no engine dump
+
+        await seedAllRepos(harness.handle);
+        const beforeProbe = await probeAllRepos(harness.handle);
+        expect(beforeProbe.chat?.body).toEqual(MESSAGES);
+
+        const zipBytes = await buildEngineDumpZip(harness, mode, Buffer.from('not a real dump'));
+        const importRes = await request(harness.app)
+            .post('/api/users/import/data-zip')
+            .field('mode', importMode)
+            .attach('avatar', zipBytes, 'backup.zip');
+        expect(await probeAllRepos(harness.handle)).toEqual(beforeProbe);
+        expect(importRes.status).toBe(400);
+    });
+
+    for (const { sourceGroup, restoreMode, dumpCase, dumpBytes } of FOREIGN_INVALID_CASES) {
+        // A sqlite source on the sqlite harness is the same-engine path,
+        // covered by the corrupt same-engine dump tests above.
+        if (sourceGroup === 'sqlite' && mode === 'sqlite') continue;
+        const sourceKind = foreignSourceKind(sourceGroup, mode);
+        if (!sourceKind) {
+            continue;
+        }
+        test(`REGRESSION: ${dumpCase} ${sourceGroup}-engine dump on /restore-backup (${restoreMode}) returns 400 and keeps existing data`, async () => {
+            await seedAllRepos(harness.handle);
+            const beforeProbe = await probeAllRepos(harness.handle);
+            expect(beforeProbe.chat?.body).toEqual(MESSAGES);
+
+            const scratch = await makeScratchDb(sourceKind);
+            try {
+                const zipBytes = await buildEngineDumpZip(harness, sourceKind, dumpBytes);
+                const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
+                const restoreRes = await request(harness.app)
+                    .post('/api/users/restore-backup')
+                    .send({ uploadId, handle: harness.handle, mode: restoreMode, selection: ALL_SELECTION, ...scratch.fields });
+                expect(await probeAllRepos(harness.handle)).toEqual(beforeProbe);
+                expect(restoreRes.status).toBe(400);
+                expect(restoreRes.body?.crossModeFailure).toBeUndefined();
+            } finally {
+                await scratch.teardown();
+            }
+        });
+    }
+
+    test('REGRESSION: pure FS category selection on DB mode does not overwrite DB tables', async () => {
+        if (mode === 'fs') return;
+
+        // Seed state #1 and take a full backup ZIP (includes _engine_dump.bin + extensions).
+        await seedAllRepos(harness.handle);
+        const extFile = path.join(harness.dirs.extensions, 'demo-ext', 'index.js');
+        fs.mkdirSync(path.dirname(extFile), { recursive: true });
+        fs.writeFileSync(extFile, 'console.log("from-backup");', 'utf8');
+
+        const backupRes = await postBackup(harness);
+        expect(backupRes.status).toBe(200);
+        const zipBytes = backupRes.body;
+
+        // Mutate live DB state and overwrite extension on disk.
+        await getSettingsRepo().save(harness.handle, { user_name: 'live-after-backup', custom: 'LIVE' });
+        await getWorldInfoRepo().save(harness.handle, 'w1', { entries: { '1': { content: 'live-world' } } });
+        fs.writeFileSync(extFile, 'console.log("live-modified");', 'utf8');
+
+        // Restore ONLY the pure FS category `extensions` (no DB categories selected).
+        const pureFsSelection = {
+            settings: false, secrets: false, characters: false, chats: false,
+            lorebooks: false, presets: false, assets: false, extensions: true,
+            globalExtensions: false, vectors: false,
+        };
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const restoreRes = await request(harness.server)
+            .post('/api/users/restore-backup')
+            .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: pureFsSelection });
+
+        expect(restoreRes.status).toBe(200);
+        // Extension file restored from backup, while live DB tables remained untouched.
+        expect(fs.readFileSync(extFile, 'utf8')).toBe('console.log("from-backup");');
+        expect(await getSettingsRepo().get(harness.handle)).toEqual({ user_name: 'live-after-backup', custom: 'LIVE' });
+        expect(await getWorldInfoRepo().get(harness.handle, 'w1')).toEqual({ entries: { '1': { content: 'live-world' } } });
+    });
+
+    test.each(['merge', 'overwrite'])('REGRESSION: FS extraction failure during same-mode DB restore (%s) leaves DB and FS intact', async (restoreMode) => {
+        if (mode === 'fs') return;
+
+        // Seed backup state #1 and collect a real DB dump from state #1.
+        await seedAllRepos(harness.handle);
+        const dumpStream = await getStorageEngine().dumpUser(harness.handle);
+        const dumpChunks = [];
+        for await (const chunk of dumpStream) {
+            dumpChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const validDumpBuf = Buffer.concat(dumpChunks);
+
+        const secretsPath = path.join(harness.dirs.root, 'secrets.json');
+        const extKeepPath = path.join(harness.dirs.extensions, 'keep-ext', 'index.js');
+        fs.mkdirSync(path.dirname(extKeepPath), { recursive: true });
+        fs.writeFileSync(secretsPath, '{"token":"backup"}', 'utf8');
+        fs.writeFileSync(extKeepPath, 'live-ext', 'utf8');
+
+        // Mutate live DB to state #2 so an overwritten DB would be distinguishable.
+        await getSettingsRepo().save(harness.handle, { user_name: 'live-protected', custom: 'KEEP' });
+        const liveBefore = await probeAllRepos(harness.handle);
+        fs.writeFileSync(secretsPath, '{"token":"live"}', 'utf8');
+
+        // Build an archive with a VALID same-engine DB dump plus colliding FS entries:
+        // creating file `extensions/clash` followed by `extensions/clash/child.txt` fails
+        // during extraction (after overwrite snapshotting already succeeded).
+        const zipPath = path.join(harness.dataRoot, `fs-extract-fail-${restoreMode}-${randomBytes(4).toString('hex')}.zip`);
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }), { name: 'manifest.json' });
+            arc.append(JSON.stringify({ engineKind: mode, schemaVersion: 1, createdAt: new Date().toISOString(), handle: harness.handle }), { name: '_engine_meta.json' });
+            arc.append(validDumpBuf, { name: '_engine_dump.bin' });
+            arc.append('{"token":"incoming"}', { name: 'secrets.json' });
+            arc.append('file-blocking-dir', { name: 'extensions/clash' });
+            arc.append('nested-under-file', { name: 'extensions/clash/child.txt' });
+            arc.finalize();
+        });
+
+        const uploadId = await uploadArchiveToSession(harness.server, fs.readFileSync(zipPath), { handle: harness.handle });
+        const restoreRes = await request(harness.server)
+            .post('/api/users/restore-backup')
+            .send({ uploadId, handle: harness.handle, mode: restoreMode, selection: ALL_SELECTION });
+
+        expect(restoreRes.status).toBe(500);
+        // Live DB must not have been rolled back to state #1.
+        expect(await probeAllRepos(harness.handle)).toEqual(liveBefore);
+        // Live FS state must have been restored cleanly.
+        expect(fs.readFileSync(secretsPath, 'utf8')).toBe('{"token":"live"}');
+        expect(fs.readFileSync(extKeepPath, 'utf8')).toBe('live-ext');
+        expect(fs.existsSync(path.join(harness.dirs.extensions, 'clash'))).toBe(false);
+    });
+
+    test.each(['merge', 'overwrite'])('REGRESSION: corrupt DB dump with valid FS entries (%s) returns 400 and leaves both FS and DB untouched', async (restoreMode) => {
+        if (mode === 'fs') return;
+
+        await seedAllRepos(harness.handle);
+        const beforeProbe = await probeAllRepos(harness.handle);
+        const extFile = path.join(harness.dirs.extensions, 'keep-ext', 'app.js');
+        fs.mkdirSync(path.dirname(extFile), { recursive: true });
+        fs.writeFileSync(extFile, 'original-ext-content', 'utf8');
+
+        const zipPath = path.join(harness.dataRoot, `corrupt-with-fs-${randomBytes(4).toString('hex')}.zip`);
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }), { name: 'manifest.json' });
+            arc.append(JSON.stringify({ engineKind: mode, schemaVersion: 1, createdAt: new Date().toISOString(), handle: harness.handle }), { name: '_engine_meta.json' });
+            arc.append(Buffer.from('not a valid engine dump'), { name: '_engine_dump.bin' });
+            arc.append('incoming-ext-content', { name: 'extensions/keep-ext/app.js' });
+            arc.append('brand-new-file', { name: 'extensions/keep-ext/new.js' });
+            arc.finalize();
+        });
+
+        const uploadId = await uploadArchiveToSession(harness.server, fs.readFileSync(zipPath), { handle: harness.handle });
+        const restoreRes = await request(harness.server)
+            .post('/api/users/restore-backup')
+            .send({ uploadId, handle: harness.handle, mode: restoreMode, selection: ALL_SELECTION });
+
+        expect(restoreRes.status).toBe(400);
+        expect(await probeAllRepos(harness.handle)).toEqual(beforeProbe);
+        expect(fs.readFileSync(extFile, 'utf8')).toBe('original-ext-content');
+        expect(fs.existsSync(path.join(harness.dirs.extensions, 'keep-ext', 'new.js'))).toBe(false);
+    });
+
+    test('REGRESSION: overwrite rollback deletes previously absent targetFiles and targetDirectories', async () => {
+        const secretsPath = path.join(harness.dirs.root, 'secrets.json');
+        const extDir = harness.dirs.extensions;
+        fs.rmSync(secretsPath, { force: true });
+        fs.rmSync(extDir, { recursive: true, force: true });
+        expect(fs.existsSync(secretsPath)).toBe(false);
+        expect(fs.existsSync(extDir)).toBe(false);
+
+        const zipPath = path.join(harness.dataRoot, `overwrite-absent-rollback-${randomBytes(4).toString('hex')}.zip`);
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append(JSON.stringify({ schemaVersion: 1, handle: harness.handle, selection: ALL_SELECTION }), { name: 'manifest.json' });
+            if (mode !== 'fs') {
+                arc.append(JSON.stringify({ engineKind: mode, schemaVersion: 1, createdAt: new Date().toISOString(), handle: harness.handle }), { name: '_engine_meta.json' });
+                arc.append(Buffer.from('invalid-engine-dump'), { name: '_engine_dump.bin' });
+                arc.append('{"token":"created-then-rolled-back"}', { name: 'secrets.json' });
+                arc.append('created-ext', { name: 'extensions/new-ext/index.js' });
+            } else {
+                arc.append('{"token":"created-then-rolled-back"}', { name: 'secrets.json' });
+                arc.append('created-ext', { name: 'extensions/new-ext/index.js' });
+                arc.append('file-blocking-dir', { name: 'extensions/clash' });
+                arc.append('nested-under-file', { name: 'extensions/clash/child.txt' });
+            }
+            arc.finalize();
+        });
+
+        const uploadId = await uploadArchiveToSession(harness.server, fs.readFileSync(zipPath), { handle: harness.handle });
+        const restoreRes = await request(harness.server)
+            .post('/api/users/restore-backup')
+            .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: ALL_SELECTION });
+
+        expect(restoreRes.status).toBe(mode === 'fs' ? 500 : 400);
+        expect(fs.existsSync(secretsPath)).toBe(false);
+        expect(fs.existsSync(extDir)).toBe(false);
+    });
+
+    test('REGRESSION: early reject from engine.restoreUser destroys yauzl readStream and closes FD', async () => {
+        if (mode === 'fs') return;
+
+        const zipBytes = await buildEngineDumpZip(harness, mode, Buffer.from('unconsumed-dump-payload'));
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+
+        let observedStream = null;
+        const restoreSpy = jest.spyOn(getStorageEngine(), 'restoreUser').mockImplementationOnce(async (_handle, readStream) => {
+            observedStream = readStream;
+            throw new RestoreDumpInvalidError('rejected before reading stream');
+        });
+
+        const fdDirExists = fs.existsSync('/dev/fd');
+        const fdCountBefore = fdDirExists ? fs.readdirSync('/dev/fd').length : 0;
+        try {
+            const restoreRes = await request(harness.server)
+                .post('/api/users/restore-backup')
+                .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
+            expect(restoreRes.status).toBe(400);
+        } finally {
+            restoreSpy.mockRestore();
+        }
+
+        expect(observedStream).not.toBeNull();
+        expect(observedStream.destroyed).toBe(true);
+        // Allow fs.close callback from fd-slicer to settle.
+        await new Promise(resolve => setTimeout(resolve, 25));
+        const fdCountAfter = fdDirExists ? fs.readdirSync('/dev/fd').length : 0;
+        expect(fdCountAfter).toBeLessThanOrEqual(fdCountBefore);
+    });
+
+    test('REGRESSION: /import/data-zip cleans up uploaded temp file when rejecting non-.zip extension', async () => {
+        const importRes = await request(harness.server)
+            .post('/api/users/import/data-zip')
+            .attach('avatar', Buffer.from('not a zip'), 'backup.txt');
+
+        expect(importRes.status).toBe(400);
+        expect(importRes.body.error).toMatch(/\.zip/i);
+        expect(fs.readdirSync(uploadsDir)).toEqual([]);
+    });
 });
+
+function foreignSourceKind(sourceGroup, mode) {
+    if (sourceGroup === 'sqlite') return 'sqlite';
+    if (mode !== 'postgres' && !process.env.LUKER_DISABLE_POSTGRES_TESTS) return 'postgres';
+    if (mode !== 'mysql' && !process.env.LUKER_DISABLE_MYSQL_TESTS) return 'mysql';
+    return null;
+}
+
+/**
+ * Throwaway scratch namespace for a mysql/postgres source restore, passed as
+ * the operator scratch DB fields. Other source kinds need none.
+ */
+async function makeScratchDb(kind) {
+    const scope = currentScopeForResources();
+    if (kind === 'mysql') {
+        const lease = await acquireMysqlDatabase(scope, MYSQL_ROOT_URL, { fresh: true, label: 'backup roundtrip scratch mysql' });
+        return {
+            fields: { scratchMysqlUrl: lease.url },
+            teardown: async () => { await scope.release(lease.resourceId); },
+        };
+    }
+    if (kind === 'postgres') {
+        const lease = await acquirePostgresDatabase(scope, PG_ROOT_URL, { fresh: true, label: 'backup roundtrip scratch postgres' });
+        return {
+            fields: { scratchPostgresUrl: lease.url },
+            teardown: async () => { await scope.release(lease.resourceId); },
+        };
+    }
+    return { fields: {}, teardown: async () => {} };
+}

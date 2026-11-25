@@ -14,7 +14,7 @@
  * the test only runs against `fs` to keep the inner loop fast. Storage
  * gating is enforced by the session-lifecycle layer.
  */
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeEach } from '@jest/globals';
 import request from 'supertest';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../../storage/harness/endpoint-harness.js';
@@ -35,9 +35,6 @@ describe.each(FS_HARNESSES)('sync router skeleton on $name', ({ mode }) => {
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('GET /api/sync/v1/health is reachable through the mounted router', async () => {
         const r = await request(harness.server).get('/api/sync/v1/health');

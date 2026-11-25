@@ -45,9 +45,6 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
         await getSettingsRepo().save(harness.handle, { user_name: 'tester' });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('GET /api/settings/get returns 200 with the settings JSON', async () => {
         const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
@@ -239,9 +236,6 @@ describe.each(ENDPOINT_HARNESSES)('settings.js fresh-storage handling on $name',
         // DO NOT seed SettingsRepo — that's the whole point of this test.
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: missing settings doc + missing settings.json → 200 with empty defaults', async () => {
         const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);

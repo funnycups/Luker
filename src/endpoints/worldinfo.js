@@ -5,9 +5,10 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import _ from 'lodash';
 import { normalizeLookupText } from '../util.js';
-import { getWorldInfoRepo } from '../storage/index.js';
-import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError, InvalidArgumentError } from '../storage/errors.js';
+import { getSettingsRepo, getWorldInfoRepo } from '../storage/index.js';
+import { ConflictError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError, InvalidArgumentError } from '../storage/errors.js';
 import { assertSafeRepoName } from '../storage/name-validation.js';
+import { assertWorldNotBound } from '../character-world-ownership.js';
 import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
 /**
@@ -348,72 +349,118 @@ router.post('/delete', async (request, response) => {
         return response.sendStatus(400);
     }
 
-    const deleted = await getWorldInfoRepo().delete(request.user.profile.handle, request.body.name);
-    if (!deleted) {
-        return response.sendStatus(404);
-    }
+    try {
+        const { expectedVersion, onlyIfUnbound } = request.body;
+        if (expectedVersion !== undefined && (typeof expectedVersion !== 'string' || !expectedVersion)) {
+            return response.status(400).send({ error: 'expectedVersion must identify the original world book save' });
+        }
+        if (onlyIfUnbound !== undefined && typeof onlyIfUnbound !== 'boolean') {
+            return response.status(400).send({ error: 'onlyIfUnbound must be a boolean' });
+        }
+        const deleted = await getWorldInfoRepo().delete(request.user.profile.handle, request.body.name, {
+            expectedVersion,
+            beforeDelete: onlyIfUnbound ? async resolveName => assertWorldNotBound(request.user.directories.characters, request.body.name, undefined, await getSettingsRepo().get(request.user.profile.handle), resolveName) : undefined,
+        });
+        if (!deleted) {
+            return response.status(404).send({ code: 'world_missing', resourceState: 'missing' });
+        }
 
-    return response.sendStatus(200);
+        return response.sendStatus(200);
+    } catch (error) {
+        if (error instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: error.message });
+        }
+        let resourceState;
+        try {
+            const repo = getWorldInfoRepo();
+            const handle = request.user.profile.handle;
+            const exists = Object.hasOwn(error, 'worldDeletionExists')
+                ? await error.worldDeletionExists()
+                : await repo.exists(handle, request.body.name);
+            resourceState = exists ? 'present' : 'missing';
+        } catch (inspectionError) {
+            console.error(`Cannot determine deletion state for World Info '${request.body.name}':`, inspectionError);
+            resourceState = 'unknown';
+        }
+        if (error instanceof ConflictError) return response.status(409).send({ code: error.code, details: error.details, resourceState });
+        console.error(`Error deleting World Info '${request.body.name}':`, error);
+        return response.status(500).send({ code: 'world_delete_failed', resourceState });
+    }
 });
 
 router.post('/import', async (request, response) => {
     if (!request.file) return response.sendStatus(400);
 
-    const filename = sanitizeImportedWorldInfoFilename(request.file.originalname);
+    const pathToUpload = request.file.path || (request.file.destination && request.file.filename
+        ? path.join(request.file.destination, request.file.filename)
+        : null);
 
-    let fileContents = null;
-
-    if (request.body.convertedData) {
-        fileContents = request.body.convertedData;
-    } else {
-        const pathToUpload = path.join(request.file.destination, request.file.filename);
-        fileContents = fs.readFileSync(pathToUpload, 'utf8');
-        fs.unlinkSync(pathToUpload);
-    }
-
-    let worldContent;
     try {
-        worldContent = JSON.parse(fileContents);
-    } catch (err) {
-        return response.status(400).send('Is not a valid world info file');
-    }
-    if (!_.isObjectLike(worldContent) || Array.isArray(worldContent)) {
-        return response.status(400).send('Is not a valid world info file');
-    }
-    // Coerce array-form `entries` (each entry carries its own `uid` inline)
-    // into the documented uid-keyed object form. Some legacy authors and
-    // merge tooling serialize world books this way; upstream ST's /import
-    // accepts them and the frontend renders array-form entries fine. We
-    // normalize here so the on-disk shape stays consistent with the rest
-    // of the codebase (see normalizeWorldInfoFile — same coercion runs on
-    // /get and /get-batch reads).
-    const { file: normalizedContent } = normalizeWorldInfoFile(worldContent);
-    if (!_.isObjectLike(normalizedContent.entries) || Array.isArray(normalizedContent.entries)) {
-        return response.status(400).send('Is not a valid world info file');
-    }
-    worldContent = normalizedContent;
+        const filename = sanitizeImportedWorldInfoFilename(request.file.originalname);
 
-    const worldName = path.parse(filename).name;
-    if (!worldName) {
-        return response.status(400).send('World file must have a name');
-    }
-    let safeWorldName;
-    try {
-        safeWorldName = assertSafeRepoName(worldName);
-    } catch (err) {
-        if (err instanceof InvalidArgumentError) {
-            return response.status(400).send({ error: err.message });
+        let fileContents = null;
+
+        if (request.body.convertedData) {
+            fileContents = request.body.convertedData;
+        } else {
+            fileContents = fs.readFileSync(pathToUpload, 'utf8');
         }
-        throw err;
-    }
 
-    try {
-        await getWorldInfoRepo().save(request.user.profile.handle, safeWorldName, worldContent);
-    } catch (err) {
-        console.error('Error importing world info:', err);
-        return response.sendStatus(500);
+        let worldContent;
+        try {
+            worldContent = JSON.parse(fileContents);
+        } catch (err) {
+            return response.status(400).send('Is not a valid world info file');
+        }
+        if (!_.isObjectLike(worldContent) || Array.isArray(worldContent)) {
+            return response.status(400).send('Is not a valid world info file');
+        }
+        // Coerce array-form `entries` (each entry carries its own `uid` inline)
+        // into the documented uid-keyed object form. Some legacy authors and
+        // merge tooling serialize world books this way; upstream ST's /import
+        // accepts them and the frontend renders array-form entries fine. We
+        // normalize here so the on-disk shape stays consistent with the rest
+        // of the codebase (see normalizeWorldInfoFile — same coercion runs on
+        // /get and /get-batch reads).
+        const { file: normalizedContent } = normalizeWorldInfoFile(worldContent);
+        if (!_.isObjectLike(normalizedContent.entries) || Array.isArray(normalizedContent.entries)) {
+            return response.status(400).send('Is not a valid world info file');
+        }
+        worldContent = normalizedContent;
+
+        const worldName = path.parse(filename).name;
+        if (!worldName) {
+            return response.status(400).send('World file must have a name');
+        }
+        let safeWorldName;
+        try {
+            safeWorldName = assertSafeRepoName(worldName);
+        } catch (err) {
+            if (err instanceof InvalidArgumentError) {
+                return response.status(400).send({ error: err.message });
+            }
+            throw err;
+        }
+
+        try {
+            await getWorldInfoRepo().save(request.user.profile.handle, safeWorldName, worldContent);
+        } catch (err) {
+            if (err instanceof StorageReadOnlyError) {
+                return response.status(503).send({ error: 'storage_read_only', message: err.message });
+            }
+            console.error('Error importing world info:', err);
+            return response.sendStatus(500);
+        }
+        return response.send({ name: safeWorldName });
+    } finally {
+        if (pathToUpload) {
+            try {
+                fs.rmSync(pathToUpload, { force: true });
+            } catch (cleanupErr) {
+                console.warn('Failed to clean up uploaded world info file:', pathToUpload, cleanupErr);
+            }
+        }
     }
-    return response.send({ name: safeWorldName });
 });
 
 router.post('/edit', async (request, response) => {
@@ -449,9 +496,13 @@ router.post('/edit', async (request, response) => {
     }
 
     try {
-        await getWorldInfoRepo().save(request.user.profile.handle, safeName, normalizedData);
+        const version = await getWorldInfoRepo().save(request.user.profile.handle, safeName, normalizedData);
+        response.setHeader('X-World-Version', version);
         return response.send({ ok: true });
     } catch (err) {
+        if (err instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: err.message });
+        }
         console.error('Error editing world info:', err);
         return response.sendStatus(500);
     }
@@ -477,6 +528,9 @@ router.post('/patch', async (request, response) => {
         await getWorldInfoRepo().patch(request.user.profile.handle, worldInfoName, operations);
         return response.send({ ok: true, applied: operations.length });
     } catch (error) {
+        if (error instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: error.message });
+        }
         if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
             return response.status(409).send({ error: 'World info patch test conflict.', code: 'patch_test_failed', details: String(error?.message || '') });
         }

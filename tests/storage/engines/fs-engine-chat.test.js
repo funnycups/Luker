@@ -1,16 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 describe('FsEngine chat handler — selected document validation', () => {
     let tmpDir, engine;
     const handle = 'u';
     let chatsDir;
-    beforeEach(() => {
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-chat-'));
+    beforeEach(async () => {
+        tmpDir = (await currentScopeForResources().directory('luker-fs-chat')).path;
         const userDir = path.join(tmpDir, handle);
         chatsDir = path.join(userDir, 'chats', 'TestChar');
         fs.mkdirSync(chatsDir, { recursive: true });
@@ -21,9 +21,6 @@ describe('FsEngine chat handler — selected document validation', () => {
                 groupChats: path.join(userDir, 'group chats'),
             }),
         });
-    });
-    afterEach(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
     const chatKey = (overrides = {}) => ({
@@ -92,8 +89,8 @@ describe('FsEngine chat handler — selected document validation', () => {
 describe('FsEngine chat handler — legacy long name (>128 bytes) round-trip', () => {
     let tmpDir, engine;
     const handle = 'u';
-    beforeEach(() => {
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-chat-long-'));
+    beforeEach(async () => {
+        tmpDir = (await currentScopeForResources().directory('luker-fs-chat-long')).path;
         const userDir = path.join(tmpDir, handle);
         fs.mkdirSync(path.join(userDir, 'chats'), { recursive: true });
         engine = new FsEngine({
@@ -103,9 +100,6 @@ describe('FsEngine chat handler — legacy long name (>128 bytes) round-trip', (
                 groupChats: path.join(userDir, 'group chats'),
             }),
         });
-    });
-    afterEach(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
     // Two long-name variants: ASCII 129 bytes and CJK 129 bytes (43 * 3). Both
@@ -161,11 +155,8 @@ describe('FsEngine chat handler — legacy long name (>128 bytes) round-trip', (
 // a child process whose link(2) entry points reject with EACCES.
 describe('FsEngine chat handler — filesystems that deny hard links', () => {
     let tmpDir;
-    beforeEach(() => {
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-no-hardlink-'));
-    });
-    afterEach(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+    beforeEach(async () => {
+        tmpDir = (await currentScopeForResources().directory('luker-fs-no-hardlink')).path;
     });
 
     const engineModule = new URL('../../../src/storage/engines/fs-engine.js', import.meta.url).href;
@@ -175,6 +166,8 @@ describe('FsEngine chat handler — filesystems that deny hard links', () => {
     const chatsEndpointModule = new URL('../../../src/endpoints/chats.js', import.meta.url).href;
     const storageIndexModule = new URL('../../../src/storage/index.js', import.meta.url).href;
     const utilModule = new URL('../../../src/util.js', import.meta.url).href;
+    const resourceRunModule = new URL('../../harness/resources/run.js', import.meta.url).href;
+    const repoRootPath = fileURLToPath(new URL('../../..', import.meta.url));
     const defaultConfigPath = fileURLToPath(new URL('../../../default/config.yaml', import.meta.url));
 
     function runWithoutHardLinks(scriptBody) {
@@ -364,13 +357,23 @@ describe('FsEngine chat handler — filesystems that deny hard links', () => {
             setConfigFilePath(${JSON.stringify(defaultConfigPath)});
             reloadConfigCache();
             globalThis.DATA_ROOT = userDir;
+            const { createRun } = await import(${JSON.stringify(resourceRunModule)});
             const { makeEndpointHarness } = await import(${JSON.stringify(endpointHarnessModule)});
             const { router: chatsRouter } = await import(${JSON.stringify(chatsEndpointModule)});
             const { getChatRepo } = await import(${JSON.stringify(storageIndexModule)});
+            const childRun = await createRun({
+                projectRoot: ${JSON.stringify(repoRootPath)},
+                profile: 'storage-local',
+                command: [process.execPath],
+                source: 'fs-engine-chat-child',
+            });
+            const childScope = await childRun.scope({ kind: 'case', label: 'rename-no-hardlinks' });
             const h = await makeEndpointHarness({
+                scope: childScope,
                 mode: 'fs',
                 mount: (app) => app.use('/api/chats', chatsRouter),
             });
+            let ok = false;
             try {
                 const chatRepo = getChatRepo();
                 await chatRepo.save(h.handle, 'TestChar', 'source', {
@@ -403,8 +406,11 @@ describe('FsEngine chat handler — filesystems that deny hard links', () => {
                     movedMessages: moved?.body,
                     movedState,
                 });
+                ok = true;
             } finally {
                 await h.cleanup();
+                await childScope.dispose();
+                await childRun.finish({ status: ok ? 'passed' : 'failed' });
             }
         `);
 

@@ -1,27 +1,14 @@
-// Each of the 8 incremental chat-mutation endpoints must trigger
-// getBackupFunction(handle), creating a chat_<sanitized_name>_<ts>.jsonl file
-// in request.user.directories.backups (== harness.dirs.backups).
-//
-// Previously only POST /save invoked the backup throttle — every other
-// mutation path (append, patch, meta/patch, state/patch, plus the four group
-// twins) silently bypassed it, so users on db modes who never hit the legacy
-// /save route (e.g. branch-only workflows, state-only sidecar writes) got
-// zero backup history. All 8 incremental mutation endpoints must drive
-// `getBackupFunction(handle)`; we assert one per endpoint per engine.
-//
-// Throttle note: getBackupFunction memoizes a 10s `{leading:true, trailing:
-// true}` throttle per handle in a module-scoped Map. Across tests in the
-// same describe block the throttle stays warm, so call #2 onward in the
-// 10s window would only schedule a trailing fire that lands after the test
-// asserted. To keep each test deterministic we reset the throttle map in
-// beforeEach via the dedicated test-only export.
+// Incremental chat mutations create real backup files in the owner's directory.
+// Closing the endpoint fixture drains pending backups before releasing its data.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
-import { router as chatsRouter, _resetChatBackupThrottlesForTests } from '../../../src/endpoints/chats.js';
+import { router as chatsRouter } from '../../../src/endpoints/chats.js';
 import { getChatRepo } from '../../../src/storage/index.js';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 const HEADER = { user_name: 'tester', character_name: 'Alice', chat_metadata: {} };
 const MESSAGES = [
@@ -39,7 +26,6 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
     let harness;
 
     beforeEach(async () => {
-        _resetChatBackupThrottlesForTests();
         harness = await makeEndpointHarness({
             mode,
             mount: (app) => { app.use('/api/chats', chatsRouter); },
@@ -52,9 +38,22 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         await getChatRepo().save(harness.handle, 'Alice', 'c1', HEADER, MESSAGES, null);
     });
 
-    afterEach(async () => {
-        _resetChatBackupThrottlesForTests();
-        if (harness) await harness.cleanup();
+    test('fixture cleanup writes the latest pending backup before releasing its data root', async () => {
+        const directory = await currentScopeForResources().directory('retained chat backup observation');
+        harness.dirs.backups = directory.path;
+        for (const message of ['leading lifecycle reply', 'pending lifecycle reply']) {
+            const current = await getChatRepo().get(harness.handle, 'Alice', 'c1');
+            await request(harness.server).post('/api/chats/append').send({
+                avatar_url: 'Alice.png', file_name: 'c1', integrity: current.integrity,
+                messages: [{ name: 'Alice', mes: message }],
+            }).expect(200);
+        }
+        const backupBytes = () => listBackupFiles(harness, 'alice').map(name => fs.readFileSync(path.join(directory.path, name), 'utf8')).join('\n');
+        expect(backupBytes()).toContain('leading lifecycle reply');
+        expect(backupBytes()).not.toContain('pending lifecycle reply');
+        await harness.cleanup();
+        expect(backupBytes()).toContain('pending lifecycle reply');
+        expect(fs.existsSync(harness.dataRoot)).toBe(false);
     });
 
     test('REGRESSION: solo /append triggers chat backup', async () => {

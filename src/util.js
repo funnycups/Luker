@@ -307,6 +307,37 @@ export function delay(ms) {
 }
 
 /**
+ * Retains pending work outside the timer so draining cancels its native handle first.
+ * @template {(...args: any[]) => any} T
+ * @param {T} callback Work to invoke
+ * @param {number} interval Throttle interval in milliseconds
+ * @returns {{run: (...args: Parameters<T>) => ReturnType<T>, flush: () => ReturnType<T> | undefined}}
+ */
+export function createDrainingThrottle(callback, interval) {
+    /** @type {Parameters<T> | undefined} */
+    let pending;
+    const invoke = (...args) => {
+        pending = undefined;
+        return callback(...args);
+    };
+    const throttled = _.throttle(invoke, interval, { leading: true, trailing: true });
+    return {
+        run: (...args) => {
+            pending = args;
+            return throttled(...args);
+        },
+        flush: () => {
+            throttled.cancel();
+            if (pending) return invoke(...pending);
+        },
+        cancel: () => {
+            pending = undefined;
+            throttled.cancel();
+        },
+    };
+}
+
+/**
  * Generates a random hex string of the given length.
  * @param {number} length String length
  * @returns {string} Random hex string

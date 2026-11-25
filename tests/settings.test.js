@@ -78,6 +78,31 @@ afterEach(() => {
 });
 
 describe('buildSettingsResponse', () => {
+    test('bootstrap keeps the complete stored settings separate from its partial preset inventory', async () => {
+        const request = createRequestFixture();
+        const { directories } = request.user;
+        const expected = {
+            oai_settings: { preset_settings_openai: 'Default', extensions: { replacement: true } },
+            extension_settings: { retained: { enabled: true } },
+            unknown: { source: 'stored' },
+        };
+        writeJson(path.join(directories.root, 'settings.json'), expected);
+        writeJson(path.join(directories.openAI_Settings, 'Default.json'), { temperature: 0.7 });
+        writeJson(path.join(directories.openAI_Settings, 'Other.json'), { temperature: 0.9 });
+        writeJson(path.join(directories.quickreplies, 'Watch.json'), { name: 'Watch', qrList: [] });
+
+        const full = await buildSettingsResponse(request);
+        const bootstrap = await buildSettingsResponse(request, { includePresetContents: false, includeQuickReplyPresets: false });
+
+        expect(JSON.parse(full.settings)).toEqual(expected);
+        expect(JSON.parse(bootstrap.settings)).toEqual(expected);
+        expect(bootstrap.openai_setting_names).toEqual(['Default', 'Other']);
+        expect(bootstrap.openai_settings).toEqual([JSON.stringify({ temperature: 0.7 }), null]);
+        expect(bootstrap.quickReplyPresets).toEqual([]);
+        expect(full.quickReplyPresets).toEqual([{ name: 'Watch', qrList: [] }]);
+        expect(JSON.parse(fs.readFileSync(path.join(directories.root, 'settings.json'), 'utf8'))).toEqual(expected);
+    });
+
     test('excludes preset state sidecars from preset collections', async () => {
         const request = createRequestFixture();
         const { directories } = request.user;

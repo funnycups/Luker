@@ -2,6 +2,7 @@ import { NotFoundError } from '../errors.js';
 import { assertWritable } from '../read-only-mode.js';
 import { decodeJsonPointer } from '../json-pointer.js';
 import { applyJsonPatch } from './json-patch.js';
+import { getAuxiliaryWorldReferences, withWorldReferenceWrite } from '../world-reference-coordination.js';
 
 export class SettingsRepo {
     constructor({ engine }) { this._engine = engine; }
@@ -33,17 +34,21 @@ export class SettingsRepo {
 
     async save(handle, doc) {
         assertWritable();
-        await this._engine.withTransaction(handle, (tx) => tx.putResource(this._key(handle), { doc }));
+        await withWorldReferenceWrite(this._engine, handle, async assertReferences => {
+            await assertReferences(getAuxiliaryWorldReferences(doc));
+            return this._engine.withTransaction(handle, (tx) => tx.putResource(this._key(handle), { doc }));
+        });
     }
 
     async patch(handle, ops) {
         assertWritable();
-        return this._engine.withTransaction(handle, async (tx) => {
+        return withWorldReferenceWrite(this._engine, handle, assertReferences => this._engine.withTransaction(handle, async (tx) => {
             const existing = await tx.getResource(this._key(handle));
             if (existing == null) throw new NotFoundError('settings', { handle });
             const next = applyJsonPatch(existing, ops);
+            await assertReferences(getAuxiliaryWorldReferences(next));
             await tx.putResource(this._key(handle), { doc: next });
             return next;
-        });
+        }));
     }
 }

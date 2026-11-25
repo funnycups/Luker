@@ -53,9 +53,6 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: /api/chats/group/import writes through ChatRepo', async () => {
         uploadPayload = {

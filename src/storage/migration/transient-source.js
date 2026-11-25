@@ -14,30 +14,26 @@
 //               contract (some Repo paths touch the per-user dir even when
 //               the engine is db-backed).
 //
-// Important wrinkle for mysql/pg sources: the dump's INSERT params include
-// the ORIGINAL source handle baked in (the engine doesn't parameterize
-// handle separately — it's just the first column in every row). Replaying
-// the dump verbatim on operator DB would land rows at the original handle,
-// which may collide with the operator's real users. We stream-rewrite the
-// first param of every dump line to substitute scratchHandle so the rows
-// land in our isolated namespace and tear down cleanly via deleteUser.
+// Every engine dump carries the ORIGINAL source handle in its rows. The
+// engines' `restoreUser` validates the dump and writes its rows under the
+// handle it is given, so the rows land in the isolated scratchHandle
+// namespace and tear down cleanly via deleteUser. An invalid dump throws
+// `RestoreDumpInvalidError` before the source is used.
 
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { StringDecoder } from 'node:string_decoder';
-import Database from 'better-sqlite3';
 import yauzl from 'yauzl';
 
 import { FsEngine } from '../engines/fs-engine.js';
-import { SqliteEngine } from '../engines/sqlite-engine.js';
+import { SqliteEngine, assertValidSqliteFile, rewriteSqliteHandle } from '../engines/sqlite-engine.js';
 import { MysqlEngine } from '../engines/mysql-engine.js';
 import { PgEngine } from '../engines/postgres-engine.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY, SCRATCH_HANDLE_PREFIX } from '../engine-backup-entries.js';
 import { USER_DIRECTORY_TEMPLATE } from '../../constants.js';
 import { CrossModeScratchConnectionError } from './cross-mode-errors.js';
+import { RestoreDumpInvalidError } from '../errors.js';
 
 /**
  * @typedef {object} TransientSource
@@ -70,14 +66,22 @@ export async function materializeTransientSource(engineMeta, zipPath, opts) {
         throw new Error('materializeTransientSource: dataRoot is required');
     }
 
+    if (!['fs', 'sqlite', 'mysql', 'postgres'].includes(kind)) {
+        throw new Error(`materializeTransientSource: unsupported engineKind "${kind}"`);
+    }
+
     const scratchRoot = path.join(dataRoot, '_storage-migrations', scratchHandle);
     await fsPromises.mkdir(scratchRoot, { recursive: true });
 
-    if (kind === 'fs') return buildFsTransient({ scratchRoot, scratchHandle, zipPath });
-    if (kind === 'sqlite') return buildSqliteTransient({ scratchRoot, scratchHandle, zipPath });
-    if (kind === 'mysql') return buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
-    if (kind === 'postgres') return buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
-    throw new Error(`materializeTransientSource: unsupported engineKind "${kind}"`);
+    try {
+        if (kind === 'fs') return await buildFsTransient({ scratchRoot, scratchHandle, zipPath });
+        if (kind === 'sqlite') return await buildSqliteTransient({ scratchRoot, scratchHandle, zipPath });
+        if (kind === 'mysql') return await buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
+        return await buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
+    } catch (err) {
+        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+        throw err;
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -154,18 +158,19 @@ async function buildSqliteTransient({ scratchRoot, scratchHandle, zipPath }) {
     // The .sqlite file is the engine's home — write it AT scratchRoot
     // (sqlite-engine looks for luker-storage.sqlite under dirs.root).
     const dumpDest = path.join(scratchRoot, 'luker-storage.sqlite');
-    const dumpFound = await extractEngineDumpToFile(zipPath, dumpDest);
-    if (!dumpFound) {
-        throw new Error(`transient sqlite source: backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
+    try {
+        const dumpFound = await extractEngineDumpToFile(zipPath, dumpDest);
+        if (!dumpFound) {
+            throw new RestoreDumpInvalidError(`sqlite backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
+        }
+        await assertValidSqliteFile(dumpDest);
+        // The SqliteEngine queries `WHERE handle = ?` with scratchHandle, and
+        // the dump's rows still carry the source's original handle.
+        rewriteSqliteHandle(dumpDest, scratchHandle);
+    } catch (err) {
+        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+        throw err;
     }
-    // Rewrite the `handle` column on every user-data table from the source's
-    // original handle to the scratchHandle so subsequent reads via the
-    // SqliteEngine (which queries `WHERE handle = ?` with scratchHandle)
-    // see the imported rows. The .sqlite dump is a byte-copy of the source's
-    // per-user DB, so its rows still carry the original handle string —
-    // without this UPDATE the engine reads return empty even though the
-    // file itself contains the data.
-    rewriteSqliteHandleInPlace(dumpDest, scratchHandle);
 
     const engine = new SqliteEngine({
         directoriesByHandle: (h) => {
@@ -190,39 +195,9 @@ async function buildSqliteTransient({ scratchRoot, scratchHandle, zipPath }) {
     };
 }
 
-/**
- * UPDATE every user-data table's `handle` column to `scratchHandle`. Done
- * synchronously via better-sqlite3 because the engine isn't open yet (this
- * runs immediately after writing the dump bytes and before the engine
- * lazily opens the file). All 9 tables listed in src/storage/engines/migrations/sqlite/0001-initial.sql
- * carry a `handle` column; we update them all in one transaction so a crash
- * mid-update leaves a recoverable state (re-running the cross-mode restore
- * with a fresh scratch dir is idempotent).
- */
-function rewriteSqliteHandleInPlace(sqlitePath, scratchHandle) {
-    const TABLES_WITH_HANDLE = [
-        'chats', 'chat_states', 'settings', 'presets', 'preset_states',
-        'worlds', 'named_docs', 'groups_table', 'stats',
-    ];
-    const db = new Database(sqlitePath);
-    try {
-        db.pragma('journal_mode = WAL');
-        db.pragma('foreign_keys = OFF');
-        const tx = db.transaction(() => {
-            for (const tbl of TABLES_WITH_HANDLE) {
-                db.prepare(`UPDATE ${tbl} SET handle = ?`).run(scratchHandle);
-            }
-        });
-        tx();
-    } finally {
-        db.close();
-    }
-}
-
 // --------------------------------------------------------------------------
-// mysql source: connect to operator-supplied scratch DB, replay the dump
-// rewriting the first param (handle column) to scratchHandle so rows land in
-// our isolated namespace.
+// mysql source: connect to operator-supplied scratch DB and restore the dump
+// under scratchHandle.
 // --------------------------------------------------------------------------
 
 async function buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds }) {
@@ -237,28 +212,29 @@ async function buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratc
         url: scratchCreds.mysqlUrl,
         poolSize: scratchCreds.mysqlPoolSize,
     });
+    let dumpStream = null;
+    let restoreStarted = false;
     try {
-        await engine.ping();
-    } catch (err) {
-        try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
-        throw new CrossModeScratchConnectionError('mysql', err);
-    }
+        try {
+            await engine.ping();
+        } catch (err) {
+            throw new CrossModeScratchConnectionError('mysql', err);
+        }
 
-    // Stream the dump from the ZIP, rewriting handle on each NDJSON line.
-    const dumpStream = await openEngineDumpStream(zipPath);
-    if (!dumpStream) {
-        try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
-        throw new Error(`transient mysql source: backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
-    }
-    const rewritten = rewriteHandleInDumpStream(dumpStream, scratchHandle);
-    try {
-        await engine.restoreUser(scratchHandle, rewritten);
+        dumpStream = await openEngineDumpStream(zipPath);
+        if (!dumpStream) {
+            throw new RestoreDumpInvalidError(`mysql backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
+        }
+        restoreStarted = true;
+        await engine.restoreUser(scratchHandle, dumpStream);
     } catch (err) {
-        try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+        if (dumpStream && !dumpStream.destroyed) {
+            try { dumpStream.destroy(); } catch { /* best-effort */ }
+        }
+        if (restoreStarted) {
+            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+        }
         try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
         throw err;
     }
 
@@ -293,27 +269,29 @@ async function buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCr
         url: scratchCreds.postgresUrl,
         poolSize: scratchCreds.postgresPoolSize,
     });
+    let dumpStream = null;
+    let restoreStarted = false;
     try {
-        await engine.ping();
-    } catch (err) {
-        try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
-        throw new CrossModeScratchConnectionError('postgres', err);
-    }
+        try {
+            await engine.ping();
+        } catch (err) {
+            throw new CrossModeScratchConnectionError('postgres', err);
+        }
 
-    const dumpStream = await openEngineDumpStream(zipPath);
-    if (!dumpStream) {
-        try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
-        throw new Error(`transient postgres source: backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
-    }
-    const rewritten = rewriteHandleInDumpStream(dumpStream, scratchHandle);
-    try {
-        await engine.restoreUser(scratchHandle, rewritten);
+        dumpStream = await openEngineDumpStream(zipPath);
+        if (!dumpStream) {
+            throw new RestoreDumpInvalidError(`postgres backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
+        }
+        restoreStarted = true;
+        await engine.restoreUser(scratchHandle, dumpStream);
     } catch (err) {
-        try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+        if (dumpStream && !dumpStream.destroyed) {
+            try { dumpStream.destroy(); } catch { /* best-effort */ }
+        }
+        if (restoreStarted) {
+            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+        }
         try { await engine.close(); } catch { /* best-effort */ }
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
         throw err;
     }
 
@@ -350,7 +328,12 @@ function extractZipTreeToScratch(zipPath, scratchRoot) {
             const finish = (err) => {
                 if (finished) return;
                 finished = true;
-                if (err) reject(err); else resolve();
+                if (err) {
+                    try { zipfile.close(); } catch { /* best-effort */ }
+                    reject(err);
+                } else {
+                    resolve();
+                }
             };
             zipfile.readEntry();
             zipfile.on('entry', (entry) => {
@@ -380,6 +363,10 @@ function extractZipTreeToScratch(zipPath, scratchRoot) {
                             await pipeline(readStream, fs.createWriteStream(target, { mode: 0o644 }));
                             zipfile.readEntry();
                         } catch (writeErr) {
+                            if (!readStream.destroyed) {
+                                readStream.on('error', () => {});
+                                readStream.destroy();
+                            }
                             finish(writeErr);
                         }
                     });
@@ -392,14 +379,20 @@ function extractZipTreeToScratch(zipPath, scratchRoot) {
 }
 
 /**
- * Open a read stream over the ZIP's `_engine_dump.bin` entry, or resolve to
- * null when the entry is absent.
+ * Open a read stream over the ZIP's `_engine_dump.bin` entry along with an
+ * idempotent closer for the underlying zipfile, or resolve to null when absent.
  */
-function openEngineDumpStream(zipPath) {
+function openEngineDumpEntry(zipPath) {
     return new Promise((resolve, reject) => {
         yauzl.open(zipPath, { lazyEntries: true, decodeStrings: true }, (openErr, zipfile) => {
             if (openErr) return reject(openErr);
             let settled = false;
+            let zipClosed = false;
+            const closeZip = () => {
+                if (zipClosed) return;
+                zipClosed = true;
+                try { zipfile.close(); } catch { /* already closed */ }
+            };
             zipfile.readEntry();
             zipfile.on('entry', (entry) => {
                 if (entry.fileName !== ENGINE_DUMP_ENTRY) {
@@ -410,23 +403,26 @@ function openEngineDumpStream(zipPath) {
                     if (settled) return;
                     settled = true;
                     if (streamErr) {
-                        try { zipfile.close(); } catch { /* best-effort */ }
+                        closeZip();
                         return reject(streamErr);
                     }
-                    // Keep the zipfile alive until the consumer drains the
-                    // stream; close it on stream end / error.
-                    readStream.on('end', () => { try { zipfile.close(); } catch { /* ignore */ } });
-                    readStream.on('error', () => { try { zipfile.close(); } catch { /* ignore */ } });
-                    resolve(readStream);
+                    // Keep the zipfile alive until the consumer drains or
+                    // destroys the stream; close it on end / error / close.
+                    readStream.once('end', closeZip);
+                    readStream.once('error', closeZip);
+                    readStream.once('close', closeZip);
+                    resolve({ stream: readStream, closeZip });
                 });
             });
             zipfile.on('end', () => {
                 if (!settled) {
                     settled = true;
+                    closeZip();
                     resolve(null);
                 }
             });
             zipfile.on('error', (err) => {
+                closeZip();
                 if (!settled) { settled = true; reject(err); }
             });
         });
@@ -434,52 +430,34 @@ function openEngineDumpStream(zipPath) {
 }
 
 /**
+ * Open a read stream over the ZIP's `_engine_dump.bin` entry, or resolve to
+ * null when the entry is absent.
+ */
+async function openEngineDumpStream(zipPath) {
+    const opened = await openEngineDumpEntry(zipPath);
+    return opened ? opened.stream : null;
+}
+
+/**
  * Extract `_engine_dump.bin` from the ZIP and write it to `destPath`.
  * Returns true if the entry was found and written, false otherwise.
  */
 async function extractEngineDumpToFile(zipPath, destPath) {
-    const stream = await openEngineDumpStream(zipPath);
-    if (!stream) return false;
-    await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
-    await pipeline(stream, fs.createWriteStream(destPath));
-    return true;
-}
-
-/**
- * Stream-transform a `{sql, params}` NDJSON dump so that the FIRST element of
- * every params array (always the source handle, by DUMP_TABLES contract) is
- * replaced with `scratchHandle`. The transform preserves CJK / emoji content
- * by re-encoding each parsed line as UTF-8 JSON.
- */
-function rewriteHandleInDumpStream(source, scratchHandle) {
-    async function* transform() {
-        const decoder = new StringDecoder('utf8');
-        let buf = '';
-        for await (const chunk of source) {
-            buf += decoder.write(chunk);
-            let nl;
-            while ((nl = buf.indexOf('\n')) >= 0) {
-                const line = buf.slice(0, nl).trim();
-                buf = buf.slice(nl + 1);
-                if (!line) continue;
-                yield rewriteHandleInLine(line, scratchHandle) + '\n';
-            }
+    const opened = await openEngineDumpEntry(zipPath);
+    if (!opened) return false;
+    const { stream, closeZip } = opened;
+    try {
+        await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
+        await pipeline(stream, fs.createWriteStream(destPath));
+        return true;
+    } catch (err) {
+        if (!stream.destroyed) {
+            stream.on('error', () => {});
+            stream.destroy();
         }
-        buf += decoder.end();
-        const tail = buf.trim();
-        if (tail) yield rewriteHandleInLine(tail, scratchHandle) + '\n';
+        closeZip();
+        throw err;
     }
-    return Readable.from(transform());
-}
-
-function rewriteHandleInLine(line, scratchHandle) {
-    const obj = JSON.parse(line);
-    if (Array.isArray(obj.params) && obj.params.length > 0) {
-        // Every DUMP_TABLES row begins with `handle` per
-        // src/storage/engines/mysql-engine.js and postgres-engine.js.
-        obj.params = [scratchHandle, ...obj.params.slice(1)];
-    }
-    return JSON.stringify(obj);
 }
 
 /**

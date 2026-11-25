@@ -68,9 +68,6 @@ describe.each(ENDPOINT_HARNESSES)('media attribution on $name', ({ mode }) => {
         fs.mkdirSync(harness.dirs.userImages, { recursive: true });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('records uploaded images in the chat sidecar', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'main', HEADER, MESSAGES, null);

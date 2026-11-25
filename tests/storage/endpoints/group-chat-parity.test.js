@@ -27,9 +27,6 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('REGRESSION: /api/chats/group/save creates a group chat via Repo', async () => {
         const id = 'group-001';

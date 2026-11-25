@@ -11,6 +11,7 @@ import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
 import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { getFileVersion } from '../file-version.js';
 import { encodePresetRecordRelativePath, presetRecordIdentity } from '../preset-paths.js';
 import { readPresetInventory, selectPresetEntry, readPresetEntry } from '../preset-inventory.js';
 import { assertConfinedPath } from '../path-confinement.js';
@@ -53,8 +54,8 @@ export class FsTransaction {
         return this._h(key.kind, 'putResource').put(key, record);
     }
 
-    async deleteResource(key) {
-        return this._h(key.kind, 'deleteResource').delete(key);
+    async deleteResource(key, options) {
+        return this._h(key.kind, 'deleteResource').delete(key, options);
     }
 
     async listResources(filter) {
@@ -650,25 +651,60 @@ function registerWorldInfoHandler(tx) {
         return requested ? sanitizeFilename(requested) : '';
     };
 
-    const resolveCanonicalFilename = (key) => {
+    const detectCaseInsensitive = (dir, files) => {
+        if (files.length === 0) return false;
+        const sample = files[0];
+        const ext = path.extname(sample);
+        const flippedExt = ext === ext.toLowerCase() ? ext.toUpperCase() : ext.toLowerCase();
+        if (flippedExt === ext) return false;
+        const alt = sample.slice(0, -ext.length) + flippedExt;
+        try {
+            const sampleStat = fs.lstatSync(path.join(dir, sample), { bigint: true });
+            const altStat = fs.lstatSync(path.join(dir, alt), { bigint: true });
+            return sampleStat.dev === altStat.dev && sampleStat.ino === altStat.ino;
+        } catch (error) {
+            if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
+            throw error;
+        }
+    };
+
+    const readWorldCatalog = (handle) => {
+        const dir = worldsDir(handle);
+        if (!fs.existsSync(dir)) return { files: [], caseInsensitive: false };
+        const files = fs.readdirSync(dir)
+            .filter((f) => path.extname(f).toLowerCase() === '.json')
+            .sort();
+        return { files, caseInsensitive: detectCaseInsensitive(dir, files) };
+    };
+
+    const resolveCanonicalFilename = (key, catalog = readWorldCatalog(key.handle)) => {
         const requested = String(key.name || '').trim();
         const safe = sanitizeName(requested);
         const exactName = safe ? `${safe}.json` : '';
-        const dir = worldsDir(key.handle);
-        if (exactName) {
-            const exactPath = path.join(dir, exactName);
-            if (fs.existsSync(exactPath)) return exactName;
-        }
-        if (!fs.existsSync(dir)) return null;
-        const jsonFiles = fs.readdirSync(dir)
-            .filter((f) => path.extname(f).toLowerCase() === '.json');
+        const jsonFiles = catalog.files;
+        if (exactName && jsonFiles.includes(exactName)) return exactName;
         if (requested) {
             const exactMatch = jsonFiles.find((f) => path.parse(f).name === requested);
             if (exactMatch) return exactMatch;
+            if (catalog.caseInsensitive) {
+                if (exactName) {
+                    const exactLower = exactName.toLowerCase();
+                    const ciFilename = jsonFiles.find((f) => f.toLowerCase() === exactLower);
+                    if (ciFilename) return ciFilename;
+                }
+                const requestedLower = requested.toLowerCase();
+                const ciStem = jsonFiles.find((f) => path.parse(f).name.toLowerCase() === requestedLower);
+                if (ciStem) return ciStem;
+            }
             const normalizedRequested = normalizeLookupText(requested);
             if (normalizedRequested) {
                 const tolerant = jsonFiles.find((f) => normalizeLookupText(path.parse(f).name) === normalizedRequested);
                 if (tolerant) return tolerant;
+                if (catalog.caseInsensitive) {
+                    const normalizedLower = normalizedRequested.toLowerCase();
+                    const ciTolerant = jsonFiles.find((f) => normalizeLookupText(path.parse(f).name).toLowerCase() === normalizedLower);
+                    if (ciTolerant) return ciTolerant;
+                }
             }
         }
         return null;
@@ -703,12 +739,18 @@ function registerWorldInfoHandler(tx) {
             if (!fp) throw new Error(`world put: invalid name ${key.name}`);
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
+            return getFileVersion(fp);
         },
-        delete(key) {
-            const filename = resolveCanonicalFilename(key);
-            if (!filename) return false;
-            const fp = path.join(worldsDir(key.handle), filename);
-            if (!fs.existsSync(fp)) return false;
+        delete(key, { expectedVersion, resolvedTarget } = {}) {
+            // A captured locator is the inspected filename, not its shared stem.
+            const filename = resolvedTarget === undefined ? resolveCanonicalFilename(key) : resolvedTarget?.locator;
+            const fp = filename ? path.join(worldsDir(key.handle), filename) : null;
+            if (!fp || !fs.existsSync(fp)) {
+                if (expectedVersion !== undefined) throw new ConflictError('world_changed');
+                return false;
+            }
+            if (expectedVersion !== undefined && getFileVersion(fp) !== expectedVersion) throw new ConflictError('world_changed');
+            // No asynchronous gap between resource version validation and unlink.
             fs.unlinkSync(fp);
             return true;
         },
@@ -755,6 +797,22 @@ function registerWorldInfoHandler(tx) {
     tx.resolveWorldName = async (key) => {
         const filename = resolveCanonicalFilename(key);
         return filename ? path.parse(filename).name : null;
+    };
+    tx.captureWorldInfoIdentity = handle => {
+        const catalog = readWorldCatalog(handle);
+        return {
+            resolve: requested => {
+                const filename = resolveCanonicalFilename({ handle, name: requested }, catalog);
+                return filename ? { name: path.parse(filename).name, locator: filename } : null;
+            },
+            has: locator => catalog.caseInsensitive
+                ? catalog.files.some(file => file.toLowerCase() === locator.toLowerCase())
+                : catalog.files.includes(locator),
+        };
+    };
+    tx.getWorldInfoVersion = async (key) => {
+        const filename = resolveCanonicalFilename(key);
+        return filename ? getFileVersion(path.join(worldsDir(key.handle), filename)) : null;
     };
 }
 

@@ -14,8 +14,8 @@ describePg('PgEngine schema bootstrap', () => {
         if (harness) await harness.cleanup();
     });
 
-    test('CURRENT_SCHEMA_VERSION is 1', () => {
-        expect(CURRENT_SCHEMA_VERSION).toBe(1);
+    test('CURRENT_SCHEMA_VERSION includes world revisions', () => {
+        expect(CURRENT_SCHEMA_VERSION).toBe(2);
     });
 
     test('all expected tables exist (9 storage + _storage_meta)', async () => {
@@ -73,22 +73,22 @@ describePg('PgEngine schema bootstrap', () => {
         expect(r.rows[0].integrity).toBe('abc-123');
     });
 
-    test('_storage_meta.schema_version reads "1" after initSchema', async () => {
+    test('_storage_meta.schema_version includes world revisions after initSchema', async () => {
         const r = await harness.engine._pool.query(
             'SELECT value FROM _storage_meta WHERE "key" = \'schema_version\'',
         );
         expect(r.rows.length).toBe(1);
-        expect(r.rows[0].value).toBe('1');
+        expect(r.rows[0].value).toBe('2');
     });
 
     test('initSchema is idempotent — second call is a no-op', async () => {
         // First call already ran via ping. Second direct call must not throw.
         await expect(initSchema(harness.engine._pool)).resolves.toBeUndefined();
-        // And the version row stays at 1 (not duplicated, not bumped).
+        // The version row is not duplicated or advanced on another call.
         const r = await harness.engine._pool.query(
             'SELECT value FROM _storage_meta WHERE "key" = \'schema_version\'',
         );
         expect(r.rows.length).toBe(1);
-        expect(r.rows[0].value).toBe('1');
+        expect(r.rows[0].value).toBe('2');
     });
 });

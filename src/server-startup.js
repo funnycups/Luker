@@ -315,7 +315,10 @@ export class ServerStartup {
             const server = https.createServer(sslOptions, this.app);
             this.servers.push(server);
             server.on('error', reject);
-            server.on('listening', resolve);
+            server.on('listening', () => {
+                if (this.cliArgs.port === 0) this.cliArgs.port = server.address().port;
+                resolve();
+            });
 
             let host = url.hostname;
             if (ipVersion === 6) host = urlHostnameToIPv6(url.hostname);
@@ -339,7 +342,10 @@ export class ServerStartup {
             const server = http.createServer(this.app);
             this.servers.push(server);
             server.on('error', reject);
-            server.on('listening', resolve);
+            server.on('listening', () => {
+                if (this.cliArgs.port === 0) this.cliArgs.port = server.address().port;
+                resolve();
+            });
 
             let host = url.hostname;
             if (ipVersion === 6) host = urlHostnameToIPv6(url.hostname);
@@ -371,10 +377,9 @@ export class ServerStartup {
                 await createFunc(this.cliArgs.getIPv6ListenUrl(), 6);
             } catch (error) {
                 console.error('Warning: failed to start server on IPv6');
+                console.error(error);
                 if (this.#isAddressInUseError(error)) {
                     console.error(this.#getAddressInUseMessage(this.cliArgs.getIPv6ListenUrl(), 6));
-                } else {
-                    console.error(error);
                 }
 
                 v6Failed = true;
@@ -387,10 +392,9 @@ export class ServerStartup {
                 await createFunc(this.cliArgs.getIPv4ListenUrl(), 4);
             } catch (error) {
                 console.error('Warning: failed to start server on IPv4');
+                console.error(error);
                 if (this.#isAddressInUseError(error)) {
                     console.error(this.#getAddressInUseMessage(this.cliArgs.getIPv4ListenUrl(), 4));
-                } else {
-                    console.error(error);
                 }
 
                 v4Failed = true;

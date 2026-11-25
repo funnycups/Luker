@@ -3,9 +3,10 @@
 //
 // Flow:
 //   1. acquireMigrationLock + setReadOnly(true)
-//   2. snapshot live destination (overwrite mode only) — so a failure can roll back
-//   3. materializeTransientSource(engineMeta, zip, scratchCreds) — build a live
-//      source engine instance populated from the ZIP's dump
+//   2. materializeTransientSource(engineMeta, zip, scratchCreds) — build a live
+//      source engine instance populated from the ZIP's dump; an invalid dump
+//      fails here, before any destination work
+//   3. snapshot live destination (overwrite mode only) — so a failure can roll back
 //   4. MigrationRunner(transient→liveEngine, categories=selectionToRunnerCategories,
 //      skipInternalSnapshot=true, destHandle=realHandle).migrateUser(scratchHandle)
 //   5. extractFsTreeCategories(zip, dirs, selection) — secrets/characters/etc.
@@ -36,6 +37,7 @@ import { snapshotUser, restoreFromSnapshot, removeSnapshot } from './backup.js';
 import { acquireMigrationLock, releaseMigrationLock, makeHolderId, startHeartbeat, stopHeartbeat } from './lock.js';
 import { materializeTransientSource } from './transient-source.js';
 import { selectionToRunnerCategories, FS_TREE_CATEGORIES } from './selection-mapping.js';
+import { RestoreDumpInvalidError } from '../errors.js';
 import {
     CrossModeScratchCredsRequiredError,
     CrossModeScratchConnectionError,
@@ -91,6 +93,7 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
     const startedAt = Date.now();
 
     let snapshotPath = null;
+    let destinationStarted = false;
     let transient = null;
     let heartbeat = null;
     const lockAcquired = await tryAcquireLock(dataRoot, holderId);
@@ -113,7 +116,12 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
 
     let cleanupWarning = null;
     try {
-        // 1. Snapshot live destination (overwrite mode only — merge mode
+        // 1. Materialize transient source engine populated from the ZIP.
+        transient = await materializeTransientSource(engineMeta, zipPath, {
+            dataRoot, scratchHandle, scratchCreds,
+        });
+
+        // 2. Snapshot live destination (overwrite mode only — merge mode
         //    intentionally has no rollback per spec §4.2/4.3).
         if (mode === 'overwrite') {
             try {
@@ -125,16 +133,11 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
                 });
             } catch (err) {
                 throw new CrossModeConversionFailedError(err, {
-                    rollback: 'merge-no-snapshot',
+                    rollback: 'not-started',
                     snapshotPath: null,
                 });
             }
         }
-
-        // 2. Materialize transient source engine populated from the ZIP.
-        transient = await materializeTransientSource(engineMeta, zipPath, {
-            dataRoot, scratchHandle, scratchCreds,
-        });
 
         // 3. MigrationRunner: scratch source → live destination.
         const sourceRepos = buildRepos(transient.engine);
@@ -152,6 +155,7 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
             skipInternalSnapshot: true,
         });
 
+        destinationStarted = true;
         const migrationStats = await runner.migrateUser(scratchHandle, {
             destHandle: handle,
             onProgress: (event) => {
@@ -210,66 +214,13 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
         // Always try to clean up the transient last so a leaked scratch
         // doesn't survive the failure.
         //
-        // Don't re-wrap if `err` is already a typed cross-mode error: those
-        // carry their own HTTP code (400 for creds/connection, 500 for the
-        // generic conversion failure). Wrapping a creds-required error in a
+        // Don't re-wrap if `err` is already a typed cross-mode error or an
+        // invalid engine dump: those carry their own HTTP code (400 for
+        // creds/connection/invalid dump, 500 for the generic conversion
+        // failure). Wrapping a creds-required error in a
         // generic conversion failure would silently degrade it to 500 and
         // lose the structured payload the UI uses to prompt the operator.
-        if (err instanceof CrossModeConversionFailedError
-            || err instanceof CrossModeScratchCredsRequiredError
-            || err instanceof CrossModeScratchConnectionError) {
-            if (transient) {
-                try { await transient.cleanup(); } catch { /* best-effort */ }
-            }
-            // Restore snapshot before re-throwing typed errors that don't
-            // signal a partial rollback themselves — otherwise the dest
-            // might already have been partially mutated.
-            if (snapshotPath) {
-                try {
-                    await restoreFromSnapshot({
-                        handle,
-                        userRoot: dirs.root,
-                        backupPath: snapshotPath,
-                        engine: currentEngine,
-                    });
-                } catch { /* best-effort */ }
-            }
-            throw err;
-        }
-        if (snapshotPath) {
-            try {
-                await restoreFromSnapshot({
-                    handle,
-                    userRoot: dirs.root,
-                    backupPath: snapshotPath,
-                    engine: currentEngine,
-                });
-                if (transient) {
-                    try { await transient.cleanup(); } catch { /* best-effort */ }
-                }
-                throw new CrossModeConversionFailedError(err, {
-                    rollback: 'ok',
-                    snapshotPath,
-                });
-            } catch (rbErr) {
-                if (rbErr instanceof CrossModeConversionFailedError) throw rbErr;
-                if (transient) {
-                    try { await transient.cleanup(); } catch { /* best-effort */ }
-                }
-                throw new CrossModeConversionFailedError(err, {
-                    rollback: 'partial',
-                    rollbackError: rbErr,
-                    snapshotPath,
-                });
-            }
-        }
-        if (transient) {
-            try { await transient.cleanup(); } catch { /* best-effort */ }
-        }
-        throw new CrossModeConversionFailedError(err, {
-            rollback: 'merge-no-snapshot',
-            snapshotPath: null,
-        });
+        return await recoverCrossModeFailure(err, { destinationStarted, snapshotPath, transient, handle, dirs, currentEngine });
     } finally {
         try { setReadOnly(false); } catch { /* best-effort */ }
         if (heartbeat) {
@@ -277,6 +228,37 @@ export async function crossModeRestore(zipPath, engineMeta, dirs, selection, mod
         }
         try { await releaseMigrationLock({ dataRoot, holderId }); } catch { /* best-effort */ }
     }
+}
+
+/** Recover the destination before preserving a typed refusal or reporting partial data. */
+export async function recoverCrossModeFailure(error, { destinationStarted, snapshotPath, transient, handle, dirs, currentEngine }) {
+    const typed = error instanceof CrossModeConversionFailedError
+        || error instanceof CrossModeScratchCredsRequiredError
+        || error instanceof CrossModeScratchConnectionError
+        || error instanceof RestoreDumpInvalidError;
+    let rollback = destinationStarted ? 'merge-no-snapshot' : 'not-started';
+    let rollbackError = null;
+    try {
+        if (destinationStarted && snapshotPath) {
+            try {
+                await restoreFromSnapshot({ handle, userRoot: dirs.root, backupPath: snapshotPath, engine: currentEngine });
+                rollback = 'ok';
+            } catch (error) {
+                rollback = 'partial';
+                rollbackError = error;
+            }
+        }
+    } finally {
+        if (transient) {
+            try { await transient.cleanup(); } catch (cleanupError) {
+                // Keep the recovery error authoritative, but retain cleanup
+                // diagnostics rather than suppressing them.
+                error.cleanupError = cleanupError;
+            }
+        }
+    }
+    if (typed && (rollback === 'not-started' || rollback === 'ok')) throw error;
+    throw new CrossModeConversionFailedError(error, { rollback, rollbackError, snapshotPath });
 }
 
 function buildRepos(engine) {
@@ -363,7 +345,12 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
             const finish = (err) => {
                 if (finished) return;
                 finished = true;
-                if (err) reject(err); else resolve();
+                if (err) {
+                    try { zipfile.close(); } catch { /* best-effort */ }
+                    reject(err);
+                } else {
+                    resolve();
+                }
             };
 
             zipfile.readEntry();

@@ -52,7 +52,6 @@ describe('restore upload session endpoints', () => {
 
     afterEach(async () => {
         globalThis.DATA_ROOT = previousDataRoot;
-        if (harness) await harness.cleanup();
     });
 
     test('init validates handle, extension and size', async () => {

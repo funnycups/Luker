@@ -47,9 +47,9 @@ describe('SqliteEngine scaffolding', () => {
         engine2.close();
     });
 
-    test('schema is initialized on first open (user_version === 1)', () => {
+    test('schema is initialized on first open', () => {
         engine._dbFor(handle);
-        expect(engine._dbs.get(handle).pragma('user_version', { simple: true })).toBe(1);
+        expect(engine._dbs.get(handle).pragma('user_version', { simple: true })).toBe(2);
     });
 
     test('schema is idempotent — reopen on existing db does not error', () => {
@@ -81,5 +81,117 @@ describe('SqliteEngine scaffolding', () => {
                     VALUES (?, ?, ?, 0, '', ?, ?, ?)`).run(handle, 'TestChar', 'chat1', doc, 100, 100);
         const row = db.prepare('SELECT integrity FROM chats WHERE handle=? AND char_dir=? AND name=?').get(handle, 'TestChar', 'chat1');
         expect(row.integrity).toBe('abc-123');
+    });
+
+    test('restoreUser serializes with in-flight and queued transactions via _txTail', async () => {
+        // Prepare a second valid sqlite dump with distinct settings.
+        const dumpRoot = path.join(tmpDir, 'src-dump');
+        const dumpEngine = new SqliteEngine({ directoriesByHandle: () => ({ root: dumpRoot }) });
+        let dumpStream;
+        try {
+            await dumpEngine.withTransaction('src', async (tx) => {
+                await tx.putResource({ kind: 'settings', handle: 'src' }, { doc: { marker: 'restored-value' } });
+            });
+            dumpStream = await dumpEngine.dumpUser('src');
+        } finally {
+            dumpEngine.close();
+        }
+
+        await engine.withTransaction(handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle }, { doc: { marker: 'initial-value' } });
+        });
+
+        let releaseInFlight;
+        let inFlightEntered;
+        const entered = new Promise(resolve => { inFlightEntered = resolve; });
+        const hold = new Promise(resolve => { releaseInFlight = resolve; });
+        const order = [];
+
+        const inFlightTx = engine.withTransaction(handle, async (tx) => {
+            order.push('tx1-start');
+            inFlightEntered();
+            await hold;
+            await tx.putResource({ kind: 'settings', handle }, { doc: { marker: 'tx1-committed' } });
+            order.push('tx1-end');
+        });
+
+        const existingDb = engine._dbs.get(handle);
+        const origClose = existingDb.close.bind(existingDb);
+        existingDb.close = () => {
+            order.push('restore-swap');
+            return origClose();
+        };
+
+        await entered;
+        const restorePromise = engine.restoreUser(handle, dumpStream);
+        const queuedRead = engine.withTransaction(handle, async (tx) => {
+            order.push('tx2-start');
+            return await tx.getResource({ kind: 'settings', handle });
+        });
+
+        releaseInFlight();
+        await Promise.all([inFlightTx, restorePromise]);
+        const readAfterRestore = await queuedRead;
+
+        expect(order).toEqual(['tx1-start', 'tx1-end', 'restore-swap', 'tx2-start']);
+        expect(readAfterRestore).toEqual({ marker: 'restored-value' });
+    });
+
+    test('restoreUser surfaces existing.close() failures instead of swallowing them', async () => {
+        const dumpRoot = path.join(tmpDir, 'src-close-err');
+        const dumpEngine = new SqliteEngine({ directoriesByHandle: () => ({ root: dumpRoot }) });
+        let dumpStream;
+        try {
+            await dumpEngine.withTransaction('src', async (tx) => {
+                await tx.putResource({ kind: 'settings', handle: 'src' }, { doc: { marker: 'incoming' } });
+            });
+            dumpStream = await dumpEngine.dumpUser('src');
+        } finally {
+            dumpEngine.close();
+        }
+
+        await engine.withTransaction(handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle }, { doc: { marker: 'original' } });
+        });
+
+        const existingDb = engine._dbs.get(handle);
+        const origClose = existingDb.close.bind(existingDb);
+        existingDb.close = () => { throw new Error('SQLITE_BUSY: database handle busy'); };
+        try {
+            await expect(engine.restoreUser(handle, dumpStream)).rejects.toThrow(/Failed to close existing SQLite database.*SQLITE_BUSY/);
+            // Original database remains intact and no temp restore files linger.
+            const leftoverTemps = fs.readdirSync(path.join(tmpDir, handle)).filter(name => name.startsWith('luker-restore-'));
+            expect(leftoverTemps).toEqual([]);
+        } finally {
+            existingDb.close = origClose;
+        }
+        const current = await engine.withTransaction(handle, async (tx) => tx.getResource({ kind: 'settings', handle }));
+        expect(current).toEqual({ marker: 'original' });
+    });
+
+    test('withTransaction evicts and closes a wedged handle when ROLLBACK fails so subsequent transactions succeed', async () => {
+        const { TransactionOutcomeUnknownError } = await import('../../../src/storage/transaction-outcome.js');
+        await engine.withTransaction(handle, async (tx) => {
+            await tx.putResource({ kind: 'settings', handle }, { doc: { marker: 'before-wedge' } });
+        });
+
+        const wedgedDb = engine._dbs.get(handle);
+        const origExec = wedgedDb.exec.bind(wedgedDb);
+        wedgedDb.exec = (sql) => {
+            if (sql === 'ROLLBACK') throw new Error('synthetic rollback failure');
+            return origExec(sql);
+        };
+
+        await expect(engine.withTransaction(handle, async () => {
+            throw new Error('tx body boom');
+        })).rejects.toBeInstanceOf(TransactionOutcomeUnknownError);
+
+        // Wedged handle was evicted and closed.
+        expect(engine._dbs.has(handle)).toBe(false);
+        expect(wedgedDb.open).toBe(false);
+
+        // Subsequent transaction opens a fresh handle cleanly instead of hitting nested BEGIN error.
+        const recovered = await engine.withTransaction(handle, async (tx) => tx.getResource({ kind: 'settings', handle }));
+        expect(recovered).toEqual({ marker: 'before-wedge' });
     });
 });

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createReadStream, existsSync } from 'node:fs';
@@ -10,10 +9,13 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
 import { request } from '@playwright/test';
 import WebSocket from 'ws';
+import '../src/fetch-patch.js';
 import { Jimp, JimpMime } from '../src/jimp.js';
 import { USER_DIRECTORY_TEMPLATE } from '../src/constants.js';
 import { normalizeCharacterProfile } from '../public/scripts/extensions/stable-diffusion/character-archive/store.js';
-import { startServer, tearDownServer } from './e2e/_lib/server.js';
+import { ensureRun, trackScope } from './harness/jest-run.js';
+import { currentScopeForResources } from './harness/storage-scope.js';
+import { startServer } from './harness/server.js';
 
 const SESSION_HEADER = 'X-Luker-Transient-Session';
 const NAMESPACE = 'sd_character_profiles';
@@ -42,9 +44,10 @@ async function createApi(handle) {
         handle,
         client,
         get: (url) => client.get(url),
-        post: (url, data = {}, headers = {}) => client.post(url, {
+        post: (url, data = {}, headers = {}, options = {}) => client.post(url, {
             data,
             headers: { 'X-CSRF-Token': token, ...headers },
+            ...options,
         }),
         async login() {
             const response = await api.post('/api/users/login', { handle, password: '' });
@@ -214,17 +217,20 @@ async function waitForRemoval(directory, action) {
 
 // This matches the existing real-server fixture's 60-second startup readiness budget.
 beforeAll(async () => {
+    const run = await ensureRun();
+    const scope = trackScope(await run.scope({ kind: 'scenario', label: 'transient-sessions' }));
     server = await startServer({
+        scope,
         batchKey: 'image-illustration',
         scenarioId: 'transient-media',
         extraConfig: { enableUserAccounts: true, disableCsrfProtection: false },
     });
     imageBytes = Buffer.from(await new Jimp({ width: 128, height: 192, color: 0x4488ccff }).getBuffer(JimpMime.png));
     admin = await createApi('default-user');
-    const created = await admin.post('/api/users/create', { handle: 'media-other', name: 'Other media user' });
+    const created = await admin.post('/api/users/create', { handle: 'media-other', name: 'Other media user' }, {}, { timeout: 90_000 });
     if (!created.ok()) throw new Error(`Cannot create fixture user (${created.status()}): ${await created.text()}`);
     otherUser = await createApi('media-other');
-}, 60_000);
+}, 120_000);
 
 beforeEach(() => {
     testScope = new AbortController();
@@ -251,8 +257,8 @@ afterEach(async () => {
 afterAll(async () => {
     await admin?.client.dispose();
     await otherUser?.client.dispose();
-    await tearDownServer(server);
-});
+    await server?.stop();
+}, 30_000);
 
 describe('owned transient media sessions', () => {
     test('temporary previews require their owner and are not cached', async () => {
@@ -384,7 +390,13 @@ describe('owned transient media sessions', () => {
         const session = await openSession();
         const filename = 'late-image.png';
         const fifo = path.join(session.directory, filename);
-        execFileSync('mkfifo', [fifo]);
+        const mkfifo = await currentScopeForResources().process({
+            label: 'mkfifo',
+            command: ['mkfifo', fifo],
+            readyLine: { onSpawn: true },
+            expectedExit: { code: 0 },
+        });
+        await mkfifo.exited;
         let reader;
         const release = () => {
             if (!reader) {

@@ -57,13 +57,12 @@ describe('SqliteEngine settings handler', () => {
             .rejects.toThrow(/singleton/);
     });
 
-    test('get returns null when stored doc is unparseable', async () => {
+    test('get throws a descriptive SyntaxError when stored doc is unparseable', async () => {
         // Inject corrupt JSON directly via raw db access
         engine._dbFor(handle);
         const db = engine._dbs.get(handle);
         db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run(handle, 'not json', Date.now());
-        const got = await engine.withTransaction(handle, async (tx) =>
-            tx.getResource({ kind: 'settings', handle }));
-        expect(got).toBeNull();
+        await expect(engine.withTransaction(handle, async (tx) =>
+            tx.getResource({ kind: 'settings', handle }))).rejects.toThrow(SyntaxError);
     });
 });

@@ -1,6 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import multer from 'multer';
+import request from 'supertest';
 import { setReadOnly, isReadOnly, assertWritable, withReadOnlyBypass } from '../../src/storage/read-only-mode.js';
 import { StorageReadOnlyError } from '../../src/storage/errors.js';
 import { CONTRACT_HARNESSES } from './harness/contract-harness.js';
+import { ENDPOINT_HARNESSES, makeEndpointHarness } from './harness/endpoint-harness.js';
 import { ChatRepo } from '../../src/storage/repositories/chat-repo.js';
 import { SettingsRepo } from '../../src/storage/repositories/settings-repo.js';
 import { PresetRepo } from '../../src/storage/repositories/preset-repo.js';
@@ -8,6 +13,8 @@ import { WorldInfoRepo } from '../../src/storage/repositories/world-info-repo.js
 import { NamedDocRepo } from '../../src/storage/repositories/named-doc-repo.js';
 import { GroupRepo } from '../../src/storage/repositories/group-repo.js';
 import { StatsRepo } from '../../src/storage/repositories/stats-repo.js';
+import { getWorldInfoRepo } from '../../src/storage/index.js';
+import { router as worldInfoRouter } from '../../src/endpoints/worldinfo.js';
 
 describe('read-only mode flag', () => {
     afterEach(() => setReadOnly(false));  // always release
@@ -175,5 +182,77 @@ describe.each(CONTRACT_HARNESSES)('Repo writes respect read-only mode on $name',
         const repo = new StatsRepo({ engine: h.engine });
         await expect(repo.save(h.handle, { timestamp: Date.now() }))
             .rejects.toBeInstanceOf(StorageReadOnlyError);
+    });
+});
+
+describe.each(ENDPOINT_HARNESSES)('worldinfo read-only error mapping on $name', ({ mode }) => {
+    let harness;
+    let uploadsDir;
+
+    beforeEach(async () => {
+        harness = await makeEndpointHarness({
+            mode,
+            mount: (app, { dirs }) => {
+                uploadsDir = path.join(dirs.root, 'wi-uploads');
+                fs.mkdirSync(uploadsDir, { recursive: true });
+                const upload = multer({
+                    storage: multer.diskStorage({
+                        destination: (_req, _file, cb) => cb(null, uploadsDir),
+                    }),
+                }).single('avatar');
+                app.use('/api/worldinfo/import', upload);
+                app.use('/api/worldinfo', worldInfoRouter);
+            },
+        });
+        await getWorldInfoRepo().save(harness.handle, 'Protected', { entries: { '0': { uid: 0, content: 'keep' } } });
+    });
+
+    afterEach(() => {
+        setReadOnly(false);
+    });
+
+    test('POST /api/worldinfo/delete returns 503 storage_read_only when read-only', async () => {
+        setReadOnly(true);
+        const res = await request(harness.server)
+            .post('/api/worldinfo/delete')
+            .send({ name: 'Protected' });
+
+        expect(res.status).toBe(503);
+        expect(res.body.error).toBe('storage_read_only');
+
+        setReadOnly(false);
+        expect(await getWorldInfoRepo().get(harness.handle, 'Protected')).toEqual({ entries: { '0': { uid: 0, content: 'keep' } } });
+    });
+
+    test('POST /api/worldinfo/edit and /patch return 503 storage_read_only when read-only', async () => {
+        setReadOnly(true);
+        const editRes = await request(harness.server)
+            .post('/api/worldinfo/edit')
+            .send({ name: 'Protected', data: { entries: {} } });
+        expect(editRes.status).toBe(503);
+        expect(editRes.body.error).toBe('storage_read_only');
+
+        const patchRes = await request(harness.server)
+            .post('/api/worldinfo/patch')
+            .send({ name: 'Protected', operations: [{ op: 'replace', path: '/entries/0/content', value: 'changed' }] });
+        expect(patchRes.status).toBe(503);
+        expect(patchRes.body.error).toBe('storage_read_only');
+
+        setReadOnly(false);
+        expect(await getWorldInfoRepo().get(harness.handle, 'Protected')).toEqual({ entries: { '0': { uid: 0, content: 'keep' } } });
+    });
+
+    test('POST /api/worldinfo/import removes uploaded temp file even when convertedData is provided', async () => {
+        const res = await request(harness.server)
+            .post('/api/worldinfo/import')
+            .field('convertedData', JSON.stringify({ entries: { '0': { uid: 0, content: 'converted' } } }))
+            .attach('avatar', Buffer.from('raw-uploaded-payload'), 'ImportedBook.json');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ name: 'ImportedBook' });
+        expect(fs.readdirSync(uploadsDir)).toEqual([]);
+        expect(await getWorldInfoRepo().get(harness.handle, 'ImportedBook')).toEqual({
+            entries: { '0': { uid: 0, content: 'converted' } },
+        });
     });
 });

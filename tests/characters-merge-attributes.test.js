@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
-import { validateReplacePaths, applyReplacePaths } from '../src/endpoints/characters.js';
+import { validateReplacePaths, applyReplacePaths, toStoredV2Character, applyCharacterMergeUpdate } from '../src/endpoints/characters.js';
+import { deepMerge } from '../src/util.js';
 
 describe('validateReplacePaths', () => {
     test('accepts an empty array', () => {
@@ -189,5 +190,101 @@ describe('mergeCharacterUpdate (replace + merge interplay) — pure simulation',
         expect(merged.data.description).toBe('new desc');
         // name was untouched
         expect(merged.data.name).toBe('Original');
+    });
+});
+
+describe('toStoredV2Character legacy root extensions', () => {
+    test('data.extensions wins over a conflicting root extensions copy', () => {
+        const character = {
+            spec: 'chara_card_v2',
+            extensions: { talkativeness: 0.1, plugin: { mode: 'stale', rootOnly: 1 } },
+            data: { name: 'A', extensions: { talkativeness: 0.9, plugin: { mode: 'fresh' } } },
+        };
+        const stored = toStoredV2Character(character);
+        expect(stored.data.extensions.talkativeness).toBe(0.9);
+        expect(stored.data.extensions.plugin).toEqual({ mode: 'fresh' });
+        expect(stored.extensions).toBeUndefined();
+    });
+
+    test('keys present only in the root extensions copy are preserved', () => {
+        const character = {
+            spec: 'chara_card_v2',
+            extensions: { legacy_plugin: { a: 1 } },
+            data: { name: 'A', extensions: { other: true } },
+        };
+        const stored = toStoredV2Character(character);
+        expect(stored.data.extensions).toEqual({ legacy_plugin: { a: 1 }, other: true });
+    });
+
+    test('a merge-attributes update on a card with both copies keeps the new value', () => {
+        const stored = {
+            spec: 'chara_card_v2',
+            extensions: { orchestrator: { activePresetIds: { single: 'old' } } },
+            data: { name: 'A', extensions: { orchestrator: { activePresetIds: { single: 'old' } } } },
+        };
+        const update = { data: { extensions: { orchestrator: { activePresetIds: { single: 'new' } } } } };
+        const written = toStoredV2Character(deepMerge(stored, update));
+        expect(written.data.extensions.orchestrator.activePresetIds.single).toBe('new');
+        expect(written.extensions).toBeUndefined();
+    });
+});
+
+describe('applyCharacterMergeUpdate on a card with a legacy root extensions copy', () => {
+    const makeStored = () => {
+        const orchestrator = {
+            presetLibraries: { loop: { reef_watch: { name: 'Reef Watch' }, tide_log: { name: 'Tide Log' } } },
+            activePresetIds: { loop: 'reef_watch' },
+        };
+        return {
+            spec: 'chara_card_v2',
+            spec_version: '2.0',
+            name: 'A',
+            extensions: structuredClone({ orchestrator, legacy_plugin: { a: 1 } }),
+            data: { name: 'A', extensions: structuredClone({ orchestrator }) },
+        };
+    };
+
+    test('a replaced extension key that removes a sub-key keeps it removed', () => {
+        const update = {
+            data: {
+                extensions: {
+                    orchestrator: {
+                        presetLibraries: { loop: { tide_log: { name: 'Tide Log' } } },
+                        activePresetIds: { loop: 'tide_log' },
+                    },
+                },
+            },
+        };
+        const merged = applyCharacterMergeUpdate(makeStored(), update, ['data.extensions.orchestrator'], {});
+        const written = toStoredV2Character(merged);
+        expect(Object.keys(written.data.extensions.orchestrator.presetLibraries.loop)).toEqual(['tide_log']);
+        expect(written.data.extensions.orchestrator.activePresetIds.loop).toBe('tide_log');
+        expect(written.data.extensions.legacy_plugin).toEqual({ a: 1 });
+        expect(written.extensions).toBeUndefined();
+    });
+
+    test('an unset sentinel inside a merged extension key keeps the sub-key removed', () => {
+        const update = {
+            data: { extensions: { orchestrator: { presetLibraries: { loop: { reef_watch: '__@@UNSET@@__' } } } } },
+        };
+        const merged = applyCharacterMergeUpdate(makeStored(), update, [], {});
+        const written = toStoredV2Character(merged);
+        expect(Object.keys(written.data.extensions.orchestrator.presetLibraries.loop)).toEqual(['tide_log']);
+    });
+
+    test('an unset replace of a key present in the root copy keeps the key removed', () => {
+        const update = { data: { extensions: { legacy_plugin: '__@@UNSET@@__' } } };
+        const merged = applyCharacterMergeUpdate(makeStored(), update, ['data.extensions.legacy_plugin'], {});
+        const written = toStoredV2Character(merged);
+        expect(written.data.extensions).not.toHaveProperty('legacy_plugin');
+    });
+
+    test('a card without a root copy merges as before', () => {
+        const stored = makeStored();
+        delete stored.extensions;
+        const update = { data: { extensions: { orchestrator: { activePresetIds: { loop: 'tide_log' } } } } };
+        const merged = applyCharacterMergeUpdate(stored, update, [], {});
+        expect(merged.data.extensions.orchestrator.activePresetIds.loop).toBe('tide_log');
+        expect(Object.keys(merged.data.extensions.orchestrator.presetLibraries.loop)).toEqual(['reef_watch', 'tide_log']);
     });
 });

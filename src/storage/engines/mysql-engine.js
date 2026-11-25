@@ -1,10 +1,11 @@
 import { Readable } from 'node:stream';
-import { StringDecoder } from 'node:string_decoder';
 import mysql from 'mysql2/promise';
 import { MysqlTransaction } from './mysql-engine-transaction.js';
 import { initSchema } from './mysql-schema.js';
 import { withRetry } from '../retry.js';
+import { completeTransaction, TransactionOutcomeUnknownError } from '../transaction-outcome.js';
 import { logEngineError } from '../engine-logger.js';
+import { dumpInsertSql, replaySqlDump } from './sql-dump-replay.js';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = { transient: 3 };
@@ -31,6 +32,22 @@ const DUMP_TABLES = Object.freeze([
     { name: 'chats', cols: ['handle', 'char_dir', 'name', 'is_group', 'group_id', 'doc', 'updated_at', 'created_at'] },
     { name: 'chat_states', cols: ['handle', 'char_dir', 'name', 'is_group', 'group_id', 'namespace', 'doc'] },
 ]);
+
+// Constraint violations, then values strict mode refuses for their column type.
+const DUMP_INVALID_ROW_ERRORS = new Set([
+    'ER_DUP_ENTRY', 'ER_NO_REFERENCED_ROW', 'ER_NO_REFERENCED_ROW_2',
+    'ER_BAD_NULL_ERROR', 'ER_CHECK_CONSTRAINT_VIOLATED',
+    'ER_INVALID_JSON_TEXT', 'ER_TRUNCATED_WRONG_VALUE', 'ER_TRUNCATED_WRONG_VALUE_FOR_FIELD',
+    'ER_WARN_DATA_OUT_OF_RANGE', 'ER_DATA_TOO_LONG', 'WARN_DATA_TRUNCATED',
+]);
+
+const DUMP_DIALECT = Object.freeze({
+    tables: DUMP_TABLES,
+    placeholder: () => '?',
+    isInvalidRow: (err) => DUMP_INVALID_ROW_ERRORS.has(err?.code),
+});
+
+import { deleteUserRows } from './user-tables.js';
 
 // mysql2 parses JSON columns into JS objects by default; Postgres returns
 // JSONB as JS objects too. Normalize to JSON.stringify so `restoreUser` re-
@@ -126,6 +143,19 @@ export class MysqlEngine {
             enableKeepAlive: true,
             keepAliveInitialDelay: 10_000,
         });
+        // mysql2/promise PromisePool only forwards acquire/connection/enqueue/release
+        // from its underlying BasePool (which never emits 'error' itself; individual
+        // PoolConnection instances do). Attach an error listener on each created raw
+        // connection so idle or unleased socket errors are logged and never crash Node
+        // as unhandled 'error' events, without double-logging when an active caller
+        // listener is attached via PromiseConnection's inheritEvents bridge.
+        this._pool.on('connection', rawConn => {
+            rawConn.on('error', error => {
+                if (rawConn._released || rawConn.listenerCount('error') === 1) {
+                    logEngineError(this.kind, 'idle-connection', null, error);
+                }
+            });
+        });
         // Lazy schema bootstrap: first ping / withTransaction triggers
         // initSchema once and caches the promise so concurrent first calls
         // share the work. Mirrors SqliteEngine's _dbFor(handle) bootstrap.
@@ -150,10 +180,18 @@ export class MysqlEngine {
         try {
             await withRetry(async () => {
                 const conn = await acquireWithTimeout(this._pool, this._acquireTimeoutMs);
+                let connectionErrored = false;
+                const onConnectionError = error => {
+                    connectionErrored = true;
+                    logEngineError(this.kind, 'ping-connection', handle ?? null, error);
+                };
+                conn.on('error', onConnectionError);
                 try {
                     await conn.query('SELECT 1');
                 } finally {
-                    conn.release();
+                    conn.removeListener('error', onConnectionError);
+                    if (connectionErrored) conn.destroy();
+                    else conn.release();
                 }
             }, { retries: this._retries.transient });
         } catch (err) {
@@ -162,25 +200,36 @@ export class MysqlEngine {
         }
     }
 
+    async _runConnTransaction(conn, handle, errorOp, fn) {
+        let began = false;
+        let failure;
+        let connectionErrored = false;
+        const onConnectionError = error => {
+            connectionErrored = true;
+            failure = error;
+            logEngineError(this.kind, errorOp, handle, error);
+        };
+        conn.on('error', onConnectionError);
+        try {
+            await conn.beginTransaction();
+            began = true;
+            return await completeTransaction(() => fn(conn), () => conn.commit(), () => conn.rollback());
+        } catch (error) {
+            failure = error;
+            throw error;
+        } finally {
+            conn.removeListener('error', onConnectionError);
+            if (connectionErrored || (failure && (!began || failure instanceof TransactionOutcomeUnknownError))) conn.destroy();
+            else conn.release();
+        }
+    }
+
     async withTransaction(handle, fn) {
         await this._ensureSchema();
         try {
             return await withRetry(async () => {
                 const conn = await acquireWithTimeout(this._pool, this._acquireTimeoutMs);
-                try {
-                    await conn.beginTransaction();
-                    const tx = new MysqlTransaction({ conn, handle });
-                    try {
-                        const result = await fn(tx);
-                        await conn.commit();
-                        return result;
-                    } catch (err) {
-                        try { await conn.rollback(); } catch { /* engine may already have rolled back */ }
-                        throw err;
-                    }
-                } finally {
-                    conn.release();
-                }
+                return this._runConnTransaction(conn, handle, 'tx-connection', () => fn(new MysqlTransaction({ conn, handle })));
             }, { retries: this._retries.transient });
         } catch (err) {
             logEngineError(this.kind, 'tx', handle, err);
@@ -196,7 +245,7 @@ export class MysqlEngine {
      * intentionally left alone.
      *
      * Table order matters where there are FKs: child rows first (chat_states
-     * has an FK on chats), then parents, then unrelated singletons. The list
+     * has an FK on chats), then parents, then unrelated singletons. `DELETE_USER_TABLES`
      * is the canonical 9 user-data tables from migrations/mysql/0001-initial.sql.
      * @param {string} handle
      */
@@ -205,25 +254,7 @@ export class MysqlEngine {
         try {
             await withRetry(async () => {
                 const conn = await acquireWithTimeout(this._pool, this._acquireTimeoutMs);
-                try {
-                    await conn.beginTransaction();
-                    try {
-                        for (const table of [
-                            'chat_states', 'preset_states',
-                            'chats', 'presets', 'worlds',
-                            'named_docs', 'groups_table',
-                            'settings', 'stats',
-                        ]) {
-                            await conn.query(`DELETE FROM ${table} WHERE handle = ?`, [handle]);
-                        }
-                        await conn.commit();
-                    } catch (err) {
-                        try { await conn.rollback(); } catch { /* best-effort */ }
-                        throw err;
-                    }
-                } finally {
-                    conn.release();
-                }
+                await this._runConnTransaction(conn, handle, 'delete-user-connection', () => deleteUserRows(conn, handle, '?'));
             }, { retries: this._retries.transient });
         } catch (err) {
             logEngineError(this.kind, 'delete-user', handle, err);
@@ -263,11 +294,16 @@ export class MysqlEngine {
 
         async function* generate() {
             const conn = await acquireWithTimeout(self._pool, self._acquireTimeoutMs);
+            let connectionErrored = false;
+            const onConnectionError = error => {
+                connectionErrored = true;
+                logEngineError(self.kind, 'dump-user-connection', handle, error);
+            };
+            conn.on('error', onConnectionError);
             try {
                 for (const t of DUMP_TABLES) {
                     const colsCsv = t.cols.join(', ');
-                    const placeholders = t.cols.map(() => '?').join(', ');
-                    const sqlText = `INSERT INTO ${t.name} (${colsCsv}) VALUES (${placeholders})`;
+                    const sqlText = dumpInsertSql(t, DUMP_DIALECT.placeholder);
                     const [rows] = await conn.query(
                         `SELECT ${colsCsv} FROM ${t.name} WHERE handle = ?`,
                         [handle],
@@ -278,7 +314,9 @@ export class MysqlEngine {
                     }
                 }
             } finally {
-                conn.release();
+                conn.removeListener('error', onConnectionError);
+                if (connectionErrored) conn.destroy();
+                else conn.release();
             }
         }
 
@@ -286,70 +324,72 @@ export class MysqlEngine {
     }
 
     /**
-     * mysql restore wipes the handle (idempotent — calls
-     * `deleteUser` which is itself retry-wrapped) then replays the incoming
-     * `{sql, params}` lines inside ONE transaction. A failed line rolls back
-     * the whole restore so the user's slot is either fully restored or
-     * unchanged — never half-applied.
+     * mysql restore replaces the handle's rows with the incoming
+     * `{sql, params}` lines. The wipe and every insert run inside ONE
+     * transaction on one connection, so a malformed line, a failed insert or
+     * a stream error rolls back to the user's previous data.
      *
-     * The wipe runs in its own transaction BEFORE the restore transaction
-     * begins; if the restore later fails, the user is left wiped (not
-     * mid-restored). The restore is idempotent: re-
-     * issuing the same restore from a good dump converges.
-     *
-     * Stream parsing buffers across chunk boundaries — `for await` chunks
-     * arrive at arbitrary byte boundaries so a record split across two
-     * chunks would JSON.parse-fail without the buffer. Critically, the
-     * chunk boundary may also fall MID multi-byte UTF-8 sequence (CJK
-     * chars are 3 bytes, emoji 4), and `chunk.toString('utf8')` on a
-     * partial sequence emits U+FFFD replacement chars in both this chunk
-     * and the next — silent mojibake in restored chat content. We use
-     * `StringDecoder` to buffer incomplete sequences internally so the
-     * decoded text round-trips byte-for-byte regardless of where yauzl
-     * splits the dump. The retry wrapper is for transient pool/connection
-     * failures during the COMMIT itself; a malformed dump line throws
-     * synchronously inside the retry body and surfaces immediately.
+     * Only the connection acquire is retried: the dump stream is consumed
+     * once, so retrying the body would replay an already-drained stream and
+     * commit an empty restore.
      * @param {string} handle
      * @param {import('node:stream').Readable} stream
      */
     async restoreUser(handle, stream) {
         await this._ensureSchema();
-        await this.deleteUser(handle);
-
         try {
-            await withRetry(async () => {
-                const conn = await acquireWithTimeout(this._pool, this._acquireTimeoutMs);
+            const conn = await withRetry(
+                () => acquireWithTimeout(this._pool, this._acquireTimeoutMs),
+                { retries: this._retries.transient },
+            );
+            let modeRestored = false;
+            let began = false;
+            let failure;
+            let connectionErrored = false;
+            const onConnectionError = error => {
+                connectionErrored = true;
+                failure = error;
+                logEngineError(this.kind, 'restore-user-connection', handle, error);
+            };
+            conn.on('error', onConnectionError);
+            try {
+                // The dump holds uploaded values: strict mode makes a value
+                // that does not fit its column an error instead of a silent
+                // coercion, whatever the server's own sql_mode. The
+                // connection goes back to the pool with its mode unchanged,
+                // or is destroyed when that cannot be done.
+                const [[{ mode }]] = await conn.query('SELECT @@SESSION.sql_mode AS mode');
+                const strictMode = mode.split(',').includes('STRICT_ALL_TABLES') ? mode : [mode, 'STRICT_ALL_TABLES'].filter(Boolean).join(',');
+                await conn.query('SET SESSION sql_mode = ?', [strictMode]);
                 try {
                     await conn.beginTransaction();
-                    try {
-                        const decoder = new StringDecoder('utf8');
-                        let buf = '';
-                        for await (const chunk of stream) {
-                            buf += decoder.write(chunk);
-                            let nl;
-                            while ((nl = buf.indexOf('\n')) >= 0) {
-                                const line = buf.slice(0, nl).trim();
-                                buf = buf.slice(nl + 1);
-                                if (!line) continue;
-                                const { sql, params } = JSON.parse(line);
-                                await conn.query(sql, params);
-                            }
-                        }
-                        buf += decoder.end();
-                        const tail = buf.trim();
-                        if (tail) {
-                            const { sql, params } = JSON.parse(tail);
-                            await conn.query(sql, params);
-                        }
-                        await conn.commit();
-                    } catch (err) {
-                        try { await conn.rollback(); } catch { /* best-effort */ }
-                        throw err;
-                    }
+                    began = true;
+                    await completeTransaction(async () => {
+                        await deleteUserRows(conn, handle, '?');
+                        // `execute` binds params server-side; `query` would splice
+                        // the uploaded values into the SQL text with client-side
+                        // escaping that does not follow the server's sql_mode.
+                        await replaySqlDump(stream, DUMP_DIALECT, handle, (sql, params) => conn.execute(sql, params));
+                    }, () => conn.commit(), () => conn.rollback());
+                } catch (err) {
+                    failure = err;
+                    throw err;
                 } finally {
-                    conn.release();
+                    if (!connectionErrored && !(failure && (!began || failure instanceof TransactionOutcomeUnknownError))) {
+                        try {
+                            await conn.query('SET SESSION sql_mode = ?', [mode]);
+                            modeRestored = true;
+                        } catch { /* the connection is destroyed below */ }
+                    }
                 }
-            }, { retries: this._retries.transient });
+            } catch (err) {
+                failure = err;
+                throw err;
+            } finally {
+                conn.removeListener('error', onConnectionError);
+                if (modeRestored && !connectionErrored && !(failure && (!began || failure instanceof TransactionOutcomeUnknownError))) conn.release();
+                else conn.destroy();
+            }
         } catch (err) {
             logEngineError(this.kind, 'restore-user', handle, err);
             throw err;

@@ -12,7 +12,9 @@
 //   - Failure: invalid scratch creds → CrossModeScratchConnectionError.
 //   - Cleanup idempotency: calling cleanup() twice is a no-op.
 
+import { jest } from '@jest/globals';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -180,13 +182,26 @@ describe('materializeTransientSource — fs', () => {
         )).rejects.toThrow(/scratchHandle/);
     });
 
-    test('rejects unknown engineKind', async () => {
+    test('rejects unknown engineKind without leaving scratchRoot behind', async () => {
         const zipPath = path.join(dataRoot, 'fs.zip');
         await buildFsSourceZip(zipPath);
+        const scratchHandle = makeScratchHandle();
         await expect(materializeTransientSource(
             { engineKind: 'oracle' }, zipPath,
-            { dataRoot, scratchHandle: makeScratchHandle(), scratchCreds: null },
+            { dataRoot, scratchHandle, scratchCreds: null },
         )).rejects.toThrow(/unsupported engineKind/);
+        expect(fs.existsSync(path.join(dataRoot, '_storage-migrations', scratchHandle))).toBe(false);
+    });
+
+    test('cleans up scratchRoot when zip extraction rejects early', async () => {
+        const badZip = path.join(dataRoot, 'not-a-zip.zip');
+        fs.writeFileSync(badZip, 'not a valid zip file', 'utf8');
+        const scratchHandle = makeScratchHandle();
+        await expect(materializeTransientSource(
+            { engineKind: 'fs' }, badZip,
+            { dataRoot, scratchHandle, scratchCreds: null },
+        )).rejects.toThrow();
+        expect(fs.existsSync(path.join(dataRoot, '_storage-migrations', scratchHandle))).toBe(false);
     });
 });
 
@@ -243,6 +258,39 @@ describe('materializeTransientSource — sqlite', () => {
             zipPath,
             { dataRoot, scratchHandle: makeScratchHandle(), scratchCreds: null },
         )).rejects.toThrow(/_engine_dump.bin/);
+    });
+
+    test('REGRESSION: sqlite dump extraction failure destroys stream and closes ZIP FD', async () => {
+        const zipPath = path.join(dataRoot, 'sqlite-mkdir-fail.zip');
+        await buildSqliteSourceZip(zipPath, { handle: 'alice', dataRoot });
+
+        const originalMkdir = fsPromises.mkdir;
+        let mkdirCalls = 0;
+        // Call 1 creates scratchRoot; call 2 runs inside extractEngineDumpToFile
+        // right after openEngineDumpEntry has opened the yauzl readStream.
+        const mkdirSpy = jest.spyOn(fsPromises, 'mkdir').mockImplementation(async (...args) => {
+            mkdirCalls += 1;
+            if (mkdirCalls === 2) {
+                throw new Error('simulated dump mkdir failure');
+            }
+            return await originalMkdir(...args);
+        });
+
+        const fdDirExists = fs.existsSync('/dev/fd');
+        const fdCountBefore = fdDirExists ? fs.readdirSync('/dev/fd').length : 0;
+        try {
+            await expect(materializeTransientSource(
+                { engineKind: 'sqlite', handle: 'alice' },
+                zipPath,
+                { dataRoot, scratchHandle: makeScratchHandle(), scratchCreds: null },
+            )).rejects.toThrow(/simulated dump mkdir failure/);
+        } finally {
+            mkdirSpy.mockRestore();
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 25));
+        const fdCountAfter = fdDirExists ? fs.readdirSync('/dev/fd').length : 0;
+        expect(fdCountAfter).toBeLessThanOrEqual(fdCountBefore);
     });
 });
 

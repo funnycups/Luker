@@ -23,9 +23,6 @@ describe.each(ENDPOINT_HARNESSES)('media delete on $name', ({ mode }) => {
         });
     });
 
-    afterEach(async () => {
-        if (harness) await harness.cleanup();
-    });
 
     test('deletes only files under user images and characters', async () => {
         const gallery = writeFileAt(harness.dirs.root, '/user/images/Ash/pic.png');

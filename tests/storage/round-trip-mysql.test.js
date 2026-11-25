@@ -349,6 +349,9 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         };
         await fsRepo.save(fsh.handle, 'grp-1', original);
         const fromFs = await fsRepo.get(fsh.handle, 'grp-1');
+        // GroupRepo.save stamps `date_added` on first write; later saves must
+        // carry that stamp verbatim across engines.
+        expect(fromFs).toEqual({ ...original, date_added: expect.any(Number) });
 
         const myh = await makeMysql();
         const fsh2 = await makeFs();
@@ -356,13 +359,13 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
             const myRepo = new GroupRepo({ engine: myh.engine });
             await myRepo.save(myh.handle, 'grp-1', fromFs);
             const fromMysql = await myRepo.get(myh.handle, 'grp-1');
-            expect(fromMysql).toEqual(original);
+            expect(fromMysql).toEqual(fromFs);
 
             fs.mkdirSync(fsh2.dirs.groups, { recursive: true });
             fs.mkdirSync(fsh2.dirs.groupChats, { recursive: true });
             const fs2Repo = new GroupRepo({ engine: fsh2.engine });
             await fs2Repo.save(fsh2.handle, 'grp-1', fromMysql);
-            expect(await fs2Repo.get(fsh2.handle, 'grp-1')).toEqual(original);
+            expect(await fs2Repo.get(fsh2.handle, 'grp-1')).toEqual(fromFs);
         } finally {
             fsh.cleanup();
             fsh2.cleanup();
@@ -383,6 +386,9 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         };
         await sqRepo.save(sqh.handle, 'grp-2', original);
         const fromSqlite = await sqRepo.get(sqh.handle, 'grp-2');
+        // GroupRepo.save stamps `date_added` on first write; later saves must
+        // carry that stamp verbatim across engines.
+        expect(fromSqlite).toEqual({ ...original, date_added: expect.any(Number) });
 
         const myh = await makeMysql();
         const sqh2 = await makeSqlite();
@@ -390,11 +396,11 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
             const myRepo = new GroupRepo({ engine: myh.engine });
             await myRepo.save(myh.handle, 'grp-2', fromSqlite);
             const fromMysql = await myRepo.get(myh.handle, 'grp-2');
-            expect(fromMysql).toEqual(original);
+            expect(fromMysql).toEqual(fromSqlite);
 
             const sq2Repo = new GroupRepo({ engine: sqh2.engine });
             await sq2Repo.save(sqh2.handle, 'grp-2', fromMysql);
-            expect(await sq2Repo.get(sqh2.handle, 'grp-2')).toEqual(original);
+            expect(await sq2Repo.get(sqh2.handle, 'grp-2')).toEqual(fromSqlite);
         } finally {
             sqh.cleanup();
             sqh2.cleanup();
@@ -415,6 +421,9 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         };
         await myRepo.save(myh.handle, 'grp-3', original);
         const fromMysql = await myRepo.get(myh.handle, 'grp-3');
+        // GroupRepo.save stamps `date_added` on first write; later saves must
+        // carry that stamp verbatim across engines.
+        expect(fromMysql).toEqual({ ...original, date_added: expect.any(Number) });
 
         const fsh = await makeFs();
         try {
@@ -422,7 +431,7 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
             fs.mkdirSync(fsh.dirs.groupChats, { recursive: true });
             const fsRepo = new GroupRepo({ engine: fsh.engine });
             await fsRepo.save(fsh.handle, 'grp-3', fromMysql);
-            expect(await fsRepo.get(fsh.handle, 'grp-3')).toEqual(original);
+            expect(await fsRepo.get(fsh.handle, 'grp-3')).toEqual(fromMysql);
         } finally {
             fsh.cleanup();
             await myh.cleanup();

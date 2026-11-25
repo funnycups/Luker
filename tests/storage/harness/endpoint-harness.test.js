@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { setImmediate as checkpoint } from 'node:timers/promises';
 import express from 'express';
 import request from 'supertest';
@@ -12,6 +13,8 @@ import { getSettingsRepo, getStorageEngine } from '../../../src/storage/index.js
 import { ChatRepo } from '../../../src/storage/repositories/chat-repo.js';
 import { ConflictError } from '../../../src/storage/errors.js';
 import { seed, capture, expectMoved, nativeSelected, groupOptions } from './group-rename-fixtures.js';
+import { createRun } from '../../harness/resources/run.js';
+import { recoverRuns } from '../../harness/resources/recovery.js';
 
 function recordLifecycle(label, value) {
     if (process.env.LUKER_RENAME_PAYLOAD_EVIDENCE) fs.appendFileSync(process.env.LUKER_RENAME_PAYLOAD_EVIDENCE, JSON.stringify({ test: expect.getState().currentTestName, label, execArgv: process.execArgv, ...value }) + '\n');
@@ -23,7 +26,44 @@ function deferred() {
     return { promise, resolve };
 }
 
-async function nativeWorkLifetime({ mode, action, transport, outcome = 'success', cleanupFailure = false }) {
+async function withExpectedCleanupFailure(body) {
+    const projectRoot = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+    const profile = 'endpoint-lifecycle-negative';
+    const run = await createRun({
+        projectRoot, profile,
+        command: [process.execPath, ...process.argv.slice(1)], source: 'native endpoint cleanup failure',
+    });
+    const errors = [];
+    let summary;
+    try { await body(await run.scope({ kind: 'case', label: 'expected native cleanup failure' })); }
+    catch (error) { errors.push(error); }
+    try {
+        summary = await run.finish({ status: 'passed' });
+        expect(summary.status).toBe('failed');
+        expect(summary.errors).toHaveLength(1);
+        expect(summary.errors[0].resource.kind).toBe('directory');
+        expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(summary.errors[0].cause.code);
+        const retained = summary.resources.filter(resource => resource.state === 'cleanup-failed');
+        expect(retained).toHaveLength(1);
+        expect(fs.existsSync(retained[0].locator.path)).toBe(true);
+    }
+    catch (error) { errors.push(error); }
+    try { await recoverRuns({ projectRoot, profiles: [profile] }); }
+    catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Endpoint failure observation and finalization failed');
+    const registry = JSON.parse(fs.readFileSync(run.registryPath, 'utf8'));
+    expect(registry.status).toBe('failed');
+    expect(registry.errors).toHaveLength(1);
+    expect(registry.recovery.state).toBe('recovered');
+    expect(registry.resources.length).toBeGreaterThan(0);
+    for (const resource of registry.resources) {
+        expect(resource.state).toBe('disposed');
+        expect(fs.existsSync(resource.locator.path)).toBe(false);
+    }
+}
+
+async function nativeWorkLifetime({ scope, mode, action, transport, outcome = 'success', cleanupFailure = false }) {
     const release = deferred(), started = deferred(), finished = deferred(), closed = deferred();
     const originalError = new Error('owned returned handler rejection');
     const router = express.Router(), nested = express.Router();
@@ -59,7 +99,7 @@ async function nativeWorkLifetime({ mode, action, transport, outcome = 'success'
     const originalLayer = nested.stack[0], originalHandler = originalLayer.route.stack[0].handle;
     const errorChain = [];
     try {
-        h = await makeEndpointHarness({ mode, mount(app) {
+        h = await makeEndpointHarness({ scope, mode, mount(app) {
             app.use('/move', router);
             app.use(async (error, _req, res, _next) => {
                 await checkpoint(); errorChain.push(error);
@@ -152,7 +192,7 @@ async function nativeWorkLifetime({ mode, action, transport, outcome = 'success'
         const cleanup = await h.cleanup().then(() => null, error => error);
         if (cleanup && (outcome === 'success' || (cleanup !== handlerResult?.error && !cleanupFailure))) failures.push(cleanup);
         if (cleanupFailure && fs.existsSync(h.dataRoot)) {
-            try { fs.chmodSync(h.dataRoot, 0o700); fs.rmSync(h.dataRoot, { recursive: true }); }
+            try { fs.chmodSync(h.dataRoot, 0o700); }
             catch (error) { failures.push(error); }
         }
     }
@@ -173,7 +213,7 @@ describe.each(ENDPOINT_HARNESSES)('admitted native work on $name', ({ mode }) =>
 });
 
 test('disconnected original work rejection and native cleanup failure retain repeated-cleanup identity', async () => {
-    await nativeWorkLifetime({ mode: 'fs', action: 'cleanup', transport: 'disconnected', outcome: 'handler-reject', cleanupFailure: true });
+    await withExpectedCleanupFailure(scope => nativeWorkLifetime({ scope, mode: 'fs', action: 'cleanup', transport: 'disconnected', outcome: 'handler-reject', cleanupFailure: true }));
 });
 
 describe.each(ENDPOINT_HARNESSES)('owned endpoint listener on $name', ({ mode }) => {
@@ -307,33 +347,37 @@ test('a genuine transport failure settles only the fixture-owned peer', async ()
 });
 
 test('cleanup retains an unexpected native permission failure across repeated calls', async () => {
-    const h = await makeEndpointHarness({ mode: 'fs', mount() {} });
-    fs.chmodSync(h.dataRoot, 0o500);
-    try {
-        const failure = await h.cleanup().then(() => null, error => error);
-        recordLifecycle('owned native cleanup failure', { code: failure.code, name: failure.name, path: failure.path });
-        expect(failure.name).toBe('Error');
-        expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(failure.code);
-        expect(failure.path.startsWith(h.dataRoot)).toBe(true);
-        expect(await h.cleanup().then(() => null, error => error)).toBe(failure);
-        expect(h.server.listening).toBe(false);
-    } finally { fs.chmodSync(h.dataRoot, 0o700); fs.rmSync(h.dataRoot, { recursive: true }); }
+    await withExpectedCleanupFailure(async scope => {
+        const h = await makeEndpointHarness({ scope, mode: 'fs', mount() {} });
+        fs.chmodSync(h.dataRoot, 0o500);
+        try {
+            const failure = await h.cleanup().then(() => null, error => error);
+            recordLifecycle('owned native cleanup failure', { code: failure.code, name: failure.name, path: failure.path });
+            expect(failure.name).toBe('Error');
+            expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(failure.code);
+            expect(failure.path.startsWith(h.dataRoot)).toBe(true);
+            expect(await h.cleanup().then(() => null, error => error)).toBe(failure);
+            expect(h.server.listening).toBe(false);
+        } finally { fs.chmodSync(h.dataRoot, 0o700); }
+    });
 });
 
 test('setup retains both the original mount failure and its real cleanup failure', async () => {
-    const original = new Error('owned setup failure');
-    let root;
-    try {
-        const failure = await makeEndpointHarness({ mode: 'fs', mount(_app, { dirs }) {
-            root = path.dirname(dirs.root); fs.chmodSync(root, 0o500); throw original;
-        } }).then(() => null, error => error);
-        expect(failure).toBeInstanceOf(AggregateError);
-        expect(failure.errors).toContain(original);
-        const cleanupFailure = failure.errors.find(error => error !== original);
-        recordLifecycle('owned setup and cleanup failure', { original: original.message, code: cleanupFailure.code, path: cleanupFailure.path });
-        expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(cleanupFailure.code);
-        expect(cleanupFailure.path.startsWith(root)).toBe(true);
-    } finally { fs.chmodSync(root, 0o700); fs.rmSync(root, { recursive: true }); }
+    await withExpectedCleanupFailure(async scope => {
+        const original = new Error('owned setup failure');
+        let root;
+        try {
+            const failure = await makeEndpointHarness({ scope, mode: 'fs', mount(_app, { dirs }) {
+                root = path.dirname(dirs.root); fs.chmodSync(root, 0o500); throw original;
+            } }).then(() => null, error => error);
+            expect(failure).toBeInstanceOf(AggregateError);
+            expect(failure.errors).toContain(original);
+            const cleanupFailure = failure.errors.find(error => error !== original);
+            recordLifecycle('owned setup and cleanup failure', { original: original.message, code: cleanupFailure.code, path: cleanupFailure.path });
+            expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(cleanupFailure.code);
+            expect(cleanupFailure.path.startsWith(root)).toBe(true);
+        } finally { fs.chmodSync(root, 0o700); }
+    });
 });
 
 test('cleanup closes its own engine rather than the latest globally initialized fixture', async () => {

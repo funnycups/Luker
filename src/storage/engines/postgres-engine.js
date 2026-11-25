@@ -1,10 +1,11 @@
 import { Readable } from 'node:stream';
-import { StringDecoder } from 'node:string_decoder';
 import pg from 'pg';
 import { PgTransaction } from './postgres-engine-transaction.js';
 import { initSchema } from './postgres-schema.js';
 import { withRetry } from '../retry.js';
+import { completeTransaction, TransactionOutcomeUnknownError } from '../transaction-outcome.js';
 import { logEngineError } from '../engine-logger.js';
+import { dumpInsertSql, replaySqlDump } from './sql-dump-replay.js';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = { transient: 3 };
@@ -31,6 +32,15 @@ const DUMP_TABLES = Object.freeze([
     { name: 'chats', cols: ['handle', 'char_dir', 'name', 'is_group', 'group_id', 'doc', 'updated_at', 'created_at'] },
     { name: 'chat_states', cols: ['handle', 'char_dir', 'name', 'is_group', 'group_id', 'namespace', 'doc'] },
 ]);
+
+const DUMP_DIALECT = Object.freeze({
+    tables: DUMP_TABLES,
+    placeholder: (i) => `$${i + 1}`,
+    // SQLSTATE class 22: data exception; class 23: integrity constraint violation.
+    isInvalidRow: (err) => typeof err?.code === 'string' && (err.code.startsWith('22') || err.code.startsWith('23')),
+});
+
+import { deleteUserRows } from './user-tables.js';
 
 // pg parses JSONB into JS objects by default; mysql2 parses JSON the same way.
 // Normalize to JSON.stringify so `restoreUser` re-inserts a value the driver
@@ -84,6 +94,7 @@ export class PgEngine {
             keepAlive: true,
             keepAliveInitialDelayMillis: 10_000,
         });
+        this._pool.on('error', error => logEngineError(this.kind, 'idle-connection', null, error));
         // Lazy schema bootstrap: first ping / withTransaction triggers
         // initSchema once and caches the promise so concurrent first calls
         // share the work. Mirrors MysqlEngine / SqliteEngine bootstrap.
@@ -108,10 +119,17 @@ export class PgEngine {
         try {
             await withRetry(async () => {
                 const client = await this._pool.connect();
+                let connectionError;
+                const onConnectionError = error => {
+                    connectionError ??= error;
+                    logEngineError(this.kind, 'ping-connection', handle ?? null, error);
+                };
+                client.on('error', onConnectionError);
                 try {
                     await client.query('SELECT 1');
                 } finally {
-                    client.release();
+                    client.release(connectionError);
+                    client.removeListener('error', onConnectionError);
                 }
             }, { retries: this._retries.transient });
         } catch (err) {
@@ -120,25 +138,36 @@ export class PgEngine {
         }
     }
 
+    async _runClientTransaction(client, handle, errorOp, fn) {
+        let began = false;
+        let failure;
+        let connectionError;
+        const onConnectionError = error => {
+            connectionError ??= error;
+            failure = error;
+            logEngineError(this.kind, errorOp, handle, error);
+        };
+        client.on('error', onConnectionError);
+        try {
+            await client.query('BEGIN');
+            began = true;
+            return await completeTransaction(() => fn(client), () => client.query('COMMIT'), () => client.query('ROLLBACK'));
+        } catch (error) {
+            failure = error;
+            throw error;
+        } finally {
+            const destroyError = connectionError ?? (failure && (!began || failure instanceof TransactionOutcomeUnknownError) ? failure : undefined);
+            client.release(destroyError);
+            client.removeListener('error', onConnectionError);
+        }
+    }
+
     async withTransaction(handle, fn) {
         await this._ensureSchema();
         try {
             return await withRetry(async () => {
                 const client = await this._pool.connect();
-                try {
-                    await client.query('BEGIN');
-                    const tx = new PgTransaction({ client, handle });
-                    try {
-                        const result = await fn(tx);
-                        await client.query('COMMIT');
-                        return result;
-                    } catch (err) {
-                        try { await client.query('ROLLBACK'); } catch { /* engine may already have rolled back */ }
-                        throw err;
-                    }
-                } finally {
-                    client.release();
-                }
+                return this._runClientTransaction(client, handle, 'tx-connection', () => fn(new PgTransaction({ client, handle })));
             }, { retries: this._retries.transient });
         } catch (err) {
             logEngineError(this.kind, 'tx', handle, err);
@@ -158,25 +187,7 @@ export class PgEngine {
         try {
             await withRetry(async () => {
                 const client = await this._pool.connect();
-                try {
-                    await client.query('BEGIN');
-                    try {
-                        for (const table of [
-                            'chat_states', 'preset_states',
-                            'chats', 'presets', 'worlds',
-                            'named_docs', 'groups_table',
-                            'settings', 'stats',
-                        ]) {
-                            await client.query(`DELETE FROM ${table} WHERE handle = $1`, [handle]);
-                        }
-                        await client.query('COMMIT');
-                    } catch (err) {
-                        try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
-                        throw err;
-                    }
-                } finally {
-                    client.release();
-                }
+                await this._runClientTransaction(client, handle, 'delete-user-connection', () => deleteUserRows(client, handle, '$1'));
             }, { retries: this._retries.transient });
         } catch (err) {
             logEngineError(this.kind, 'delete-user', handle, err);
@@ -216,11 +227,16 @@ export class PgEngine {
 
         async function* generate() {
             const client = await self._pool.connect();
+            let connectionError;
+            const onConnectionError = error => {
+                connectionError ??= error;
+                logEngineError(self.kind, 'dump-user-connection', handle, error);
+            };
+            client.on('error', onConnectionError);
             try {
                 for (const t of DUMP_TABLES) {
                     const colsCsv = t.cols.join(', ');
-                    const placeholders = t.cols.map((_, i) => `$${i + 1}`).join(', ');
-                    const sqlText = `INSERT INTO ${t.name} (${colsCsv}) VALUES (${placeholders})`;
+                    const sqlText = dumpInsertSql(t, DUMP_DIALECT.placeholder);
                     const { rows } = await client.query(
                         `SELECT ${colsCsv} FROM ${t.name} WHERE handle = $1`,
                         [handle],
@@ -231,7 +247,8 @@ export class PgEngine {
                     }
                 }
             } finally {
-                client.release();
+                client.release(connectionError);
+                client.removeListener('error', onConnectionError);
             }
         }
 
@@ -239,70 +256,25 @@ export class PgEngine {
     }
 
     /**
-     * postgres restore wipes the handle (idempotent — calls
-     * `deleteUser` which is itself retry-wrapped) then replays the incoming
-     * `{sql, params}` lines inside ONE transaction. A failed line rolls back
-     * the whole restore so the user's slot is either fully restored or
-     * unchanged — never half-applied.
+     * postgres restore replaces the handle's rows with the incoming
+     * `{sql, params}` lines. The wipe and every insert run inside ONE
+     * transaction on one client, so a malformed line, a failed insert or a
+     * stream error rolls back to the user's previous data.
      *
-     * The wipe runs in its own transaction BEFORE the restore transaction
-     * begins; if the restore later fails, the user is left wiped (not
-     * mid-restored). The restore is idempotent: re-
-     * issuing the same restore from a good dump converges.
-     *
-     * Stream parsing buffers across chunk boundaries — `for await` chunks
-     * arrive at arbitrary byte boundaries so a record split across two
-     * chunks would JSON.parse-fail without the buffer. Critically, the
-     * chunk boundary may also fall MID multi-byte UTF-8 sequence (CJK
-     * chars are 3 bytes, emoji 4), and `chunk.toString('utf8')` on a
-     * partial sequence emits U+FFFD replacement chars in both this chunk
-     * and the next — silent mojibake in restored chat content. We use
-     * `StringDecoder` to buffer incomplete sequences internally so the
-     * decoded text round-trips byte-for-byte regardless of where yauzl
-     * splits the dump. The retry wrapper is for transient pool/connection
-     * failures during the COMMIT itself; a malformed dump line throws
-     * synchronously inside the retry body and surfaces immediately.
+     * Only the connection acquire is retried: the dump stream is consumed
+     * once, so retrying the body would replay an already-drained stream and
+     * commit an empty restore.
      * @param {string} handle
      * @param {import('node:stream').Readable} stream
      */
     async restoreUser(handle, stream) {
         await this._ensureSchema();
-        await this.deleteUser(handle);
-
         try {
-            await withRetry(async () => {
-                const client = await this._pool.connect();
-                try {
-                    await client.query('BEGIN');
-                    try {
-                        const decoder = new StringDecoder('utf8');
-                        let buf = '';
-                        for await (const chunk of stream) {
-                            buf += decoder.write(chunk);
-                            let nl;
-                            while ((nl = buf.indexOf('\n')) >= 0) {
-                                const line = buf.slice(0, nl).trim();
-                                buf = buf.slice(nl + 1);
-                                if (!line) continue;
-                                const { sql, params } = JSON.parse(line);
-                                await client.query(sql, params);
-                            }
-                        }
-                        buf += decoder.end();
-                        const tail = buf.trim();
-                        if (tail) {
-                            const { sql, params } = JSON.parse(tail);
-                            await client.query(sql, params);
-                        }
-                        await client.query('COMMIT');
-                    } catch (err) {
-                        try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
-                        throw err;
-                    }
-                } finally {
-                    client.release();
-                }
-            }, { retries: this._retries.transient });
+            const client = await withRetry(() => this._pool.connect(), { retries: this._retries.transient });
+            await this._runClientTransaction(client, handle, 'restore-user-connection', async () => {
+                await deleteUserRows(client, handle, '$1');
+                await replaySqlDump(stream, DUMP_DIALECT, handle, (sql, params) => client.query(sql, params));
+            });
         } catch (err) {
             logEngineError(this.kind, 'restore-user', handle, err);
             throw err;
