@@ -15,9 +15,9 @@
 // up the container, that's an infrastructure failure to surface, not
 // hide.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMysqlContainer } from '../_lib/db-containers.js';
 import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
 import { importWorldDocument } from '../_lib/ui-worldinfo.js';
@@ -52,33 +52,28 @@ const SEED_WORLD_DATA = {
 let mysqlContainer;
 let A, B;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // One container, two isolated databases. Splitting at the DB layer
     // (not at the schema layer) keeps the test honest: A's connection
     // pool only ever sees A's tables; same for B.
     mysqlContainer = await startMysqlContainer({ databases: [A_DB, B_DB] });
 
-    A = await startServer({
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'mysql-A',
-        extraConfig: {
-            'storage.mode': 'mysql',
-            'storage.mysql.url': mysqlContainer.urlFor(A_DB),
-        },
+        extraConfig: { storage: { mode: 'mysql', mysql: { url: mysqlContainer.urlFor(A_DB) } } },
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'mysql-B',
-        extraConfig: {
-            'storage.mode': 'mysql',
-            'storage.mysql.url': mysqlContainer.urlFor(B_DB),
-        },
+        extraConfig: { storage: { mode: 'mysql', mysql: { url: mysqlContainer.urlFor(B_DB) } } },
     });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
+
+
     if (mysqlContainer) await mysqlContainer.stop();
 });
 

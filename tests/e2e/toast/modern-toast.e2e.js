@@ -8,9 +8,9 @@
 //    including rescuing active persistent toasts when dialog.dw-layer closes.
 // 6. Narrow mobile viewport (390x844) bounds, deck badge toggle, drag, and capsule containment.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { accountWindow, openAccountWindow } from '../_lib/account-window.js';
@@ -36,14 +36,14 @@ async function dragElementBy(page, locator, dx, dy) {
 test.describe('modern toast system', () => {
     let server;
 
-    test.beforeAll(async () => {
-        server = await startServer({ batchKey: 'regression', scenarioId: 'modern-toast' });
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
+        server = await startServer({ scope, batchKey: 'regression', scenarioId: 'modern-toast' });
         markOnboarded({ dataRoot: server.dataRoot });
     });
 
     test.afterAll(async () => {
         if (server) {
-            await tearDownServer(server);
             server = null;
         }
     });

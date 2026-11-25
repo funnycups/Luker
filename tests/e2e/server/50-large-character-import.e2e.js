@@ -11,10 +11,10 @@
 // payloads. This test guards against accidentally adding a max-size cap or
 // a timeout that strangles real-world card imports.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -35,14 +35,13 @@ const ONE_MB_DESC = (() => {
     return blob.slice(0, 1_048_576);
 })();
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'server', scenarioId: 'large-card' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'large-card' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#50 — large character card import', () => {
     test('1MB description: server does not OOM, import succeeds, char queryable', async ({ page }) => {

@@ -6,22 +6,25 @@
 //      failed tool entry inside `.wb-tool-trace`, and stages no `.wb-chg`.
 //   C. Undo: an applied change can be undone and the store reverts.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
+    createNewChatViaUI,
+    reloadAndAwait,
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt, applyIterBatch, discardIterBatch, rollbackIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
-import { sendIteratePrompt, workbenchWindow } from '../_lib/ui-workbench.js';
+import { applyWorkbenchChanges, sendIteratePrompt, sendWorkbenchIterationPrompt, stopWorkbenchIteration, workbenchWindow } from '../_lib/ui-workbench.js';
 import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 import { normalizeIterStudioSettings } from '../preset/_helpers.js';
+import { openChatByName } from '../_lib/sync.js';
+import { holdWorkbenchSnapshots } from '../_lib/workbench-snapshot-gate.js';
 
 let server, mock, importPath;
 
@@ -36,7 +39,8 @@ const CHAT_TURNS = [
 const BASELINE_STATE = '夜间执勤；信号灯已修剪。';
 const EDITED_STATE = '夜间执勤；信号灯已重新修剪。';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
@@ -46,13 +50,13 @@ test.beforeAll(async () => {
             '*Seraphina nods once.* "Then it is decided. We wait."',
         ],
     });
-    server = await startServer({ batchKey: 'iterstudio', scenarioId: '92-mg-graph-negative' });
+    server = await startServer({ scope, batchKey: 'iterstudio', scenarioId: '92-mg-graph-negative' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     normalizeIterStudioSettings(server.dataRoot);
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-graph-import-'));
+    const tmpDir = (await scope.directory('mg-graph-import')).path;
     importPath = resolve(tmpDir, 'seed-store.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -85,7 +89,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -105,12 +109,249 @@ async function seedChatAndGraph(page) {
     for (const turn of CHAT_TURNS) {
         await sendMessageAndAwaitReply(page, turn);
     }
-    await importMgGraph(page, importPath, { mode: 'bind-latest' });
+    await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
     await setMgSettings(page, { autoExtractionEnabled: false }, { closeAfter: true });
+}
+
+async function verifyAbandonedTurn(page, action) {
+    await seedChatAndGraph(page);
+    await openIterStudio(page, 'mg-graph', { autoApply: false });
+    mock.scriptToolCall({
+        name: 'mg_graph_edit_node',
+        arguments: { node_id: 'n_3', set_fields: { state: EDITED_STATE } },
+    });
+    await sendIterPrompt(page, 'mg-graph', 'Retouch the watchpost state, leaving it pending.');
+    const win = workbenchWindow(page);
+    const replacementIdentity = 'Bryn 断崖的海图官，负责晚间巡查。';
+    let rewoundIds = [];
+
+    if (action === 'stop') {
+        let routed = false;
+        mock.scriptCompletion(() => {
+            if (routed) return null;
+            routed = true;
+            return {
+                tool: 'mg_graph_edit_node',
+                arguments: { node_id: 'n_3', set_fields: { state: 'This interrupted note must not survive.' } },
+            };
+        });
+        const held = mock.holdNextQueuedRequest();
+        try {
+            await sendWorkbenchIterationPrompt(page, 'Draft an interrupted watchpost note.', { waitForSettle: false });
+            await held.requested;
+            await stopWorkbenchIteration(page);
+        } finally {
+            held.release();
+            mock.scriptCompletion(null);
+        }
+        await expect(win.locator('.wb-msg-error')).toBeVisible();
+    } else {
+        mock.scriptToolCall({
+            name: 'mg_graph_edit_node',
+            arguments: action === 'applied'
+                ? { node_id: 'n_2', set_fields: { identity: 'This applied note must not survive.' } }
+                : { node_id: 'n_3', set_fields: { state: 'This replaced note must not survive.' } },
+        });
+        await sendIterPrompt(page, 'mg-graph', 'Draft a watchpost note that will be replaced.');
+        if (action === 'applied') {
+            rewoundIds = await page.evaluate(async () => {
+                const ctx = window.Luker.getContext();
+                const { sessionBodyNamespace } = await import('/scripts/workbench/model/sessions.js');
+                const result = await ctx.getChatState('workbench_sessions');
+                if (result.ok !== true) throw new Error(JSON.stringify(result));
+                const summary = result.state.sessions.find(item => item.kind === 'iterate' && item.ws === 'memory_graph');
+                const bodyRes = await ctx.getChatState(sessionBodyNamespace(summary.id));
+                if (bodyRes.ok !== true) throw new Error(JSON.stringify(bodyRes));
+                return bodyRes.state.turns.at(-1).proposalIds;
+            });
+            expect(rewoundIds).toHaveLength(1);
+            await applyWorkbenchChanges(page, { index: 1 });
+            await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity).toBe('This applied note must not survive.');
+            expect((await readNodeFields(page, 'n_3'))?.state).toBe(BASELINE_STATE);
+        }
+    }
+
+    mock.scriptToolCall({
+        name: 'mg_graph_edit_node',
+        arguments: { node_id: 'n_2', set_fields: { identity: replacementIdentity } },
+    });
+    if (action === 'stop') {
+        await sendIterPrompt(page, 'mg-graph', 'Record the map officer identity without changing the watchpost.');
+    } else {
+        await win.getByRole('button', { name: /^(Answer again|重新回答|再次回答)$/ }).last().click();
+    }
+    await expect(win.locator('.wb-chg.is-pending').last()).toContainText(replacementIdentity);
+    await expect(win.locator('.wb-reads.is-live')).toHaveCount(0);
+    await expect(win.locator('.wb-chg.is-pending')).toHaveCount(2);
+    const busState = await page.evaluate(async () => {
+        const ctx = window.Luker.getContext();
+        const { sessionBodyNamespace } = await import('/scripts/workbench/model/sessions.js');
+        const result = await ctx.getChatState('workbench_sessions');
+        if (result.ok !== true) throw new Error(JSON.stringify(result));
+        const summary = result.state.sessions.find(item => item.kind === 'iterate' && item.ws === 'memory_graph');
+        const bodyRes = await ctx.getChatState(sessionBodyNamespace(summary.id));
+        if (bodyRes.ok !== true) throw new Error(JSON.stringify(bodyRes));
+        const turn = bodyRes.state.turns.findLast(item => item.state === 'pending');
+        return turn.draft.busState;
+    });
+    const pending = busState.entries.filter(entry => entry.status === 'pending');
+    expect(pending).toHaveLength(2);
+    expect(JSON.stringify(pending)).not.toContain('note must not survive');
+    for (const id of rewoundIds) {
+        expect(busState.entries.find(entry => entry.id === id)).toMatchObject({ status: 'rolledBack' });
+    }
+    expect(busState.outcomeQueue.filter(entry => rewoundIds.includes(entry.id))).toEqual([]);
+    await applyIterBatch(page, 'mg-graph');
+    await expect.poll(async () => (await readNodeFields(page, 'n_3'))?.state).toBe(EDITED_STATE);
+    await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity).toBe(replacementIdentity);
 }
 
 test.describe('#92 — MG graph studio negative paths', () => {
     test.setTimeout(240_000);
+
+    test('a delayed presentation snapshot cannot assign a new graph conversation to the previous chat', async ({ page }) => {
+        await seedChatAndGraph(page);
+        const original = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            return { id: ctx.getCurrentChatId(), target: ctx.resolveChatStateTarget() };
+        });
+        const otherId = await createNewChatViaUI(page);
+        await sendMessageAndAwaitReply(page, CHAT_TURNS[0]);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
+        const other = await page.evaluate(() => window.Luker.getContext().resolveChatStateTarget());
+        await openChatByName(page, original.id);
+        await openIterStudio(page, 'mg-graph');
+        await closeIterStudio(page);
+        const held = await holdWorkbenchSnapshots(page);
+        const prompt = 'Inspect the current chat watchpost without editing it.';
+        const readOwnership = () => page.evaluate(async ({ before, after, prompt }) => {
+            const ctx = window.Luker.getContext();
+            const { sessionBodyNamespace } = await import('/scripts/workbench/model/sessions.js');
+            const read = async target => {
+                const result = await ctx.getChatState('workbench_sessions', { target });
+                if (!result.ok) throw new Error(JSON.stringify(result));
+                const matched = [];
+                for (const session of (result.state?.sessions || [])) {
+                    const bodyRes = await ctx.getChatState(sessionBodyNamespace(session.id), { target });
+                    if (!bodyRes.ok) throw new Error(JSON.stringify(bodyRes));
+                    if ((bodyRes.state?.turns || []).some(turn => turn.role === 'user' && turn.text === prompt)) {
+                        matched.push(session);
+                    }
+                }
+                return matched;
+            };
+            return { before: await read(before), after: await read(after) };
+        }, { before: original.target, after: other, prompt });
+        let sessionId;
+        try {
+            await openChatByName(page, otherId);
+            await openIterStudio(page, 'mg-graph', { newSession: true });
+            await held.requested();
+            mock.scriptReply('The current chat watchpost has been inspected.');
+            await sendIterPrompt(page, 'mg-graph', prompt);
+            const ownership = await readOwnership();
+            expect(ownership.before).toEqual([]);
+            expect(ownership.after).toHaveLength(1);
+            sessionId = ownership.after[0].id;
+        } finally {
+            await held.release();
+        }
+        await closeIterStudio(page);
+        await server.restart();
+        await reloadAndAwait(page, server.baseURL);
+        const persisted = await readOwnership();
+        expect(persisted.before).toEqual([]);
+        expect(persisted.after.map(session => session.id)).toEqual([sessionId]);
+    });
+
+    test('automatic graph editing never retargets a delayed request to another chat', async ({ page }) => {
+        await seedChatAndGraph(page);
+        const original = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            return { id: ctx.getCurrentChatId(), target: ctx.resolveChatStateTarget() };
+        });
+        const otherId = await createNewChatViaUI(page);
+        await sendMessageAndAwaitReply(page, CHAT_TURNS[0]);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
+        expect((await readNodeFields(page, 'n_3')).state).toBe(BASELINE_STATE);
+        await openChatByName(page, original.id);
+        await openIterStudio(page, 'mg-graph', { autoApply: true });
+        let step = 0;
+        mock.scriptCompletion(() => {
+            step += 1;
+            if (step === 1) return { tool: 'mg_graph_list_nodes', arguments: {} };
+            if (step === 2) return { tool: 'mg_graph_edit_node', arguments: { node_id: 'n_3', set_fields: { state: EDITED_STATE } } };
+            return null;
+        });
+        const held = mock.holdNextQueuedRequest();
+        try {
+            await sendIterPrompt(page, 'mg-graph', 'Record the retrimmed lantern in this watchpost log.', { waitForSettle: false });
+            await held.requested;
+            await closeIterStudio(page);
+            // Switching chats while a chat-scoped Workbench AI iteration is active
+            // triggers the Activity Guard confirmation; confirming "Switch anyway"
+            // aborts the held turn so it can never retarget the newly opened chat.
+            await page.locator('#options_button').click();
+            await page.locator('#option_select_chat').click();
+            const targetChatId = otherId.replace(/\.jsonl$/i, '');
+            const escapedChatId = targetChatId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const exactChat = new RegExp(`^\\s*${escapedChatId}(\\.jsonl)?\\s*$`);
+            const chatRow = page.locator('.select_chat_block_wrapper', {
+                has: page.locator('.select_chat_block_filename', { hasText: exactChat }),
+            }).first();
+            await chatRow.locator('.select_chat_block_filename').click();
+            const guardPopup = page.locator('dialog.popup[open]').last();
+            await expect(guardPopup).toContainText(/Tasks still in progress|仍有任务进行中|仍有任務進行中/);
+            await guardPopup.locator('.popup-button-ok').click();
+            await page.waitForFunction(wanted => window.Luker.getContext().getCurrentChatId() === wanted, targetChatId, { timeout: 30_000 });
+            await page.locator('#shadow_select_chat_popup').waitFor({ state: 'hidden', timeout: 30_000 });
+        } finally {
+            held.release();
+            mock.clearScriptedCompletion();
+        }
+        const readOriginalTurn = () => page.evaluate(async (target) => {
+            const ctx = window.Luker.getContext();
+            const { sessionBodyNamespace } = await import('/scripts/workbench/model/sessions.js');
+            const result = await ctx.getChatState('workbench_sessions', { target });
+            if (!result.ok) throw new Error(JSON.stringify(result));
+            const summary = result.state.sessions.find(item => item.ws === 'memory_graph');
+            const bodyRes = await ctx.getChatState(sessionBodyNamespace(summary.id), { target });
+            if (!bodyRes.ok) throw new Error(JSON.stringify(bodyRes));
+            return bodyRes.state.turns.at(-1);
+        }, original.target);
+        await expect.poll(async () => {
+            const turn = await readOriginalTurn();
+            return turn?.role === 'ai' && turn.state !== 'pending';
+        }).toBe(true);
+        expect((await readNodeFields(page, 'n_3')).state).toBe(BASELINE_STATE);
+        const settledTurn = await readOriginalTurn();
+        expect(settledTurn.changes ?? []).toEqual([]);
+        expect(settledTurn.error || '').toMatch(/Stopped|已停止/);
+
+        await server.restart();
+        await reloadAndAwait(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        expect((await readNodeFields(page, 'n_3')).state).toBe(BASELINE_STATE);
+        await openChatByName(page, original.id);
+        expect((await readNodeFields(page, 'n_3')).state).toBe(BASELINE_STATE);
+        await openIterStudio(page, 'mg-graph', { autoApply: false });
+        await closeIterStudio(page);
+    });
+
+    test('stopping a chained turn discards only its proposals', async ({ page }) => {
+        await verifyAbandonedTurn(page, 'stop');
+        await expect(workbenchWindow(page).locator('.wb-chg.is-applied')).toHaveCount(2);
+    });
+
+    test('answering a chained turn again discards only the replaced proposals', async ({ page }) => {
+        await verifyAbandonedTurn(page, 'regenerate');
+        await expect(workbenchWindow(page).locator('.wb-chg.is-applied')).toHaveCount(2);
+    });
+
+    test('answering an applied chained turn again preserves earlier pending proposals', async ({ page }) => {
+        await verifyAbandonedTurn(page, 'applied');
+        await expect(workbenchWindow(page).locator('.wb-chg.is-applied')).toHaveCount(2);
+    });
 
     test('discard leaves the store untouched', async ({ page }) => {
         await seedChatAndGraph(page);
@@ -122,7 +363,7 @@ test.describe('#92 — MG graph studio negative paths', () => {
                 window.__mgStoreCommits.push(snap);
             });
         });
-        await openIterStudio(page, 'mg-graph');
+        await openIterStudio(page, 'mg-graph', { autoApply: false });
         mock.scriptToolCall({
             name: 'mg_graph_edit_node',
             arguments: { node_id: 'n_3', set_fields: { state: EDITED_STATE } },
@@ -138,7 +379,7 @@ test.describe('#92 — MG graph studio negative paths', () => {
 
     test('a failing tool call returns an error envelope and stages nothing', async ({ page }) => {
         await seedChatAndGraph(page);
-        await openIterStudio(page, 'mg-graph');
+        await openIterStudio(page, 'mg-graph', { autoApply: false });
         mock.scriptToolCall({
             name: 'mg_graph_edit_node',
             arguments: { node_id: 'n_999', set_fields: { state: 'nowhere' } },

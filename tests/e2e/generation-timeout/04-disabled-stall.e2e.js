@@ -1,24 +1,25 @@
 // 连接配置请求超时 #4 — 0/缺省 = 禁用回归：profile 没配超时，上游静默时
 // 请求必须无限等待（不引入任何默认超时）；手动"停止生成"仍然工作。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, abortGenerationViaUI } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['first beacon lantern stays lit while the tide turns'] });
     mock.setStreamStall({ afterChunks: 1, stallMs: 30_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-disabled' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-disabled' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, name: 'e2e-no-timeout' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

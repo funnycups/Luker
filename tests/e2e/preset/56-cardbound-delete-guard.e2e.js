@@ -17,10 +17,10 @@
 // Refactor 后:isCharacterBoundPresetOptionSelected() === true → 早退,
 // 无 confirm 弹窗、无 delete fetch、无文件被删。
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -37,12 +37,13 @@ const SLOT_TEMPERATURE = 0.42;
 // (见 tests/e2e/preset/_helpers.js:26),ghost 进入后 stale 全局名就是它。
 const STALE_GLOBAL_NAME = 'Default';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'cardbound-delete-guard',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -69,7 +70,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -100,17 +101,21 @@ test.describe('#56 — onDeletePresetClick guard 防止误删 stale 全局 prese
             { timeout: 15_000 },
         );
 
-        // 断言前置:ghost 选中态下 oai_settings.preset_settings_openai 仍是
-        // stale 全局名 —— 这是"guard 拒绝的场景"的现实前提。用 evaluate
-        // 得到的名字作为权威,让 stale 文件路径不受硬编码猜测影响。
-        const staleName = await page.evaluate(() => {
+        // 断言前置:ghost 选中态下 global_preset_settings_openai 保留全局名，
+        // preset_settings_openai 跟踪当前激活的卡绑槽位名。
+        const names = await page.evaluate(() => {
             const ctx = window.Luker?.getContext?.();
-            return ctx?.chatCompletionSettings?.preset_settings_openai;
+            return {
+                globalName: ctx?.chatCompletionSettings?.global_preset_settings_openai,
+                activeName: ctx?.chatCompletionSettings?.preset_settings_openai,
+            };
         });
-        expect(typeof staleName).toBe('string');
-        expect(staleName.length).toBeGreaterThan(0);
+        expect(typeof names.globalName).toBe('string');
+        expect(names.globalName.length).toBeGreaterThan(0);
         // fixtures seed 保证 'Default';如果哪天 seed 变了,expect 会告诉我们。
-        expect(staleName).toBe(STALE_GLOBAL_NAME);
+        expect(names.globalName).toBe(STALE_GLOBAL_NAME);
+        expect(names.activeName).toBe(SLOT_NAME);
+        const staleName = names.globalName;
 
         const stalePath = path.join(
             server.dataRoot,

@@ -12,6 +12,8 @@
 //   - setCounterInput / setSliderInput: write to the slider via jQuery
 //     so ST's canonical input handler fires (the counter on its own
 //     doesn't update oai_settings.<key>).
+//   - openAiResponseConfigDrawer: open the AI Response Configuration
+//     drawer when it is closed.
 //   - normalizeIterStudioSettings: rewrite settings.json to clear the
 //     dev-only requestApiPresetName / requestLlmPresetName so iter-studio
 //     LLM requests don't get rerouted via a missing connection profile.
@@ -159,12 +161,9 @@ export async function bindCurrentPresetToCharacter(page) {
         else sel.dispatchEvent(new Event('change', { bubbles: true }));
     });
     // Wait for the bind confirm popup to render then accept it.
-    const popup = page.locator('.popup:visible, dialog.popup[open]').last();
-    await popup.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-    const okBtn = popup.locator('.popup-button-ok').last();
-    if (await okBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await okBtn.click();
-    }
+    const popup = page.locator('dialog.popup[open]').last();
+    await popup.waitFor({ state: 'visible', timeout: 5000 });
+    await popup.locator('.popup-button-ok').last().click();
     // Wait until the popup is fully detached so subsequent gestures aren't
     // intercepted by its overlay (#shadow_popup leaves residue otherwise).
     await page.waitForFunction(() => {
@@ -187,4 +186,15 @@ export async function bindCurrentPresetToCharacter(page) {
     await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     // Close drawer for subsequent gestures.
     await ensureRightDrawerClosed(page);
+}
+
+/**
+ * Open the AI Response Configuration drawer (#left-nav-panel) if it is closed.
+ */
+export async function openAiResponseConfigDrawer(page) {
+    const block = page.locator('#left-nav-panel');
+    const isOpen = await block.evaluate(el => el.classList.contains('openDrawer'));
+    if (isOpen) return;
+    await page.locator('#leftNavDrawerIcon').click();
+    await block.waitFor({ state: 'visible', timeout: 5000 });
 }

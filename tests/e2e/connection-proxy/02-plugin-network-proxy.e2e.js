@@ -5,8 +5,8 @@
 // network-proxy field reaches that payload and the outbound request traverses
 // the recording proxy.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { startRecordingProxy } from '../_lib/recording-proxy.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
@@ -16,10 +16,11 @@ let server, mock, proxy;
 const PROFILE_NAME = 'e2e-plugin-network-proxy';
 const REPLY = 'The plugin relay reached the far lantern.';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
     proxy = await startRecordingProxy();
-    server = await startServer({ batchKey: 'generation', scenarioId: 'plugin-network-proxy' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'plugin-network-proxy' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({
@@ -32,7 +33,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await proxy?.stop();
     await mock?.stop();
 });

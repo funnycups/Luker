@@ -5,12 +5,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { onboardS3Page, reloadS3Page, awaitS3Page } from '../_lib/sync-s3.js';
 import { openCharacterList } from '../_lib/ui-character.js';
 import { closeAnyOpenTopSettingsDrawer, editMessageViaUI, openTopDrawer } from '../_lib/page.js';
 import { openChatByName } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const AVATAR = 'default_Seraphina.png';
 const TURN = '*I raise the lantern.* "Keep every word: 渡口, 🌙, and \\ reeds."';
@@ -46,7 +52,7 @@ async function state(page, id = null) {
 }
 
 async function scenario(browser, info, body) {
-    const server = await startServer({ batchKey: 'sync', scenarioId: `group-initialization-${randomBytes(6).toString('hex')}` });
+    const server = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `group-initialization-${randomBytes(6).toString('hex')}`, onboarding: true });
     const contexts = [], jobs = [], requiredJobs = [], releases = [], routes = [], records = [], network = [], consoleErrors = [];
     const runtimes = [server.execArgv];
     const pages = [];
@@ -174,7 +180,6 @@ async function scenario(browser, info, body) {
         fs.writeFileSync(evidencePath, JSON.stringify({ runtimes, records, network, consoleErrors, files }, null, 2));
         await info.attach('group-boundary-evidence', { path: evidencePath, contentType: 'application/json' });
         await info.attach('server.log', { body: server.outputEpochs.join('\n'), contentType: 'text/plain' });
-        await tearDownServer(server);
     }
     if (failures.length) throw new AggregateError(failures, 'Group boundary scenario failed', { cause: failures[0] });
 }

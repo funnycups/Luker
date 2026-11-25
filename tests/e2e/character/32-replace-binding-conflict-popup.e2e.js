@@ -8,11 +8,10 @@
 // local persona must not leak the incoming card's persona into the global
 // persona library.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter, openReplaceWithFile } from './_helpers.js';
@@ -83,22 +82,20 @@ function readReplacedCard(dataRoot) {
 let mock, tmpDir, replacementPath;
 
 test.describe('#32 — replace binding conflict dialog', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-32-'));
+        tmpDir = (await scope.directory('luker-e2e-32')).path;
         replacementPath = writeReplacementPng(resolve(tmpDir, 'briallen.png'));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('per-category choice: preset uses the new card, persona keeps the local value', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'binding-conflict' });
-        try {
+    test('per-category choice: preset uses the new card, persona keeps the local value', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'binding-conflict' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -159,8 +156,6 @@ test.describe('#32 — replace binding conflict dialog', () => {
             const globalPersonaKeys = await page.evaluate(() => Object.keys(window.Luker.getContext().powerUserSettings?.personas || {}));
             expect(globalPersonaKeys).not.toContain(INCOMING_PERSONA_AVATAR);
             expect(globalPersonaKeys).not.toContain(LOCAL_PERSONA_AVATAR);
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

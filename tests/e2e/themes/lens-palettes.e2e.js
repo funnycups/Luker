@@ -1,19 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'themes', scenarioId: 'lens-palettes' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'themes', scenarioId: 'lens-palettes' });
     markOnboarded({ dataRoot: server.dataRoot });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 async function installNativeBarSpies(page) {

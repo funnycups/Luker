@@ -13,8 +13,8 @@
 //   These live under the Author's Note inline-drawer in the Extensions
 //   panel. The drawer mounts inside #floatingPrompt_container.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -28,7 +28,8 @@ let server, mock;
 
 const AN_TEXT = 'AUTHORSNOTE-SENTINEL: keep the lantern trimmed and the chart folded.';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash glances toward the lantern and nods.* "Understood."',
         '*Ash folds the chart corner and waits.* "Go on."',
@@ -36,14 +37,14 @@ test.beforeAll(async () => {
         '*Ash squints at the swell.* "I hear you."',
         '*Ash leans on the rail.* "Continue."',
     ] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '91-authors-note' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '91-authors-note' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

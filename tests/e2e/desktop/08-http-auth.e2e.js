@@ -1,28 +1,23 @@
-import { test, expect } from '@playwright/test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { launchLukerDesktop } from '../_lib/desktop.js';
-import { cloneDataDir, SCRATCH_ROOT } from '../_lib/server.js';
+import { materializeSeed } from '../../harness/seed.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 const USERNAME = 'e2e-user';
 const PASSWORD = 'e2e-password';
 
-// The shell runs the backend itself, so the credential gate is the backend's
-// own basic auth. The test drives the real login window the shell opens in
-// response to Electron's login event.
-
-function prepareUserData() {
-    const userData = resolve(SCRATCH_ROOT, `desktop-http-auth-${Date.now()}`);
-    mkdirSync(userData, { recursive: true });
-    cloneDataDir(resolve(userData, 'data'));
+async function prepareUserData(scope) {
+    const directory = await scope.directory('desktop http-auth');
+    const userData = directory.path;
+    const seeded = await materializeSeed(scope, { settingsOverrides: { firstRun: false, power_user: { auto_connect: false } } });
+    renameSync(seeded.dataRoot, resolve(userData, 'data'));
     writeFileSync(resolve(userData, 'config.yaml'), [
         'basicAuthMode: true',
         'basicAuthUser:',
         `  username: ${USERNAME}`,
         `  password: ${PASSWORD}`,
-        // Basic auth middleware is only mounted when the server listens
-        // beyond the loopback default.
         'listen: true',
         'listenAddress:',
         '  ipv4: 127.0.0.1',
@@ -31,7 +26,7 @@ function prepareUserData() {
         '  ipv6: false',
         '',
     ].join('\n'));
-    return userData;
+    return directory;
 }
 
 async function waitForAuthDialog(electronApp, expectedPassword) {
@@ -52,10 +47,12 @@ async function waitForAuthDialog(electronApp, expectedPassword) {
     return found;
 }
 
-test('the shell prompts for HTTP Basic credentials and retries after a rejection', async () => {
+test('the shell prompts for HTTP Basic credentials and retries after a rejection', async ({ resources }) => {
+    const userData = await prepareUserData(resources);
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'http-auth',
-        userData: prepareUserData(),
+        userData,
         waitForSettle: false,
     });
 

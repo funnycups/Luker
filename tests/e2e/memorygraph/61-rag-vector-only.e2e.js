@@ -10,11 +10,10 @@
 //   4. Send a chat message whose tokens match one specific seed.
 //   5. Assert MG's lastRecallTrace records the matching node as a RAG hit.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -27,7 +26,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
-import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
+import { importMgGraph, rebuildMgVectors, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -71,18 +70,19 @@ const SEED_RECORDS = [
     },
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 5 }, (_, i) =>
             `*Seraphina nods.* "Acknowledged. Note ${i + 1} recorded."`),
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'rag-vector-only' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'rag-vector-only' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-rag-'));
+    const tmpDir = (await scope.directory('mg-rag')).path;
     importPath = resolve(tmpDir, 'seed.json');
     const nodes = {};
     let seq = 0;
@@ -111,7 +111,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -135,28 +135,12 @@ test.describe('#61 — RAG recall mode reaches the seeded graph via real chat se
         await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
 
-        // Force vector index sync so the imported nodes have embeddings, then
-        // send a message whose tokens uniquely match the "Summary 1" event
-        // (cliff lantern). The send drives the GENERATION_AFTER_WORLD_INFO_SCAN
-        // listener → safeInjectMemoryPrompts → runRagRecall.
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            const main = await import('/scripts/extensions/memory-graph/main.js');
-            const vi = await import('/scripts/extensions/memory-graph/vector-index.js');
-            const profile = vi.getVectorConfigFromSettings(settings);
-            if (!profile) return;
-            const chatKey = main.resolveChatKeyForSession(ctx);
-            const store = await main.ensureMemoryStoreLoaded(ctx);
-            if (!store) return;
-            const beforeSync = structuredClone(store);
-            await vi.syncVectorIndex(store, profile, chatKey, { purge: true, tolerateErrors: false });
-            await main.commitSessionMutation(ctx, chatKey, beforeSync, store);
-        });
-
-        // Confirm embed endpoint was hit (RAG path only works with embeddings).
-        const embedCalls = mock.requests.filter(r => r.url.includes('/embeddings'));
-        expect(embedCalls.length, 'mock should have served at least one /embeddings call').toBeGreaterThan(0);
+        // Index the imported nodes through the Graph tab "Rebuild Vectors"
+        // button; the click itself must reach the embeddings endpoint.
+        const embedsBeforeRebuild = mock.requests.filter(r => r.url.includes('/embeddings')).length;
+        await rebuildMgVectors(page);
+        const embedsAfterRebuild = mock.requests.filter(r => r.url.includes('/embeddings')).length;
+        expect(embedsAfterRebuild - embedsBeforeRebuild, 'mock should have received /embeddings requests during rebuild').toBeGreaterThan(0);
 
         // Send a tightly scoped query that should rank the cliff-lantern
         // event first. The mockLLM-style bag-of-tokens embedder gives strong

@@ -1,24 +1,22 @@
 // tests/e2e/memorygraph/58-vector-index-rebuild.e2e.js
 //
-// #58 — MG vector-index rebuild via the real "Rebuild From Chat" button.
+// #58 — MG vector-index rebuild via the real "Rebuild Vectors" button.
 //
 // Real-user flow:
 //   1. Enable MG via the real checkbox + auto-extraction checkbox.
 //   2. Send 2 RP turns via the textarea so MG has a real chat to anchor.
 //   3. Import a pre-seeded graph store (5 distinctive nodes) via the real
 //      Import button + file picker.
-//   4. Click the real `Rebuild Graph` button in Memory Lens Settings (via the
-//      helper `rebuildMgIndex`). The rebuild routes through `syncVectorIndex`
-//      under the hood — the same path the auto-extractor uses post-batch.
+//   4. Click the real `Full Rebuild` button in Memory Lens Settings (via the
+//      helper `rebuildMgVectors`), which re-embeds every eligible node.
 //   5. After rebuild, query the graph via the Layer-1 `vectorSearch` read
 //      API with a paraphrased query for each seed; assert the matching
 //      node ranks first.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -31,7 +29,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
-import { importMgGraph, rebuildMgIndex, setMgSettings } from '../_lib/ui-mg-varops.js';
+import { importMgGraph, rebuildMgVectors, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -81,13 +79,14 @@ const SEED_RECORDS = [
     },
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 5 }, (_, i) =>
             `*Seraphina folds the chart and meets your eyes.* "Acknowledged. Note ${i + 1} recorded."`,
         ),
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'vector-rebuild' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'vector-rebuild' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -96,7 +95,7 @@ test.beforeAll(async () => {
     // Build pre-seeded MG store with 4 records — each with semantically
     // distinct tokens so the mock embedder (bag-of-tokens hash) gives
     // strong separation. ids n_1..n_4.
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-vec-'));
+    const tmpDir = (await scope.directory('mg-vec')).path;
     importPath = resolve(tmpDir, 'seed.json');
     const nodes = {};
     let seq = 0;
@@ -125,14 +124,14 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
 test.describe('#58 — MG vector-index rebuild via real button → semantic recall ranks seeds first', () => {
     test.setTimeout(180_000);
 
-    test('import seeds, click Rebuild Graph, vectorSearch ranks each seed first for its paraphrased query', async ({ page }) => {
+    test('import seeds, click Rebuild Vectors, vectorSearch ranks each seed first for its paraphrased query', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
@@ -146,37 +145,14 @@ test.describe('#58 — MG vector-index rebuild via real button → semantic reca
         }
 
         // Seed MG via the real Import button.
-        await importMgGraph(page, importPath, { mode: 'bind-latest' });
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
 
-        // Click the real "Rebuild Graph" button inside Memory Lens Settings.
-        await rebuildMgIndex(page, { closeAfter: true });
-
-        // After the rebuild, we need to also explicitly sync the vector
-        // index via the public path the rebuild button uses (it gates on
-        // extraction running first; we don't have a real extractor wired
-        // here, so we drive syncVectorIndex directly through the public
-        // ensureMemoryStoreLoaded surface). This is the same operation a
-        // post-rebuild click would do once the extractor confirms there's
-        // nothing new to extract.
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            const main = await import('/scripts/extensions/memory-graph/main.js');
-            const vi = await import('/scripts/extensions/memory-graph/vector-index.js');
-            const profile = vi.getVectorConfigFromSettings(settings);
-            if (!profile) return;
-            const chatKey = main.resolveChatKeyForSession(ctx);
-            const store = await main.ensureMemoryStoreLoaded(ctx);
-            if (!store) return;
-            const beforeSync = structuredClone(store);
-            await vi.syncVectorIndex(store, profile, chatKey, { purge: true, tolerateErrors: false });
-            await main.commitSessionMutation(ctx, chatKey, beforeSync, store);
-        });
-
-        // Confirm the mock embedder was actually called during rebuild.
-        const embedCalls = mock.requests.filter(r => r.url.includes('/embeddings'));
-        expect(embedCalls.length, 'mock should have received /embeddings requests during rebuild').toBeGreaterThan(0);
+        // Re-embed the imported nodes through Memory Lens Settings -> Full Rebuild.
+        const embedsBeforeRebuild = mock.requests.filter(r => r.url.includes('/embeddings')).length;
+        await rebuildMgVectors(page);
+        const embedsAfterRebuild = mock.requests.filter(r => r.url.includes('/embeddings')).length;
+        expect(embedsAfterRebuild - embedsBeforeRebuild, 'mock should have received /embeddings requests during rebuild').toBeGreaterThan(0);
 
         // Pre-snapshot seed ids by hint for ranking assertions.
         const idsByHint = await page.evaluate(async () => {
@@ -202,7 +178,7 @@ test.describe('#58 — MG vector-index rebuild via real button → semantic reca
         for (const rec of SEED_RECORDS) {
             const expectedTitle = titleByHint[rec.idHint];
             const expectedId = idsByHint[expectedTitle];
-            if (!expectedId) continue;
+            expect(expectedId, `seeded node "${expectedTitle}" should be visible after import`).toBeTruthy();
             const hits = await page.evaluate(async ({ query }) => {
                 const ctx = window.Luker.getContext();
                 const mg = ctx.getExtensionApi?.('memory-graph');

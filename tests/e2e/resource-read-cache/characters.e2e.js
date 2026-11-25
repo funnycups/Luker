@@ -1,12 +1,17 @@
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { editSelectedCharacterFields, importCharacterFile } from '../_lib/ui-character.js';
 import { write as writePngCard, read as readPngCard } from '../../../src/character-card-parser.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const NAME = 'Resource Reader';
@@ -17,13 +22,13 @@ let tmpDir;
 let pngPath;
 
 test.beforeAll(async () => {
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'server',
         scenarioId: 'resource-character',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
-    tmpDir = mkdtempSync(join(tmpdir(), 'luker-resource-character-'));
+    tmpDir = (await fileScope.directory('resource-character')).path;
     const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
     const payload = {
         spec: 'chara_card_v2',
@@ -51,11 +56,6 @@ test.beforeAll(async () => {
     };
     pngPath = join(tmpDir, 'resource-reader.png');
     writeFileSync(pngPath, writePngCard(seed, JSON.stringify(payload)));
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('loads a complete character from source fields and projection', async ({ page }) => {

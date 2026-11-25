@@ -18,8 +18,8 @@
 //   5. Verify Settings view shows `maxRounds === 77`.
 //   6. Verify Flow view `main` Role prompt reverted to pre-draft value (no marker).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import {
@@ -33,14 +33,13 @@ let server;
 const NEW_MAX_ROUNDS = 77;
 const MAIN_AGENT_DRAFT_MARKER = 'REGRESSION-120-MAIN-AGENT-DRAFT-MARKER';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '120-orch-rt-limits', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '120-orch-rt-limits', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 async function openDirectorInWorkbench(page) {
     await setOrchMode(page, 'director');

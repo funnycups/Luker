@@ -27,10 +27,10 @@
 //   5. Call with a name that exists in NEITHER library → false (global
 //      branch short-circuits on missing settingName index).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -45,12 +45,13 @@ const SLOT_NAME = 'X';
 const OTHER_GLOBAL_NAME = 'OtherName';
 const SHARED_TEMPERATURE = 0.5;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'hasUnsaved-name-mismatch',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -89,7 +90,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

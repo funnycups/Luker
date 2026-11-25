@@ -18,8 +18,8 @@
 //    character editor panel, so a local helper clicks `#rm_button_back`
 //    to navigate back to the character list before each card click.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
@@ -30,12 +30,13 @@ let server, mock;
 const PERSONA_A_ID = 'persona-a-e2e.png';
 const PERSONA_B_ID = 'persona-b-e2e.png';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash narrows her eyes at the dark line of breakers.* "The tide is still settling. Stay close."',
         '*Bryn keeps the lantern trim, her hands steady on the brass.* "Speak quietly. The cliff carries voices."',
     ] });
-    server = await startServer({ batchKey: 'personas', scenarioId: 'bind-char' });
+    server = await startServer({ scope, batchKey: 'personas', scenarioId: 'bind-char' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -46,7 +47,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -60,7 +61,8 @@ async function openPersonaPanelViaJsClick(page) {
     await page.waitForFunction(() => !!document.querySelector('#persona-management-button .drawer-toggle'), { timeout: 5000 });
     const isOpen = await page.evaluate(() => {
         const icon = document.querySelector('#persona-management-button .drawer-icon');
-        return icon && icon.classList.contains('openIcon');
+        const content = document.querySelector('#PersonaManagement');
+        return Boolean(icon?.classList.contains('openIcon') && content?.classList.contains('openDrawer'));
     });
     if (!isOpen) {
         await page.evaluate(() => {
@@ -68,6 +70,8 @@ async function openPersonaPanelViaJsClick(page) {
             toggle?.click();
         });
     }
+    await expect(page.locator('#PersonaManagement')).toHaveClass(/\bopenDrawer\b/, { timeout: 5000 });
+    await expect(page.locator('#persona-management-button .drawer-icon')).toHaveClass(/\bopenIcon\b/, { timeout: 5000 });
     await page.locator('#persona-management-block').waitFor({ state: 'visible', timeout: 5000 });
 }
 
@@ -87,20 +91,17 @@ async function selectCharacterCard(page, name) {
     // (e.g. clicking "Keep Global" triggered an animated transition that
     // the previous bindPersonaToCurrentCharacter didn't fully wait out).
     const bindingPopup = page.locator('.popup .persona-binding-popup-button', { hasText: /Keep Global|Character Only|Cancel/i }).first();
-    if (await bindingPopup.isVisible({ timeout: 200 }).catch(() => false)) {
+    if (await bindingPopup.isVisible()) {
         // Click "Keep Global" if still up — same intent as the original
         // bind. If the popup is for a different operation, the cancel
         // fallback dismisses it without committing anything.
         const keep = page.locator('.popup .persona-binding-popup-button', { hasText: /Keep Global/i }).first();
-        if (await keep.isVisible({ timeout: 200 }).catch(() => false)) {
-            await keep.click().catch(() => {});
+        if (await keep.isVisible()) {
+            await keep.click();
         } else {
-            const cancel = page.locator('.popup .persona-binding-popup-button', { hasText: /Cancel/i }).first();
-            if (await cancel.isVisible({ timeout: 200 }).catch(() => false)) {
-                await cancel.click().catch(() => {});
-            }
+            await page.locator('.popup .persona-binding-popup-button', { hasText: /Cancel/i }).first().click();
         }
-        await bindingPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await bindingPopup.waitFor({ state: 'detached', timeout: 5000 });
     }
 
     // Close persona drawer if open (via JS click — handles overlay cases).
@@ -171,12 +172,13 @@ async function selectCharacterCard(page, name) {
     await card.waitFor({ state: 'visible', timeout: 10_000 });
     await card.click();
 
-    // Wait for ctx.characterId to point at the new selection.
+    // Wait for ctx.characterId and chat load/editor sync to point at the new selection.
     await page.waitForFunction((wantName) => {
         const ctx = window.Luker.getContext();
         const cid = Number(ctx.characterId);
         return Number.isFinite(cid) && ctx.characters[cid]?.name === wantName;
     }, name, { timeout: 10_000 });
+    await expect(page.locator('#character_name_pole')).toHaveValue(name, { timeout: 10_000 });
 }
 
 /**
@@ -195,14 +197,12 @@ async function bindPersonaToCurrentCharacter(page, personaName) {
     // .persona-binding-popup-button.
     await page.locator('#lock_persona_to_char').click({ force: true });
     const keepGlobalBtn = page.locator('.popup .persona-binding-popup-button', { hasText: /Keep Global/i }).first();
-    if (await keepGlobalBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await keepGlobalBtn.click();
-        // Wait for the popup to actually close. Without this, the next
-        // navigation gesture (selectCharacterCard) can race the popup's
-        // dialog overlay and bail with "element not visible".
-        await page.locator('.popup .persona-binding-popup-button', { hasText: /Keep Global/i }).first()
-            .waitFor({ state: 'detached', timeout: 8_000 }).catch(() => {});
-    }
+    await keepGlobalBtn.waitFor({ state: 'visible', timeout: 5000 });
+    await keepGlobalBtn.click();
+    // Wait for the popup to actually close. Without this, the next
+    // navigation gesture (selectCharacterCard) can race the popup's
+    // dialog overlay and bail with "element not visible".
+    await keepGlobalBtn.waitFor({ state: 'detached', timeout: 8_000 });
     // Tiny settle for save debounce.
     await page.waitForTimeout(400);
 }

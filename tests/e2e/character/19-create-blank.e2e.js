@@ -9,8 +9,8 @@
 // Definitions" popup (#character_popup); open the popup first and
 // expand its inline-drawers before filling.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
@@ -52,16 +52,10 @@ async function createBlankCharacterViaUI(page, fields = {}) {
         name: '#character_name_pole',
         description: '#description_textarea',
         firstmes: '#firstmessage_textarea',
-        creator_notes: '#creator_notes_textarea',
-        creator: '#creator_textarea',
-        character_version: '#character_version_textarea',
     };
     for (const [key, sel] of Object.entries(MAIN_FIELDS)) {
         if (fields[key] == null) continue;
-        const loc = page.locator(sel);
-        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
-            await loc.fill(String(fields[key]));
-        }
+        await page.locator(sel).fill(String(fields[key]));
     }
 
     const ADV_FIELDS = {
@@ -70,6 +64,10 @@ async function createBlankCharacterViaUI(page, fields = {}) {
         mes_example: '#mes_example_textarea',
         system_prompt: '#system_prompt_textarea',
         post_history_instructions: '#post_history_instructions_textarea',
+        // Creator's Metadata drawer of the Advanced Definitions popup.
+        creator_notes: '#creator_notes_textarea',
+        creator: '#creator_textarea',
+        character_version: '#character_version_textarea',
     };
     const needAdvanced = Object.keys(ADV_FIELDS).some(k => fields[k] != null);
     if (needAdvanced) {
@@ -106,9 +104,10 @@ async function createBlankCharacterViaUI(page, fields = {}) {
     }
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'create-blank' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'create-blank' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -116,7 +115,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -173,6 +172,9 @@ test.describe('#19 — Create blank character via UI form', () => {
         await expect(page.locator('#personality_textarea')).toHaveValue(PERSONALITY);
         await expect(page.locator('#scenario_pole')).toHaveValue(SCENARIO);
         await expect(page.locator('#system_prompt_textarea')).toHaveValue(SYSTEM_PROMPT);
+        await expect(page.locator('#creator_notes_textarea')).toHaveValue('e2e — fresh-blank fixture via UI');
+        await expect(page.locator('#creator_textarea')).toHaveValue('luker-e2e');
+        await expect(page.locator('#character_version_textarea')).toHaveValue('1.0');
         await page.evaluate(() => { document.querySelector('#advanced_div')?.click(); });
         await page.locator('#personality_textarea').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 
@@ -204,5 +206,8 @@ test.describe('#19 — Create blank character via UI form', () => {
             });
         });
         await expect(page.locator('#system_prompt_textarea')).toHaveValue(SYSTEM_PROMPT);
+        await expect(page.locator('#creator_notes_textarea')).toHaveValue('e2e — fresh-blank fixture via UI');
+        await expect(page.locator('#creator_textarea')).toHaveValue('luker-e2e');
+        await expect(page.locator('#character_version_textarea')).toHaveValue('1.0');
     });
 });

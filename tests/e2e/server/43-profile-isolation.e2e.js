@@ -8,10 +8,10 @@
 // "Pollution" here means residue from B that should have been cleaned up
 // on the way back (e.g. mock-B's URL still in oai_settings.custom_url).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, openExtensionsDrawer } from '../_lib/page.js';
@@ -52,17 +52,18 @@ function seedTwoProfiles({ dataRoot, urlA, urlB }) {
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mockA = await startMockLLM({});
     mockB = await startMockLLM({});
-    server = await startServer({ batchKey: 'server', scenarioId: 'settings-isolation' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'settings-isolation' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mockA.baseURL });
     seedTwoProfiles({ dataRoot: server.dataRoot, urlA: mockA.baseURL, urlB: mockB.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mockA?.stop();
     await mockB?.stop();
 });

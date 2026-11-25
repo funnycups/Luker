@@ -13,14 +13,11 @@
 // fingerprint diff that asserts EVERY backed-up engine row + fs file
 // round-tripped exactly.
 //
-// Skipped automatically when no real dataRoot is available (CI envs etc).
-
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs';
-import os from 'node:os';
+import { test, expect } from '../../../harness/playwright.js';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../../_lib/server.js';
+import { startServer } from '../../../harness/server.js';
 import { awaitMainUI } from '../../_lib/page.js';
 import { markOnboarded } from '../../_lib/fixtures.js';
 import { accountWindow, answerWindowConfirm, closeAccountWindow, openAccountTab, pageHead } from '../../_lib/account-window.js';
@@ -44,29 +41,43 @@ const SPEC_ID = '99-real-data-sqlite-to-fs';
 // extra wall-clock vs the fabricated-data specs.
 test.setTimeout(15 * 60 * 1000);
 
-test('cross-mode recovery: real sqlite data round-trips through fs restore with full category parity', async ({ page }) => {
+test('cross-mode recovery: real sqlite data round-trips through fs restore with full category parity', async ({ resources, page }) => {
     const realDataRoot = resolveRealDataRoot();
-    test.skip(
-        !realDataRoot || !realDataLooksPopulated(realDataRoot),
-        `no real Luker dataRoot found (set LUKER_REAL_DATA_ROOT to point at one); resolved: ${realDataRoot}`,
-    );
-
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), `xmode-${SPEC_ID}-`));
+    const tempDir = (await resources.directory(`xmode-${SPEC_ID}`)).path;
     let sourceServer = null;
     let destServer = null;
     let sourceDataRoot = null;
 
-    try {
-        // Step 1: APFS-clone the real data into the scratch root, scrub
-        // secrets + dev prompt pollution.  This becomes the source server's
-        // dataRoot — the real data dir is never touched.
-        sourceDataRoot = cloneRealDataForSpec({ sourceDataRoot: realDataRoot, specId: SPEC_ID });
+    {
+        const data = await cloneRealDataForSpec({ scope: resources, sourceDataRoot: realDataRoot, specId: SPEC_ID });
+        sourceDataRoot = data.path;
         expect(realDataLooksPopulated(sourceDataRoot)).toBe(true);
 
-        // Step 2: snapshot the source BEFORE booting any server, so the
-        // fingerprint reflects the operator's real on-disk state and isn't
-        // polluted by anything the running server might write on boot
-        // (settings hydration, default-content seeding, etc).
+        // Step 2: boot a sqlite source server pointed at the cloned data.
+        sourceServer = await startServer({ scope: resources,
+            batchKey: 'xmode',
+            scenarioId: `${SPEC_ID}-src`,
+            data,
+            extraConfig: { storage: { mode: SOURCE_MODE } },
+        });
+        markOnboarded({ dataRoot: sourceServer.dataRoot });
+        await awaitMainUI(page, sourceServer.baseURL);
+        await completeFirstRunOnboardingIfVisible(page);
+
+        // Step 4: download a full backup ZIP via Account → Backup.
+        // We keep the page's default content selection and click Download.
+        const backupZipPath = path.join(tempDir, 'real-backup.zip');
+        await downloadBackupViaUI(page, backupZipPath);
+        expect(existsSync(backupZipPath)).toBe(true);
+        expect(statSync(backupZipPath).size).toBeGreaterThan(64 * 1024);
+
+        // Step 5: kill source before reading its on-disk state. A live sqlite
+        // server keeps boot-time settings writes in the WAL; an out-of-band
+        // read during that window sees the pre-boot value while the backup
+        // carries the current one. Stopping first checkpoints the WAL.
+        await sourceServer.stop();
+        sourceServer = null;
+
         const beforeSnap = await snapshotDataRoot({
             dataRoot: sourceDataRoot,
             engineMode: SOURCE_MODE,
@@ -78,34 +89,11 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
         // on a no-op round trip.
         expect(sourceCounts.totalRows, `source has no engine rows: ${JSON.stringify(sourceCounts)}`).toBeGreaterThan(0);
 
-        // Step 3: boot a sqlite source server pointed at the cloned data.
-        sourceServer = await startServer({
-            batchKey: 'xmode',
-            scenarioId: `${SPEC_ID}-src`,
-            useExistingDataRoot: sourceDataRoot,
-            extraConfig: { 'storage.mode': SOURCE_MODE },
-        });
-        markOnboarded({ dataRoot: sourceServer.dataRoot });
-        await awaitMainUI(page, sourceServer.baseURL);
-
-        // Step 4: download a full backup ZIP via Account → Backup.
-        // We keep the page's default content selection and click Download.
-        const backupZipPath = path.join(tempDir, 'real-backup.zip');
-        await downloadBackupViaUI(page, backupZipPath);
-        expect(existsSync(backupZipPath)).toBe(true);
-        expect(statSync(backupZipPath).size).toBeGreaterThan(64 * 1024);
-
-        // Step 5: kill source.
-        await tearDownServer(sourceServer);
-        sourceServer = null;
-
-        // Step 6: boot a fresh fs dest server.  No useExistingDataRoot —
-        // we want a clean dest so the restored data has nothing to merge
-        // against.
-        destServer = await startServer({
+        // Step 6: boot a fresh fs destination before restoring the selected bytes.
+        destServer = await startServer({ scope: resources,
             batchKey: 'xmode',
             scenarioId: `${SPEC_ID}-dst`,
-            extraConfig: { 'storage.mode': DEST_MODE },
+            extraConfig: { storage: { mode: DEST_MODE } },
         });
         markOnboarded({ dataRoot: destServer.dataRoot });
         await awaitMainUI(page, destServer.baseURL);
@@ -117,20 +105,12 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
         // flow imposes.
         await restoreBackupViaUI(page, backupZipPath);
 
-        // Step 8: wait until the migrated data lands.  The cross-mode
-        // orchestrator runs synchronously inside the POST handler, but the
-        // fs writes flush after the HTTP response; poll the dest dataRoot
-        // until it carries at least as many rows as the source had.
-        await waitForDestPopulated(destServer.dataRoot, sourceCounts.totalRows);
+        // Step 8: wait until every backed-up category matches. The restore
+        // response streams progress before the fs writes settle, so polling
+        // for parity is the completion condition rather than a row floor.
+        const report = await waitForRestoredParity(destServer.dataRoot, beforeSnap);
 
-        // Step 9: snapshot the dest and diff.
-        const afterSnap = await snapshotDataRoot({
-            dataRoot: destServer.dataRoot,
-            engineMode: DEST_MODE,
-        });
-        const report = compareSnapshots(beforeSnap, afterSnap);
-
-        // Step 10: assert no missing / changed items in ANY backed-up
+        // Step 9: assert no missing / changed items in ANY backed-up
         // category.  Extras on dest are tolerated (the fs server's boot
         // re-seeds a couple of default themes that the operator may have
         // overwritten in their real install; the backup ZIP carries the
@@ -139,21 +119,17 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
         // The failure message embeds the full per-category diff so the
         // developer can see exactly which row didn't round-trip.
         expect(hasParityFailures(report), formatParityReport(report)).toBe(false);
-    } finally {
-        if (sourceServer) {
-            try { await tearDownServer(sourceServer); } catch { /* best-effort cleanup */ }
-        }
-        if (destServer) {
-            try { await tearDownServer(destServer); } catch { /* best-effort cleanup */ }
-        }
-        if (sourceDataRoot && existsSync(sourceDataRoot)) {
-            try { rmSync(sourceDataRoot, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
-        }
-        try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
     }
 });
 
 // ----- helpers -----------------------------------------------------------
+
+async function completeFirstRunOnboardingIfVisible(page) {
+    const onboarding = page.locator('dialog.popup[open]', { hasText: /Welcome to Luker|欢迎使用|歡迎使用/ }).first();
+    if (!(await onboarding.isVisible())) return;
+    await onboarding.locator('.popup-button-ok').click();
+    await onboarding.waitFor({ state: 'detached', timeout: 5_000 });
+}
 
 function describeCounts(label, snap) {
     const out = { label, totalRows: 0, perCategory: {} };
@@ -170,22 +146,19 @@ function describeCounts(label, snap) {
     return out;
 }
 
-async function waitForDestPopulated(dataRoot, expectedMinRows) {
+async function waitForRestoredParity(dataRoot, sourceSnapshot) {
     const deadline = Date.now() + 180_000;
-    let lastSnap = null;
+    let lastReport = null;
     while (Date.now() < deadline) {
         try {
-            lastSnap = await snapshotDataRoot({ dataRoot, engineMode: DEST_MODE });
-            const counts = describeCounts('dest', lastSnap);
-            if (counts.totalRows >= expectedMinRows) return;
-        } catch { /* dest dir may not exist yet */ }
+            const snapshot = await snapshotDataRoot({ dataRoot, engineMode: DEST_MODE });
+            lastReport = compareSnapshots(sourceSnapshot, snapshot);
+            if (!hasParityFailures(lastReport)) return lastReport;
+        } catch { /* dest dir may not exist or be readable yet */ }
         await new Promise(r => setTimeout(r, 500));
     }
-    const lastCounts = lastSnap ? describeCounts('dest', lastSnap) : { totalRows: 0, perCategory: {} };
-    throw new Error(
-        `dest dataRoot did not reach ${expectedMinRows} rows within 180s; ` +
-        `last counts = ${JSON.stringify(lastCounts.perCategory)} (total ${lastCounts.totalRows})`,
-    );
+    const detail = lastReport ? formatParityReport(lastReport) : 'no destination snapshot could be read';
+    throw new Error(`dest dataRoot did not reach source parity within 180s: ${detail}`);
 }
 
 // ----- DOM helpers (duplicated from recovery-flow.js, scaled down) ------

@@ -6,24 +6,19 @@
 //
 // No docker required for this pair — both engines are file-based.
 
-import { test } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { test } from '../../../harness/playwright.js';
 
 import { runCrossModeRecoveryFlow } from './_lib/recovery-flow.js';
 
-test('cross-mode recovery: fs → sqlite preserves chat through engine swap', async ({ page }) => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'xmode-fs-to-sqlite-'));
-    try {
-        await runCrossModeRecoveryFlow({
+test('cross-mode recovery: fs → sqlite preserves chat through engine swap', async ({ resources, page }) => {
+    const tempDir = (await resources.directory('xmode-fs-to-sqlite')).path;
+    {
+        await runCrossModeRecoveryFlow({ scope: resources,
             page,
             sourceMode: 'fs',
             destMode: 'sqlite',
             specId: '01-fs-to-sqlite',
             tempDir,
         });
-    } finally {
-        rmSync(tempDir, { recursive: true, force: true });
     }
 });

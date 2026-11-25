@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 import { testSetup } from './frontent-test-utils.js';
 import { serverDirectory } from '../../src/server-directory.js';
 

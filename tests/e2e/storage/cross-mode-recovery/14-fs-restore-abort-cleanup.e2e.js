@@ -10,20 +10,19 @@
 // failure message,
 // and then asserts `_uploads/restore-sessions` is empty.
 
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
-import os from 'node:os';
+import { test, expect } from '../../../harness/playwright.js';
+import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../../_lib/server.js';
+import { startServer } from '../../../harness/server.js';
 import { startMockLLM } from '../../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../../_lib/fixtures.js';
 import { awaitMainUI } from '../../_lib/page.js';
 import { openBackupManagerViaUI } from './_lib/recovery-flow.js';
 import { accountWindow, answerWindowConfirm } from '../../_lib/account-window.js';
 
-test('restore failure drops the server-side upload session', async ({ page }) => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'xmode-fs-restore-abort-'));
+test('restore failure drops the server-side upload session', async ({ resources, page }) => {
+    const tempDir = (await resources.directory('xmode-fs-restore-abort')).path;
     const mock = await startMockLLM();
     let server = null;
 
@@ -38,10 +37,10 @@ test('restore failure drops the server-side upload session', async ({ page }) =>
     };
 
     try {
-        server = await startServer({
+        server = await startServer({ scope: resources,
             batchKey: 'xmode',
             scenarioId: '14-fs-restore-abort',
-            extraConfig: { 'storage.mode': 'fs' },
+            extraConfig: { storage: { mode: 'fs' } },
         });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -108,8 +107,7 @@ test('restore failure drops the server-side upload session', async ({ page }) =>
             await page.unroute(isRestorePostPath, abortRestorePost);
         }
     } finally {
-        await tearDownServer(server);
+
         await mock?.stop();
-        rmSync(tempDir, { recursive: true, force: true });
     }
 });

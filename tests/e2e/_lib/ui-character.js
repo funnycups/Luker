@@ -1,10 +1,21 @@
-// Real-UI helpers for character management: import via file picker, create,
-// edit fields, duplicate, delete (with confirm popup), bulk-select operations,
-// avatar upload.
+// Real-UI helpers for character management: import via the file picker and
+// delete with the confirm popup.
 //
 // Every helper uses real DOM gestures — no raw fetch('/api/characters/...'),
 // no direct ctx.characters mutation. Tests that bypass these helpers are
 // going against the audit's intent.
+
+/**
+ * Open the right nav (character list) drawer if it's closed.
+ */
+async function ensureRightDrawerOpen(page) {
+    const drawer = page.locator('#rightNavDrawerIcon');
+    const closed = await drawer.evaluate(el => el.classList.contains('closedIcon'));
+    if (closed) {
+        await drawer.click();
+        await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
+    }
+}
 
 /**
  * Show the character list in the right nav drawer, opening the drawer if
@@ -12,7 +23,7 @@
  */
 export async function openCharacterList(page) {
     const drawer = page.locator('#rightNavDrawerIcon');
-    const closed = await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
+    const closed = await drawer.evaluate(el => el.classList.contains('closedIcon'));
     if (closed) {
         await drawer.click();
     }
@@ -33,13 +44,13 @@ export async function openCharacterList(page) {
 export async function importCharacterFile(page, { filePath, expectedName, timeoutMs = 30_000 } = {}) {
     if (!filePath) throw new Error('importCharacterFile: filePath required');
     if (!expectedName) throw new Error('importCharacterFile: expectedName required');
-    await openCharacterList(page);
-    // The visible button is #character_import_button (icon); clicking it
-    // triggers the hidden file input #character_import_file. Drive the
-    // input directly via setInputFiles — that's the documented Playwright
-    // pattern for file pickers.
-    await page.locator('#character_import_button').click().catch(() => { /* not strictly required, but flexes the visible icon */ });
-    await page.locator('#character_import_file').setInputFiles(filePath);
+    await ensureRightDrawerOpen(page);
+    // The visible button is #character_import_button (icon); its handler
+    // clicks the hidden file input, which opens the file chooser.
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.locator('#character_import_button').click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(filePath);
     // Wait for the new card to appear.
     const card = page.locator('#rm_print_characters_block .character_select', { hasText: expectedName }).first();
     await card.waitFor({ state: 'visible', timeout: timeoutMs });
@@ -241,54 +252,9 @@ export async function duplicateSelectedCharacter(page, { timeoutMs = 20_000 } = 
  */
 export async function deleteSelectedCharacter(page, { timeoutMs = 15_000 } = {}) {
     await page.locator('#delete_button').click();
-    // The delete confirm popup includes a checkbox + OK. Tick the
-    // confirmation checkbox if present, then click OK.
-    const popup = page.locator('.popup:visible').last();
+    const popup = page.locator('dialog.popup[open]', { has: page.locator('#del_char_checkbox') });
     await popup.waitFor({ state: 'visible', timeout: 5000 });
-    const confirmCheckbox = popup.locator('input[type="checkbox"]').first();
-    if (await confirmCheckbox.isVisible({ timeout: 500 }).catch(() => false)) {
-        await confirmCheckbox.check().catch(() => {});
-    }
-    await popup.locator('.popup-button-ok').first().click();
-    await popup.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
-}
-
-/**
- * Enter bulk-select mode (the multi-checkbox UI on the character list)
- * and toggle the checkboxes for the named characters.
- *
- * The `.bulk_select_checkbox` elements have computed visibility 0 in
- * headless (they're styled to appear only via the surrounding label),
- * so Playwright's `force:true` still refuses to click them. Dispatch
- * the click via JS instead.
- */
-export async function bulkSelectCharacters(page, names = []) {
-    // Toggle bulk-select mode. Current builds use `#bulkEditButton`.
-    const modeBtn = page.locator('#bulkEditButton, #rm_bulk_select, [data-action="bulk-edit"]').first();
-    if (await modeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-        await modeBtn.click();
-    }
-    // For each requested name, locate the row + tick the checkbox via JS.
-    for (const name of names) {
-        await page.evaluate((wanted) => {
-            const rows = Array.from(document.querySelectorAll('#rm_print_characters_block .character_select'));
-            const row = rows.find(r => (r.textContent || '').includes(wanted));
-            if (!row) throw new Error(`character "${wanted}" not in list`);
-            const cb = row.querySelector('input.bulk_select_checkbox, input[type="checkbox"]');
-            if (cb && !cb.checked) cb.click();
-        }, name);
-    }
-}
-
-/**
- * Click the bulk-delete button and accept the confirm.
- */
-export async function bulkDeleteSelected(page, { timeoutMs = 15_000 } = {}) {
-    const btn = page.locator('#bulkDeleteButton, [data-action="bulk-delete"]').first();
-    await btn.click();
-    const popup = page.locator('.popup:visible, dialog.popup[open]').last();
-    if (await popup.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await popup.locator('.popup-button-ok').first().click();
-        await popup.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
-    }
+    await popup.locator('#del_char_checkbox').check();
+    await popup.locator('.popup-button-ok').click();
+    await popup.waitFor({ state: 'detached', timeout: timeoutMs });
 }

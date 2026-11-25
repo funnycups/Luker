@@ -5,9 +5,9 @@
 // server on a unix socket, points the Luker server at it, and walks the real
 // user path: settings menu -> capture -> downloaded artifact.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { startFakeDevtools } from '../../renderer-capture/_lib/fake-devtools-server.js';
@@ -18,9 +18,11 @@ const TRACE_EVENTS = [{ name: 'RunTask' }];
 let server;
 let devtools;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     devtools = await startFakeDevtools({ heapChunks: HEAP_CHUNKS, traceEvents: TRACE_EVENTS });
     server = await startServer({
+        scope,
         batchKey: 'diagnostics',
         scenarioId: 'server-capture',
         extraEnv: { LUKER_RENDERER_DEVTOOLS_SOCKET: devtools.socketPath },
@@ -29,7 +31,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await devtools?.close();
 });
 

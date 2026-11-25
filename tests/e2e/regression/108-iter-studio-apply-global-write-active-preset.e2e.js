@@ -24,8 +24,8 @@
 //   6. Open the Orchestration Editor and assert the director main agent's
 //      systemPrompt textarea still contains the marker.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -39,16 +39,16 @@ let server, mock;
 
 const MARKER = '*REGRESSION-LOCK-108* Hold the Ash voice — close every turn with the brine on the lantern bezel.';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startServer({ batchKey: 'regression', scenarioId: '108-writeactive-preset', extraConfig: { 'storage.mode': 'fs' } });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '108-writeactive-preset', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

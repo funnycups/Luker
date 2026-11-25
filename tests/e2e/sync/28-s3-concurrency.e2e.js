@@ -1,5 +1,5 @@
 /* eslint-disable playwright/no-conditional-in-test, playwright/no-conditional-expect -- Parameterized genuine provider outcomes require distinct assertions. */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { randomBytes } from 'node:crypto';
 import { s3Fixture, createReadyWorldBook, selectReadyWorldBook, reloadS3Page, awaitS3Page, backendRow, registryOf } from '../_lib/sync-s3.js';
 import { pair, manual, startManual, remoteHead, assertLocal, entryOf, publishedHead, pathsOf } from '../_lib/s3-races.js';

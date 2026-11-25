@@ -1,7 +1,7 @@
 import { chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, openExtensionsDrawer } from '../_lib/page.js';
 import { openMemoryWorkspace, openOrchWorkspace, openWorkbenchIterate, saveOrchDraftIfVisible, selectOrchPreset, setOrchMode } from '../_lib/ui-workbench.js';
 import { accountWindow, openAccountTab, windowConfirm } from '../_lib/account-window.js';
@@ -15,16 +15,14 @@ function isSettingsSave(response) {
         && response.ok();
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'extensions',
         scenarioId: 'prompt-settings-defaults',
         extraConfig: { enableUserAccounts: false },
     });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 async function revealPrompt(page, selector) {

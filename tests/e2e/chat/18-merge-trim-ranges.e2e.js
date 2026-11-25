@@ -14,10 +14,10 @@
 // .cms-range-to inputs: changing them must feed buildMergedBodyAndHeader's
 // body.slice(from, to) cut, NOT silently fall back to the full body.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -36,18 +36,19 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // 4 + 3 + 5 = 12 scripted replies, one per user turn across A, B, C.
     const replies = Array.from({ length: 12 }, (_, i) => `r${i}`);
     mock = await startMockLLM({ scriptedReplies: replies });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'merge-trim-ranges' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'merge-trim-ranges' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

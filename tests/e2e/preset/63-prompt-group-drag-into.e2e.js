@@ -20,8 +20,8 @@
 //      span with `data-pm-group-id` matching the target group.
 //   3. Membership survives a full page reload.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
@@ -40,14 +40,15 @@ test.use({
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina studies the tide chart, tracing the reef edge with a slow finger.* We have until dusk, no later.',
     ] });
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'prompt-group-drag-into',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -56,7 +57,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -147,10 +148,19 @@ test.describe('#63 — drag a prompt INTO an existing group (real gesture)', () 
         expect(before).not.toContain(sourceId);
         expect(before?.length).toBe(2);
 
-        // Locate the drag handle for the source prompt.
-        const sourceHandle = page.locator(
-            `#completion_prompt_manager_list li[data-pm-identifier="${sourceId}"] .prompt-manager-marker-handle`,
+        // Wait for the left drawer's CSS open transition to finish before
+        // measuring drag coordinates so bounding boxes do not shift mid-gesture.
+        await page.evaluate(async () => {
+            const panel = document.getElementById('left-nav-panel');
+            if (!panel || typeof panel.getAnimations !== 'function') return;
+            await Promise.all(panel.getAnimations({ subtree: false }).map(animation => animation.finished.catch(() => {})));
+        });
+
+        // Locate the drag source row and handle.
+        const sourceRow = page.locator(
+            `#completion_prompt_manager_list li[data-pm-identifier="${sourceId}"]`,
         ).first();
+        const sourceHandle = sourceRow.locator('.prompt-manager-marker-handle').first();
         await expect(sourceHandle).toBeVisible();
 
         // Target: the LAST member row of the seeded group. Dropping
@@ -181,14 +191,19 @@ test.describe('#63 — drag a prompt INTO an existing group (real gesture)', () 
         await page.waitForTimeout(30);
 
         // Re-measure after scroll — bounding boxes shift.
+        const sourceRowBox = await sourceRow.boundingBox();
         const sourceBox = await sourceHandle.boundingBox();
         const targetBox = await targetRow.boundingBox();
-        if (!sourceBox || !targetBox) throw new Error('missing bounding box for drag source/target');
+        if (!sourceRowBox || !sourceBox || !targetBox) throw new Error('missing bounding box for drag source/target');
 
+        // PromptManager shrinks the drag placeholder to 4px + 8px vertical margins (20px);
+        // lifting a row above the target shifts the target up by sourceRowBox.height so the
+        // post-swap placeholder sits at [targetBox.y + targetBox.height - sourceRowBox.height, +20],
+        // directly before the 1px .prompt-manager-group-end sentinel.
         const startX = sourceBox.x + sourceBox.width / 2;
         const startY = sourceBox.y + sourceBox.height / 2;
         const endX = targetBox.x + targetBox.width / 2;
-        const endY = targetBox.y + targetBox.height - 3;
+        const endY = targetBox.y + targetBox.height - sourceRowBox.height + 8;
 
         await page.mouse.move(startX, startY);
         await page.mouse.down();

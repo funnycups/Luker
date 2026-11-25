@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 import { testSetup } from './frontent-test-utils.js';
 
 function createEditableReasoningMessageHtml({ detailsAttributes = 'data-has-content="false"', includeMessageContainers = false, includeMessageEditControls = false } = {}) {

@@ -7,8 +7,8 @@ These helpers exist so each batch of e2e specs:
 - shares the same login/idle/send/restart primitives
 - uses the same RP-immersive fixtures (no "say hi" placeholder content)
 
-The legacy suites under `tests/frontend/` and `tests/skills-ui/playwright/`
-keep their inline `awaitMainUI` helpers. New e2e under `tests/e2e/` should
+The legacy suite under `tests/frontend/` keeps its inline `awaitMainUI`
+helpers. New e2e under `tests/e2e/` should
 import from here.
 
 ## Modules

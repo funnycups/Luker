@@ -20,11 +20,10 @@
 //   - disarm the failure and regenerate: fresh recall must run and the new
 //     focus must reach the prompt
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -39,6 +38,12 @@ import {
     regenerateViaUI,
 } from '../_lib/page.js';
 import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server, mock, importPath;
 
@@ -89,13 +94,13 @@ test.beforeAll(async () => {
     mock = await startMockLLM({
         scriptedReplies: [BASELINE_REPLY, FAILED_REPLY, REGEN_REPLY],
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'recall-failure-no-cache' });
+    server = await startServer({ scope: fileScope, batchKey: 'memorygraph', scenarioId: 'recall-failure-no-cache' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-recall-failure-'));
+    const tmpDir = (await fileScope.directory('mg-recall-failure')).path;
     importPath = resolve(tmpDir, 'seed.json');
     const nodes = {};
     let seq = 0;
@@ -124,7 +129,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

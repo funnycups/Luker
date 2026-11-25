@@ -1,12 +1,17 @@
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName } from '../_lib/page.js';
 import { importCharacterFile } from '../_lib/ui-character.js';
 import { write as writePngCard } from '../../../src/character-card-parser.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const NAME = 'State Reader';
@@ -79,12 +84,12 @@ let tmpDir;
 let pngPath;
 
 test.beforeAll(async () => {
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'server',
         scenarioId: 'resource-state',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
-    tmpDir = mkdtempSync(join(tmpdir(), 'luker-resource-state-'));
+    tmpDir = (await fileScope.directory('resource-state')).path;
     const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
     const payload = {
         spec: 'chara_card_v2',
@@ -100,11 +105,6 @@ test.beforeAll(async () => {
     };
     pngPath = join(tmpDir, 'state-reader.png');
     writeFileSync(pngPath, writePngCard(seed, JSON.stringify(payload)));
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('restores character and chat state through cached GET resources', async ({ page }) => {

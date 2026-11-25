@@ -2,11 +2,11 @@
 // (only `worlds`) does NOT propagate changes outside that category;
 // and "Undo last sync" reverts the most recent sync on both devices.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -19,21 +19,19 @@ import {
 
 let A, B;
 
-test.beforeAll(async () => {
-    A = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'cat-undo-A',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'cat-undo-B',
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — category toggle and undo', () => {
     test('worlds-only pair: chats edits do NOT propagate; undo reverts the last sync on both devices', async ({ browser }) => {

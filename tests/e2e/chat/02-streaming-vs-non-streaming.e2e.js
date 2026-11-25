@@ -11,8 +11,8 @@
 // per-chunk delays so DOM growth is observable.
 
 import http from 'node:http';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -131,9 +131,9 @@ async function sendAndSampleViaUI(page, text) {
 }
 
 test.describe('#2 — streaming vs non-streaming bubble growth', () => {
-    test('streaming reply grows incrementally over multiple ticks', async ({ page }) => {
+    test('streaming reply grows incrementally over multiple ticks', async ({ resources, page }) => {
         const slow = await startSlowStreamMock({ chunkDelayMs: 80 });
-        const server = await startServer({ batchKey: 'chat', scenarioId: 'stream-on' });
+        const server = await startServer({ scope: resources, batchKey: 'chat', scenarioId: 'stream-on' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: slow.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: slow.baseURL });
@@ -156,14 +156,14 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
                     .toBeGreaterThanOrEqual(samples[i - 1].len);
             }
         } finally {
-            await tearDownServer(server);
+
             await slow.stop();
         }
     });
 
-    test('non-streaming reply lands in a single observable tick', async ({ page }) => {
+    test('non-streaming reply lands in a single observable tick', async ({ resources, page }) => {
         const mock = await startMockLLM({ scriptedReplies: [LONG_REPLY] });
-        const server = await startServer({ batchKey: 'chat', scenarioId: 'stream-off' });
+        const server = await startServer({ scope: resources, batchKey: 'chat', scenarioId: 'stream-off' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -184,7 +184,7 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
                     .toBe(finalLen);
             }
         } finally {
-            await tearDownServer(server);
+
             await mock.stop();
         }
     });

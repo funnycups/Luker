@@ -10,11 +10,17 @@
 // The test drives the real UI: click #request_inspector_button, then the
 // row's abort button. It does not call internal abort helpers directly.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const CHUNKS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
 const REPLY_TEXT = CHUNKS.join(' ');
@@ -28,14 +34,13 @@ test.describe('request-inspector: abort in-flight generation', () => {
             scriptedReplies: [REPLY_TEXT],
             streamChunkDelayMs: CHUNK_DELAY_MS,
         });
-        server = await startServer({ batchKey: 'generation', scenarioId: 'inspector-abort' });
+        server = await startServer({ scope: fileScope, batchKey: 'generation', scenarioId: 'inspector-abort' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 

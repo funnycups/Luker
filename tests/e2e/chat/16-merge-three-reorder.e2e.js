@@ -11,10 +11,10 @@
 // in the wrong order. Each source contributes 3 messages
 // (greeting + user + reply) for 9 total.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -33,20 +33,21 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina nods once.* "rA: the rope is fast."',
         '*Seraphina turns the lantern.* "rB: the cable is humming."',
         '*Seraphina lowers the spyglass.* "rC: the cliff face is loose."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'merge-three-reorder' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'merge-three-reorder' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

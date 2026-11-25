@@ -150,7 +150,7 @@ export const BRYN_ENTRIES = [
  * `extensionSettings` slot is silently ignored, so the profile must live
  * under the same key `bootstrapVectorsBackend` writes).
  */
-export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o', source = 'custom', mode = 'cc', api = 'openai', profileOverrides = {} }) {
+export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o', source = 'custom', mode = 'cc', api = source, profileOverrides = {} }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     if (!existsSync(settingsPath)) {
         throw new Error(`settings.json not found at ${settingsPath} — start the server once before adding profiles`);
@@ -174,11 +174,6 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
         'instruct-state': false,
         'tokenizer': '',
         'stop-strings': '',
-        // CUSTOM source with explicit URL — no real key needed. For the
-        // openai_responses source the profile-resolver reads overrides from
-        // 'api-url' into responses_url (profile-resolver.js), so write that
-        // key instead of 'custom-url'.
-        'chat-completion-source': source,
         // 'api-url' is the server-URL key every runtime consumer reads
         // (shared.js#sendRequest, profile-resolver.js). cc custom profiles
         // additionally carry the legacy 'custom-url' field name so raw
@@ -194,6 +189,17 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
 }
 
 /**
+ * Turn on User Settings → "Auto-connect to Last Server" in a parsed
+ * settings.json. The connection fixtures seed a saved connection; with
+ * auto-connect on, the app connects to it on page load through its own
+ * Connect handler, as it does for a user who enabled the option.
+ */
+function enableAutoConnect(s) {
+    s.power_user = s.power_user || {};
+    s.power_user.auto_connect = true;
+}
+
+/**
  * Patch settings.json with the openai sub-tree config for the CUSTOM
  * chat-completion source so the very first turn already routes to the
  * mock. Done because connection-manager profile activation in the UI
@@ -205,10 +211,12 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
  * oai_settings (= our mock) instead of routing via a missing connection
  * profile or a real-API connection name.
  */
-export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o', stream = true }) {
+export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o', stream = true, storageMode = 'fs' }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
+    const presetName = s.oai_settings?.preset_settings_openai;
     s.main_api = 'openai';
+    enableAutoConnect(s);
     s.firstRun = false;
     s.oai_settings = s.oai_settings || {};
     s.oai_settings.chat_completion_source = 'custom';
@@ -247,6 +255,23 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
     ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
     ext.connectionManager.selectedProfile = null;
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+
+    // Leave the active chat-completion preset as a user who saved it after
+    // these edits would. Saving strips connection fields from the preset
+    // body, so only the generation field set above (stream_openai) is
+    // written. Without it the preset reads as having unsaved changes and
+    // the director's preset swap opens the unsaved-preset dialog.
+    // Database storage modes keep settings and presets in the database, so
+    // the seeded settings file can name a preset that has no file on disk.
+    if (!presetName || storageMode !== 'fs') return;
+    const presetPath = resolve(userRoot(dataRoot, handle), 'OpenAI Settings', `${presetName}.json`);
+    if (!existsSync(presetPath)) {
+        throw new Error(`active chat-completion preset not found at ${presetPath} — start the server once before bootstrapping`);
+    }
+    const preset = JSON.parse(readFileSync(presetPath, 'utf8'));
+    if (preset.stream_openai === stream) return;
+    preset.stream_openai = stream;
+    writeFileSync(presetPath, JSON.stringify(preset, null, 4));
 }
 
 /**
@@ -259,6 +284,7 @@ export function bootstrapTextgenMain({ dataRoot, handle = 'default-user', baseUR
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
     s.main_api = 'textgenerationwebui';
+    enableAutoConnect(s);
     s.textgenerationwebui_settings = s.textgenerationwebui_settings || {};
     s.textgenerationwebui_settings.type = type;
     s.textgenerationwebui_settings.server_urls = {
@@ -287,6 +313,7 @@ export function bootstrapResponsesBackend({ dataRoot, handle = 'default-user', b
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
     s.main_api = 'openai';
+    enableAutoConnect(s);
     s.firstRun = false;
     s.oai_settings = s.oai_settings || {};
     s.oai_settings.chat_completion_source = 'openai_responses';
@@ -378,6 +405,7 @@ function bootstrapMockChatBackend({ dataRoot, handle = 'default-user', baseURL, 
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
     s.main_api = 'openai';
+    enableAutoConnect(s);
     s.firstRun = false;
     s.oai_settings = s.oai_settings || {};
     s.oai_settings.chat_completion_source = source;
@@ -466,8 +494,8 @@ export function markOnboarded({ dataRoot, handle = 'default-user' }) {
  * `enabled_world_info` is NOT flipped here — the vectors WI semantic
  * path is opt-in and several specs that share the same dataRoot
  * bootstrap specifically assert it stays off. Tests that want the WI
- * path enabled should toggle the `#vectors_enabled_world_info` checkbox
- * via `page.evaluate` (the canonical handler updates the module-scope
+ * path enabled should tick the `#vectors_enabled_world_info` checkbox
+ * in the Vector Storage settings (its handler updates the module-scope
  * mirror that the interceptor actually reads).
  *
  * The `proxy-password` is any non-empty token; the openai vector
@@ -525,7 +553,7 @@ export function bootstrapVectorsBackend({
     // around 0.2 between "topical match" and "unrelated". Setting the
     // threshold there keeps semantic-miss entries out of the prompt
     // without requiring a real semantic embedder. Tests that need a
-    // different threshold can override via page.evaluate.
+    // different threshold set it in the Vector Storage settings.
     s.extension_settings.vectors.score_threshold = 0.2;
     s.extension_settings.vectors.max_entries = 5;
 

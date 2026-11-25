@@ -12,10 +12,10 @@
 //   6. Verify old directory is gone, new directory exists with intact SKILL.md, and
 //      Setup select shows "RP124-New" active.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
@@ -26,14 +26,13 @@ import {
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '124-orch-preset-rename-scope', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '124-orch-preset-rename-scope', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 function skillsRootFor(dataRoot) {
     return path.join(dataRoot, 'default-user', 'skills');

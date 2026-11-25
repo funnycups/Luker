@@ -31,11 +31,10 @@
 // arrive shallow and the replace flow actually issues the
 // /api/characters/get refresh (as on the reported deployment).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
@@ -108,28 +107,26 @@ async function waitForReplaceChoicePopup(page) {
 let mock, tmpDir, briallenPngPath;
 
 test.describe('#29 — replace flow failure resilience', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-resilience-'));
+        tmpDir = (await scope.directory('luker-e2e-replace-resilience')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
-        briallenPngPath = resolve(tmpdir(), 'briallen-replace.png');
+        briallenPngPath = resolve(tmpDir, 'briallen-replace.png');
         writeFileSync(briallenPngPath, buildBriallenPng(seed));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('post-import character refresh failing mid-body does not abort the replace flow with an error toast', async ({ page }) => {
-        const server = await startServer({
+    test('post-import character refresh failing mid-body does not abort the replace flow with an error toast', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-refresh-fault',
-            extraConfig: { lazyLoadCharacters: true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -197,18 +194,16 @@ test.describe('#29 — replace flow failure resilience', () => {
                 const ctx = window.Luker?.getContext?.();
                 return (ctx?.characters || []).some(c => String(c?.data?.name || c?.name || '') === want);
             }, { want: BRIALLEN_NAME }, { timeout: 10_000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('retrying the exact same file after a successful replace issues a second import', async ({ page }) => {
-        const server = await startServer({
+    test('retrying the exact same file after a successful replace issues a second import', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-same-file-retry',
-            extraConfig: { lazyLoadCharacters: true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -242,8 +237,6 @@ test.describe('#29 — replace flow failure resilience', () => {
             // was cleared.
             await page.locator('#character_replace_file').setInputFiles(briallenPngPath);
             await expect.poll(() => importRequests, { timeout: 20_000 }).toBe(2);
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

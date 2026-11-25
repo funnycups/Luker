@@ -3,14 +3,13 @@
 //
 // Two real servers; every edit goes through the Luker UI.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, renameCurrentChatViaUI, selectCharacterByName } from '../_lib/page.js';
 import { addWorldEntry, createWorldBook, selectWorldBook, deleteSelectedWorldBook } from '../_lib/ui-worldinfo.js';
 import { writeCharacterPng } from '../groups/_helpers.js';
@@ -19,14 +18,20 @@ import {
     openChatByName, readUserFile, userRootOf, backendIdOf, shadowMain, waitForBackgroundSync, syncFlash,
 } from '../_lib/sync.js';
 
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
+
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 let A;
 let B;
 let contexts = [];
 
 test.beforeEach(async ({}, testInfo) => {
-    A = await startServer({ batchKey: 'sync', scenarioId: `undo-${testInfo.testId}-A` });
-    B = await startServer({ batchKey: 'sync', scenarioId: `undo-${testInfo.testId}-B` });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `undo-${testInfo.testId}-A` });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `undo-${testInfo.testId}-B` });
     for (const server of [A, B]) {
         writeCharacterPng({ dataRoot: server.dataRoot, avatarFile: 'Seraphina.png', card: { name: 'Seraphina', first_mes: 'Welcome back to the glade.' } });
         fs.mkdirSync(path.join(userRootOf(server), 'chats', 'Seraphina'), { recursive: true });
@@ -41,8 +46,6 @@ test.beforeEach(async ({}, testInfo) => {
 test.afterEach(async () => {
     for (const ctx of contexts) await ctx.close();
     contexts = [];
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
 
 async function pairedPages(browser, { idleA = 3600 } = {}) {
@@ -103,7 +106,9 @@ test.describe('LAN Sync — undo and change propagation', () => {
         await openLanSyncPanel(pageA);
         expect(await clickSyncNow(pageA, 'B device')).toBe('success');
         await waitForBackgroundSync(pageB, { since });
-        await tearDownServer(A);
+        // Take the paired peer's application process down; B's undo must
+        // report the failed propagation instead of a success message.
+        await A.stop();
         await openLanSyncPanel(pageB);
         expect(await clickUndoLastSync(pageB, 'A device')).toBe('error');
         await expect(syncFlash(pageB)).toHaveAttribute('data-flash', 'error');
@@ -159,19 +164,15 @@ test.describe('LAN Sync — undo and change propagation', () => {
 
     test('a large background image round trips byte for byte', async ({ browser }) => {
         const { pageA } = await pairedPages(browser, { idleA: 2 });
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-e2e-bg-'));
-        try {
-            const file = path.join(tmp, 'starlit-glade.png');
-            // A real PNG followed by 8 MiB after IEND: decoders ignore trailing bytes,
-            // and the size makes the transfer span many object chunks.
-            fs.writeFileSync(file, Buffer.concat([fs.readFileSync(path.join(REPO_ROOT, 'default/content/default_Seraphina.png')), crypto.randomBytes(8 * 1024 * 1024)]));
-            await pageA.locator('#add_bg_button').setInputFiles(file);
-            const sha = p => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-            const target = path.join(userRootOf(B), 'backgrounds', 'starlit-glade.png');
-            // The wait covers an 8 MiB LAN transfer plus the idle delay.
-            await expect.poll(() => fs.existsSync(target) && sha(target) === sha(file), { timeout: 120_000 }).toBe(true);
-        } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-        }
+        const tmp = (await fileScope.directory('undo-large-bg')).path;
+        const file = path.join(tmp, 'starlit-glade.png');
+        // A real PNG followed by 8 MiB after IEND: decoders ignore trailing bytes,
+        // and the size makes the transfer span many object chunks.
+        fs.writeFileSync(file, Buffer.concat([fs.readFileSync(path.join(REPO_ROOT, 'default/content/default_Seraphina.png')), crypto.randomBytes(8 * 1024 * 1024)]));
+        await pageA.locator('#add_bg_button').setInputFiles(file);
+        const sha = p => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+        const target = path.join(userRootOf(B), 'backgrounds', 'starlit-glade.png');
+        // The wait covers an 8 MiB LAN transfer plus the idle delay.
+        await expect.poll(() => fs.existsSync(target) && sha(target) === sha(file), { timeout: 120_000 }).toBe(true);
     });
 });

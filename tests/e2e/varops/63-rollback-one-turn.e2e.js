@@ -16,8 +16,8 @@
 // Deleting again should reflect `count=1`. Finally restart the server and
 // verify the rebuilt state survives.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -36,16 +36,17 @@ const REPLY = (n) => [
     ` "Mark ${n} on the tally, keep — that brings us to ${n}."`,
 ].join('');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY(1), REPLY(2), REPLY(3)] });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'rollback-turn' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'rollback-turn' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -59,20 +60,6 @@ test.describe('#63 — Rollback one turn → state restored (real delete-message
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
-
-        // The delete-message UI shows a confirm popup when
-        // power_user.confirm_message_delete is true (the default). Flip it
-        // off so deleteMessageViaUI's MESSAGE_DELETED listener resolves
-        // without an extra OK click.
-        await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            if (ctx.powerUserSettings) ctx.powerUserSettings.confirm_message_delete = false;
-        });
-        const cmd = await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            return { confirm: ctx.powerUserSettings?.confirm_message_delete, hasPus: !!ctx.powerUserSettings };
-        });
-        console.log(`SPEC63 confirm_message_delete=${JSON.stringify(cmd)}`);
 
         // ── Three turns, each setting count=n ─────────────────────────
         const replyIds = [];

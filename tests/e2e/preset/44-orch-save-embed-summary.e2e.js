@@ -25,8 +25,8 @@
 //                       (no card presets, no character orchestrator
 //                       override entry).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -55,12 +55,13 @@ const CHAR_AVATAR = 'orley-the-orchestrator.png';
 const EMBED_PRESET_NAME = 'EmbedMe';
 const EMBED_PRESET_TEMP = 0.37;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'orch-save-embed-summary',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -74,7 +75,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -207,9 +208,11 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         expect(state.presets[0].temperature).toBeCloseTo(EMBED_PRESET_TEMP, 5);
         // First-add bootstraps the default (Layer 1 contract).
         expect(state.defaultPresetName).toBe(EMBED_PRESET_NAME);
-        // Orchestrator character override was also persisted.
-        const override = await readCharacterOrchestratorOverride(page);
-        expect(override).not.toBeNull();
+        // Orchestrator character override was also persisted (sequential write after embed).
+        await expect.poll(
+            async () => (await readCharacterOrchestratorOverride(page)) !== null,
+            { timeout: 15_000 },
+        ).toBe(true);
         await closeWorkbench(page);
     });
 

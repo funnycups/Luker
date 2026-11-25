@@ -14,10 +14,10 @@
 //   5. Delete "RP122-A" via `.ol-setup-bar` Delete button + `.ol-dialog` confirm.
 //   6. Verify skill directory is gone on server (cascade fired).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
@@ -28,14 +28,13 @@ import {
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '122-orch-preset-skill-cascade', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '122-orch-preset-skill-cascade', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 function skillsRootFor(dataRoot) {
     return path.join(dataRoot, 'default-user', 'skills');

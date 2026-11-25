@@ -23,11 +23,10 @@
 //      the source's late sentinels (the smoking-gun leak). Branch
 //      sentinel IS visible.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -40,7 +39,8 @@ import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, sourceImportPath, branchImportPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
@@ -53,12 +53,12 @@ test.beforeAll(async () => {
             '*Ash takes a breath, considering the alternate path.* "Chart toward the headland instead — the reef gives a different account from that angle."',
         ],
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'branch-isolation' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'branch-isolation' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-branch-'));
+    const tmpDir = (await scope.directory('mg-branch')).path;
     sourceImportPath = resolve(tmpDir, 'source-sentinels.json');
     branchImportPath = resolve(tmpDir, 'branch-sentinel.json');
 
@@ -126,7 +126,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -141,7 +141,7 @@ test.describe('#55 — Branch chat keeps source MG intact (real branch UI)', () 
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        }, { timeout: 10_000 });
 
         // 5 user/asst turns populate the source chat tail.
         const sourceTurns = [

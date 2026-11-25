@@ -8,10 +8,10 @@
 // drives a real tool-call turn through the UI and asserts the shell is told
 // to release the keep-alive once the turn ends.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -21,9 +21,10 @@ const FINAL_REPLY = '*Ash pays the line out over the rail.* "Four fathoms, sand 
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [] });
-    server = await startServer({ batchKey: 'regression', scenarioId: 'harmony-keepalive-release' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'harmony-keepalive-release' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, stream: false });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -43,7 +44,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -4,8 +4,8 @@
 // nested dialog + #toast-container z-index above .wb-win, and narrow mobile
 // (<= 720px) layout verification via real UI gestures.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -32,14 +32,16 @@ let server, mock;
 const SECRET_KEY = 'sk-e2etestsecretkey1234567890';
 const SECRET_URL = 'https://vault.secret.example.com/v1/token';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: ['*Ash glances over the chart.* "The lantern holds."'],
     });
     server = await startServer({
+        scope,
         batchKey: 'workbench',
         scenarioId: '01-nav-ask-dialogs-mobile',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -64,7 +66,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

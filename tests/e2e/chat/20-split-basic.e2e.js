@@ -24,10 +24,10 @@
 //     body — header lines aren't compared (the new headers carry a fresh
 //     create_date) but the body JSON is byte-equal per entry.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -45,20 +45,21 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina charts the swell on the parchment.* "r0: the tide is full."',
         '*Seraphina rolls a brass weight along the chart.* "r1: the wind backs to the east."',
         '*Seraphina notches a tally into the rail.* "r2: that\'s three watches gone."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'split-basic' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'split-basic' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

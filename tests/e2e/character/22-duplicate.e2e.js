@@ -5,8 +5,8 @@
 // description via the UI; verify the dup's description is unchanged.
 // Restart; both persist independently.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
@@ -35,7 +35,7 @@ async function duplicateSelectedViaUI(page, { timeoutMs = 20_000 } = {}) {
     const popup = page.locator('dialog.popup[open]').last();
     await popup.waitFor({ state: 'visible', timeout: 8000 });
     await popup.locator('.popup-button-ok').first().click();
-    await popup.waitFor({ state: 'detached', timeout: 8000 }).catch(() => {});
+    await popup.waitFor({ state: 'detached', timeout: 8000 });
     // Wait for the new avatar to land in ctx.characters.
     await page.waitForFunction((before) => {
         const ctx = window.Luker?.getContext?.();
@@ -50,9 +50,10 @@ async function duplicateSelectedViaUI(page, { timeoutMs = 20_000 } = {}) {
     return afterAvatars.find(a => !beforeAvatars.includes(a));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'duplicate' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'duplicate' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -61,7 +62,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -133,6 +134,6 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
         await clickCharacterCard(page, { avatar: dupAvatar });
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
-        expect(await page.locator('#description_textarea').inputValue()).toContain('wiry coastal cartographer');
+        await expect(page.locator('#description_textarea')).toHaveValue(/wiry coastal cartographer/);
     });
 });

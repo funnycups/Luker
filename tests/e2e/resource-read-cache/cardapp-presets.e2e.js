@@ -1,11 +1,10 @@
-import { test, expect } from '@playwright/test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { write as writePngCard } from '../../../src/character-card-parser.js';
 import { awaitMainUI } from '../_lib/page.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { openCharacterList } from '../_lib/ui-character.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
@@ -51,17 +50,15 @@ export function init(ctx) {
 `;
 
 let server;
-let directory;
 let cardPath;
 
-test.beforeAll(async () => {
-    directory = mkdtempSync(join(tmpdir(), 'luker-cardapp-presets-'));
-    const dataRoot = join(directory, 'data');
-    mkdirSync(dataRoot);
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    const directory = (await scope.directory('cardapp-presets')).path;
     server = await startServer({
+        scope,
         batchKey: 'server',
         scenarioId: 'cardapp-presets',
-        useExistingDataRoot: dataRoot,
     });
     cardPath = join(directory, 'harbor-archivist.png');
     writeFileSync(cardPath, writePngCard(
@@ -80,11 +77,6 @@ test.beforeAll(async () => {
             },
         }),
     ));
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
 async function openArchivist(page) {

@@ -2,11 +2,12 @@
 // The Sync issues page lists the file; B picks its own edit, which survives
 // on both sides.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -16,27 +17,35 @@ import {
     waitForBackgroundSync,
     waitForSyncPopup,
     listPopupConflicts,
-    conflictChoiceShowing,
+    conflictSideFromShadow,
     chooseConflictVersion,
     applyConflictChoices,
     readUserFile,
+    userRootOf,
+    backendIdOf,
 } from '../_lib/sync.js';
 
 let A, B;
 
-test.beforeAll(async () => {
-    A = await startServer({
+const sharedBook = content => JSON.stringify({
+    entries: { 0: { uid: 0, displayIndex: 0, comment: 'Doomed', content, key: ['doomed'], keysecondary: [] } },
+});
+const sharedContent = file => Object.values(JSON.parse(file).entries)[0].content;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'delvs-A',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'delvs-B',
     });
 
-    // Pre-seed both sides with the same file so pairing puts it in the
+    // Pre-seed both sides with the same world book so pairing puts it in the
     // shared history before A deletes / B edits it.
-    const initial = JSON.stringify({ name: 'doomed', notes: 'pre-pair' });
+    const initial = sharedBook('pre-pair');
     const aWorlds = path.join(A.dataRoot, 'default-user', 'worlds');
     const bWorlds = path.join(B.dataRoot, 'default-user', 'worlds');
     fs.mkdirSync(aWorlds, { recursive: true });
@@ -45,10 +54,7 @@ test.beforeAll(async () => {
     fs.writeFileSync(path.join(bWorlds, 'doomed.json'), initial);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — delete vs edit conflict', () => {
     test('A deletes, B edits → Sync issues page → B picks its edit → file kept on both sides', async ({ browser }) => {
@@ -83,7 +89,7 @@ test.describe('LAN Sync — delete vs edit conflict', () => {
         // B edits the file (different content from the pre-pair snapshot).
         fs.writeFileSync(
             path.join(B.dataRoot, 'default-user', 'worlds', 'doomed.json'),
-            JSON.stringify({ name: 'doomed', notes: 'B-saved-it' }),
+            sharedBook('B-saved-it'),
         );
 
         // B syncs: one side edited what the other deleted.
@@ -93,12 +99,26 @@ test.describe('LAN Sync — delete vs edit conflict', () => {
         await waitForSyncPopup(pageB);
         expect(await listPopupConflicts(pageB)).toEqual([{ path: 'worlds/doomed.json', stale: false }]);
         // The merge decides which device is `ours`, so find B's version by its content.
-        const bChoice = await conflictChoiceShowing(pageB, 'worlds/doomed.json', 'B-saved-it');
+        const bChoice = await conflictSideFromShadow(B, pageB, 'worlds/doomed.json', 'B-saved-it');
+        const pending = await pageB.evaluate(async () => {
+            const status = await (await fetch('/api/sync/v1/status')).json();
+            return status.conflicts.find(conflict => conflict.path === 'worlds/doomed.json');
+        });
+        const gitdir = path.join(userRootOf(B), '.sync', backendIdOf(B), 'repo.git');
+        const blob = await git.readBlob({ fs, gitdir, oid: pending[bChoice] });
+        const object = path.join(gitdir, 'objects', blob.oid.slice(0, 2), blob.oid.slice(2));
+        const original = fs.readFileSync(object);
+        try {
+            fs.writeFileSync(object, 'corrupt shadow object');
+            await expect(conflictSideFromShadow(B, pageB, 'worlds/doomed.json', 'B-saved-it')).rejects.toThrow(/Cannot read conflict shadow.*worlds\/doomed\.json/);
+        } finally {
+            fs.writeFileSync(object, original);
+        }
         await chooseConflictVersion(pageB, 'worlds/doomed.json', bChoice);
         expect(await applyConflictChoices(pageB)).toBe('success');
-        expect(JSON.parse(readUserFile(B, 'worlds/doomed.json')).notes).toBe('B-saved-it');
+        expect(sharedContent(readUserFile(B, 'worlds/doomed.json'))).toBe('B-saved-it');
         // B pushes the resolution and A applies it from the notify-driven run.
-        await expect.poll(() => { try { return JSON.parse(readUserFile(A, 'worlds/doomed.json')).notes; } catch { return null; } }, { timeout: 30_000 }).toBe('B-saved-it');
+        await expect.poll(() => { try { return sharedContent(readUserFile(A, 'worlds/doomed.json')); } catch { return null; } }, { timeout: 30_000 }).toBe('B-saved-it');
 
         await ctxA.close();
         await ctxB.close();

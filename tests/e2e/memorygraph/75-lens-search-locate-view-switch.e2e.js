@@ -9,11 +9,10 @@
 //   3. On the Settings full-view tab, searching and clicking a location node
 //      exits full-view mode, switches to the Graph tab, and displays details.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -26,16 +25,17 @@ import { importMgGraph, openMgGraphView, setMgSettings } from '../_lib/ui-mg-var
 
 let server, mock, importPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: ['*Seraphina folds the chart and meets your eyes.* "The lantern will hold."'],
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'lens-search-locate-switch' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'lens-search-locate-switch' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-lens-locate-'));
+    const tmpDir = (await scope.directory('mg-lens-locate')).path;
     importPath = resolve(tmpDir, 'seed-store.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -80,7 +80,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

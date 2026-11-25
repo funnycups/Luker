@@ -20,8 +20,8 @@
 //   spec can sequence the two-step write→finalize protocol deterministically.
 //   See `_lib/mockLLM.js` header comment for the full API.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -34,8 +34,8 @@ import {
     sendMessageAndAwaitReply,
     reloadAndAwait,
     getChatSnapshot,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 // The reply text needs to be distinctive so the byte-equality assertion
 // is meaningful. Multi-line + special chars catch encoding gaps.
@@ -46,16 +46,17 @@ const FINAL_REPLY =
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '67-bubble-fidelity' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '67-bubble-fidelity' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

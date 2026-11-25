@@ -9,8 +9,8 @@
 //   5. Click between cards; the bound preset auto-activates. Assert via DOM.
 //   6. Restart, re-click, re-assert via DOM.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName } from '../_lib/page.js';
@@ -26,12 +26,13 @@ const PRESET_B = 'pa-iyana-bound';
 const VALUES_A = { temperature: 0.39, top_p: 0.71 };
 const VALUES_B = { temperature: 0.83, top_p: 0.56 };
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'char-bound',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -52,7 +53,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

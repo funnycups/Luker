@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { s3Fixture, backendRow, createReadyWorldBook, selectReadyWorldBook } from '../_lib/sync-s3.js';
@@ -58,11 +58,11 @@ async function closePopupButtons(page) {
 }
 
 async function assertPlacement(page) {
-    const boxes = await page.locator('.activity-pill:visible').evaluateAll(elements => elements.map(element => {
-        const r = element.getBoundingClientRect();
-        return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
-    }));
-    expect(boxes).toHaveLength(2);
+    const syncBox = await pill(page).boundingBox();
+    const runBox = await page.locator('.rpdock.rp-dock-pill').boundingBox();
+    expect(syncBox).not.toBeNull();
+    expect(runBox).not.toBeNull();
+    const boxes = [syncBox, runBox].map(r => ({ x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height, width: r.width, height: r.height }));
     const [a, b] = boxes;
     expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
     const topBar = await page.locator('#top-settings-holder').boundingBox();
@@ -323,6 +323,11 @@ test('real orchestration and Sync share desktop and narrow placement with long l
         await imported.locator('button').last().click();
         await expect(olSetup.locator('.ol-setup-bar select.ol-select option:checked')).toHaveText('Lighthouse watch');
         await closeWorkbench(page);
+        // The director asks before swapping presets. Edit a preset field so
+        // the run has an unsaved change for the user to answer.
+        await openTopDrawer(page, 'ai-config-button');
+        await page.locator('#openai_max_tokens').fill('777');
+        await closeAnyOpenTopSettingsDrawer(page);
         mock.scriptDirectorRun({ route: ({ role, turn }) => role === 'director-main' ? turn === 0 ? { text: '*She studies the green lanterns beyond the reef.*', tool: 'write_message', arguments: { text: final, mode: 'replace' } } : { tool: 'finalize', arguments: {} } : null });
         upstream.arm();
         await page.locator('#send_textarea').fill('*I steady the lantern against the rain.* "Has the lighthouse answered us?"');
@@ -351,9 +356,10 @@ test('real orchestration and Sync share desktop and narrow placement with long l
             await page.setViewportSize(viewport);
             await page.emulateMedia({ reducedMotion });
             await pill(page).focus();
-            await page.keyboard.press('Tab');
+            await expect(pill(page)).toBeFocused();
+            await runPill.focus();
             await expect(runPill).toBeFocused();
-            await page.keyboard.press('Shift+Tab');
+            await pill(page).focus();
             await expect(pill(page)).toBeFocused();
             await assertPlacement(page);
             await expect(pill(page)).toHaveAttribute('aria-label', new RegExp(label));

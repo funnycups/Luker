@@ -14,8 +14,8 @@
 //      with a single `colSpan` summary cell, and clicking it opens Inspector with
 //      `.ml-insp-prose` summary + `.ml-insp-children` listing the 2 child leaves.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -179,11 +179,12 @@ test.describe('#76 — non-event rollup summary and fail-loud compression', () =
     const extractionCalls = [];
     const compressionCalls = [];
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({
             scriptedReplies: RP_TURNS.map((t) => t.reply),
         });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'rollup-summary-fail-loud' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'rollup-summary-fail-loud' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -243,7 +244,6 @@ test.describe('#76 — non-event rollup summary and fail-loud compression', () =
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 

@@ -13,11 +13,10 @@
 // both servers; both admins then create `alice` with the same password
 // so the cross-handle gate never fires.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { createUserViaAdminUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -51,16 +50,17 @@ const SEED_WORLD_BODY = {
 
 let A, B;
 
-test.beforeAll(async ({ browser }) => {
-    A = await startServer({
+test.beforeAll(async ({ browser, workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'multiuser-A',
-        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
+        extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: true } },
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'multiuser-B',
-        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
+        extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: true } },
     });
 
     for (const server of [A, B]) {
@@ -84,10 +84,7 @@ test.beforeAll(async ({ browser }) => {
     );
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — multi-user pair and sync', () => {
     test('alice@A pairs with alice@B without credentials, seeded world lands on B, follow-up Sync now reuses the stored secret', async ({ browser }) => {

@@ -6,11 +6,11 @@
 // 3. Multi-user mode with an unread critical announcement waits until the
 //    critical announcement popup is dismissed before showing the update modal.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/playwright.js';
 import path from 'node:path';
 import storage from 'node-persist';
 
-import { startServer, tearDownServer } from './_lib/server.js';
+import { startServer } from '../harness/server.js';
 import { markOnboarded } from './_lib/fixtures.js';
 import { awaitMainUI } from './_lib/page.js';
 import { ANNOUNCEMENTS_STORAGE_KEY } from '../../src/announcements.js';
@@ -25,8 +25,8 @@ async function mutateUserStorage(dataRoot, mutator) {
     await mutator(store);
 }
 
-test('fresh install stays silent; multi-version upgrade displays changelog, rewrites links, and persists ack', async ({ page }) => {
-    let server = await startServer({ batchKey: 'server', scenarioId: 'single-user-upgrade' });
+test('fresh install stays silent; multi-version upgrade displays changelog, rewrites links, and persists ack', async ({ page, resources }) => {
+    const server = await startServer({ scope: resources, batchKey: 'server', scenarioId: 'single-user-upgrade' });
     const { dataRoot } = server;
     markOnboarded({ dataRoot });
 
@@ -41,7 +41,7 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         await expect(page.locator('.wn-backdrop')).toHaveCount(0);
 
         // 2. Simulate upgrading from 2.9.0-rc.2 to current version on restart.
-        await tearDownServer(server, { removeData: false });
+        await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
@@ -49,11 +49,7 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
             user.lastSeenRevision = '111111111';
             await store.setItem('user:default-user', user);
         });
-        server = await startServer({
-            batchKey: 'server',
-            scenarioId: 'single-user-upgrade',
-            useExistingDataRoot: dataRoot,
-        });
+        await server.restart();
 
         await page.addInitScript(() => {
             window.localStorage.setItem('language', 'zh-cn');
@@ -102,12 +98,13 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         expect(await (await postReloadCheck).json()).toEqual({ show: false });
         await expect(page.locator('.wn-backdrop')).toHaveCount(0);
     } finally {
-        await tearDownServer(server);
+        await server.stop();
     }
 });
 
-test('multi-user mode waits for unread critical announcement before displaying What\'s New modal', async ({ page }) => {
-    let server = await startServer({
+test('multi-user mode waits for unread critical announcement before displaying What\'s New modal', async ({ page, resources }) => {
+    const server = await startServer({
+        scope: resources,
         batchKey: 'server',
         scenarioId: 'multi-user-announcement-order',
         extraConfig: { enableUserAccounts: true },
@@ -116,7 +113,7 @@ test('multi-user mode waits for unread critical announcement before displaying W
     markOnboarded({ dataRoot });
 
     try {
-        await tearDownServer(server, { removeData: false });
+        await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
@@ -136,12 +133,7 @@ test('multi-user mode waits for unread critical announcement before displaying W
             });
         });
 
-        server = await startServer({
-            batchKey: 'server',
-            scenarioId: 'multi-user-announcement-order',
-            extraConfig: { enableUserAccounts: true },
-            useExistingDataRoot: dataRoot,
-        });
+        await server.restart();
 
         await page.addInitScript(() => {
             window.localStorage.setItem('language', 'en');
@@ -168,12 +160,13 @@ test('multi-user mode waits for unread critical announcement before displaying W
         await ackPromise;
         await expect(backdrop).toHaveCount(0);
     } finally {
-        await tearDownServer(server);
+        await server.stop();
     }
 });
 
-test('announcements fetch failure still resolves gate and allows What\'s New modal to appear', async ({ page }) => {
-    let server = await startServer({
+test('announcements fetch failure still resolves gate and allows What\'s New modal to appear', async ({ page, resources }) => {
+    const server = await startServer({
+        scope: resources,
         batchKey: 'server',
         scenarioId: 'announcements-fail-whats-new',
         extraConfig: { enableUserAccounts: true },
@@ -182,7 +175,7 @@ test('announcements fetch failure still resolves gate and allows What\'s New mod
     markOnboarded({ dataRoot });
 
     try {
-        await tearDownServer(server, { removeData: false });
+        await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
@@ -191,12 +184,7 @@ test('announcements fetch failure still resolves gate and allows What\'s New mod
             await store.setItem('user:default-user', user);
         });
 
-        server = await startServer({
-            batchKey: 'server',
-            scenarioId: 'announcements-fail-whats-new',
-            extraConfig: { enableUserAccounts: true },
-            useExistingDataRoot: dataRoot,
-        });
+        await server.restart();
 
         // Simulate announcements backend failure: real announcements.js must still resolve its gate.
         await page.route('**/api/users/announcements/me/list', route => route.fulfill({
@@ -214,18 +202,18 @@ test('announcements fetch failure still resolves gate and allows What\'s New mod
         await backdrop.locator('button.lw-btn.is-primary').click();
         await expect(backdrop).toHaveCount(0);
     } finally {
-        await tearDownServer(server);
+        await server.stop();
     }
 });
 
-test('mobile viewport keeps What\'s New modal within viewport, covers full screen scrim, scrolls cleanly, and stacks above Workbench pill', async ({ page }) => {
+test('mobile viewport keeps What\'s New modal within viewport, covers full screen scrim, scrolls cleanly, and stacks above Workbench pill', async ({ page, resources }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    let server = await startServer({ batchKey: 'server', scenarioId: 'mobile-whats-new-layout' });
+    const server = await startServer({ scope: resources, batchKey: 'server', scenarioId: 'mobile-whats-new-layout' });
     const { dataRoot } = server;
     markOnboarded({ dataRoot });
 
     try {
-        await tearDownServer(server, { removeData: false });
+        await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
@@ -233,11 +221,7 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
             user.lastSeenRevision = '111111111';
             await store.setItem('user:default-user', user);
         });
-        server = await startServer({
-            batchKey: 'server',
-            scenarioId: 'mobile-whats-new-layout',
-            useExistingDataRoot: dataRoot,
-        });
+        await server.restart();
 
         await page.addInitScript(() => {
             window.localStorage.setItem('language', 'zh-cn');
@@ -345,6 +329,6 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
         await ackPromise;
         await expect(backdrop).toHaveCount(0);
     } finally {
-        await tearDownServer(server);
+        await server.stop();
     }
 });

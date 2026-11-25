@@ -22,8 +22,8 @@
 // /api/ws-delivery was opened during the call). We also assert the
 // x-luker-generation-id header rides on the initial HTTP response.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -36,7 +36,8 @@ const NONSTREAM_REPLY = 'This is a plugin-triggered non-stream reply.';
 const STREAM_CHUNKS = ['plugin', 'stream', 'chunk', 'one', 'two', 'three'];
 const STREAM_REPLY = STREAM_CHUNKS.join(' ');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [NONSTREAM_REPLY, STREAM_REPLY],
         // Small drip so the stream case actually goes over multiple SSE
@@ -44,14 +45,14 @@ test.beforeAll(async () => {
         // "N chunks in → N chunks out" and we want that path exercised.
         streamChunkDelayMs: 30,
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'plugin-request' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'plugin-request' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

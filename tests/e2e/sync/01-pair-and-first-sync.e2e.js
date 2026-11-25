@@ -9,11 +9,11 @@
 // These specs run in default (single-user) mode. Multi-user pairings
 // are exercised by separate specs in the same directory.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -24,12 +24,13 @@ import {
 
 let A, B;
 
-test.beforeAll(async () => {
-    A = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'pair-A',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'pair-B',
     });
@@ -46,10 +47,7 @@ test.beforeAll(async () => {
     );
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — pair and first sync', () => {
     test('A generates link → B accepts → B receives A\'s seeded world', async ({ browser }) => {

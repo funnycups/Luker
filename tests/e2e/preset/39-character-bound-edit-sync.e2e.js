@@ -21,10 +21,10 @@
 //      Assert the temperature DOM value AND the persisted preset
 //      snapshot on the card both reflect the post-bind edits.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName } from '../_lib/page.js';
@@ -46,12 +46,13 @@ const BIND_TEMP = 0.42;
 const POST_BIND_TEMP = 0.81;
 const GROUP_NAME = 'Inspector Group';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'char-bound-edit-sync',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -65,7 +66,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -129,7 +130,9 @@ test.describe('#39 — character-bound preset edits sync back to the card', () =
                 ? oai.extensions.luker.prompt_groups
                 : [];
             const id = `grp-${Date.now()}`;
-            groups.push({ id, name: groupName, collapsed: false, identifiers: [], parentId: null });
+            // Give the group an existing prompt identifier so PromptManager's
+            // cleanupEmptyGroups() retains it on reload.
+            groups.push({ id, name: groupName, collapsed: false, identifiers: ['main'], parentId: null });
             oai.extensions.luker.prompt_groups = groups;
             // Force a synchronous save so the SETTINGS_UPDATED listener
             // fires inside the test window without waiting on the 1s

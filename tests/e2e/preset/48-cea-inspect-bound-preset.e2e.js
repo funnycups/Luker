@@ -1,33 +1,21 @@
-// #48 — CEA editor iter-studio: `inspect_bound_preset` end-to-end,
-//        exercising the READ_TOOL_LEGACY_NAMES self-map.
+// #48 — CEA editor iter-studio: `inspect_bound_preset` end-to-end.
 //
-// `inspect_bound_preset` is wired into the CEA editor tool catalog
-// via a self-map (`READ_TOOL_LEGACY_NAMES.inspect_bound_preset =
-// 'inspect_bound_preset'`) so runCeaEditorReadTool dispatches to the
-// short name unchanged. The full chain per turn:
+// The full chain per turn:
 //
 //   mock LLM tool_call → editor-iteration/studio.js executes
-//     → runCeaEditorReadTool(call, {helperApis})
-//     → READ_TOOL_LEGACY_NAMES lookup → 'inspect_bound_preset'
-//     → runCharacterEditorHelperToolCall(legacyCall, helperApis)
-//     → createCharacterEditorBoundPresetToolApi.invoke(call)
-//     → runCharacterPresetReadTool(call, {context, avatar})
+//     → runCeaEditorReadTool(call, { context, avatar })
+//     → runCharacterPresetReadTool(call, { context, avatar })
 //     → context.character.presets.list / get → tool_result → back to LLM.
 //
-// The self-map is the load-bearing hook this test pins: a future mistyped
-// entry like `'inspect_bound_preset': 'wrong_name'` would surface here as
-// runCharacterEditorHelperToolCall throwing "Unsupported helper tool:
-// wrong_name" (none of the helper APIs' `isToolName` would match), and
-// the DOM result-pre would carry `{ error: 'Unsupported helper tool:
-// wrong_name' }`. Structural assertions on the happy-path payload shape
-// (list array + get object) verify the legacy map is intact.
+// Structural assertions on the happy-path payload shape (list array + get
+// object) and on the error envelope pin the dispatch.
 //
 // Real UI/gestures: open Extensions drawer → CEA inline-drawer → click
 // "Open Editor" (real gesture opens the unified CEA editor iter-studio
 // popup). mockLLM scripts tool_calls; assertions run on the popup DOM.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -46,12 +34,13 @@ const SLOT_B_NAME = 'CurationSlotB';
 const SLOT_A_TEMP = 0.19;
 const SLOT_B_TEMP = 0.87;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'cea-inspect-bound-preset',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -78,7 +67,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -124,7 +113,7 @@ async function sendReadOnlyPrompt(page, prompt) {
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('#48 — CEA editor iter-studio inspect_bound_preset (legacy-map coverage)', () => {
+test.describe('#48 — CEA editor iter-studio inspect_bound_preset', () => {
     test('list + get(existing) + get(nonexistent): tool_results flow through the CEA dispatch chain', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, CHAR_NAME);
@@ -132,13 +121,6 @@ test.describe('#48 — CEA editor iter-studio inspect_bound_preset (legacy-map c
         await openIterStudio(page, 'cea');
 
         // ---- Turn 1: list ----
-        // If READ_TOOL_LEGACY_NAMES['inspect_bound_preset'] is mistyped
-        // (e.g. to 'wrong_name'), the dispatch chain lands on
-        // runCharacterEditorHelperToolCall's throw path — no helper API
-        // matches 'wrong_name' → thrown error → runCeaEditorReadTool
-        // returns `{ok:false, error:'Unsupported helper tool: wrong_name'}`
-        // → the studio renders `{error: ...}` in the result-pre and the
-        // Array.isArray + length===2 assertion below fails.
         mock.scriptToolCall({
             name: 'inspect_bound_preset',
             arguments: { action: 'list' },
@@ -192,10 +174,9 @@ test.describe('#48 — CEA editor iter-studio inspect_bound_preset (legacy-map c
 
         // action=get without a name bypasses the JSON-schema check
         // (name is not `required`) but hits the executor's
-        // VALIDATION_ARGS branch. CEA's helper API `throws` on
-        // ok:false; runCeaEditorReadTool catches and returns
-        // `{ok:false, error}`; the studio persists `{error}` on the
-        // tool_result — the DOM result-pre carries an `error` field.
+        // VALIDATION_ARGS branch; runCeaEditorReadTool returns the
+        // executor's `{ok:false, error}` envelope and the studio
+        // persists `{error}` on the tool_result.
         mock.scriptToolCall({
             name: 'inspect_bound_preset',
             arguments: { action: 'get' },

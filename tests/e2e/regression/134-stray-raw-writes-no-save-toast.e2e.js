@@ -8,10 +8,10 @@
 // missing and no character selected. Pre-fix, the write guard toasted on top
 // of the welcome screen. Post-fix, it is dropped silently.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -55,15 +55,14 @@ if (ctx) {
 `);
 }
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'startup-raw-writer-no-toast' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'startup-raw-writer-no-toast' });
     markOnboarded({ dataRoot: server.dataRoot });
     installRawWriterExtension(server.dataRoot);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('stray raw chat writes on the welcome screen drop silently', () => {
     test('no save-aborted toast and no chat target is created', async ({ page }) => {

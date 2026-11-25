@@ -33,11 +33,10 @@
 // reload, then continues into a replace to confirm the world button on
 // the replaced card still works.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel } from './_helpers.js';
@@ -78,9 +77,10 @@ function readCardDataFromDisk(charsDir, expectedName) {
 test.describe('#27 — import-embedded persists the binding', () => {
     let mock, tmpDir, cardAPath, cardBPath;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-27-'));
+        tmpDir = (await scope.directory('luker-e2e-27')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
         cardAPath = resolve(tmpDir, 'card-a.png');
         cardBPath = resolve(tmpDir, 'card-b.png');
@@ -90,14 +90,11 @@ test.describe('#27 — import-embedded persists the binding', () => {
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('legacy "import embedded world?" popup → Yes writes data.extensions.world that survives reload + replace', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '27-persists' });
-        try {
+    test('legacy "import embedded world?" popup → Yes writes data.extensions.world that survives reload + replace', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '27-persists' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -198,8 +195,6 @@ test.describe('#27 — import-embedded persists the binding', () => {
                 const ch = idx !== undefined ? ctx.characters[idx] : null;
                 return String(ch?.data?.extensions?.world || '').trim() === 'book-a';
             }, null, { timeout: 10_000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

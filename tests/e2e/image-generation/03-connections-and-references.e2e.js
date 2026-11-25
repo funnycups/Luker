@@ -4,8 +4,8 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -326,7 +326,8 @@ function seedConnectionAndReferenceFixtures({ dataRoot, mockBaseURL, geminiBaseU
 let server, mock, sdMock, comfy, geminiMock, novelMock, styleUploadPath;
 let rerunCounter = 0;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     sdMock = await startSdWebUiMock();
     comfy = await startComfyMock();
     geminiMock = await startGeminiImageMock();
@@ -364,7 +365,7 @@ test.beforeAll(async () => {
         return { text: '*Ash nods quietly.*' };
     });
 
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '03-connections-and-references' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '03-connections-and-references' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     ({ styleUploadPath } = seedConnectionAndReferenceFixtures({
@@ -375,7 +376,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
     await sdMock?.stop();
     await comfy?.stop();
@@ -685,10 +685,10 @@ test.describe('connection binding, reference protocols, and illustration version
         }, lockedCandidate.id)).toBe(true);
 
         // 2. Re-run message-level illustration generation: locked illustration stays intact, unlocked is replaced.
-        await page.evaluate(() => {
-            const messages = [...document.querySelectorAll('.mes:not([is_user="true"]):not([is_system="true"])')];
-            messages.at(-1)?.querySelector('.sd_illustration_gen')?.click();
-        });
+        const message = page.locator('.mes:not([is_user="true"]):not([is_system="true"])').last();
+        await message.hover();
+        await message.locator('.extraMesButtonsHint').click();
+        await message.locator('.sd_illustration_gen').click();
         const confirmReplace = page.locator('dialog.popup[open]').last();
         await expect(confirmReplace).toContainText('This message already has illustrations. Replace them?');
         await confirmReplace.locator('.popup-button-ok').click();

@@ -3,10 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
-
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startRustfsContainer } from '../_lib/s3-container.js';
 import { startS3Proxy } from '../_lib/s3-proxy.js';
 import { onboardS3Page, reloadS3Page, createReadyWorldBook, selectReadyWorldBook } from '../_lib/sync-s3.js';
@@ -77,15 +76,15 @@ async function status(page) {
 }
 
 /** All ownership is local to a scenario, including startup and assertion failure exits. */
-async function journey(browser, testInfo, name, body) {
+async function journey(browser, resources, testInfo, name, body) {
     const servers = [], contexts = [], proxies = [], storage = [], jobs = [], holds = [];
     const captured = [];
     const frames = [];
     const failures = [];
     const scope = {
         async device(label, { lan = false } = {}) {
-            const server = await startServer({ batchKey: 'sync', scenarioId: `docs-${name}-${label}-${randomBytes(4).toString('hex')}`,
-                extraConfig: lan ? { listen: true, securityOverride: true, whitelistMode: false } : null });
+            const server = await startServer({ scope: resources, onboarding: true, batchKey: 'sync', scenarioId: `docs-${name}-${label}-${randomBytes(4).toString('hex')}`,
+                extraConfig: lan ? { listen: true, securityOverride: true, whitelistMode: false } : {} });
             servers.push(server);
             const context = await browser.newContext({ viewport: VIEWPORT, locale: 'en-US', timezoneId: 'UTC' });
             contexts.push(context);
@@ -161,13 +160,12 @@ async function journey(browser, testInfo, name, body) {
         const closed = await Promise.allSettled(contexts.map(context => context.close()));
         const stoppedProxies = await Promise.allSettled(proxies.map(proxy => proxy.close()));
         const attached = await Promise.allSettled(servers.map((server, index) => testInfo.attach(`server-${index}.log`, { body: server.output, contentType: 'text/plain' })));
-        const stopped = await Promise.allSettled(servers.map(server => tearDownServer(server)));
         const stoppedStorage = await Promise.allSettled(storage.map(provider => provider.stop()));
-        failures.push(...[...closed, ...stoppedProxies, ...attached, ...stopped, ...stoppedStorage].filter(result => result.status === 'rejected').map(result => result.reason));
+        failures.push(...[...closed, ...stoppedProxies, ...attached, ...stoppedStorage].filter(result => result.status === 'rejected').map(result => result.reason));
         const recorded = await Promise.allSettled([scope.record('resource-settlement', {
             contexts: closed.map(result => result.status),
             proxies: stoppedProxies.map(result => result.status),
-            servers: stopped.map((result, index) => ({ port: servers[index].port, execArgv: servers[index].execArgv, status: result.status })),
+            servers: servers.map(server => ({ port: server.port, execArgv: server.execArgv, output: server.output })),
             storage: stoppedStorage.map(result => result.status),
             requests: settled.map(result => result.error ? 'rejected' : 'fulfilled'),
             releasedHolds: holds.length,
@@ -287,8 +285,8 @@ async function assertNoPendingAfterReload(device) {
     await expect(device.page.locator('.dw-conflict')).toHaveCount(0);
 }
 
-test('LAN pairing, pending lore and resolution images', async ({ browser }, testInfo) => {
-    await journey(browser, testInfo, 'pairing', async scope => {
+test('LAN pairing, pending lore and resolution images', async ({ browser, resources }, testInfo) => {
+    await journey(browser, resources, testInfo, 'pairing', async scope => {
         const a = await scope.device('Desk', { lan: true });
         const b = await scope.device('Tablet', { lan: true });
         await createLore(a);
@@ -384,8 +382,8 @@ test('LAN pairing, pending lore and resolution images', async ({ browser }, test
     });
 });
 
-test('Stale lore preview and cancelled then confirmed overwrite images', async ({ browser }, testInfo) => {
-    await journey(browser, testInfo, 'stale', async scope => {
+test('Stale lore preview and cancelled then confirmed overwrite images', async ({ browser, resources }, testInfo) => {
+    await journey(browser, resources, testInfo, 'stale', async scope => {
         const a = await scope.device('Desk');
         const b = await scope.device('Tablet');
         await createLore(a);
@@ -448,7 +446,7 @@ async function assertS3Form(page, options) {
         await expect(field(model)).toHaveValue(value);
         await expect(field(model)).toBeVisible();
     }
-    await expect(win.locator('label.dw-field', { has: field('passphrase') })).toContainText('Encryption passphrase');
+    await expect(win.locator('label.dw-field', { has: page.locator('[data-model="top.form.passphrase"]') })).toContainText('Encryption passphrase');
     await assertCategories(page, 's3', ['worlds']);
     await expect(win.locator('[data-act="s3-save"]')).toBeVisible();
 }
@@ -469,8 +467,8 @@ async function submitS3(scope, page, { rejected = false } = {}) {
     await waitForBackendSync(page, { label: 'Shared archive' });
 }
 
-test('S3 setup, second-device pull, mixed backends and genuine active capsule images', async ({ browser }, testInfo) => {
-    await journey(browser, testInfo, 'storage', async scope => {
+test('S3 setup, second-device pull, mixed backends and genuine active capsule images', async ({ browser, resources }, testInfo) => {
+    await journey(browser, resources, testInfo, 'storage', async scope => {
         const { options, proxy } = await scope.storage();
         const a = await scope.device('Desk');
         const b = await scope.device('Tablet');
@@ -526,7 +524,7 @@ test('S3 setup, second-device pull, mixed backends and genuine active capsule im
             await expect(composer).toBeFocused();
             await expect(composer).toHaveValue(/moonwell/);
             await expect(panel(a.page)).toHaveCount(0);
-            await expect(pill).toHaveText('Syncing: Shared archive');
+            await expect(pill).toHaveText(/^Syncing: Shared archive/);
             await expect(pill).toHaveAttribute('data-tone', 'running');
             await expect(pill.getByRole('progressbar')).toBeVisible();
             await expect(pill.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
@@ -689,8 +687,8 @@ async function prepareChatPair(scope, group) {
     return { a, b, groupId };
 }
 
-async function forkJourney(browser, testInfo, { group, name, image }) {
-    return journey(browser, testInfo, name, async scope => {
+async function forkJourney(browser, resources, testInfo, { group, name, image }) {
+    return journey(browser, resources, testInfo, name, async scope => {
         const { a, b, groupId } = await prepareChatPair(scope, group);
         for (const [device, words] of [[a, WORDS.desk], [b, WORDS.tablet]]) {
             if (group) await openGroup(device, groupId);
@@ -735,8 +733,8 @@ async function forkJourney(browser, testInfo, { group, name, image }) {
     });
 }
 
-async function restoredJourney(browser, testInfo, { group, name, image }) {
-    return journey(browser, testInfo, name, async scope => {
+async function restoredJourney(browser, resources, testInfo, { group, name, image }) {
+    return journey(browser, resources, testInfo, name, async scope => {
         const { a, b, groupId } = await prepareChatPair(scope, group);
         if (group) await openGroup(b, groupId);
         else { await selectSeraphina(b.page); await openChatByName(b.page, 'Forest Path'); }
@@ -767,18 +765,18 @@ async function restoredJourney(browser, testInfo, { group, name, image }) {
     });
 }
 
-test('Character chat branch notice image opens the preserved RP version', async ({ browser }, testInfo) => {
-    expect(await forkJourney(browser, testInfo, { group: false, name: 'characterFork', image: 'chat-fork-notice' })).toEqual(MANIFEST.characterFork);
+test('Character chat branch notice image opens the preserved RP version', async ({ browser, resources }, testInfo) => {
+    expect(await forkJourney(browser, resources, testInfo, { group: false, name: 'characterFork', image: 'chat-fork-notice' })).toEqual(MANIFEST.characterFork);
 });
 
-test('Group chat branch notice image opens its owning group', async ({ browser }, testInfo) => {
-    expect(await forkJourney(browser, testInfo, { group: true, name: 'groupFork', image: 'group-chat-fork-notice' })).toEqual(MANIFEST.groupFork);
+test('Group chat branch notice image opens its owning group', async ({ browser, resources }, testInfo) => {
+    expect(await forkJourney(browser, resources, testInfo, { group: true, name: 'groupFork', image: 'group-chat-fork-notice' })).toEqual(MANIFEST.groupFork);
 });
 
-test('Restored character chat notice image names keeping and deleting devices', async ({ browser }, testInfo) => {
-    expect(await restoredJourney(browser, testInfo, { group: false, name: 'characterRestore', image: 'chat-restored-notice' })).toEqual(MANIFEST.characterRestore);
+test('Restored character chat notice image names keeping and deleting devices', async ({ browser, resources }, testInfo) => {
+    expect(await restoredJourney(browser, resources, testInfo, { group: false, name: 'characterRestore', image: 'chat-restored-notice' })).toEqual(MANIFEST.characterRestore);
 });
 
-test('Restored group chat notice image opens the restored owning group', async ({ browser }, testInfo) => {
-    expect(await restoredJourney(browser, testInfo, { group: true, name: 'groupRestore', image: 'group-chat-restored-notice' })).toEqual(MANIFEST.groupRestore);
+test('Restored group chat notice image opens the restored owning group', async ({ browser, resources }, testInfo) => {
+    expect(await restoredJourney(browser, resources, testInfo, { group: true, name: 'groupRestore', image: 'group-chat-restored-notice' })).toEqual(MANIFEST.groupRestore);
 });

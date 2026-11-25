@@ -6,11 +6,10 @@
 // extensions UI, replacing a card that carries a bound preset still keeps
 // it — and the editor's world-book popup never appears.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter, openReplaceWithFile } from './_helpers.js';
@@ -58,25 +57,33 @@ function readReplacedCard(dataRoot) {
     throw new Error(`replacement card ${NEW_NAME} not found on disk`);
 }
 
+/**
+ * Which side of the replace flow settled first: an open dialog, the
+ * CHARACTER_REPLACED event, or neither yet.
+ * @returns {Promise<'popup' | 'replaced' | 'pending'>}
+ */
+async function readReplaceOutcome(openPopups, replacedFired) {
+    if (await openPopups.count() > 0) return 'popup';
+    return replacedFired ? 'replaced' : 'pending';
+}
+
 let mock, tmpDir, plainReplacementPath;
 
 test.describe('#33 — binding preservation without the editor plugin', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-33-'));
+        tmpDir = (await scope.directory('luker-e2e-33')).path;
         plainReplacementPath = writeReplacementPng(resolve(tmpDir, 'briallen-plain.png'));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('a binding-free replacement shows no dialog and writes no binding data', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'binding-none' });
-        try {
+    test('a binding-free replacement shows no dialog and writes no binding data', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'binding-none' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -104,13 +111,11 @@ test.describe('#33 — binding preservation without the editor plugin', () => {
             expect(disk.orchestrator).toBeUndefined();
             expect(disk.memory_graph).toBeUndefined();
             expect(disk.card_app).toBeUndefined();
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('disabling the Character Editor Assistant keeps binding protection alive', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'binding-no-cea' });
+    test('disabling the Character Editor Assistant keeps binding protection alive', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'binding-no-cea' });
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
@@ -146,8 +151,9 @@ test.describe('#33 — binding preservation without the editor plugin', () => {
                 window.Luker.getContext().extensionSettings.disabledExtensions.includes('character-editor-assistant'),
             ), { timeout: 5000 }).toBe(true);
             // Closing the popup runs the deferred save and triggers the reload.
+            const reloaded = page.waitForEvent('load', { timeout: 30_000 });
             await page.keyboard.press('Escape');
-            await page.waitForTimeout(500);
+            await reloaded;
             await awaitMainUI(page, server.baseURL);
 
             const disabled = await page.evaluate(() => window.Luker.getContext().extensionSettings.disabledExtensions.includes('character-editor-assistant'));
@@ -155,12 +161,17 @@ test.describe('#33 — binding preservation without the editor plugin', () => {
 
             await clickCharacterCard(page, OLD_NAME);
             await openCharacterEditPanel(page);
+            // Read-only listener: CHARACTER_REPLACED is emitted after the
+            // binding write-back and the world-book step have both finished,
+            // so any dialog either step would open exists by then.
+            await page.evaluate(() => {
+                const ctx = window.Luker.getContext();
+                window.__e2eCharacterReplaced = false;
+                const handler = () => { window.__e2eCharacterReplaced = true; };
+                ctx.eventSource.on(ctx.eventTypes.CHARACTER_REPLACED, handler);
+                window.__e2eReplacementCleanup = () => ctx.eventSource.removeListener(ctx.eventTypes.CHARACTER_REPLACED, handler);
+            });
             await openReplaceWithFile(page, plainReplacementPath);
-
-            // No world-book popup (CEA is disabled) and no binding dialog
-            // (the silent path) may appear.
-            await page.waitForTimeout(2500);
-            await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
 
             // The replace + preservation chain is async; wait for the
             // preserved preset to land on disk before the final read.
@@ -172,17 +183,21 @@ test.describe('#33 — binding preservation without the editor plugin', () => {
                 }
             }, { timeout: 30_000 }).toBe(BOUND_PRESET);
 
-            // Final determination happens after the write-back has settled
-            // on disk: any post-replace dialog the runtime would fire (CEA's
-            // world-book popup chief among them) has already been inserted
-            // by then, and nothing auto-dismisses popups, so a retrying
-            // assertion catches one that the snapshot above missed.
-            await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
+            // No world-book popup (CEA is disabled) and no binding dialog
+            // (the silent path) may appear. Nothing auto-dismisses popups, so
+            // one opened during the replace flow is still open here; a dialog
+            // that blocks the flow settles the wait as 'popup' instead.
+            const openPopups = page.locator('dialog.popup[open]');
+            const replaceOutcome = async () => readReplaceOutcome(openPopups, await page.evaluate(() => window.__e2eCharacterReplaced));
+            await expect.poll(replaceOutcome, { timeout: 30_000, message: 'CHARACTER_REPLACED or a replace dialog' }).not.toBe('pending');
+            expect(await replaceOutcome()).toBe('replaced');
+            await expect(openPopups).toHaveCount(0);
 
             const disk = readReplacedCard(server.dataRoot).extensions;
             expect(disk.luker?.chat_completion_preset?.presets?.[0]?.name).toBe(BOUND_PRESET);
         } finally {
-            await tearDownServer(server);
+            if (!page.isClosed()) await page.evaluate(() => { window.__e2eReplacementCleanup?.(); delete window.__e2eReplacementCleanup; });
+
         }
     });
 });

@@ -7,12 +7,11 @@
 // responses that its own write set the mark that started the idle sync.
 // The only mock is the upstream embedding API for vectors.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { awaitMainUI, selectCharacterByName, openExtensionsDrawer, openInlineDrawer, openUserSettingsDrawer, openTopDrawer, closeTopDrawer } from '../_lib/page.js';
 import { createWorldBook, addWorldEntry } from '../_lib/ui-worldinfo.js';
@@ -24,6 +23,12 @@ import {
     openLanSyncPanel, generatePairingLink, acceptPairingLink, setSyncSchedule, closeAllPopups, openChatByName,
     readUserFile, userRootOf, waitForBackgroundSync, recordDirtyWrites, categoryStep,
 } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 const CATEGORIES = ['worlds', 'characters', 'chats', 'backgrounds', 'image-metadata', 'stats', 'skills', 'card-apps', 'vectors'];
@@ -41,9 +46,9 @@ let contexts = [];
 
 test.beforeAll(async () => {
     mock = await startMockLLM({});
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-e2e-dirty-'));
-    A = await startServer({ batchKey: 'sync', scenarioId: 'dirty-A' });
-    B = await startServer({ batchKey: 'sync', scenarioId: 'dirty-B' });
+    tmp = (await fileScope.directory('sync-dirty')).path;
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'dirty-A' });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'dirty-B' });
     for (const server of [A, B]) {
         writeCharacterPng({ dataRoot: server.dataRoot, avatarFile: 'Seraphina.png', card: { name: 'Seraphina', first_mes: 'Welcome back to the glade.' } });
         const chatDir = path.join(userRootOf(server), 'chats', 'Seraphina');
@@ -63,10 +68,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
     for (const ctx of contexts) await ctx.close();
-    await tearDownServer(A);
-    await tearDownServer(B);
     await mock.stop();
-    fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 // A's idle delay; client saves debounce for at most `debounce_timeout.relaxed` (1 s).

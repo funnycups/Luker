@@ -28,7 +28,8 @@
 // so the element is in DOM whether or not the drawer is expanded; we
 // open the drawer for parity with the user gesture.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
@@ -38,7 +39,7 @@ import {
 } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, openExtensionsDrawer } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
-import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+import { writeCharacterWithBinding } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -97,13 +98,14 @@ function scrubPresetPrompts(dataRoot, handle = 'default-user') {
     writeFileSync(path, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 10 }, (_, i) =>
             `*A reply tuned to the wind.* Acknowledged (${i + 1}).`,
         ),
     });
-    server = await startWorldInfoServer({ specBaseName: '32-vectorized-entries', scenarioId: 'vectorized' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'vectorized' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -120,7 +122,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 

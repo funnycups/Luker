@@ -7,10 +7,10 @@
 // dropdown and confirm the next sent turn lands at the corresponding
 // mock — proving the dropdown switch actually re-routes the backend.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -52,7 +52,8 @@ function seedTwoProfiles({ dataRoot, urlA, urlB }) {
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mockA = await startMockLLM({ scriptedReplies: [
         '*Ash answers with the chart still open between you.* "Mock A: the lantern is steady; tell me what the gull rocks looked like."',
         '*Ash sets the brass spyglass down.* "Mock A again — keep going, the wind has not yet shifted."',
@@ -61,14 +62,14 @@ test.beforeAll(async () => {
         '*A different voice cuts across the watchpost.* "Mock B speaking now — the reef would not have lit that brightly under the old chart."',
         '*Mock B again.* "Hold the next turn. Something is moving past the breakers."',
     ] });
-    server = await startServer({ batchKey: 'server', scenarioId: 'profile-switch' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'profile-switch' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mockA.baseURL });
     seedTwoProfiles({ dataRoot: server.dataRoot, urlA: mockA.baseURL, urlB: mockB.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mockA?.stop();
     await mockB?.stop();
 });

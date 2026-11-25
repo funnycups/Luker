@@ -31,8 +31,8 @@
 //  12. Clear (whole nuke) via the "Clear Bound Chat Completion Preset"
 //      dropdown entry → confirm → card has null chat_completion_preset.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -55,12 +55,13 @@ const SLOT_B_TEMP = 0.22;
 const OVERWRITE_SEED_TEMP = 0.33;
 const UPDATED_B_TEMP = 0.44;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'bind-and-manage-dialog',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -74,7 +75,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -99,7 +100,13 @@ async function fireDropdownAction(page, optionId) {
     const drawer = page.locator('#rightNavDrawerIcon');
     const closed = await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
     if (closed) await drawer.click();
+    await expect(page.locator('#right-nav-panel')).toHaveClass(/\bopenDrawer\b/, { timeout: 5000 });
+    await expect(drawer).toHaveClass(/\bopenIcon\b/, { timeout: 5000 });
     await page.waitForSelector('#char-management-dropdown', { state: 'attached', timeout: 5000 });
+    await page.waitForFunction(() => {
+        const sel = document.querySelector('#char-management-dropdown');
+        return sel && sel.selectedIndex === 0;
+    }, { timeout: 5000 });
     await page.evaluate((id) => {
         const sel = document.querySelector('#char-management-dropdown');
         if (!sel) throw new Error('#char-management-dropdown not found');
@@ -142,12 +149,28 @@ async function selectPresetByNameFromOrigin(page, name, origin) {
             return v.startsWith('__luker_card__::') && v.includes(encodeURIComponent(target));
         }, name, { timeout: 10_000 });
     } else {
-        // Global path — preset_settings_openai carries the name at runtime.
+        // Global path — preset_settings_openai carries the name at runtime, and
+        // the select value must settle on the non-card-bound option for target.
         await page.waitForFunction((target) => {
             const ctx = window.Luker?.getContext?.();
-            return ctx?.chatCompletionSettings?.preset_settings_openai === target;
+            const sel = document.querySelector('#settings_preset_openai');
+            const selected = sel?.selectedOptions?.[0];
+            return ctx?.chatCompletionSettings?.preset_settings_openai === target
+                && Boolean(selected)
+                && !String(sel.value ?? '').startsWith('__luker_card__::')
+                && String(selected.textContent ?? '').trim() === target;
         }, name, { timeout: 10_000 });
     }
+}
+
+async function waitForBoundGhostAndDropdownReset(page, presetName) {
+    await page.waitForFunction((target) => {
+        const presetVal = String(document.querySelector('#settings_preset_openai')?.value ?? '');
+        const dropdown = document.querySelector('#char-management-dropdown');
+        return presetVal.startsWith('__luker_card__::')
+            && presetVal.includes(encodeURIComponent(target))
+            && dropdown?.selectedIndex === 0;
+    }, presetName, { timeout: 10_000 });
 }
 
 /** Accept the top-most ST popup that just opened (click OK) and wait for
@@ -243,6 +266,7 @@ test.describe('#43 — Bind (add + set-default) and Manage Bound Presets dialog'
         await fireDropdownAction(page, 'bind_character_chat_completion_preset');
         await acceptPopup(page);
         await waitForCardSlotCount(page, 1);
+        await waitForBoundGhostAndDropdownReset(page, SLOT_A);
         {
             const state = await readCardState(page);
             expect(state.presets.map(p => p.name)).toEqual([SLOT_A]);
@@ -254,6 +278,7 @@ test.describe('#43 — Bind (add + set-default) and Manage Bound Presets dialog'
         await fireDropdownAction(page, 'bind_character_chat_completion_preset');
         await acceptPopup(page);
         await waitForCardSlotCount(page, 2);
+        await waitForBoundGhostAndDropdownReset(page, SLOT_B);
         {
             const state = await readCardState(page);
             expect(state.presets.map(p => p.name).sort()).toEqual([SLOT_A, SLOT_B]);

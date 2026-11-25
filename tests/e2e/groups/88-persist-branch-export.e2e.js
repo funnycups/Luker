@@ -24,10 +24,10 @@
 // _helpers.js does); /cut last needs a tick — we never use it here so
 // no shrink-poll concern.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait, branchFromMessageViaUI } from '../_lib/page.js';
@@ -73,9 +73,10 @@ const REPLIES = [
     '*Kestrel folds her charcoal sketch into her coat and lets out a slow breath.* "Then the watch is held. I would like a cup of something hot before the fifth bell."',
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'groups', scenarioId: 'persist-branch' });
+    server = await startServer({ scope, batchKey: 'groups', scenarioId: 'persist-branch' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -83,7 +84,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

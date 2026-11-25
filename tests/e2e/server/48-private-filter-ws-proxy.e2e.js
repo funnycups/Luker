@@ -12,14 +12,15 @@
 //     ticket and verify the endpoint shape rather than wrestling with a
 //     full websocket handshake under the harness.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'server',
         scenarioId: 'private-filter',
         extraEnv: {
@@ -33,9 +34,7 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#48 — private-request-filter blocks outgoing fetches to disallowed private IPs', () => {
     test('outgoing request to 192.168.99.123 (not in whitelist) is blocked', async ({ page }) => {

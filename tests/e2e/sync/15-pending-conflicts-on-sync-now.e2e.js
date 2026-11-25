@@ -6,11 +6,11 @@
 // in spec 02, everything else goes through the Sync pages of the Account
 // window.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -23,20 +23,24 @@ import {
     listPopupConflicts,
 } from '../_lib/sync.js';
 
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
+
 const WORLD = 'worlds/pending-conflict.json';
 
 let A, B;
 const worldFile = server => path.join(server.dataRoot, 'default-user', ...WORLD.split('/'));
 
 test.beforeAll(async () => {
-    A = await startServer({ batchKey: 'sync', scenarioId: 'pending-A' });
-    B = await startServer({ batchKey: 'sync', scenarioId: 'pending-B' });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'pending-A' });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'pending-B' });
     fs.writeFileSync(worldFile(A), JSON.stringify({ name: 'pending-conflict', note: 'base' }));
 });
 
 test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
 
 test.describe('LAN Sync — pending conflicts after Sync now', () => {

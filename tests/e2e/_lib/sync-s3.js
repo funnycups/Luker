@@ -6,7 +6,7 @@ import { expect } from '@playwright/test';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { startRustfsContainer } from './s3-container.js';
 import { startS3Proxy } from './s3-proxy.js';
-import { startServer, tearDownServer } from './server.js';
+import { startServer } from '../../harness/server.js';
 import { backendCard, openLanSyncPanel, setSyncSchedule, userRootOf } from './sync.js';
 import { createWorldBook, selectWorldBook } from './ui-worldinfo.js';
 
@@ -67,16 +67,17 @@ async function awaitWorldEditor(page, name) {
 }
 
 export function s3Fixture(test) {
-    let storage;
-    const servers = [], contexts = [], proxies = [], clients = [];
+    let storage, scope;
+    const contexts = [], proxies = [], clients = [];
 
+    test.beforeEach(({ resources }) => { scope = resources; });
     test.beforeAll(async () => { storage = await startRustfsContainer(); });
 
     test.afterEach(async () => {
         for (const context of contexts.splice(0)) await context.close();
-        for (const server of servers.splice(0)) await tearDownServer(server);
         for (const proxy of proxies.splice(0)) await proxy.close();
         for (const client of clients.splice(0)) client.destroy();
+        scope = null;
     });
 
     test.afterAll(async () => { await storage?.stop(); });
@@ -100,9 +101,9 @@ export function s3Fixture(test) {
             proxies.push(proxy);
             return proxy;
         },
-        async device(browser, name, extraEnv = {}, { extraConfig, timezoneId = 'UTC', jitless = false } = {}) {
-            const server = await startServer({ batchKey: 'sync', scenarioId: `s3-${name}-${randomBytes(4).toString('hex')}`, extraEnv: { TZ: 'UTC', ...extraEnv }, extraConfig });
-            servers.push(server);
+        async device(browser, name, extraEnv = {}, { extraConfig, timezoneId = 'UTC', jitless = false, onboarding = true } = {}) {
+            if (!scope) throw new Error('S3 fixture device requires a managed test scope');
+            const server = await startServer({ scope, batchKey: 'sync', scenarioId: `s3-${name}-${randomBytes(4).toString('hex')}`, extraEnv: { TZ: 'UTC', ...extraEnv }, extraConfig, onboarding });
             if (jitless || process.env.LUKER_TASK12_ACTUAL_JITLESS === '1' || process.env.LUKER_TASK13_ACTUAL_JITLESS === '1' || process.env.LUKER_TASK14_ACTUAL_JITLESS === '1') {
                 const cache = path.join(server.dataRoot, '_webpack');
                 const bundles = fs.readdirSync(cache).map(dir => path.join(cache, dir, 'output')).find(dir => fs.existsSync(path.join(dir, 'lib.core.bundle.js')));

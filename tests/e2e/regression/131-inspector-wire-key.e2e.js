@@ -16,8 +16,8 @@
 // the mock upstream saw the override key and the inspector fingerprint
 // matches it.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { appendConnectionProfile, bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -27,9 +27,10 @@ let server, mock, profile;
 const WIRE_KEY = 'plugin-wire-key';
 const STORED_KEY = 'stored-provider-key';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['the tide log holds.'] });
-    server = await startServer({ batchKey: 'regression', scenarioId: '131-inspector-wire-key' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '131-inspector-wire-key' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     profile = appendConnectionProfile({
@@ -45,7 +46,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

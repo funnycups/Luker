@@ -20,8 +20,8 @@
 // Both behaviors are codified here so a future refactor that adds
 // conditional-aware extraction must update this test deliberately.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -44,18 +44,19 @@ const REPLY_LLM_CHOSE_BRANCH = [
     ' "Bank the lantern accordingly."',
 ].join('');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [REPLY_WITH_IF_WRAPPER, REPLY_LLM_CHOSE_BRANCH],
     });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'conditional-op' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'conditional-op' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

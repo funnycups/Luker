@@ -1,14 +1,20 @@
 // A peer whose own reconcile fails keeps main and live consistent: the
 // pushed commit waits in its journal and lands once the failure is gone.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { createWorldBook } from '../_lib/ui-worldinfo.js';
 import { openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, closeAllPopups, backendCard, backendIdOf, readUserFile, shadowMain, userRootOf } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const WORLD = 'Ember Ward';
 const THROW_ENV = { LUKER_SYNC_THROWPOINT: 'reconcile-write', LUKER_SYNC_THROWPOINT_MATCH: `worlds/${WORLD}.json` };
@@ -16,13 +22,11 @@ let A;
 let B;
 
 test.beforeAll(async () => {
-    A = await startServer({ batchKey: 'sync', scenarioId: 'reconcile-fail-A', extraEnv: THROW_ENV });
-    B = await startServer({ batchKey: 'sync', scenarioId: 'reconcile-fail-B' });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'reconcile-fail-A', extraEnv: THROW_ENV });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'reconcile-fail-B' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
 
 async function mainHas(server, rel) {
@@ -66,8 +70,7 @@ test('a failed peer reconcile leaves main and live without the pushed file until
         await openLanSyncPanel(pageA);
         await expect(backendCard(pageA, 'B device').locator('.dw-card-note.bad')).toContainText('luker-sync-throwpoint');
 
-        await tearDownServer(A, { removeData: false });
-        A = await startServer({ batchKey: 'sync', scenarioId: 'reconcile-fail-A', useExistingDataRoot: A.dataRoot });
+        await A.restart({ extraEnv: { LUKER_SYNC_THROWPOINT: '', LUKER_SYNC_THROWPOINT_MATCH: '' } });
         await expect.poll(() => readUserFile(A, `worlds/${WORLD}.json`) !== null, { timeout: 60_000 }).toBe(true);
         await expect.poll(() => mainHas(A, `worlds/${WORLD}.json`), { timeout: 60_000, message: 'recovery advances main after applying live data' }).toBe(true);
     } finally {

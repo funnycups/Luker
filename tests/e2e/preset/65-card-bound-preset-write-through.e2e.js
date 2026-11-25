@@ -19,13 +19,19 @@
 //   - no global preset file is created;
 //   - the value survives a reload.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { normalizeIterStudioSettings } from './_helpers.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server, mock;
 
@@ -39,10 +45,10 @@ const NEXT_SCRIPT = { name: 'WriteThroughScript', code: 'return "written"' };
 
 test.beforeAll(async () => {
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'preset',
         scenarioId: 'card-bound-preset-write-through',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -75,7 +81,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

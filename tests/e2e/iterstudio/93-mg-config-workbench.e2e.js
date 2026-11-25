@@ -3,10 +3,10 @@
 // template text, sparse character overrides, and the dirty guard over
 // unsaved Advanced edits.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName } from '../_lib/page.js';
@@ -48,12 +48,14 @@ async function sendAndReadToolResult(page, promptText) {
     return trace.locator('.wb-tool-entry').last();
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
     server = await startServer({
+        scope,
         batchKey: 'iterstudio',
         scenarioId: '93-mg-config-workbench',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -63,11 +65,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 
 test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
+    // The character-scope and dirty-guard cases build on the state committed
+    // by the previous test, so this file must run its tests in order.
+    test.describe.configure({ mode: 'serial' });
     test('global parameter and template edits commit, hydrate Memory Lens Settings, and persist across restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
@@ -176,10 +180,10 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
                 const character = ctx?.characters?.[ctx?.characterId];
                 return character?.data?.extensions?.memory_graph?.advancedOverride ?? null;
             });
-        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9 });
+        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9, promptDefaultsInitialized: true });
         await expect.poll(async () => {
             return readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null;
-        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9 });
+        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9, promptDefaultsInitialized: true });
 
         const globalHorizon = await page.evaluate(() => {
             return window.Luker.getContext().extensionSettings?.memory_graph?.persistentInjectionMaxSeqDistance ?? null;
@@ -199,8 +203,8 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
             const character = ctx?.characters?.[ctx?.characterId];
             return character?.data?.extensions?.memory_graph?.advancedOverride ?? null;
         });
-        expect(afterRestart).toEqual({ persistentInjectionMaxSeqDistance: 9 });
-        expect(readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null).toEqual({ persistentInjectionMaxSeqDistance: 9 });
+        expect(afterRestart).toEqual({ persistentInjectionMaxSeqDistance: 9, promptDefaultsInitialized: true });
+        expect(readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null).toEqual({ persistentInjectionMaxSeqDistance: 9, promptDefaultsInitialized: true });
     });
 
     test('unsaved Advanced edits survive a workbench commit round-trip', async ({ page }) => {
@@ -209,9 +213,10 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         const lens = await openMemoryWorkspace(page, { subview: 'settings' });
 
         const horizonInput = lens.locator('[data-field-key="persistentInjectionMaxSeqDistance"] input').first();
-        await expect(horizonInput).toHaveValue('0');
+        await expect(horizonInput).toHaveValue('9');
 
         await horizonInput.fill('13');
+        await expect(lens.locator('.ml-settings-dirty-pill')).toBeVisible();
 
         await openIterStudio(page, 'mg', { scope: 'character' });
         mock.scriptToolCall({ name: 'mg_config_set_fields', arguments: { set: { 'settings.recallMaxIterations': 4 } } });
@@ -220,6 +225,7 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
 
         await openMemoryWorkspace(page, { subview: 'settings' });
         await expect(lens.locator('[data-field-key="persistentInjectionMaxSeqDistance"] input').first()).toHaveValue('13');
+        await expect(lens.locator('.ml-settings-dirty-pill')).toBeVisible();
         await closeIterStudio(page);
     });
 });

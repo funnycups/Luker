@@ -12,20 +12,21 @@
 // brief ("Honest API tests are fine") because user creation by admin
 // is not the gesture under test; the LOGIN FORM is.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { write as embedCardData } from '../../../src/character-card-parser.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
     // Server with enableUserAccounts via extraConfig (the same path
     // production multi-user installs use).
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'server',
         scenarioId: 'multi-user',
         extraConfig: { enableUserAccounts: true },
@@ -33,7 +34,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -72,7 +73,9 @@ async function loginViaForm(page, baseURL, handle, password) {
     // The login page renders each user as a .userSelect div containing
     // a .userHandle span with the handle text — no data-handle attribute.
     const userCard = page.locator('#userList .userSelect', { has: page.locator('.userHandle', { hasText: handle }) }).first();
-    if (await userCard.isVisible({ timeout: 1000 }).catch(() => false)) {
+    // The wait above settled the login page: the card is either listed
+    // now or the page is in discreet mode.
+    if (await userCard.isVisible()) {
         await userCard.click();
     } else {
         // Discreet mode: type the handle.
@@ -82,17 +85,12 @@ async function loginViaForm(page, baseURL, handle, password) {
     }
 
     // Password block becomes visible if the account has a password.
-    const passwordInput = page.locator('#userPassword');
-    if (await passwordInput.isVisible({ timeout: 1000 }).catch(() => false)) {
+    // For a passwordless user the userSelect click already submitted.
+    if (password) {
+        const passwordInput = page.locator('#userPassword');
+        await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
         await passwordInput.fill(password);
-    }
-
-    // Click the actual Login button if visible. For a passwordless user
-    // the userSelect click already submitted; only click Login if it
-    // surfaced (which it does once the password block is visible).
-    const loginBtn = page.locator('#loginButton');
-    if (await loginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await loginBtn.click();
+        await page.locator('#loginButton').click();
     }
     // Some flows redirect immediately from the userSelect click (no
     // password block when an account has no password). Wait for the

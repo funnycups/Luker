@@ -18,8 +18,8 @@
 //   4. Same assertions for a group chat, plus clicking the other row
 //      must actually switch the open chat.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -39,12 +39,13 @@ import {
 
 let server, mock, trio;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina sets the spyglass on the sill and taps the rim twice.* "The tide book says the night watch starts when the gulls settle — that is our cue."',
         '*Seraphina pulls the lantern shutter a finger\'s width wider.* "Keep the log open; the second bell will want a line of its own."',
     ] });
-    server = await startServer({ batchKey: 'regression', scenarioId: 'chat-manager-highlight' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'chat-manager-highlight' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -52,7 +53,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

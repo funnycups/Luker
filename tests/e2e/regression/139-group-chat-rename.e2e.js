@@ -2,12 +2,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { onboardS3Page, reloadS3Page } from '../_lib/sync-s3.js';
 import { openCharacterList } from '../_lib/ui-character.js';
 import { closeAnyOpenTopSettingsDrawer, editMessageViaUI } from '../_lib/page.js';
 import { openChatByName, openLanSyncPanel, generatePairingLink, acceptPairingLink, waitForBackendSync, clickSyncNow, setSyncSchedule, setSyncDeviceLabel, closeAllPopups } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 test.describe.configure({ timeout: 240_000 });
 const AVATAR = 'default_Seraphina.png';
@@ -51,7 +57,7 @@ async function scenario(browser, info, body) {
         records,
         response(page, endpoint) { const job = observe((async () => await page.waitForResponse(response => new URL(response.url()).pathname === endpoint))()); jobs.push(job); return job; },
         async device(label) {
-            const server = await startServer({ batchKey: 'sync', scenarioId: `rename-${label}-${randomBytes(6).toString('hex')}`, extraConfig: { listen: true, securityOverride: true, whitelistMode: false } });
+            const server = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `rename-${label}-${randomBytes(6).toString('hex')}`, onboarding: true, extraConfig: { listen: true, securityOverride: true, whitelistMode: false } });
             const device = { server, label, runtimes: [server.execArgv] }; devices.push(device);
             device.context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 1100 } });
             device.page = await device.context.newPage();
@@ -76,8 +82,7 @@ async function scenario(browser, info, body) {
         const evidence = info.outputPath('rename-evidence.json'); fs.writeFileSync(evidence, JSON.stringify({ files, records, network, failures: failures.map(e => e.stack), observerErrors: settled.filter(r => r.error).map(r => r.error.message) }, null, 2));
         await info.attach('rename-evidence', { path: evidence, contentType: 'application/json' });
         await Promise.all(devices.map(d => info.attach(`${d.label}.log`, { body: d.server.outputEpochs.join('\n'), contentType: 'text/plain' })));
-        const stopped = await Promise.allSettled(devices.map(d => tearDownServer(d.server, { removeData: failures.length === 0 })));
-        failures.push(...[...closed, ...stopped].filter(r => r.status === 'rejected').map(r => r.reason));
+        failures.push(...closed.filter(r => r.status === 'rejected').map(r => r.reason));
     }
     if (failures.length) throw new AggregateError(failures, 'Rename scenario failed', { cause: failures[0] });
 }

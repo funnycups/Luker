@@ -21,8 +21,8 @@
 //   - Body order is A's slice [0..5) then B's slice [5..10), with the
 //     user prompts and scripted replies appearing in their original order.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -40,21 +40,22 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina folds the chart in half.* "Reply A1: I hear the wind shifting south."',
         '*Seraphina trims the lantern wick.* "Reply A2: it will be a long watch tonight."',
         '*Seraphina sets a brass weight on the chart corner.* "Reply B1: the reef is restless again."',
         '*Seraphina taps the spyglass barrel.* "Reply B2: we should mark the second breaker."',
     ] });
-    server = await startServer({ batchKey: 'storage', scenarioId: 'merge-db-mode' });
+    server = await startServer({ scope, batchKey: 'storage', scenarioId: 'merge-db-mode' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

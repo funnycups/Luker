@@ -12,31 +12,32 @@
 // ops). Slash-command-written keys are not owned and therefore not
 // touched by rebuild, which is exactly the behavior we want here.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina sets her elbow on the chart, watching you mark the slate.* "The wind tells me you have the tallies right."',
             '*Seraphina glances at the slate again.* "Still three. The numbers stand."',
         ],
     });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'setvar-persist' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'setvar-persist' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

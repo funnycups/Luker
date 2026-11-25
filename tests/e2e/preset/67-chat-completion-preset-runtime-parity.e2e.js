@@ -20,10 +20,10 @@
 //      without maintaining a client-side snapshot cache, reflecting both
 //      `savePreset` writes and out-of-band server file updates immediately.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -63,16 +63,18 @@ const PER_SOURCE_EFFORT_PRESET_NAME = 'Per Source Effort Map';
 let server;
 let mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash lowers the brass spyglass and taps the northern soundings.* "Two cables past the black buoy. Watch the foam line when the swell draws back."',
         ],
     });
     server = await startServer({
+        scope,
         batchKey: 'preset',
         scenarioId: 'chat-completion-preset-runtime-parity',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
     markOnboarded({ dataRoot: server.dataRoot });
@@ -181,7 +183,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

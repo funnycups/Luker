@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 
 /**
  * iteration-library exposure smoke. Independent of plugin state.
@@ -41,7 +41,6 @@ test.describe('iteration-library exposure', () => {
                 applyEditsIsFunction: typeof lib.applyEdits === 'function',
                 renderIsNamespace: typeof lib.render === 'object' && typeof lib.render.renderMessageMarkdown === 'function',
                 runnerIsNamespace: typeof lib.runner === 'object',
-                storageIsNamespace: typeof lib.storage === 'object' && typeof lib.storage.createExtensionSettingsSessionStorage === 'function',
                 textDiffIsNamespace: typeof lib.textDiff === 'object' && typeof lib.textDiff.renderInlineTextDiffHtml === 'function',
                 zoomOverlayIsNamespace: typeof lib.zoomOverlay === 'object' && typeof lib.zoomOverlay.attachZoomOverlay === 'function',
                 iterationStudioPresent: ctx.iterationStudio !== undefined,
@@ -49,14 +48,13 @@ test.describe('iteration-library exposure', () => {
         });
 
         expect(exposed.error).toBeUndefined();
-        expect(exposed.keys).toEqual(expect.arrayContaining(['applyEdits', 'inverseEdit', 'registerOp', 'BUILT_IN_OPS', 'render', 'runner', 'storage', 'textDiff', 'zoomOverlay', 'showConflictResolution', 'bindIterWorkspaceResizer', 'proposalBus', 'tools']));
+        expect(exposed.keys).toEqual(['BUILT_IN_OPS', 'applyEdits', 'bindIterWorkspaceResizer', 'inverseEdit', 'proposalBus', 'registerOp', 'render', 'runner', 'showConflictResolution', 'textDiff', 'tools', 'ui', 'zoomOverlay']);
         expect(exposed.applyEditsIsFunction).toBe(true);
         expect(exposed.renderIsNamespace).toBe(true);
         expect(exposed.runnerIsNamespace).toBe(true);
-        expect(exposed.storageIsNamespace).toBe(true);
         expect(exposed.textDiffIsNamespace).toBe(true);
         expect(exposed.zoomOverlayIsNamespace).toBe(true);
-        expect(exposed.iterationStudioPresent, 'iterationStudio should be undefined post-Stage-6').toBe(false);
+        expect(exposed.iterationStudioPresent, 'iterationStudio must stay undefined').toBe(false);
 
         expect(consoleErrors, `unexpected iter-library/iter-studio errors: ${consoleErrors.join(' | ')}`).toEqual([]);
     });

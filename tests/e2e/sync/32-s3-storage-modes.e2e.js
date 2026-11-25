@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { makeTempMysqlEngineHarness } from '../../storage/harness/mysql-harness.js';
 import { makeTempPgEngineHarness } from '../../storage/harness/pg-harness.js';
 import { s3Fixture, createReadyWorldBook, selectReadyWorldBook, reloadS3Page } from '../_lib/sync-s3.js';
@@ -24,13 +24,13 @@ async function manual(device) {
 }
 
 async function device(browser, mode, label) {
-    let extraConfig = { 'storage.mode': mode };
+    let extraConfig = { storage: { mode } };
     if (mode !== 'sqlite') {
         const db = await (mode === 'mysql' ? makeTempMysqlEngineHarness() : makeTempPgEngineHarness());
         databases.push(db);
         const root = mode === 'mysql' ? process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306' : process.env.LUKER_TEST_POSTGRES_URL || 'postgresql://luker:postgres@127.0.0.1:55432/luker_test';
         const url = mode === 'mysql' ? `${root}/${db.dbName}` : `${root}?options=-csearch_path%3D${encodeURIComponent(db.schemaName)}`;
-        extraConfig[`storage.${mode}.url`] = url;
+        extraConfig.storage[mode] = { url };
         await db.engine.ping();
     }
     const d = await fixture.device(browser, `sql-${mode}-${label}`, {}, { extraConfig });

@@ -1,5 +1,3 @@
-const baseURL = process.env.ST_BASE_URL || process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8000';
-
 export const testSetup = {
     /**
      * Navigates to the home page without waiting for SillyTavern to load.
@@ -22,7 +20,7 @@ export const testSetup = {
      * @param {Object} params
      * @param {import('@playwright/test').Page} params.page
      */
-    awaitST: async ({ page }) => {
+    awaitST: async ({ page, baseURL }) => {
         await page.goto('/');
         if (await testSetup.isLoginPage({ page })) {
             // eslint-disable-next-line playwright/no-networkidle

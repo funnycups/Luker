@@ -13,14 +13,14 @@
 //   6. Restart, reload, re-select the imported preset; the skill still
 //      appears in the rendered skills list.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
-import { normalizeIterStudioSettings, selectPresetByName, savePresetAsViaButton } from './_helpers.js';
+import { normalizeIterStudioSettings, selectPresetByName, savePresetAsViaButton, openAiResponseConfigDrawer } from './_helpers.js';
 
 let server, mock;
 
@@ -32,7 +32,7 @@ const FIXTURE_BODY_ANCHOR = '*Ash unfolds a worn chart and marks three points; t
 /**
  * Click the visible Export button — captures the download.
  *
- * If the active preset has preset-scope skills, the orchestrator's
+ * If the active preset has preset-scope skills, the core
  * OAI_PRESET_EXPORT_READY hook surfaces a confirm popup asking whether
  * to bundle them. We click Include so the exported JSON carries the
  * embedded_skills_source payload.
@@ -42,14 +42,6 @@ const FIXTURE_BODY_ANCHOR = '*Ash unfolds a worn chart and marks three points; t
  * class set by the embed-export-hook on the popup body, distinct from
  * any other popup that might be on screen.
  */
-async function openAiResponseConfigDrawer(page) {
-    const block = page.locator('#left-nav-panel');
-    const isOpen = await block.evaluate(el => el && el.classList.contains('openDrawer')).catch(() => false);
-    if (isOpen) return;
-    await page.locator('#leftNavDrawerIcon').click();
-    await block.waitFor({ state: 'visible', timeout: 5000 });
-}
-
 async function exportSelectedPreset(page) {
     await openAiResponseConfigDrawer(page);
     const dl = page.waitForEvent('download', { timeout: 30_000 });
@@ -78,20 +70,18 @@ async function importPresetFile(page, filePath) {
     // which skills to install. The dialog body is wrapped by
     // .luker_skill_import_dialog; click Install to materialize the
     // skills into the preset scope.
-    try {
-        const popup = page.locator('.popup:visible', { has: page.locator('.luker_skill_import_dialog') }).last();
-        await popup.locator('.popup-button-ok').first().click({ timeout: 15_000 });
-        await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
-    } catch (_err) { /* no embed in preset — fine */ }
-    await page.waitForTimeout(800);
+    const popup = page.locator('.popup:visible', { has: page.locator('.luker_skill_import_dialog') }).last();
+    await popup.locator('.popup-button-ok').first().click({ timeout: 15_000 });
+    await popup.waitFor({ state: 'detached', timeout: 10_000 });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'preset-embed-skills',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -100,7 +90,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -159,9 +149,7 @@ test.describe('#36 — preset with embedded skills round-trips (real UI)', () =>
         test.setTimeout(240_000);
         await awaitMainUI(page, server.baseURL);
 
-        // Wait for the orchestrator extension to register its
-        // OAI_PRESET_EXPORT_READY listener — without it, the export click
-        // skips the skill-bundling popup and writes a stripped preset.
+        // Wait for core skill export initialization before exporting.
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             // The listener registration is guarded behind `eventTypes` and

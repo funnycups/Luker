@@ -9,8 +9,8 @@
 //      the failing hook is removed.
 //   3. Frontend diagnostics capture the cross-realm error text rather than `{}`.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -32,16 +32,18 @@ const CHAR_AVATAR = 'ash-the-reef-watcher.png';
 let server;
 let mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash lifts the shuttered lamp toward the seawall.* "Clear water now. Bring the skiff alongside."',
         ],
     });
     server = await startServer({
+        scope,
         batchKey: 'preset',
         scenarioId: 'prompt-prepare-error-reporting',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
     markOnboarded({ dataRoot: server.dataRoot });
@@ -60,7 +62,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

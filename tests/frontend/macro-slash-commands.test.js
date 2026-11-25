@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 import { testSetup } from './frontent-test-utils.js';
 
 test.describe('MacroSlashCommands', () => {

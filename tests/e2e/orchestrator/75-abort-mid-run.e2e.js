@@ -21,8 +21,8 @@
 //   cost despite testing a pure module — they are now ESM imports of
 //   `run-state/store.js` and run in milliseconds.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -33,14 +33,14 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 test.describe('#75 — Abort mid-run', () => {
-    test('full mid-run abort: director main loop + in-flight sub-agent cancel; runStore transitions to aborted; next turn works', async ({ browser }) => {
+    test('full mid-run abort: director main loop + in-flight sub-agent cancel; runStore transitions to aborted; next turn works', async ({ resources, browser }) => {
         // Fresh page + fresh mock so latency doesn't affect previous tests.
         const slowMock = await startMockLLM({ latencyMs: 2000 });
-        const slowServer = await startServer({ batchKey: 'orchestrator', scenarioId: '75-abort-full' });
+        const slowServer = await startServer({ scope: resources, batchKey: 'orchestrator', scenarioId: '75-abort-full' });
         markOnboarded({ dataRoot: slowServer.dataRoot });
         bootstrapCustomBackend({ dataRoot: slowServer.dataRoot, baseURL: slowMock.baseURL });
         appendConnectionProfile({ dataRoot: slowServer.dataRoot, baseURL: slowMock.baseURL });
@@ -196,7 +196,7 @@ test.describe('#75 — Abort mid-run', () => {
             expect(bubble.trim()).toBe('After-abort reply.');
         } finally {
             await page.close();
-            await tearDownServer(slowServer);
+
             await slowMock.stop();
         }
     });

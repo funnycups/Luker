@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -21,7 +21,8 @@ let server, mock;
 
 test.use({ actionTimeout: 15_000 });
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
     mock.scriptCompletion(({ toolNames }) => toolNames.includes('add_image_prompt')
         ? {
@@ -34,9 +35,10 @@ test.beforeAll(async () => {
         }
         : { text: '*Ash studies the coastline in the lantern light.*' });
     server = await startServer({
+        scope,
         batchKey: 'workbench',
         scenarioId: '03-content-layout',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -49,7 +51,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await test.step('Stop the application server', () => tearDownServer(server));
 
     await test.step('Stop the upstream LLM fixture', () => mock?.stop());
 });
@@ -250,12 +251,11 @@ test('long run details preserve the mobile run selector and embedded controls fi
     }
 
     await lens.getByRole('button', { name: 'Character Archive', exact: true }).click();
-    await lens.locator('[data-sd-role="new-profile"]').click();
-    await lens.locator('[data-sd-field="profile-name"]').fill('Ash Coastal Survey');
-    // Make the last outfit sit beyond the scroll pane, not just below its header.
-    for (let index = 0; index < 5; index++) {
-        await lens.getByRole('button', { name: 'Add outfit', exact: true }).click();
-    }
+    await lens.locator('[data-sd-role="new-profile"]').first().click();
+    const profileName = lens.locator('[data-sd-field="profile-name"]');
+    const profileDescription = lens.locator('[data-sd-field="profile-description"]');
+    await profileName.fill('Ash Coastal Survey');
+    const descriptionText = 'Weatherproof blue coastal survey coat with brass fastenings and salt-marked sleeves.';
     for (const width of [375, 800, 1280]) {
         await page.setViewportSize({ width, height: 812 });
         await expect.poll(() => win.evaluate(el => {
@@ -263,15 +263,11 @@ test('long run details preserve the mobile run selector and embedded controls fi
             return layer.width === innerWidth && layer.height === innerHeight
                 && el.getAnimations().every(animation => animation.playState !== 'running');
         })).toBe(true);
-        const lastOutfit = lens.locator('.sdlens-outfit-card').last();
-        const name = lastOutfit.locator('input').first();
-        await clickInCharacterDetail(page, name);
-        await name.fill('Coastal Survey Coat');
-        await expectInsideCharacterDetail(name);
-        const prose = lastOutfit.locator('textarea');
-        await clickInCharacterDetail(page, prose);
-        await prose.fill('A weatherproof blue coat with brass fastenings.');
-        await expectInsideCharacterDetail(prose);
+        await clickInCharacterDetail(page, profileName);
+        await expectInsideCharacterDetail(profileName);
+        await clickInCharacterDetail(page, profileDescription);
+        await profileDescription.fill(descriptionText);
+        await expectInsideCharacterDetail(profileDescription);
         await expectContainedControls(win);
     }
     await lens.locator('[data-sd-role="save-profile"]').click();
@@ -279,7 +275,7 @@ test('long run details preserve the mobile run selector and embedded controls fi
     await lens.getByRole('button', { name: 'Image Studio', exact: true }).click();
     await lens.getByRole('button', { name: 'Character Archive', exact: true }).click();
     await lens.locator('.sdlens-chars-list-pane button').filter({ hasText: 'Ash Coastal Survey' }).click();
-    await expect(lens.locator('.sdlens-outfit-card').last().locator('input').first()).toHaveValue('Coastal Survey Coat');
+    await expect(lens.locator('[data-sd-field="profile-description"]')).toHaveValue(descriptionText);
 
     await page.setViewportSize({ width: 375, height: 812 });
     for (const theme of ['light', 'dark']) {

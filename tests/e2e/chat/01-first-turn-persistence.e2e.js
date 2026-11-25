@@ -5,8 +5,8 @@
 // .mes_text DOM nodes. ctx.chat snapshot is the secondary cross-restart
 // equality check; DOM is the primary assertion.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -22,18 +22,19 @@ import { resolve } from 'node:path';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina lays her hand on the rail beside yours, eyes still on the dark water.* "The reef has been restless tonight, but the lantern still holds. We can keep moving."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'first-turn-persistence' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'first-turn-persistence' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

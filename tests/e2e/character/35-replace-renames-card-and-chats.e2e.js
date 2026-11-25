@@ -17,11 +17,10 @@
 //   - card-apps/<old>/ moves to card-apps/<new>/
 //   - the renamed character and its chat survive a reload
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, openReplaceWithFile, writeEmbeddedCharacter } from './_helpers.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterProgrammatic, getChatSnapshot, getRenderedChatTexts } from '../_lib/page.js';
@@ -74,25 +73,21 @@ function buildBriallenPng(seedPng) {
 let tmpDir, briallenPngPath;
 
 test.describe('#35 — replace renames card identity and chats', () => {
-    test.beforeAll(async () => {
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-rename-'));
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
+        tmpDir = (await scope.directory('luker-e2e-replace-rename')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
         briallenPngPath = resolve(tmpDir, 'briallen-replace.png');
         writeFileSync(briallenPngPath, buildBriallenPng(seed));
     });
 
-    test.afterAll(async () => {
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
-    });
-
-    test('the replacement name drives the avatar file, chats folder, chat files and messages', async ({ page }) => {
+    test('the replacement name drives the avatar file, chats folder, chat files and messages', async ({ page, resources }) => {
         test.setTimeout(180_000);
         const server = await startServer({
+            scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-rename',
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
         try {
             markOnboarded({ dataRoot: server.dataRoot });
@@ -195,7 +190,7 @@ test.describe('#35 — replace renames card identity and chats', () => {
             const rendered = await getRenderedChatTexts(page);
             expect(rendered.join('\n'), 'conversation still renders after the rename and reload').toContain('Ash looks up from a half-folded chart');
         } finally {
-            await tearDownServer(server);
+            await server.stop();
         }
     });
 });

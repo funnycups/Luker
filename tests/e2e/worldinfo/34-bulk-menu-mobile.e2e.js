@@ -6,12 +6,13 @@
 // washed-out grey panel), a touch tap on a row must open the field dialog, and
 // the World Info drawer must stay open behind the menu.
 
-import { test, expect, devices } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { devices } from '@playwright/test';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
-import { startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+import { startServer } from '../../harness/server.js';
 
 test.describe.configure({ mode: 'serial' });
 test.use({ ...devices['Pixel 5'] });
@@ -69,9 +70,10 @@ async function openBulkMenu(page) {
     return menu;
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startWorldInfoServer({ specBaseName: '34-bulk-menu-mobile', scenarioId: 'bulk-menu-mobile' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'bulk-menu-mobile' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -79,7 +81,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
     await mock?.stop();
 });
 

@@ -1,16 +1,17 @@
 // 连接配置请求超时 #6 — 主聊天 text completion 非流式路径
 // (script.js#sendGenerationRequest 通用分支注入)。上游延迟 > 超时 → pre-head 抛出。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { appendConnectionProfile, bootstrapTextgenMain, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ash checks the chart twice.*'], latencyMs: 8_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-tc-nonstream' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-tc-nonstream' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapTextgenMain({ dataRoot: server.dataRoot, baseURL: mock.baseURL, streaming: false });
     appendConnectionProfile({
@@ -24,7 +25,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

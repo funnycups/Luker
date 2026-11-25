@@ -9,11 +9,12 @@
 // Also captures screenshot 04-admin-picker.png of the picker + inspector,
 // gated behind LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, createUserViaAdminUI } from '../_lib/page.js';
 import { accountWindow, closeAccountWindow, openAdminPage } from '../_lib/account-window.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { loginAs } from '../_lib/sync.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
@@ -22,12 +23,14 @@ const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images
 
 let server;
 
-test.beforeAll(async ({ browser }) => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources, browser }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'storage-inspector',
         scenarioId: 'admin-per-user',
         extraConfig: { enableUserAccounts: true },
     });
+    markOnboarded({ dataRoot: server.dataRoot });
 
     // Bootstrap: log in as the default admin and create alice + bob via
     // the real Admin Panel New User form.
@@ -48,9 +51,7 @@ test.beforeAll(async ({ browser }) => {
     await seedFixtureUser(server.dataRoot, 'bob');
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('Storage Inspector · admin per-user view', () => {
     test('admin sees picker, switches to bob, sees bob\'s Chats', async ({ page }) => {

@@ -13,10 +13,10 @@
 // drive the real checkboxes, save through the popup, and read the stored
 // settings.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -26,13 +26,19 @@ import {
     openInlineDrawer,
 } from '../_lib/page.js';
 
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
+
 const REPLY = 'The lantern flame settles to a steady blue.';
 
 let server, mock;
 
 test.beforeAll(async () => {
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '102-regex-plugin-lanes' });
+    server = await startServer({ scope: fileScope, batchKey: 'extensions', scenarioId: '102-regex-plugin-lanes' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -58,7 +64,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

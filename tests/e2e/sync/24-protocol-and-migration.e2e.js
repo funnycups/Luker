@@ -1,12 +1,12 @@
 // Real UI pairing and sync against two Luker routers. Only the protocol-1
 // health endpoint is stubbed; the legacy files are installed while stopped.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { createWorldBook, addWorldEntry } from '../_lib/ui-worldinfo.js';
 import {
@@ -15,6 +15,12 @@ import {
     shadowMain, waitForBackgroundSync, listPeers,
 } from '../_lib/sync.js';
 import { formError } from '../_lib/account-window.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let A;
 let B;
@@ -48,13 +54,10 @@ async function writeLore(page, server, name, content) {
 test.beforeEach(async ({}, testInfo) => {
     A = undefined;
     B = undefined;
-    A = await startServer({ batchKey: 'sync', scenarioId: `${testInfo.testId}-A` });
-    B = await startServer({ batchKey: 'sync', scenarioId: `${testInfo.testId}-B` });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `${testInfo.testId}-A` });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `${testInfo.testId}-B` });
 });
 
-test.afterEach(async () => {
-    await Promise.all([tearDownServer(A), tearDownServer(B)]);
-});
 
 test('pairing with a protocol 1 peer shows the upgrade message without registering a backend', async ({ browser }) => {
     const contexts = [];

@@ -18,8 +18,8 @@
 //      active character's `.chat` still names O, and the DOM still shows
 //      O's content.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -34,16 +34,17 @@ import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash studies the inked coastline.* "The western marker is still where we left it."',
         ],
     });
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'regression',
         scenarioId: 'rebuild-keeps-chat-pointer',
-        extraConfig: { 'performance.lazyLoadCharacters': true },
+        extraConfig: { performance: { lazyLoadCharacters: true } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -52,7 +53,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

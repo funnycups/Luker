@@ -16,8 +16,8 @@
 // rules. Every expected line is read off the shipped constants rather than
 // pasted here, so a reworded line re-derives instead of rotting the check.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -103,9 +103,10 @@ async function enableMgAndFillGraph(page) {
 test.describe('#71 — the extraction request carries the rendered template', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: [SETUP_REPLY] });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-template-render' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-template-render' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -115,7 +116,7 @@ test.describe('#71 — the extraction request carries the rendered template', ()
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
+
         await mock?.stop();
     });
 

@@ -14,8 +14,8 @@
 //   - Send a real turn; assert the rendered bubble carries the substitution
 //     (the display lane is live for a rule that also carries plugin lanes).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -30,16 +30,17 @@ const REPLY = 'The lantern flame settles to a steady blue.';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '101-regex-display-plugin' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '101-regex-display-plugin' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

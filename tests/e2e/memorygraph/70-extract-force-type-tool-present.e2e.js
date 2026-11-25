@@ -20,8 +20,8 @@
 //      scheduler treating force-update types as always active, this round
 //      withholds the tool and the assertion goes red.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -183,9 +183,10 @@ async function readEventSummaries(page) {
 test.describe('#70 — a force-update type always carries its create tool', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: [SETUP_REPLY] });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-force-type-tool' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-force-type-tool' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -195,7 +196,7 @@ test.describe('#70 — a force-update type always carries its create tool', () =
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
+
         await mock?.stop();
     });
 
@@ -254,9 +255,10 @@ test.describe('#70 — a force-update type always carries its create tool', () =
 test.describe('#70 — a persisted cadence does not withhold the force-update tool', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: [SETUP_REPLY] });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-force-type-tool-persisted-cadence' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-force-type-tool-persisted-cadence' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -267,7 +269,7 @@ test.describe('#70 — a persisted cadence does not withhold the force-update to
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
+
         await mock?.stop();
     });
 

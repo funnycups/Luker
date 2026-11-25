@@ -4,16 +4,16 @@
 // Real flow:
 //   1. seed Ash with a bound WI book via fs fixture
 //   2. install a character-scope skill via ctx.skills.executeExtractEmbed
-//      (no UI for this — install is its own e2e in skills-ui/)
+//      (the card import dialog path is covered by #38)
 //   3. click into Ash → click #delete_button → tick confirm checkbox
 //      → click popup OK
 //   4. assert: card gone from list; WI book file still on disk
 //   5. cascade: character-scope skills list is empty (or skill missing)
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
@@ -24,9 +24,10 @@ let server, mock, avatar, bookName, galleryDir, spritesDir;
 
 const ASH_NAME = 'Ash the Cartographer';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'delete-cascade' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'delete-cascade' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -49,7 +50,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -66,7 +67,7 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
 
         // Install a character-scope skill via the public skills API
         // (there's no user-facing UI for "install a skill from arbitrary
-        // payload" — that flow has its own e2e under skills-ui/).
+        // payload" — the card import dialog path is covered by #38).
         const installSummary = await page.evaluate(async ({ scope }) => {
             const ctx = window.Luker.getContext();
             if (!ctx.skills?.executeExtractEmbed) return { ok: false, reason: 'skills API not exposed' };
@@ -105,6 +106,8 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
             return (list || []).map(s => s.name);
         }, charScope);
         expect(beforeSkills, 'character-scope skill installed').toContain('cartographer-protocol');
+        const skillDir = resolve(server.dataRoot, 'default-user', 'skills', 'character', avatar, 'cartographer-protocol');
+        expect(existsSync(skillDir), 'character-scope skill directory on disk before delete').toBe(true);
 
         // Confirm WI book on disk pre-delete.
         const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${bookName}.json`);
@@ -124,7 +127,6 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
             const ctx = window.Luker?.getContext?.();
             return !(ctx?.characters || []).some(c => c?.avatar === wantAvatar);
         }, avatar, { timeout: 15_000 });
-        await page.waitForTimeout(500);
 
         // ── DOM assertion: card gone from list. ─────────────────────
         const remainingCards = await page.evaluate((wantAvatar) => {
@@ -137,28 +139,19 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
         expect(serverDeleted, 'avatar file gone from disk after delete').toBe(true);
 
         // Character-owned asset files (chat images + expression sprites)
-        // went with the card.
-        expect(existsSync(resolve(galleryDir, 'ash-portrait.png')), 'gallery file removed with character').toBe(false);
-        expect(existsSync(resolve(spritesDir, 'happy.png')), 'sprite file removed with character').toBe(false);
+        // go with the card. The media delete request runs after the card
+        // leaves the list, so wait for the files to disappear.
+        await expect.poll(() => existsSync(resolve(galleryDir, 'ash-portrait.png')), { message: 'gallery file removed with character', timeout: 10_000 }).toBe(false);
+        await expect.poll(() => existsSync(resolve(spritesDir, 'happy.png')), { message: 'sprite file removed with character', timeout: 10_000 }).toBe(false);
 
-        // Wait for the undo-toast window to expire (default 5000ms) so
-        // commitDeletedCharacterUndoSnapshot fires CHARACTER_DELETED.
-        // Then give the cascade chain (which is now awaited by
-        // eventSource.emit since CHARACTER_DELETED listener was
-        // converted to `async (event) => await onCharacterDeletedCascade`)
-        // a beat to complete its skill-delete fetches.
-        await page.waitForTimeout(6000);
-
-        // After cascade: the character-scope list must NOT contain the
-        // fixture skill.
+        // CHARACTER_DELETED fires once the undo-toast window (default
+        // 5000ms) expires and commitDeletedCharacterUndoSnapshot runs; the
+        // cascade then deletes the character-scope skill directory.
+        await expect.poll(() => existsSync(skillDir), { timeout: 20_000 }).toBe(false);
         const afterSkills = await page.evaluate(async (scope) => {
             const ctx = window.Luker.getContext();
-            try {
-                const list = await ctx.skills.list({ scope });
-                return (list || []).map(s => s.name);
-            } catch (_) {
-                return [];
-            }
+            const list = await ctx.skills.list({ scope });
+            return list.map(s => s.name);
         }, charScope);
         expect(afterSkills, 'cascade removed character-scope skill').not.toContain('cartographer-protocol');
 

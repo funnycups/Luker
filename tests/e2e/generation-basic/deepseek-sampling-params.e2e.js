@@ -7,8 +7,8 @@
 // temperature and top_p survive. This drives a real send through the DeepSeek
 // provider and asserts both the client body and the upstream wire body.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapDeepseekBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -23,15 +23,16 @@ function lastChatRequest() {
     return [...mock.requests].reverse().find(r => r.url.endsWith('/chat/completions'));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [MOCK_REPLY, MOCK_REPLY] });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'deepseek-sampling-params' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'deepseek-sampling-params' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapDeepseekBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, model: 'deepseek-v4-pro' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

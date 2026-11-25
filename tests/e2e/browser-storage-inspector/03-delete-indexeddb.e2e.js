@@ -5,18 +5,19 @@
 //       DB itself still present via indexedDB.databases().
 //   (b) Back at IndexedDB L2 → click delete on DB2 → verify DB gone.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'browser-storage-inspector', scenarioId: 'delete-idb' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'browser-storage-inspector', scenarioId: 'delete-idb' });
 });
 
-test.afterAll(async () => { await tearDownServer(server); });
+
 
 test.describe('Browser Storage Inspector · delete IndexedDB', () => {
     test('deletes single store; DB survives', async ({ page }) => {

@@ -1,13 +1,12 @@
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { write as writePngCard } from '../../../src/character-card-parser.js';
 import { writeEmbeddedCharacter } from './_helpers.js';
 import { writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, closeTopDrawer, openUserSettingsDrawer, selectCharacterByName } from '../_lib/page.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const ORIGINAL_NAME = 'Ash the Cartographer';
@@ -18,13 +17,14 @@ const TAGS = ['navigation', 'coastal'];
 for (const rename of [false, true]) {
     const replacementName = rename ? 'Ash the Headland Keeper' : ORIGINAL_NAME;
 
-    test(`replacement imports tags and offers world-book choices ${rename ? 'with' : 'without'} renaming`, async ({ page }) => {
+    test(`replacement imports tags and offers world-book choices ${rename ? 'with' : 'without'} renaming`, async ({ page, resources }) => {
         const server = await startServer({
+            scope: resources,
             batchKey: 'character',
             scenarioId: `replace-tags-${rename}`,
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        const directory = mkdtempSync(resolve(tmpdir(), 'luker-replace-tags-'));
+        const directory = (await resources.directory(`luker-replace-tags-${rename}`)).path;
         try {
             writeWorldBook({
                 dataRoot: server.dataRoot,
@@ -107,8 +107,7 @@ for (const rename of [false, true]) {
             await expect(worldPopup).toBeHidden();
             expect(errors).toEqual([]);
         } finally {
-            await tearDownServer(server);
-            rmSync(directory, { recursive: true, force: true });
+            await server.stop();
         }
     });
 }

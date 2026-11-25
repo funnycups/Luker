@@ -25,14 +25,14 @@
 //      (d) The colliding global CardBoundExportSlot.json is unchanged
 //          (import uses the new name, does NOT overwrite the collider).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
-import { normalizeIterStudioSettings } from './_helpers.js';
+import { normalizeIterStudioSettings, openAiResponseConfigDrawer } from './_helpers.js';
 import { writeEmbeddedCharacter, disableTagImportPopup } from '../character/_helpers.js';
 import { read as readPngCard } from '../../../src/character-card-parser.js';
 
@@ -46,14 +46,6 @@ const SLOT_TEMPERATURE = 0.31;
 const GLOBAL_COLLIDING_TEMPERATURE = 0.99;
 const FIXTURE_SKILL_NAME = 'p52-roundtrip-skill';
 const FIXTURE_BODY_ANCHOR = '# Body anchor: roundtrip v1';
-
-async function openAiResponseConfigDrawer(page) {
-    const block = page.locator('#left-nav-panel');
-    const isOpen = await block.evaluate(el => el && el.classList.contains('openDrawer')).catch(() => false);
-    if (isOpen) return;
-    await page.locator('#leftNavDrawerIcon').click();
-    await block.waitFor({ state: 'visible', timeout: 5000 });
-}
 
 async function exportSelectedPreset(page) {
     await openAiResponseConfigDrawer(page);
@@ -126,12 +118,13 @@ async function importPresetFile(page, filePath, { expectedName }) {
     }, expectedName, { timeout: 20_000 });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'cardbound-export-import-roundtrip',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -168,7 +161,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

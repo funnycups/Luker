@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend, appendConnectionProfile, markOnboarded,
@@ -17,11 +17,12 @@ test.describe.configure({ mode: 'serial' });
 
 let desktop, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash sets the spyglass down and taps the chart twice.* "Three breakers north of the gull rocks. Nothing on the moon\'s account. Something is moving out there, and it is not the tide."',
     ] });
-    desktop = await launchLukerDesktop({ scenarioId: 'boot-and-first-turn' });
+    desktop = await launchLukerDesktop({ scope, scenarioId: 'boot-and-first-turn' });
     markOnboarded({ dataRoot: desktop.dataRoot });
     bootstrapCustomBackend({ dataRoot: desktop.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: desktop.dataRoot, baseURL: mock.baseURL });

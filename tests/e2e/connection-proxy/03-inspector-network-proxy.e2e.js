@@ -4,10 +4,10 @@
 // inspector explains that route: a real chat turn under a profile proxy, then
 // the detail view reports which proxy carried it, with credentials stripped.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { startRecordingProxy } from '../_lib/recording-proxy.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
@@ -19,10 +19,11 @@ const REPLY = '*Ash taps the lantern frame.* "The relay held, and the log shows 
 const PROXY_USER = 'relay-user';
 const PROXY_SECRET = 'relay-secret';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
     proxy = await startRecordingProxy();
-    server = await startServer({ batchKey: 'regression', scenarioId: 'inspector-network-proxy' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'inspector-network-proxy' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({
@@ -48,7 +49,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await proxy?.stop();
     await mock?.stop();
 });

@@ -22,14 +22,14 @@
 //      AND the server-side filename resolver have to agree on the
 //      trimmed name.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
-import { startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
 /**
  * Read entry rows under #world_popup_entries_list — the live editor's
@@ -194,9 +194,10 @@ async function selectBookByTrimmedLabel(page, wantedTrimmed) {
     }
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startWorldInfoServer({ specBaseName: '26-cache-key-trim', scenarioId: 'cache-trim-regression' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'cache-trim-regression' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -204,7 +205,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 

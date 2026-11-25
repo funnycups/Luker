@@ -25,13 +25,14 @@
 //      gestures — bindings persist on disk and the WI pipeline
 //      reattaches correctly post-restart.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, sendMessageAndAwaitReply, selectCharacterByName } from '../_lib/page.js';
-import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+import { writeCharacterWithBinding } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -83,13 +84,14 @@ function scrubPresetPrompts(dataRoot, handle = 'default-user') {
     writeFileSync(path, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 10 }, (_, i) =>
             `*A measured reply, eyes on the horizon.* Acknowledged (${i + 1}).`,
         ),
     });
-    server = await startWorldInfoServer({ specBaseName: '27-bind-character-switch', scenarioId: 'char-bind-switch' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'char-bind-switch' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -119,7 +121,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 

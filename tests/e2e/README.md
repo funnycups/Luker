@@ -1,8 +1,9 @@
 # tests/e2e — Expanded Playwright e2e suite
 
 This directory holds the post-2.7.0 expanded e2e suite. It complements
-the legacy suites under `tests/frontend/` (Macro / iteration smoke) and
-`tests/skills-ui/playwright/` (Skills UI smoke).
+the browser-hosted suite under `tests/frontend/` (Macro / iteration smoke),
+which runs as the `frontend` Playwright project against one shared server.
+`npm run test:e2e` runs both projects.
 
 ## Layout
 
@@ -78,13 +79,11 @@ generating these specs. Quick rules:
 3. Persistence assertions cross a `server.restart()` boundary, not just
    in-memory reads.
 4. RP-immersive fixture content only — no "say hi" placeholders.
-5. `test.fail('<reason>')` for tests that lock a real product bug.
-6. `test.fixme('<blocker>')` for tests blocked on missing infrastructure
-   (mock embedder, worktree-symlink → squoosh-WASM, etc).
+5. Repair real product regressions and keep their tests passing.
+6. Report missing infrastructure explicitly. Expected failures, skips and
+   fixme annotations require explicit user authorization.
 
 ## Bugs locked
 
-None at present. When a regression lands that you cannot fix in the
-same change, wrap the failing assertion in `test.fail('<reason>')` and
-add a row here naming the spec and the broken behaviour. Removing the
-`test.fail` (and this row) is part of the fix.
+None at present. Report an unresolved regression with its failing command
+and observed behavior. Do not hide it behind an expected-failure annotation.

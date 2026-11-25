@@ -9,9 +9,9 @@
 // Captures 01-browser-l1.png and 02-indexeddb-l2.png doc screenshots,
 // gated behind LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
@@ -20,14 +20,15 @@ const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'browser-storage-inspector',
         scenarioId: 'enumerate',
     });
 });
 
-test.afterAll(async () => { await tearDownServer(server); });
+
 
 test.describe('Browser Storage Inspector · enumerate and drill', () => {
     test('L1 shows 5 categories; each drills correctly', async ({ page }) => {

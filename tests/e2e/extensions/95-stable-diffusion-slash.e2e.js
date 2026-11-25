@@ -9,8 +9,8 @@
 //     run the slash command exactly as a user would.
 //   - Verify a chat message with an image attachment lands at the tail.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -18,21 +18,22 @@ import { startSdWebUiMock } from '../_lib/sdMock.js';
 
 let server, mock, sdMock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash sets the brass spyglass down to admire the sketch.* "Sharp eye for the gull rocks."',
         ],
     });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '95-stable-diffusion' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '95-stable-diffusion' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
     await sdMock?.stop();
 });

@@ -15,29 +15,28 @@
 //   2. The URL actually resolves (200 + image content type) on the
 //      live server.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-const SCRATCH_ROOT = resolve(REPO_ROOT, 'tests/.e2e-scratch');
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'default-avatar-url',
         extraConfig: { enableUserAccounts: true },
-        useExistingDataRoot: await seedDataRoot(),
+        data: await seedDataRoot(scope),
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /**
  * Build a scratch dataRoot with one bare user: a user record (node-persist
@@ -47,8 +46,9 @@ test.afterAll(async () => {
  * settings.json gets one auto-seeded on boot, which sets user_avatar —
  * so the fallback state must be seeded explicitly.)
  */
-async function seedDataRoot() {
-    const dataRoot = resolve(SCRATCH_ROOT, 'personas-default-avatar-url');
+async function seedDataRoot(scope) {
+    const directory = await scope.directory('personas-default-avatar-url');
+    const dataRoot = directory.path;
     mkdirSync(resolve(dataRoot, '_storage'), { recursive: true });
     mkdirSync(resolve(dataRoot, 'bare-user'), { recursive: true });
 
@@ -73,7 +73,7 @@ async function seedDataRoot() {
     // to PUBLIC_USER_AVATAR.
     writeFileSync(resolve(dataRoot, 'bare-user/settings.json'), JSON.stringify({ username: 'Bare User' }));
 
-    return dataRoot;
+    return directory;
 }
 
 /** node-persist stores datums at sha256(key) under _storage. */

@@ -23,11 +23,10 @@
 //      (read via the Layer-1 read API for stable assertion) should
 //      contain the literal token; substituteParams resolves it to "7.5".
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -48,9 +47,10 @@ let server, mock, importPath;
 
 const SETVAR_REPLY = '*Seraphina lifts the chart with both hands.* {{setvar::current_omen_threshold::7.5}} "The threshold for tonight reads 7.5 — anything past that and we lift the watch."';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [SETVAR_REPLY] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'mg-var-ops' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'mg-var-ops' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -58,7 +58,7 @@ test.beforeAll(async () => {
     // The node we import carries the macro token in its identity field;
     // the macro should round-trip verbatim on storage and expand only
     // when read through substituteParams.
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-varops-'));
+    const tmpDir = (await scope.directory('mg-varops')).path;
     importPath = resolve(tmpDir, 'macro-node.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -82,7 +82,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -97,7 +97,7 @@ test.describe('#60 — MG + var_ops co-operation via macro expansion', () => {
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        }, { timeout: 10_000 });
 
         // Send a user turn; the mock reply embeds a setvar macro that
         // the var-op-log extractor will record on the assistant message.
@@ -114,8 +114,8 @@ test.describe('#60 — MG + var_ops co-operation via macro expansion', () => {
         expect(rows).toEqual([
             { op: 'setvar', key: 'current_omen_threshold', value: '7.5', path: '' },
         ]);
-        await page.locator('.popup:visible .popup-button-cancel').last().click().catch(() => {});
-        await page.locator('.var-ops-panel').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await page.locator('.popup:visible .popup-button-cancel').last().click();
+        await page.locator('.var-ops-panel').waitFor({ state: 'detached', timeout: 5000 });
 
         // Confirm the chat variable was actually set (apply ran).
         const varSeen = await page.evaluate(() => {

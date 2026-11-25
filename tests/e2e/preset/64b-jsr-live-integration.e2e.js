@@ -22,10 +22,10 @@
 // Skips gracefully if TavernHelper's ext dir + built bundle are not
 // present in the repo (e.g. cold clones without local vendor copies).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -63,12 +63,13 @@ const CARD_REGEX = {
 
 test.skip(!HAS_TAVERN_HELPER, 'JS-Slash-Runner (TavernHelper) not installed in host third-party dir; skipping live-integration');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'jsr-live-integration',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
     // Symlink the ext into the scratch dataRoot's global-extensions
@@ -111,7 +112,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

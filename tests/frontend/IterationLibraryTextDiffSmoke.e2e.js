@@ -18,7 +18,7 @@
 // screenshot per case — used by the spec's "verify the new diff shows
 // context surrounding the find/replace" check.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 
 const SERAPHINA_DESCRIPTION = `Seraphina is the ancient guardian of the Whispering Woods. Her long flowing emerald hair cascades down her shoulders, framing a face of ethereal beauty. Eyes like liquid gold shine with wisdom and warmth, mirroring the dappled sunlight filtering through the leaves. Adorned in flowing white silken robes, intricately embroidered with silver leaves and vines, she carries an aura of grace and serenity. She is barefoot, and beautiful jewelry adorns her neck and arms.
 

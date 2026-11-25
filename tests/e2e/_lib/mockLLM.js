@@ -15,7 +15,13 @@
 // has tools, the mock can be scripted to reply with a tool_calls choice
 // via `nextTool({name, arguments})` before the next chat call.
 // Test hooks: setStreamStall({afterChunks, stallMs}) halts a streaming
-// reply mid-flight; latencyMs is abort-aware.
+// reply mid-flight; latencyMs is abort-aware. holdNextQueuedRequest()
+// parks the next request that falls through to the queue (any request
+// the director/generic routes don't answer) until the test calls
+// release(); `requested` resolves with its record when it arrives, and
+// release({ status, message }) answers it with that error instead of the
+// queue. A request already closed by its client skips the hold. Chat-completion request
+// records carry closedAt / responseCompleted once the response closes.
 //
 // ─────────────────────────────────────────────────────────────────────────
 // Director-aware routing (for orchestrator director-mode runtime tests)
@@ -68,12 +74,17 @@
 //                            counters; track those yourself via a
 //                            closure over local state if needed).
 //   req.body               — raw parsed JSON body if you need more
+//   req.record             — this request's entry in `mock.requests`
 //
 // route() returns ONE of:
 //   - { text: '...' }                              plain assistant text
 //   - { tool: 'name', arguments: {...} }           single tool call
 //   - { toolCalls: [{name, arguments}, ...] }      parallel tool calls
 //   - null / undefined                             fall back to queue
+//
+// route() may also return a Promise of one of these to hold the response
+// until the test resolves it (e.g. to act in the UI while the director
+// run is in flight). The per-role turn counter advances once it settles.
 //
 // Both streaming and non-streaming transports are handled — the mock
 // emits the right shape based on the request body's `stream` flag.
@@ -145,6 +156,21 @@ const STALL_PACING_MS = 150;
 // Resolves when the response is closed by the peer (client abort) or the
 // window elapses, whichever first. Keeps a stalled mock request from
 // holding timers / sockets open after the client went away.
+// Real providers issue a fresh tool-call id per call; a per-response
+// sequence keeps the mock's ids unique across responses. `repeatId`
+// (the `repeatToolCallId` option) instead reuses one id in every
+// response, like providers that number calls per response.
+let toolCallResponseSeq = 0;
+function makeToolCallIds(prefix, count, repeatId = '') {
+    if (count <= 0) return [];
+    if (repeatId) {
+        return Array.from({ length: count }, (_, i) => (i === 0 ? repeatId : `${repeatId}-${i + 1}`));
+    }
+    toolCallResponseSeq += 1;
+    const seq = toolCallResponseSeq;
+    return Array.from({ length: count }, (_, i) => `${prefix}-${seq}-${i + 1}`);
+}
+
 function waitForCloseOrTimeout(res, ms) {
     return new Promise((resolve) => {
         if (res.destroyed || res.writableEnded) { resolve(); return; }
@@ -167,12 +193,13 @@ function waitForCloseOrTimeout(res, ms) {
  *   clearDirectorRun:()=>void,
  *   scriptCompletion:(route:Function|null)=>void,
  *   clearScriptedCompletion:()=>void,
+ *   holdNextQueuedRequest:()=>{requested:Promise<object>, release:(error?:{status:number, message?:string})=>void},
  *   setChatCompletionFailure:(fn:Function|null)=>void,
  *   requests:object[],
  *   stop:()=>Promise<void>,
  * }>}
  */
-export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0, streamChunkDelayMs = 0, streamStallAfterChunks = -1, streamStallMs = 0 } = {}) {
+export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0, streamChunkDelayMs = 0, streamStallAfterChunks = -1, streamStallMs = 0, repeatToolCallId = '' } = {}) {
     const replies = [...scriptedReplies];
     const tools = [...scriptedToolCalls];
     const requests = [];
@@ -221,6 +248,18 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
     // | null (fall through to queue).
     let genericRoute = null;
     let genericTurn = 0;
+
+    // Holds parked by holdNextQueuedRequest(), consumed in arrival order
+    // by requests that reach the queue fallback.
+    const queueHolds = [];
+    function holdNextQueuedRequest() {
+        let markRequested;
+        let release;
+        const requested = new Promise((resolve) => { markRequested = resolve; });
+        const released = new Promise((resolve) => { release = resolve; });
+        queueHolds.push({ markRequested, released });
+        return { requested, release };
+    }
     function setGenericRoute(fn) {
         genericRoute = typeof fn === 'function' ? fn : null;
         genericTurn = 0;
@@ -335,7 +374,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         // first-chunk delivery — see tests/e2e/orchestrator/
         // 81-dispatch-barrier-*.e2e.js. The record is appended before
         // any await so `mock.requests` reflects arrival order.
-        const record = { url: req.url, method: req.method, body: parsed, headers: req.headers, receivedAt: Date.now(), firstByteAt: null };
+        const record = { url: req.url, method: req.method, body: parsed, headers: req.headers, receivedAt: Date.now(), firstByteAt: null, closedAt: null, responseCompleted: null };
         requests.push(record);
 
         if ((req.url || '').includes('/chat/completions')) {
@@ -346,6 +385,10 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 if (closed) return;
                 closed = true;
                 activeChatRequests -= 1;
+                // Lets specs prove a client-side abort closed the upstream
+                // request before the mock finished its reply.
+                record.closedAt = Date.now();
+                record.responseCompleted = res.writableFinished;
             });
         }
 
@@ -436,9 +479,10 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                     const reqDescriptor = {
                         ...classification,
                         turn: turnCounters[classification.role],
+                        record,
                     };
                     try {
-                        routerResponse = directorRoute(reqDescriptor);
+                        routerResponse = await directorRoute(reqDescriptor);
                     } catch (err) {
                         // Surface router exceptions as an HTTP 500 — the
                         // test will fail loudly with the message instead
@@ -455,6 +499,9 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                     if (routerResponse !== null && routerResponse !== undefined) {
                         turnCounters[classification.role] += 1;
                     }
+                    // A held route can settle after the client closed the
+                    // request; the turn still counts, there is nobody to answer.
+                    if (res.destroyed || res.writableEnded) return;
                 }
             }
 
@@ -462,7 +509,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
 
             // Router took over → emit its response and return.
             if (routerResponse !== null && routerResponse !== undefined) {
-                respondFromRouter(res, parsed, routerResponse, isStream);
+                respondFromRouter(res, parsed, routerResponse, isStream, repeatToolCallId);
                 return;
             }
 
@@ -493,7 +540,24 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 }
                 if (generic !== null && generic !== undefined) {
                     genericTurn += 1;
-                    respondFromRouter(res, parsed, generic, isStream);
+                    respondFromRouter(res, parsed, generic, isStream, repeatToolCallId);
+                    return;
+                }
+            }
+
+            // A request whose client already went away leaves the hold
+            // for the next request: its 'close' has fired, so nothing
+            // would end the wait but release().
+            if (queueHolds.length > 0 && (res.destroyed || record.closedAt !== null)) return;
+            const hold = queueHolds.shift();
+            if (hold) {
+                hold.markRequested(record);
+                const closed = new Promise((resolve) => { res.once('close', () => resolve(null)); });
+                const releaseResponse = await Promise.race([hold.released, closed]);
+                if (res.destroyed || res.writableEnded) return;
+                if (releaseResponse && Number.isInteger(releaseResponse.status)) {
+                    res.writeHead(releaseResponse.status, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: String(releaseResponse.message || 'mock held request failed') } }));
                     return;
                 }
             }
@@ -507,6 +571,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             // either returns content OR tool_calls, not both per turn.
             const toolCall = tools.length ? tools.shift() : null;
             const reply = toolCall ? null : (replies.length ? replies.shift() : deriveEcho(parsed));
+            const toolCallId = toolCall ? makeToolCallIds('mock-tc', 1, repeatToolCallId)[0] : '';
             if (isStream) {
                 res.writeHead(200, {
                     'content-type': 'text/event-stream',
@@ -518,7 +583,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                     // and silently skips choices without it. Without `index: 0` here,
                     // every streaming tool_call gets dropped on the floor.
                     const frame = {
-                        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'mock-tc-1', type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] }, finish_reason: null }],
+                        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: toolCallId, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] }, finish_reason: null }],
                     };
                     res.write(`data: ${JSON.stringify(frame)}\n\n`);
                     res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
@@ -545,7 +610,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 return;
             }
             const choice = toolCall
-                ? { index: 0, message: { role: 'assistant', tool_calls: [{ id: 'mock-tc-1', type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] }, finish_reason: 'tool_calls' }
+                ? { index: 0, message: { role: 'assistant', tool_calls: [{ id: toolCallId, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] }, finish_reason: 'tool_calls' }
                 : { index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' };
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({
@@ -630,7 +695,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                         turn: turnCounters[classification.role],
                     };
                     try {
-                        routerResponse = directorRoute(reqDescriptor);
+                        routerResponse = await directorRoute(reqDescriptor);
                     } catch (err) {
                         res.writeHead(500, { 'content-type': 'application/json' });
                         res.end(JSON.stringify({ error: { message: `mock director route threw: ${err?.message || err}` } }));
@@ -643,7 +708,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             }
 
             if (routerResponse !== null && routerResponse !== undefined) {
-                await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: routerResponse }, chunkDelayMsGlobal);
+                await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: routerResponse }, chunkDelayMsGlobal, repeatToolCallId);
                 return;
             }
 
@@ -671,7 +736,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 }
                 if (generic !== null && generic !== undefined) {
                     genericTurn += 1;
-                    await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: generic }, chunkDelayMsGlobal);
+                    await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: generic }, chunkDelayMsGlobal, repeatToolCallId);
                     return;
                 }
             }
@@ -683,7 +748,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             const scripted = toolCall
                 ? { response: { tool: toolCall.name, arguments: toolCall.arguments } }
                 : { response: { text: reply } };
-            await respondFromResponsesRoute(res, parsed, isStreamFlagged, scripted, chunkDelayMsGlobal);
+            await respondFromResponsesRoute(res, parsed, isStreamFlagged, scripted, chunkDelayMsGlobal, repeatToolCallId);
             return;
         }
 
@@ -706,11 +771,17 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         scriptDirectorRun({ route } = {}) { setDirectorRoute(route); },
         clearDirectorRun() { setDirectorRoute(null); },
         scriptCompletion(route) { setGenericRoute(route); },
+        holdNextQueuedRequest,
         clearScriptedCompletion() { setGenericRoute(null); },
         setChatCompletionFailure(fn) { setChatCompletionFailure(fn); },
         failNextResponses,
         requests,
-        stop: () => new Promise((resolve) => server.close(() => resolve())),
+        stop: () => new Promise((resolve) => {
+            server.close(() => resolve());
+            // Tests intentionally leave generations stalled; drop their sockets
+            // so teardown does not wait for the scripted latency to elapse.
+            server.closeAllConnections?.();
+        }),
     };
 }
 
@@ -733,8 +804,9 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
  * (parallel-dispatch case) — without distinct indices the runtime's
  * tool-call assembler collapses them into one.
  */
-function respondFromRouter(res, parsed, response, isStream) {
+function respondFromRouter(res, parsed, response, isStream, repeatToolCallId = '') {
     const toolCalls = normalizeToolCalls(response);
+    const toolCallIds = makeToolCallIds('mock-tc', toolCalls.length, repeatToolCallId);
     const text = String(response.text ?? '');
     const reasoning = response.reasoning != null ? String(response.reasoning) : '';
     if (isStream) {
@@ -777,7 +849,7 @@ function respondFromRouter(res, parsed, response, isStream) {
                         delta: {
                             tool_calls: [{
                                 index: i,
-                                id: `mock-tc-${i + 1}`,
+                                id: toolCallIds[i],
                                 type: 'function',
                                 function: { name: tc.name, arguments: tc.arguments },
                             }],
@@ -800,7 +872,7 @@ function respondFromRouter(res, parsed, response, isStream) {
     if (reasoning) message.reasoning = reasoning;
     if (toolCalls.length > 0) {
         message.tool_calls = toolCalls.map((tc, i) => ({
-            id: `mock-tc-${i + 1}`,
+            id: toolCallIds[i],
             type: 'function',
             function: { name: tc.name, arguments: tc.arguments },
         }));
@@ -827,8 +899,9 @@ function respondFromRouter(res, parsed, response, isStream) {
  * optional { reasoning }). Streaming emits semantic Responses events;
  * non-streaming returns the full response object.
  */
-async function respondFromResponsesRoute(res, parsed, isStream, scripted, chunkDelayMs = 0) {
+async function respondFromResponsesRoute(res, parsed, isStream, scripted, chunkDelayMs = 0, repeatToolCallId = '') {
     const toolCalls = normalizeToolCalls(scripted.response);
+    const toolCallIds = makeToolCallIds('mock-call', toolCalls.length, repeatToolCallId);
     const text = String(scripted.response.text ?? '');
     const reasoning = scripted.response.reasoning != null ? String(scripted.response.reasoning) : '';
 
@@ -841,7 +914,7 @@ async function respondFromResponsesRoute(res, parsed, isStream, scripted, chunkD
             output.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
         }
         toolCalls.forEach((tc, i) => {
-            output.push({ type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: tc.arguments });
+            output.push({ type: 'function_call', id: `fc_${i + 1}`, call_id: toolCallIds[i], name: tc.name, arguments: tc.arguments });
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({
@@ -895,10 +968,10 @@ async function respondFromResponsesRoute(res, parsed, isStream, scripted, chunkD
     }
     for (let i = 0; i < toolCalls.length; i++) {
         const tc = toolCalls[i];
-        send({ type: 'response.output_item.added', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: '' } });
+        send({ type: 'response.output_item.added', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: toolCallIds[i], name: tc.name, arguments: '' } });
         send({ type: 'response.function_call_arguments.delta', item_id: `fc_${i + 1}`, output_index: outputIndex, delta: tc.arguments });
         send({ type: 'response.function_call_arguments.done', item_id: `fc_${i + 1}`, output_index: outputIndex, arguments: tc.arguments });
-        send({ type: 'response.output_item.done', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: tc.arguments } });
+        send({ type: 'response.output_item.done', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: toolCallIds[i], name: tc.name, arguments: tc.arguments } });
         outputIndex += 1;
     }
     send({

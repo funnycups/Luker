@@ -1,10 +1,10 @@
 // 连接配置请求超时 #3 — 插件复用 ConnectionManagerRequestService 时按"实际
 // 使用的 profile"取值：cc 与 tc 两条分支都测。请求体必须带
 // request_timeout_ms，超时后插件调用以错误结束且上游被中止。
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -20,10 +20,11 @@ function selectProfile({ dataRoot, profileId }) {
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['plugin one', 'plugin two'] });
     mock.setStreamStall({ afterChunks: 1, stallMs: 30_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-plugin' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-plugin' });
     markOnboarded({ dataRoot: server.dataRoot });
     ccProfile = appendConnectionProfile({
         dataRoot: server.dataRoot,
@@ -44,7 +45,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

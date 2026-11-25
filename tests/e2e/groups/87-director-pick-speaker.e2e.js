@@ -23,8 +23,8 @@
 // context so we open via openGroupById; /trigger requires `await=true`
 // to wait for the generation to finish before returning.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -46,9 +46,10 @@ const REPLIES = [
     '*Kestrel sketches a quick arc on a fresh corner of paper.* "South pier just put up a fourth flare. That is one beyond the steady-twos. The pilot wants confirmation before the next bell."',
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'groups', scenarioId: 'director' });
+    server = await startServer({ scope, batchKey: 'groups', scenarioId: 'director' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -56,7 +57,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

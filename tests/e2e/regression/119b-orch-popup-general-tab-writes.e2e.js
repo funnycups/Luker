@@ -15,25 +15,30 @@
 //   5. Re-open Workbench -> Orchestration -> Settings view.
 //   6. Verify both textareas still hold marker A and marker B.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
-import { openOrchWorkspace, setOrchEnabled } from '../_lib/ui-workbench.js';
+import { closeWorkbench, openOrchWorkspace, setOrchEnabled } from '../_lib/ui-workbench.js';
 
 let server;
 
 const PROMPT_MARKER_A = 'REGRESSION-119b marker A: edits must persist to settings.requestSystemPrompt.';
 const PROMPT_MARKER_B = 'REGRESSION-119b marker B: edits must persist to settings.iterModePromptSpec.';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '119b-orch-popup-writes', extraConfig: { 'storage.mode': 'fs' } });
+function readUserSettings() {
+    return JSON.parse(readFileSync(join(server.dataRoot, 'default-user', 'settings.json'), 'utf8'));
+}
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '119b-orch-popup-writes', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 function settingsTextarea(lens, labelRegex) {
     return lens.locator('label.ol-form-row').filter({
@@ -60,7 +65,10 @@ test.describe('#119b — orchestrator Settings writes persist across reload', ()
         await specIterPrompt.fill(PROMPT_MARKER_B);
         await specIterPrompt.press('Tab');
 
-        await page.waitForTimeout(800);
+        // Wait for settings save to flush to disk.
+        await expect.poll(() => readUserSettings()?.extension_settings?.orchestrator, { timeout: 15_000 })
+            .toMatchObject({ requestSystemPrompt: PROMPT_MARKER_A, iterModePromptSpec: PROMPT_MARKER_B });
+        await closeWorkbench(page);
 
         // Reload the page — the load-bearing leg.
         await reloadAndAwait(page, server.baseURL);

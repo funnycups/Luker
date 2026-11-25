@@ -4,10 +4,10 @@
 // running version stays ahead of the stub's stable tag, so the prompt can
 // only come from the prerelease on the list endpoint.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startReleaseStub } from '../_lib/releaseStub.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
@@ -56,12 +56,14 @@ async function toggleBetaUpdates(page, checked) {
     await saved;
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     stub = await startReleaseStub({
         tag: STABLE_TAG,
         releases: [STABLE_TAG, RC_TAG],
     });
     server = await startServer({
+        scope,
         batchKey: 'server',
         scenarioId: 'beta-update-toggle',
         extraEnv: { LUKER_GITHUB_API_BASE: stub.baseURL },
@@ -70,7 +72,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await stub?.stop();
 });
 

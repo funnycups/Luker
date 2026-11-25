@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import git from 'isomorphic-git';
 import { readCommitFiles, readBlobBytes } from '../../../src/sync/pipeline/git-tree.js';
@@ -8,8 +8,8 @@ import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { restoreChatCorpus, editCorpusChat, readChat, readChatData, COMPANIONS } from '../_lib/s3-chat.js';
 import { inheritedEpoch } from '../_lib/s3-inherited.js';
 import { openLanSyncPanel, closeAllPopups, clickSyncNow, readUserFile, waitForSyncPopup, syncPopup,
-    listPopupConflicts, conflictChoiceShowing, chooseConflictVersion, applyConflictChoices,
-    waitForStatusChecks, waitForBackendSync, clickUndoLastSync } from '../_lib/sync.js';
+    listPopupConflicts, conflictOtherSide, chooseConflictVersion, applyConflictChoices,
+    waitForStatusChecks, waitForBackendSync, clickUndoLastSync, readConflictDiff } from '../_lib/sync.js';
 
 const fixture = s3Fixture(test);
 test.use({ actionTimeout: 30_000 });
@@ -64,9 +64,9 @@ for (const resolution of ['current', 'theirs']) test(`stale S3 conflict ${resolu
     await reloadS3Page(b.page);
     await waitForSyncPopup(b.page);
     expect(await listPopupConflicts(b.page)).toEqual([{ path: REL, stale: true }]);
-    const current = syncPopup(b.page).locator(`.dw-conflict[data-path=${JSON.stringify(REL)}] .dw-version[data-v="current"]`);
-    await expect(current).toContainText('Later live moss edit');
-    const selected = resolution === 'current' ? 'current' : await conflictChoiceShowing(b.page, REL, 'Desk guards the moonwell');
+    const current = await readConflictDiff(b.page, REL, { index: 1 });
+    expect(`${current.text}\n${current.current.join('\n')}`).toContain('Later live moss edit');
+    const selected = resolution === 'current' ? 'current' : await conflictOtherSide(b.page, REL);
     await chooseConflictVersion(b.page, REL, selected);
     if (resolution === 'theirs') {
         expect(await applyConflictChoices(b.page)).toBe('confirm-cancelled');

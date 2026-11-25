@@ -1,8 +1,8 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, openOptionsAndClick, acceptTopmostPopup } from '../_lib/page.js';
@@ -23,9 +23,10 @@ function appendImageToLastMessage(chatPath, imageUrl) {
     writeFileSync(chatPath, lines.join('\n') + '\n');
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ash logs the reading without looking up.* "Noted. The reef is quiet enough tonight."'] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'media-gc-delete' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'media-gc-delete' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -33,7 +34,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -69,6 +70,10 @@ test('chat delete offers preview with cancel, skip, and confirmed deletion', asy
     await expect(page.locator('.mediaDeletionDialog')).toBeVisible();
 
     // The thumbnail preview must fit the viewport, mirroring the built-in viewer.
+    // The dialog wires its selection and preview handlers once the open
+    // animation settles. Wait for the initial selection count before
+    // clicking a thumbnail, otherwise the click only toggles its checkbox.
+    await expect(page.locator('.mediaDeletionSelectedCount')).toHaveText('Selected: 1');
     await page.locator('.mediaDeletionThumb').first().click();
     const previewImg = page.locator('.popup:visible .popup-content > img').last();
     await previewImg.waitFor({ state: 'visible', timeout: 15_000 });

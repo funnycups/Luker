@@ -20,8 +20,8 @@
 //       time (proves no render-storm hang).
 //   (c) The total number of full popup re-renders stays bounded.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -44,16 +44,17 @@ async function openOrchIterStudio(page) {
     await openIterStudio(page, 'orch', { scope: 'global' });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startServer({ batchKey: 'regression', scenarioId: '116-iter-studio-send-perf', extraConfig: { 'storage.mode': 'fs' } });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '116-iter-studio-send-perf', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -14,10 +14,10 @@
 //   7. Verify `.ol-setup-bar select.ol-select` value is STILL `global:secondary-spec-preset`
 //      and settings.json on disk still holds `secondary-spec-preset`.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import {
@@ -68,19 +68,19 @@ function readActiveSpecId(dataRoot) {
     return s?.extension_settings?.orchestrator?.activePresetIds?.spec || '';
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'regression',
         scenarioId: '125-orch-preset-switch-persist',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     seedTwoSpecPresets(server.dataRoot);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#125 — orchestrator preset switch persists across page reload', () => {
     test.setTimeout(90_000);

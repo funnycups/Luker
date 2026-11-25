@@ -3,8 +3,8 @@
 import http from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
@@ -217,10 +217,11 @@ let server;
 let comfy;
 let llm;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     comfy = await startComfyMock({ loraNames: ['detail_tweaker.safetensors'] });
     llm = await startIterationLlmMock();
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '04-comfy-workflow-iteration' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '04-comfy-workflow-iteration' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: llm.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: llm.baseURL, api: 'custom' });
@@ -238,7 +239,6 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
     await comfy?.stop();
     await llm?.stop();
-    await tearDownServer(server);
 });
 
 test.describe('ComfyUI workflow AI iteration in Workbench', () => {

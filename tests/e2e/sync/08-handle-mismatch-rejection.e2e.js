@@ -5,9 +5,9 @@
 // users get a confusing 412 with no explanation; dropping the server
 // check would let a hand-crafted POST through.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { createUserViaAdminUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -29,23 +29,21 @@ async function adminCreateUser(page, baseURL, { handle, name, password }) {
     await createUserViaAdminUI(page, { handle, name, password });
 }
 
-test.beforeAll(async () => {
-    A = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'mismatch-A',
-        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
+        extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: true } },
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'mismatch-B',
-        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
+        extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: true } },
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — handle-mismatch rejection', () => {
     test('UI pre-flight blocks pair; bypassing the UI surfaces a 412 HANDLE_MISMATCH from the server', async ({ browser }) => {

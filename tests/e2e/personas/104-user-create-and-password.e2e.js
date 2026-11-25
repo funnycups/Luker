@@ -11,22 +11,22 @@
 //
 // Requires `enableUserAccounts: true` at server boot, hence extraConfig.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
+import { startServer } from '../../harness/server.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'users-crud',
         extraConfig: { enableUserAccounts: true },
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /**
  * Build an APIRequestContext bound to a single user session (the cookie

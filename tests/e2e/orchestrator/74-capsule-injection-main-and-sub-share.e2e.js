@@ -27,8 +27,8 @@
 //   the sentinel appears in BOTH the main agent's request body AND the
 //   sub-agent's request body in mock.requests.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -39,8 +39,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 const CAPSULE_TEXT =
     '[Orchestration Capsule from prior turn]\n'
@@ -50,16 +50,17 @@ const CAPSULE_TEXT =
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '74-capsule-inject' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '74-capsule-inject' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

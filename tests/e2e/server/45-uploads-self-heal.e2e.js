@@ -10,24 +10,23 @@
 // `ensureDirectory(uploadsPath)` per request. Pre-fix, multer would resolve
 // `dest` once at boot and silently fail forever after the dir was removed.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
 const UPLOADS_DIR = '_uploads';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'server', scenarioId: 'uploads-heal' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'uploads-heal' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#45 — _uploads/ directory self-heals after deletion', () => {
     test('delete uploads dir while running; next upload re-creates it and succeeds', async ({ page }) => {

@@ -171,9 +171,12 @@ export async function startComfyMock({ loraNames = [] } = {}) {
             socket.destroy();
             return;
         }
+        // Send the upgrade response and initial status frame in one transport write.
+        socket.cork();
         wsServer.handleUpgrade(req, socket, head, ws => {
             wsServer.emit('connection', ws, req);
         });
+        socket.uncork();
     });
 
     await new Promise(resolve => httpServer.listen(0, '127.0.0.1', resolve));

@@ -1,21 +1,19 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { chmodSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, openExtensionsDrawer } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'extensions',
         scenarioId: 'settings-save-failure',
         extraConfig: { enableUserAccounts: false },
     });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test('a failed settings write reports an error and allows saving the same edit again', async ({ page }) => {

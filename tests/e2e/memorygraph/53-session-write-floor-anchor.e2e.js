@@ -21,11 +21,10 @@
 //      floor) must NOT survive — they truncate alongside the deleted
 //      assistant turn.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -33,12 +32,14 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     deleteMessageViaUI,
+    reloadAndAwait,
 } from '../_lib/page.js';
 import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina folds the chart and meets your eyes.* "The lantern will hold."',
         '*She traces a line on the chart with one knuckle.* "Breakers north of the gulls."',
@@ -46,7 +47,7 @@ test.beforeAll(async () => {
         '*She turns to the rail, spyglass raised.* "Hold. Don\'t speak for a moment."',
         '*Seraphina nods once.* "Then it is decided. We wait."',
     ] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'floor-anchor' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'floor-anchor' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -54,7 +55,7 @@ test.beforeAll(async () => {
     // Three sentinel nodes. Imported with "Bind Latest Floor" mode, they
     // anchor to the chat's current tail floor — the exact precondition
     // for the floor-anchor regression check.
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-anchor-'));
+    const tmpDir = (await scope.directory('mg-anchor')).path;
     importPath = resolve(tmpDir, 'sentinels.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -99,9 +100,26 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
+
+/**
+ * Read the TailAnchor sentinel titles through the memory-graph session of
+ * the current chat, together with whether the session opened and the chat
+ * length.
+ */
+async function readTailAnchors(page) {
+    return page.evaluate(async () => {
+        const ctx = window.Luker.getContext();
+        const mg = ctx.getExtensionApi?.('memory-graph');
+        const session = await mg?.openSession?.(ctx);
+        const titles = session
+            ? session.listVisibleCandidates({}).map(n => n.title).filter(t => /TailAnchor/.test(t)).sort()
+            : [];
+        return { sessionOk: Boolean(session), chatLen: ctx.chat.length, titles };
+    });
+}
 
 test.describe('#53 — session-write floor anchor: delete-floor truncates MG records', () => {
     test('5 turns → import sentinels bound to tail → delete last assistant → sentinels are gone', async ({ page }) => {
@@ -109,13 +127,6 @@ test.describe('#53 — session-write floor anchor: delete-floor truncates MG rec
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
-
-        // Disable the delete-confirmation popup so deleteMessageViaUI does
-        // not need a follow-up OK click.
-        await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            if (ctx.powerUserSettings) ctx.powerUserSettings.confirm_message_delete = false;
-        });
 
         // 5 RP turns so the chat tail anchor is non-trivial.
         for (const t of [
@@ -132,18 +143,13 @@ test.describe('#53 — session-write floor anchor: delete-floor truncates MG rec
         await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
 
-        // Verify the sentinels are visible BEFORE the delete.
-        const beforeDelete = await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const mg = ctx.getExtensionApi?.('memory-graph');
-            const session = await mg?.openSession?.(ctx);
-            if (!session) return { titles: [], chatLen: ctx.chat.length };
-            const titles = session.listVisibleCandidates({})
-                .map(n => n.title)
-                .filter(t => /TailAnchor/.test(t))
-                .sort();
-            return { titles, chatLen: ctx.chat.length };
-        });
+        // Positive control: after a reload the sentinels must come back
+        // through the same disk-replay read used after the delete, so their
+        // later absence can only mean truncation.
+        await reloadAndAwait(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        const beforeDelete = await readTailAnchors(page);
+        expect(beforeDelete.sessionOk, 'memory-graph session must open after reload').toBe(true);
         expect(beforeDelete.titles).toEqual([
             'TailAnchorChar-A',
             'TailAnchorChar-B',
@@ -163,8 +169,8 @@ test.describe('#53 — session-write floor anchor: delete-floor truncates MG rec
         // Hover + scroll the target message so its .extraMesButtons row
         // renders and the .mes_edit pencil is reachable.
         const mes = page.locator(`.mes[mesid="${lastAssistantId}"]`);
-        await mes.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
-        await mes.hover().catch(() => {});
+        await mes.scrollIntoViewIfNeeded({ timeout: 5000 });
+        await mes.hover();
 
         await deleteMessageViaUI(page, lastAssistantId);
 
@@ -186,27 +192,14 @@ test.describe('#53 — session-write floor anchor: delete-floor truncates MG rec
         // extra slack covers slow CI.
         await page.waitForTimeout(5000);
 
-        // Drop the cached store so the next read replays the (truncated)
-        // floor-state log from disk.
-        await page.evaluate(async () => {
-            try {
-                const mod = await import('/scripts/extensions/memory-graph/main.js');
-                if (mod.invalidateMemoryStoreCache) mod.invalidateMemoryStoreCache();
-            } catch { /* best-effort */ }
-        });
+        // Reload so the next read replays the (truncated) floor-state log
+        // from disk instead of the in-memory store.
+        await reloadAndAwait(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        const afterDelete = await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const mg = ctx.getExtensionApi?.('memory-graph');
-            const session = await mg?.openSession?.(ctx);
-            if (!session) return { titles: [] };
-            const titles = session.listVisibleCandidates({})
-                .map(n => n.title)
-                .filter(t => /TailAnchor/.test(t))
-                .sort();
-            return { titles };
-        });
-
+        const afterDelete = await readTailAnchors(page);
+        expect(afterDelete.sessionOk, 'memory-graph session must open after reload').toBe(true);
+        expect(afterDelete.chatLen, 'the reloaded chat must have one message fewer').toBe(beforeDelete.chatLen - 1);
         expect(
             afterDelete.titles,
             `expected all TailAnchor sentinels to truncate with the deleted floor, but these survived: ${JSON.stringify(afterDelete.titles)}`,

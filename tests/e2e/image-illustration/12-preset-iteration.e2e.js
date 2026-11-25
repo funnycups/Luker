@@ -2,8 +2,8 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -25,9 +25,11 @@ import {
 let server;
 let mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
     server = await startServer({
+        scope,
         batchKey: 'image-illustration',
         scenarioId: '12-preset-iteration',
         extraConfig: { enableUserAccounts: false, disableUpdateCheck: true },
@@ -38,7 +40,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

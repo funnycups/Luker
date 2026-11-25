@@ -2,12 +2,11 @@
 // UI file picker. BYAF is a zipped bundle with manifest.json + character
 // + scenario JSON files + images.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import AdmZip from 'adm-zip';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
@@ -46,15 +45,16 @@ const SCENARIO = {
     messages: [],
 };
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'import-byaf' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'import-byaf' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-byaf-'));
+    tmpDir = (await scope.directory('luker-e2e-byaf')).path;
     const iconPng = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
     const zip = new AdmZip();
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(MANIFEST), 'utf8'));
@@ -66,11 +66,8 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
-    if (tmpDir && existsSync(tmpDir)) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-    }
 });
 
 test.describe('#18 — Import byaf character card via UI file picker', () => {

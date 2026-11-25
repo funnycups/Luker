@@ -1,5 +1,5 @@
 /* eslint-disable playwright/no-conditional-in-test, playwright/no-conditional-expect -- Crash boundaries have distinct pre-restart artifacts; a provider may retain a completed orphan. */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { s3Fixture, createReadyWorldBook } from '../_lib/sync-s3.js';
@@ -36,12 +36,16 @@ for (const point of [...receiving, ...sending]) {
         const before = await remoteHead(fixture, options, a);
         const packsBefore = await remotePacks(fixture, options);
         const orphaned = [];
+        await victim.server.expectExit({ code: null, signal: 'SIGKILL' });
         fs.writeFileSync(arm, '');
         await startManual(victim);
-        await victim.server.waitForStderr(`luker-sync-failpoint: ${point}\n`);
+        // Managed process output redacts supplied environment values, so the
+        // marker's point name arrives as the redaction placeholder. The arm
+        // file proves which armed point consumed it before the SIGKILL.
+        await victim.server.waitForStderr('luker-sync-failpoint: ');
         expect(await victim.server.kill()).toEqual({ code: null, signal: 'SIGKILL' });
         expect(fs.existsSync(arm)).toBe(false);
-        expect(victim.server.output.match(/^luker-sync-failpoint: .*$/gm)).toEqual([`luker-sync-failpoint: ${point}`]);
+        expect(victim.server.output.match(/^luker-sync-failpoint: .*$/gm)).toHaveLength(1);
         const localPaths = pathsOf(victim);
         const installed = fs.readdirSync(`${localPaths.gitDir}/objects/pack`);
         if (point === 's3-pack-installed-before-index') {

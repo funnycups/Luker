@@ -12,8 +12,8 @@
 // other character/* tests. If extracted into a unit test suite, the
 // supertest harness would be appropriate.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from './_helpers.js';
@@ -23,9 +23,10 @@ let server, mock, avatar;
 
 const UNSET = '__@@UNSET@@__';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'merge-attrs' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'merge-attrs' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -34,7 +35,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

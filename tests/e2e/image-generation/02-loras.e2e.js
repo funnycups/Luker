@@ -6,8 +6,8 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -102,12 +102,13 @@ function writeLoraWorkflow(dataRoot) {
     );
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     comfy = await startComfyMock();
     comfy.setLoras(['lora_a.safetensors']);
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM({ scriptedReplies: ['*Ash keeps the lantern trimmed and waits.*'] });
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '02-loras' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '02-loras' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, api: 'custom' });
@@ -115,7 +116,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
     await sdMock?.stop();
     await comfy?.stop();

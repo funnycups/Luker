@@ -22,22 +22,20 @@
 // vectorized). This proves the flag is round-tripped through the editor
 // UI, not just on disk.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
-import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+import { writeCharacterWithBinding } from './_helpers.js';
 
 /**
- * The shared dev seed at `data/default-user/settings.json` may carry an
- * orchestrator-flavored preset selection (e.g. `plugin-only-...`) whose
- * giant system prompt would dominate the chat-completion body and crowd
- * the WI-injected entries out of the budget assertion. Drop the preset
- * pointer + the prompts array so the prompt body the WI activation
- * injects into is small and predictable. Idempotent.
+ * Empty the active chat-completion preset's prompts and keep the
+ * orchestrator off, so the request body the WI activation injects into is
+ * small and predictable for the budget assertion. Idempotent.
  */
 function scrubPresetPrompts(dataRoot, handle = 'default-user') {
     const path = resolve(dataRoot, handle, 'settings.json');
@@ -107,13 +105,14 @@ const STRATEGY_ENTRIES = [
     },
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 8 }, (_, i) =>
             `*Ash answers measuredly, eyes still on the chart.* Reply ${i + 1} acknowledged.`,
         ),
     });
-    server = await startWorldInfoServer({ specBaseName: '25-activation-strategies', scenarioId: 'activation-strategies' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'activation-strategies' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -134,7 +133,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 

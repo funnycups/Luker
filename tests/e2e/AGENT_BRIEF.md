@@ -13,11 +13,12 @@ the same time.
    except adding to `tests/e2e/<your-batch>/`.
 2. **Spec naming**: `tests/e2e/<your-batch>/<NN>-<short-name>.e2e.js`
    where NN is the case number from the master list (#1–#115).
-3. **Use the shared `_lib`** — don't reinvent. Import from
-   `../_lib/server.js`, `../_lib/page.js`, `../_lib/mockLLM.js`,
-   `../_lib/fixtures.js`. Read those files to learn the API.
-4. **Port range**: your batch already has a reserved port range in
-   `_lib/ports.js`. Just pass your `batchKey` to `startServer()`.
+3. **Use the shared harness and `_lib`** — don't reinvent. Import `test, expect`
+   from `../../harness/playwright.js`, `startServer` from
+   `../../harness/server.js`, and helpers from `../_lib/page.js`,
+   `../_lib/mockLLM.js`, `../_lib/fixtures.js`. Read those files to learn the API.
+4. **Managed port and scope**: pass a resource `scope` (`await workerResources.scenario(testInfo.file)`
+   in `beforeAll`, or `resources` inside a `test`) and your `batchKey` to `startServer()`.
 5. **No mocks where real is feasible** — real Luker server, real Playwright,
    real browser, real chat history on disk. Mock the LLM only (already
    provided). Per repo convention `e2e_real_user_flow`.
@@ -29,26 +30,27 @@ the same time.
    not enough.
 8. **Full raw content** — chat bubbles must equal model output 1:1 (per
    `feedback_no_silent_truncation`).
-9. **Each spec must clean up after itself** — `afterAll` calls
-   `tearDownServer(server)` and `mock.stop()`. The scratch dataRoot is
-   wiped automatically.
+9. **Each spec must clean up after itself** — `scope` stops `server` and wipes
+   the managed `dataRoot` automatically; `afterAll` stops in-process mocks such
+   as `mock.stop()`.
 10. **Don't run the full suite — only your own batch.** When you're
     happy, run `cd tests && npx playwright test e2e/<your-batch>/ --reporter=list`.
-    You don't need every test to pass on first try — failures that
-    look like real product bugs should be left as failing tests with a
-    `test.fail(...)` or a `test.fixme(...)` annotation describing what
-    they expose. Better an "expected failure" recording a real bug
-    than a glossed-over test.
+     Fix verified product failures and preserve the regression coverage.
+     Report unresolved failures with evidence. Expected-failure and fixme
+     annotations require explicit user authorization.
 
 ## Shared `_lib` quick reference
 
-### `server.js`
+### `../../harness/playwright.js` & `../../harness/server.js`
 ```js
-import { startServer, tearDownServer } from '../_lib/server.js';
-const server = await startServer({ batchKey: 'chat', scenarioId: 'unique' });
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+
+const scope = await workerResources.scenario(testInfo.file);
+const server = await startServer({ scope, batchKey: 'chat', scenarioId: 'unique' });
 // server.port, server.dataRoot, server.baseURL
-await server.restart();           // kills + respawns same dataRoot
-await tearDownServer(server);     // afterAll
+await server.restart();           // stops + respawns same dataRoot
+await server.stop();              // optional early stop; scope cleans up automatically
 ```
 
 ### `mockLLM.js`
@@ -103,24 +105,24 @@ const snap = await getChatSnapshot(page);  // {chatId, length, messages, metadat
 
 ```js
 // tests/e2e/<your-batch>/01-thing.e2e.js
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [ /* RP-immersive replies */ ] });
-    server = await startServer({ batchKey: 'YOUR_BATCH_KEY', scenarioId: 'thing' });
+    server = await startServer({ scope, batchKey: 'YOUR_BATCH_KEY', scenarioId: 'thing' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 
@@ -144,10 +146,8 @@ cd /Users/funnycups/worktree/luker-e2e-expand/tests
 PW_WORKERS=2 npx playwright test e2e/<your-batch>/ --reporter=list
 ```
 
-Expected outcome per case: a row with ✓ (pass) or ✘ (real product bug —
-keep it but mark `test.fail()`). If a spec is fundamentally blocked by
-missing UI / unknown API, leave a `test.fixme()` with a one-line note
-on why, so a human (or follow-up agent) can pick it up.
+Report passing cases, verified product failures and infrastructure blockers
+separately. Do not annotate a failing case as expected without authorization.
 
 ## Reporting format
 
@@ -155,7 +155,7 @@ When done, return a brief summary:
 ```
 Files written:
 - tests/e2e/<batch>/01-x.e2e.js       (3 cases, 3 pass)
-- tests/e2e/<batch>/02-y.e2e.js       (2 cases, 1 pass, 1 fixme: <reason>)
+- tests/e2e/<batch>/02-y.e2e.js       (2 cases, 1 pass, 1 failure: <reason>)
 
-Total: <N> cases / <P> pass / <F> fail (real bugs?) / <X> fixme
+Total: <N> cases / <P> pass / <F> fail / infrastructure blockers: <details>
 ```

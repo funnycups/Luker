@@ -3,20 +3,25 @@
 // and desktop shells get refresh alone. Each case injects a bridge shape
 // before the page boots, opens the real drawer, and clicks the real buttons.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from './_lib/server.js';
+import { test, expect } from '../harness/playwright.js';
+import { startServer } from '../harness/server.js';
 import { markOnboarded } from './_lib/fixtures.js';
 import { awaitMainUI } from './_lib/page.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server;
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'chat', scenarioId: 'drawer' });
+    server = await startServer({ scope: fileScope, batchKey: 'chat', scenarioId: 'drawer' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 /** Open the User Settings drawer through its real toggle. */

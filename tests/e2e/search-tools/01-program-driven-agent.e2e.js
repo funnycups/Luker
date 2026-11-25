@@ -16,8 +16,8 @@
 // anything else (the main generation) gets the plain reply. Determinism comes
 // from the scripted sequence, not from the live search results.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -29,31 +29,59 @@ import {
     selectCharacterByName,
     openExtensionsDrawer,
     closeExtensionsDrawer,
+    sendMessageViaUI,
 } from '../_lib/page.js';
 
 const AGENT_SEARCH = 'luker_search_agent_search';
 const AGENT_UPSERT = 'luker_search_agent_upsert_lorebook_entry';
+const AGENT_GET = 'luker_search_agent_get_lorebook_entries';
 const PANEL = '.rpdock.rp-dock';
 const SHARED_LOREBOOK = '__SEARCH_TOOLS__';
+const RUNNING_TOAST = /running/i;
 const MAIN_REPLY = '*Seraphina folds the chart and sets the lantern on the sill.* "The tide will tell us more than the glass will tonight. Stay a while."';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'extensions', scenarioId: 'search-tools-agent' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: 'search-tools-agent', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
 test.describe('search-tools program-driven agent', () => {
     test.describe.configure({ mode: 'serial' });
+
+    test('reads all requested managed entries beyond the former limit', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        await enablePreRequestAgent(page);
+        const ids = Array.from({ length: 12 }, (_, index) => `watch_${index}`);
+        let round = 0;
+        mock.clearScriptedCompletion();
+        mock.scriptCompletion(({ toolNames }) => {
+            if (!toolNames?.includes(AGENT_SEARCH)) return { text: MAIN_REPLY };
+            if (round++ === 0) return { toolCalls: ids.map(id => ({ name: AGENT_UPSERT, arguments: { entry_id: id, title: id, keywords: [id], content: `The harbor watch records ${id}.`, always_inject: false } })) };
+            if (round === 2) return { tool: AGENT_GET, arguments: { entry_ids: [...ids, 'missing_watch'] } };
+            return { text: 'The harbor records are complete.' };
+        });
+        await sendMessageViaUI(page, 'Read all the harbor watch records before we sail.');
+        await expect(page.locator(PANEL).locator('.rp-status')).toHaveAttribute('data-status', 'committed', { timeout: 90_000 });
+        const request = mock.requests.find(record => record.body?.messages?.some(message => message.role === 'tool' && String(message.content).includes('missing_entry_ids')));
+        expect(request).toBeTruthy();
+        const result = request.body.messages.filter(message => message.role === 'tool').map(message => {
+            try { return JSON.parse(message.content); } catch { return null; }
+        }).find(value => Array.isArray(value?.missing_entry_ids));
+        expect(result.entries.map(entry => entry.entry_id)).toEqual(ids);
+        expect(result.missing_entry_ids).toEqual(['missing_watch']);
+    });
 
     test('runs the agent, auto-opens the run panel, writes the shared lorebook, and stops on a no-tool-call round', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
@@ -85,30 +113,30 @@ test.describe('search-tools program-driven agent', () => {
             return { text: 'Existing managed entries already cover this turn; no further search is needed.' };
         });
 
-        await sendChat(page, '*She taps the chart once.* "Check the logbook before the next watch."');
+        await sendMessageViaUI(page, '*She taps the chart once.* "Check the logbook before the next watch."');
 
         // The shared Run Dock auto-opens on the non-quiet RUN_STARTED emitted
         // when the pre-request agent begins.
         const panel = page.locator(PANEL);
         await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
+        // The run panel is the only running indicator.
+        await expect(page.locator('#toast-container .toast', { hasText: RUNNING_TOAST })).toHaveCount(0);
 
-        // Enlarge the dock if available so all blocks render together in `.rp-dock-blocks`.
-        const enlargeBtn = panel.locator('button[aria-label*="Enlarge"], button[title*="Enlarge"], button[aria-label*="放大"], button[title*="放大"]').first();
-        if (await enlargeBtn.isVisible().catch(() => false)) {
-            await enlargeBtn.click();
-        }
+        // Enlarge the dock so all rounds and their details are available.
+        const enlargeBtn = panel.getByRole('button', { name: /^(Enlarge|放大)$/ });
+        await expect(enlargeBtn).toBeVisible();
+        await enlargeBtn.click();
 
         // The run settles into the committed terminal state — the agent stopped
         // on the scripted no-tool-call round.
         await expect(panel.locator('.rp-status')).toHaveAttribute('data-status', 'committed', { timeout: 60_000 });
 
-        // Expand the first agent round in large view if collapsed so `.rp-step` rows mount.
-        if (await panel.locator('.rp-step[data-kind="tool_call"]').count() === 0) {
-            const firstHead = panel.locator('.rp-dock-agent-head').first();
-            if (await firstHead.isVisible().catch(() => false)) {
-                await firstHead.click();
-            }
+        const firstHead = panel.locator('.rp-dock-agent-head').first();
+        await expect(firstHead).toBeVisible();
+        if ((await firstHead.getAttribute('aria-expanded')) !== 'true') {
+            await firstHead.click();
         }
+        await expect(firstHead).toHaveAttribute('aria-expanded', 'true');
 
         // At least one step carries a tool_call kind.
         await expect.poll(
@@ -116,11 +144,17 @@ test.describe('search-tools program-driven agent', () => {
             { timeout: 30_000 },
         ).toBeGreaterThan(0);
 
-        // The final block / text is visible with no tool_call inside `.rp-dock-final` or last agent block.
+        // The final round exposes the actual no-tool reply, not an absent block.
         const lastBlock = panel.locator('.rp-dock-agent').last();
-        if (await lastBlock.isVisible().catch(() => false)) {
-            await expect(lastBlock.locator('.rp-step[data-kind="tool_call"]')).toHaveCount(0);
+        await expect(lastBlock).toBeVisible();
+        const lastHead = lastBlock.locator('.rp-dock-agent-head');
+        if ((await lastHead.getAttribute('aria-expanded')) !== 'true') {
+            await lastHead.click();
         }
+        await expect(lastHead).toHaveAttribute('aria-expanded', 'true');
+        await expect(lastBlock.locator('.rp-step[data-kind="tool_call"]')).toHaveCount(0);
+        await expect(lastBlock.locator('.rp-step[data-kind="text"] .rp-textblock'))
+            .toHaveText('Existing managed entries already cover this turn; no further search is needed.');
 
         // The shared lorebook gained a managed entry, read back through the
         // app's own world-info API.
@@ -150,10 +184,11 @@ test.describe('search-tools program-driven agent', () => {
         });
 
         try {
-            await sendChat(page, '*She unrolls a fresh chart.* "Hold the light steady — I want the reef line exact."');
+            await sendMessageViaUI(page, '*She unrolls a fresh chart.* "Hold the light steady — I want the reef line exact."');
 
             const panel = page.locator(PANEL);
             await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
+            await expect(page.locator('#toast-container .toast', { hasText: RUNNING_TOAST })).toHaveCount(0);
             const stopButton = panel.locator('button.rp-dock-stop').first();
             await stopButton.waitFor({ state: 'visible', timeout: 30_000 });
             await stopButton.click();
@@ -182,15 +217,6 @@ async function enablePreRequestAgent(page) {
     await checkbox.check();
     await expect(checkbox).toBeChecked();
     await closeExtensionsDrawer(page);
-}
-
-async function sendChat(page, text) {
-    await page.evaluate((prompt) => {
-        const ta = document.getElementById('send_textarea');
-        ta.value = prompt;
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        document.getElementById('send_but').click();
-    }, text);
 }
 
 async function readSharedManagedEntries(page) {

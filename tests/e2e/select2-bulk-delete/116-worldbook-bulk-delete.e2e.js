@@ -5,11 +5,11 @@
 // only used for the "which book is open in the editor" setup gesture and
 // for reading the surviving option labels — never to invoke the feature.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import AdmZip from 'adm-zip';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
 import { awaitMainUI, acceptTopmostPopup, cancelTopmostPopup } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
@@ -19,17 +19,16 @@ test.describe.configure({ mode: 'serial' });
 const BOOKS = ['reef-conditions', 'reef-drifters', 'tide-tables'];
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'bulkdelete', scenarioId: 'worldbook' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'bulkdelete', scenarioId: 'worldbook' });
     markOnboarded({ dataRoot: server.dataRoot });
     for (const name of BOOKS) {
         writeWorldBook({ dataRoot: server.dataRoot, name, entries: BRYN_ENTRIES });
     }
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.beforeEach(async ({ page }) => {
     await awaitMainUI(page, server.baseURL);

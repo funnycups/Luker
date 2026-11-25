@@ -22,10 +22,10 @@
 //     "split + merge preserves the message stream", not "header is
 //     identical".
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -45,20 +45,21 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina folds the chart edge under a brass weight.* "r0: the swell is rising."',
         '*Seraphina taps the compass glass twice.* "r1: north-by-east, steady."',
         '*Seraphina lowers the spyglass onto the chart.* "r2: the reef is masked tonight."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'split-merge-roundtrip' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'split-merge-roundtrip' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

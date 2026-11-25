@@ -13,8 +13,8 @@
 //   5. Assert the mock LLM receives a request whose body references the
 //      attachment (URL, filename, or text content).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -27,18 +27,19 @@ const ATTACHMENT_TEXT = [
     'Tide level: minus seven from the marker stone. Wind: WSW, steady.',
 ].join('\n');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash glances over the page you handed her.* "The drifters never light two lanterns by accident. Stay low."',
     ] });
-    server = await startServer({ batchKey: 'server', scenarioId: 'attach' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'attach' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

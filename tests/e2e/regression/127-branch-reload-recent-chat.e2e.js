@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -14,17 +14,18 @@ import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash studies the inked coastline.* "The western marker is still where we left it."',
             '*Ash lowers the spyglass.* "The northern buoy still burns beyond the fog."',
         ],
     });
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'regression',
         scenarioId: 'branch-reload-recent-chat',
-        extraConfig: { 'performance.lazyLoadCharacters': true },
+        extraConfig: { performance: { lazyLoadCharacters: true } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -33,7 +34,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -142,9 +143,18 @@ test.describe('#127 - original chat selection after branching', () => {
         await welcomePanel.waitFor({ state: 'visible', timeout: 15_000 });
         const originalEntry = welcomePanel.locator(`.recentChat[data-file=${JSON.stringify(originalChatId)}]`);
         await expect(originalEntry).toHaveCount(1);
+        // Wait for the card pointer write triggered by the selection before
+        // reloading; the chat id updates before the merge request settles.
+        const pointerPersistedBeforeReload = page.waitForResponse((response) => {
+            if (!response.url().endsWith('/api/characters/merge-attributes') || response.request().method() !== 'POST') {
+                return false;
+            }
+            return response.request().postDataJSON()?.chat === originalChatId;
+        }, { timeout: 15_000 });
         await originalEntry.click();
 
         await page.waitForFunction((chatId) => window.Luker.getContext().getCurrentChatId() === chatId, originalChatId, { timeout: 15_000 });
+        await pointerPersistedBeforeReload;
 
         // After the welcome early-return path, reload once more. The freshly
         // reloaded card must point at the original chat (the healed pointer),

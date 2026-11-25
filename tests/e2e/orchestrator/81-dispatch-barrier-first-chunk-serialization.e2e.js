@@ -33,8 +33,8 @@
 // barrier, not by network / server / director-runtime plumbing. If the
 // barrier were disabled, both cases would look like (b).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -45,8 +45,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 // Three timing thresholds pin down what "barrier engaged" vs "barrier
 // bypassed" looks like on the mock. They are NOT independent —
@@ -82,11 +82,12 @@ const BYPASSED_MAX_SPREAD_MS = 100;
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // Streaming-capable mock with a first-byte latency so we can
     // measure follower-request timing relative to lead first-byte.
     mock = await startMockLLM({ latencyMs: LATENCY_MS });
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '81-dispatch-barrier' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '81-dispatch-barrier' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     // The connection profile name here is the barrier key that sub-
@@ -96,7 +97,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -133,22 +134,11 @@ async function runFanOutTurn(page, { agentApiPresetName }) {
         ],
     });
 
-    // Ensure streaming is enabled at runtime. `bootstrapCustomBackend`
-    // wrote `stream_openai: true` to settings.json, but the live
-    // `oai_settings` singleton gets reset by
-    // `installMinimalDirectorProfile`'s `saveSettings({directSave})`
-    // call (which round-trips through the server and re-applies the
-    // persisted body). Force streaming back on AFTER profile install
-    // so `isStreamingPresetEnabled('')` — the fallback path the
-    // barrier reads when the sub-agent's `llmPresetName` is empty —
-    // returns true. Without this the barrier detects
-    // "non-streaming preset" and opts out; the ACTIVE sub-test would
-    // pass trivially with `streamEnabled=false, barrierKey=''` and
-    // hide any barrier regressions.
-    await page.evaluate(() => {
-        const ctx = window.Luker.getContext();
-        if (ctx?.chatCompletionSettings) ctx.chatCompletionSettings.stream_openai = true;
-    });
+    // The barrier is gated on the resolved preset's stream flag, and the
+    // sub-agents fall back to the active preset (`bootstrapCustomBackend`
+    // saves `stream_openai: true` into it). Without streaming the barrier
+    // opts out and the ACTIVE sub-test would pass trivially.
+    expect(await page.evaluate(() => window.Luker.getContext().chatCompletionSettings.stream_openai)).toBe(true);
 
     // Clear any leftover run state from a prior sub-test.
     await page.evaluate(async () => {
@@ -199,33 +189,11 @@ async function runFanOutTurn(page, { agentApiPresetName }) {
 
     const startIdx = mock.requests.length;
 
-    // Guard against the director-preset-swap "unsaved changes" popup
-    // (director-preset-swap.js:141). When the takeover fires and the
-    // active openai preset has any diff vs its persisted body, the
-    // popup opens and blocks Generate. We auto-click "Discard and
-    // continue" — the test's mock backend doesn't care about
-    // persisted preset bodies, and picking Discard avoids side-
-    // effect writes to the fixture dataRoot. Idempotent: the poll
-    // exits either on click success or on generation completion.
-    const popupDismisser = (async () => {
-        for (let i = 0; i < 300; i++) {
-            const btn = page.locator('dialog.popup .popup-button-cancel:visible').last();
-            try {
-                if (await btn.isVisible({ timeout: 100 })) {
-                    await btn.click({ timeout: 500 });
-                    return;
-                }
-            } catch { /* no popup this tick */ }
-            await new Promise(r => setTimeout(r, 100));
-        }
-    })();
-
     await sendMessageAndAwaitReply(
         page,
         `barrier check ${agentApiPresetName ? 'engaged' : 'bypassed'}`,
         { timeoutMs: 60_000 },
     );
-    void popupDismisser; // fire-and-forget; the polling window is bounded
 
     // Filter to sub-agent requests only. Sub-agent fingerprint = system
     // messages contain <orchestration_role>...</orchestration_role>

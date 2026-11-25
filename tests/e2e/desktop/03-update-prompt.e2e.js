@@ -8,10 +8,9 @@
 // real. `LUKER_DESKTOP_SKIP_OPEN_INSTALLER` keeps the download from actually
 // handing a file to the OS installer.
 
-import { test, expect } from '@playwright/test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { test, expect } from '../../harness/playwright.js';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { startReleaseStub } from '../_lib/releaseStub.js';
 import { launchLukerDesktop } from '../_lib/desktop.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -32,13 +31,15 @@ function updatePrompt(page) {
     return page.locator('dialog.popup[open]', { hasText: 'A Luker update is available.' });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     stub = await startReleaseStub({
         tag: '9.9.9',
         assets: [{ name: ASSET_NAME, url: `/download/${ASSET_NAME}`, size: Buffer.byteLength(ASSET_BYTES) }],
         assetBody: ASSET_BYTES,
     });
     desktop = await launchLukerDesktop({
+        scope,
         scenarioId: 'update-prompt',
         extraEnv: {
             LUKER_GITHUB_API_BASE: stub.baseURL,
@@ -85,9 +86,10 @@ test('a relaunch clears the installer an earlier run downloaded', async () => {
     expect(existsSync(destination)).toBe(false);
 });
 
-test('a failing asset download is reported, not swallowed', async () => {
+test('a failing asset download is reported, not swallowed', async ({ resources }) => {
     stub.setAssetStatus(404);
     const failing = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'update-failure',
         extraEnv: {
             LUKER_GITHUB_API_BASE: stub.baseURL,
@@ -113,7 +115,7 @@ test('the shell reports how it was installed', async () => {
     expect(await desktop.page.evaluate(() => window.LukerDesktop.installFlavour)).toBe('');
 });
 
-test('a release with no asset for this install opens the release page', async () => {
+test('a release with no asset for this install opens the release page', async ({ resources }) => {
     // The stub is swapped to serve only a build for another platform, so the
     // endpoint reports no matching asset. Downloads are restored to 200, so an
     // attempt to fetch one would leave a file behind and the assertions below
@@ -126,6 +128,7 @@ test('a release with no asset for this install opens the release page', async ()
     stub.setAssetStatus(200);
 
     const noAsset = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'update-no-asset',
         extraEnv: {
             LUKER_GITHUB_API_BASE: stub.baseURL,
@@ -146,7 +149,7 @@ test('a release with no asset for this install opens the release page', async ()
     await noAsset.close();
 });
 
-test('replacing a running bundle in place asks the user to restart', async () => {
+test('replacing a running bundle in place asks the user to restart', async ({ resources }) => {
     // A self-contained Linux bundle names its own path through the
     // environment, so pointing that at a scratch file drives the replace-in-
     // place branch on any platform: the download is renamed over the file the
@@ -155,11 +158,12 @@ test('replacing a running bundle in place asks the user to restart', async () =>
     stub.setAssets([{ name: ASSET_NAME, url: `/download/${ASSET_NAME}`, size: Buffer.byteLength(ASSET_BYTES) }]);
     stub.setAssetStatus(200);
 
-    const bundleDir = mkdtempSync(join(tmpdir(), 'luker-appimage-'));
+    const bundleDir = (await resources.directory('desktop bundle update')).path;
     const bundlePath = join(bundleDir, 'Luker-9.9.9-linux-x86_64.AppImage');
     writeFileSync(bundlePath, 'the bundle that is currently running');
 
     const appimage = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'update-appimage',
         extraEnv: {
             LUKER_GITHUB_API_BASE: stub.baseURL,
@@ -178,5 +182,4 @@ test('replacing a running bundle in place asks the user to restart', async () =>
     expect(readFileSync(bundlePath)).toEqual(Buffer.from(ASSET_BYTES));
 
     await appimage.close();
-    rmSync(bundleDir, { recursive: true, force: true });
 });

@@ -13,8 +13,8 @@
 // fits inside the 400-pixel popup body without horizontal overflow and
 // without any chip splitting onto two lines.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -26,16 +26,16 @@ let server, mock;
 const VERY_LONG_PROMPT = '*You are Ash, cartographer of the Bryn headland, a brine-bitten coast keeper who reads the reef like a slow ledger.* '
     + 'Hold an immersive register and close every turn with a tactile sense beat — the verdigris on the spyglass, the cold of the lantern bezel, the salt-grit of the rail under a palm.';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startServer({ batchKey: 'regression', scenarioId: '109-iter-diff-narrow', extraConfig: { 'storage.mode': 'fs' } });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '109-iter-diff-narrow', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

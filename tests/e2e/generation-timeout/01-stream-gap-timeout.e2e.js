@@ -1,8 +1,8 @@
 // 连接配置请求超时 #1 — 流式 chunk 间隔超过 profile 超时。
 // head + 第一个 chunk 已到，上游随后静默；ws-delivery 的惰性定时器到点
 // 抛 TimeoutError，客户端发 abort 通知，服务端 job 被取消，无幽灵持久化。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, getChatSnapshot } from '../_lib/page.js';
@@ -11,10 +11,11 @@ let server, mock;
 
 const REPLY = 'first beacon lantern stays lit while the tide turns and the reef whispers back to us';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
     mock.setStreamStall({ afterChunks: 1, stallMs: 30_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-stream-gap' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-stream-gap' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({
@@ -26,7 +27,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

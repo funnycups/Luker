@@ -5,12 +5,18 @@
 // Two real servers; the schedules are set in Account → Device settings and the
 // world books are created through the World Info UI.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { createWorldBook } from '../_lib/ui-worldinfo.js';
 import { openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, setSyncSchedule, closeAllPopups, readUserFile, waitForBackgroundSync } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let A;
 let B;
@@ -43,15 +49,13 @@ async function pairedPages(browser, { idleA, pollA, idleB, pollB }) {
 }
 
 test.beforeEach(async ({}, testInfo) => {
-    A = await startServer({ batchKey: 'sync', scenarioId: `auto-${testInfo.testId}-A` });
-    B = await startServer({ batchKey: 'sync', scenarioId: `auto-${testInfo.testId}-B` });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `auto-${testInfo.testId}-A` });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `auto-${testInfo.testId}-B` });
 });
 
 test.afterEach(async () => {
     for (const ctx of contexts) await ctx.close();
     contexts = [];
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
 
 test.describe('LAN Sync — automatic triggers', () => {

@@ -8,8 +8,8 @@
 // the mesids of everything below it; deleting from the top would land
 // on the wrong message.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -19,45 +19,8 @@ import {
     sendMessageAndAwaitReply,
     getChatSnapshot,
     getRenderedChatTexts,
+    deleteMessageViaUI,
 } from '../_lib/page.js';
-
-/**
- * Delete a message via the real pencil → delete-icon → confirm flow.
- *
- * Note: page.js's deleteMessageViaUI uses `.popup:visible` to find the
- * confirm dialog, which is unreliable for ST's `<dialog>` element popup.
- * We poll for an open dialog via the DOM API directly and click the
- * delete-button via `el.click()` — same path a real tap takes.
- */
-async function deleteMessageViaUI(page, mesid) {
-    const mes = page.locator(`.mes[mesid="${mesid}"]`);
-    await mes.waitFor({ state: 'visible', timeout: 10_000 });
-    await mes.locator('.mes_edit').first().click({ force: true });
-    await mes.locator('.mes_edit_delete').first().waitFor({ state: 'visible', timeout: 5000 });
-
-    const deletePromise = page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.Luker.getContext();
-        const t = setTimeout(() => reject(new Error('delete timeout')), 20_000);
-        const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, (id) => {
-            clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch { /* ignore */ }
-            resolve(id);
-        });
-    }));
-
-    await mes.locator('.mes_edit_delete').first().click();
-    await page.waitForFunction(() => {
-        return Array.from(document.querySelectorAll('dialog.popup')).some(d => d.hasAttribute('open'));
-    }, { timeout: 5000 }).catch(() => {});
-    await page.evaluate(() => {
-        const openDlg = Array.from(document.querySelectorAll('dialog.popup')).reverse().find(d => d.hasAttribute('open'));
-        if (openDlg) {
-            const ok = openDlg.querySelector('.popup-button-ok');
-            if (ok) ok.click();
-        }
-    });
-    await deletePromise;
-}
 
 const REPLIES = [
     '*Seraphina nods.* "Reply A — keep going."',
@@ -68,16 +31,17 @@ const REPLIES = [
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'truncate-from-here' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'truncate-from-here' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

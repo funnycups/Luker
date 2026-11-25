@@ -7,23 +7,22 @@
 // orphan's hash + token should remove just the orphan and leave the rest
 // of the user's data untouched.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readdirSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'server', scenarioId: 'data-maid' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'data-maid' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#51 — data-maid orphan cleanup', () => {
     test('orphan avatar thumbnail flagged and deleted; live files preserved', async ({ page }) => {

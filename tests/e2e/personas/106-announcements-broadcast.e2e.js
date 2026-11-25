@@ -15,23 +15,23 @@
 // public/scripts/announcements.js only activates in multi-user mode
 // (when `enableUserAccounts` is on), so we override the scenario config.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'announcements',
         extraConfig: { enableUserAccounts: true },
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 async function newSession(baseURL) {
     const ctx = await pwRequest.newContext({ baseURL });

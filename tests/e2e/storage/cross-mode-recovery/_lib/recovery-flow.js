@@ -23,7 +23,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../../../_lib/server.js';
+import { startServer } from '../../../../harness/server.js';
 import { startMockLLM } from '../../../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../../../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../../../_lib/page.js';
@@ -47,7 +47,7 @@ const SEED_REPLY = '*Nods* Acknowledged, the lantern stays lit through the swap.
  *   Values above 8 MiB force the browser upload through the real multi-chunk
  *   path (0 = do not seed).
  */
-export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, specId, tempDir, seedLargeAssetBytes = 0 }) {
+export async function runCrossModeRecoveryFlow({ scope, page, sourceMode, destMode, specId, tempDir, seedLargeAssetBytes = 0 }) {
     fs.mkdirSync(tempDir, { recursive: true });
 
     // Step 1: optional testcontainers for db sourceMode/destMode.
@@ -76,17 +76,17 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
     // Step 2: start server in sourceMode, seed character data, send a chat.
     const mock = await startMockLLM({ scriptedReplies: [SEED_REPLY] });
     try {
-        const sourceExtraConfig = { 'storage.mode': sourceMode };
-        if (sourceDbConfig?.mysql) sourceExtraConfig['storage.mysql.url'] = sourceDbConfig.mysql.url;
-        if (sourceDbConfig?.postgres) sourceExtraConfig['storage.postgres.url'] = sourceDbConfig.postgres.url;
-        const sourceServer = await startServer({
+        const sourceExtraConfig = { storage: { mode: sourceMode } };
+        if (sourceDbConfig?.mysql) sourceExtraConfig.storage.mysql = { url: sourceDbConfig.mysql.url };
+        if (sourceDbConfig?.postgres) sourceExtraConfig.storage.postgres = { url: sourceDbConfig.postgres.url };
+        const sourceServer = await startServer({ scope,
             batchKey: 'xmode',
             scenarioId: `${specId}-src-${sourceMode}`,
             extraConfig: sourceExtraConfig,
         });
-        try {
+        {
             markOnboarded({ dataRoot: sourceServer.dataRoot });
-            bootstrapCustomBackend({ dataRoot: sourceServer.dataRoot, baseURL: mock.baseURL });
+            bootstrapCustomBackend({ dataRoot: sourceServer.dataRoot, baseURL: mock.baseURL, storageMode: sourceMode });
             appendConnectionProfile({ dataRoot: sourceServer.dataRoot, baseURL: mock.baseURL });
 
             await awaitMainUI(page, sourceServer.baseURL);
@@ -118,21 +118,20 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
             expect(fs.statSync(backupZipPath).size).toBeGreaterThan(1024);
 
             // Step 4: tear down source server.
-            const sourceDataRoot = sourceServer.dataRoot;
-            await tearDownServer(sourceServer);
+            await sourceServer.stop();
 
             // Step 5+6: restart in destMode on a fresh dataRoot.
-            const destExtraConfig = { 'storage.mode': destMode };
-            if (destDbConfig?.mysql) destExtraConfig['storage.mysql.url'] = destDbConfig.mysql.url;
-            if (destDbConfig?.postgres) destExtraConfig['storage.postgres.url'] = destDbConfig.postgres.url;
-            const destServer = await startServer({
+            const destExtraConfig = { storage: { mode: destMode } };
+            if (destDbConfig?.mysql) destExtraConfig.storage.mysql = { url: destDbConfig.mysql.url };
+            if (destDbConfig?.postgres) destExtraConfig.storage.postgres = { url: destDbConfig.postgres.url };
+            const destServer = await startServer({ scope,
                 batchKey: 'xmode',
                 scenarioId: `${specId}-dst-${destMode}`,
                 extraConfig: destExtraConfig,
             });
-            try {
+            {
                 markOnboarded({ dataRoot: destServer.dataRoot });
-                bootstrapCustomBackend({ dataRoot: destServer.dataRoot, baseURL: mock.baseURL });
+                bootstrapCustomBackend({ dataRoot: destServer.dataRoot, baseURL: mock.baseURL, storageMode: destMode });
                 appendConnectionProfile({ dataRoot: destServer.dataRoot, baseURL: mock.baseURL });
 
                 // Step 7: login + verify the dest does NOT already carry the seed.
@@ -187,13 +186,7 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
 
                 // Step 11: screenshot for visual review.
                 await page.screenshot({ path: path.join(tempDir, `verified-${specId}.png`), fullPage: true });
-            } finally {
-                await tearDownServer(destServer);
-                fs.rmSync(sourceDataRoot, { recursive: true, force: true });
             }
-        } catch (err) {
-            try { await tearDownServer(sourceServer); } catch { /* ignore */ }
-            throw err;
         }
     } finally {
         await mock?.stop();

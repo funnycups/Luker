@@ -9,8 +9,11 @@
 // perplexity penalties, perplexity/aimlapi top_k) and the capability
 // additions (mistralai/siliconflow/ai21/workers_ai).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { startServer } from '../../harness/server.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
@@ -69,13 +72,19 @@ const CASES = [
     { source: 'workers_ai', n: true, temperature: true, frequency: true, presence: true, topK: true, minP: false },
 ];
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'generation', scenarioId: 'sampling-param-gating' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'sampling-param-gating' });
+    markOnboarded({ dataRoot: server.dataRoot });
+    // The deterministic seed ships koboldhorde as the main API; the source
+    // selector this suite drives lives in the OpenAI block.
+    const settingsPath = resolve(server.dataRoot, 'default-user', 'settings.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    settings.main_api = 'openai';
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 4));
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe.serial('Sampling-parameter gating', () => {
     test('source selection shows or hides the sampling blocks', async ({ page }) => {

@@ -5,16 +5,14 @@
 //   2. Ask Workbench AI iteration (`Graph` target) to edit a node → Apply selected
 //      → the live store changes and the store-commit listener fires.
 //   3. Restart the server → the change survives.
-//   4. A pending edit survives tab switches & folding Workbench, still approves
-//      when reopened from the session list; after a page reload, the session
-//      remains readable in the session list.
+//   4. A pending edit survives folding Workbench and a page reload, chains
+//      another edit to the same field, and both edits still approve.
 //   5. Memory Lens Settings "AI Edit Graph" button also opens Workbench on Graph.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -40,10 +38,12 @@ const CHAT_TURNS = [
 
 const EDITED_STATE = '夜间执勤；信号灯已重新修剪。';
 const EDITED_IDENTITY = 'Bryn 断崖的常驻海图官，前盐礁灯塔守备（近期补充）。';
+const EDITED_IDENTITY_AGAIN = 'Bryn 断崖的常驻海图官，前盐礁灯塔守备，上月刚为哨所补给。';
 const COMPACT_TITLE = '断崖守夜阶段';
 const COMPACT_SUMMARY = '两夜间于 Bryn 断崖点亮信号灯，漂泊者北行，两人决定留守至三更。';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
@@ -53,13 +53,13 @@ test.beforeAll(async () => {
             '*Seraphina nods once.* "Then it is decided. We wait."',
         ],
     });
-    server = await startServer({ batchKey: 'iterstudio', scenarioId: '91-mg-graph-apply' });
+    server = await startServer({ scope, batchKey: 'iterstudio', scenarioId: '91-mg-graph-apply' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     normalizeIterStudioSettings(server.dataRoot);
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-graph-import-'));
+    const tmpDir = (await scope.directory('mg-graph-import')).path;
     importPath = resolve(tmpDir, 'seed-store.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -98,7 +98,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -123,7 +123,7 @@ async function seedChatAndGraph(page) {
     for (const turn of CHAT_TURNS) {
         await sendMessageAndAwaitReply(page, turn);
     }
-    await importMgGraph(page, importPath, { mode: 'bind-latest' });
+    await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
     await setMgSettings(page, { autoExtractionEnabled: false }, { closeAfter: true });
 }
 
@@ -169,7 +169,7 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         expect(persisted?.state).toBe(EDITED_STATE);
     });
 
-    test('a pending draft survives folding Workbench and session reopen, and session persists across reload', async ({ page }) => {
+    test('a pending proposal survives a page reload, chains a new edit and still approves', async ({ page }) => {
         await seedChatAndGraph(page);
 
         await openIterStudio(page, 'mg-graph');
@@ -179,17 +179,13 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         });
         await sendIterPrompt(page, 'mg-graph', 'Add to the chart officer\'s identity that she recently resupplied the post.');
 
-        // Fold Workbench, switch tabs, and start a fresh chat view, then reopen the session.
+        // Fold Workbench and reopen the session before checking durable restoration.
         await closeIterStudio(page);
         await switchWorkbenchTab(page, 'home');
         await switchWorkbenchTab(page, 'ai');
         const win = workbenchWindow(page);
         await win.locator('.wb-sess-list .wb-sess-item').first().click();
         await win.locator('.wb-chg.is-pending .wb-chg-foot button.is-primary').first().waitFor({ state: 'visible', timeout: 10_000 });
-        await applyIterBatch(page, 'mg-graph');
-
-        await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity, { timeout: 15_000 })
-            .toBe(EDITED_IDENTITY);
         await closeIterStudio(page);
 
         await reloadAndAwait(page, server.baseURL);
@@ -197,7 +193,27 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         await openIterStudio(page, 'mg-graph');
         await expect(workbenchWindow(page).locator('.wb-sess-list')).toContainText('Add to the chart officer', { timeout: 10_000 });
         await workbenchWindow(page).locator('.wb-sess-list .wb-sess-item').first().click();
-        await expect(workbenchWindow(page).locator('.wb-chat')).toContainText('resupplied', { timeout: 10_000 });
+        const cards = workbenchWindow(page).locator('.wb-chg');
+        await expect(cards.filter({ has: page.locator('.wb-chg-foot button.is-primary') })).toHaveCount(1);
+        await expect(cards.first()).toContainText(EDITED_IDENTITY);
+        expect((await readNodeFields(page, 'n_2'))?.identity).toBe('Bryn 断崖的常驻海图官。');
+
+        mock.scriptToolCall({
+            name: 'mg_graph_edit_node',
+            arguments: { node_id: 'n_2', set_fields: { identity: EDITED_IDENTITY_AGAIN } },
+        });
+        await sendIterPrompt(page, 'mg-graph', 'Also note that she resupplied the post last month.');
+        await expect(cards).toHaveCount(2, { timeout: 30_000 });
+        const secondDiff = cards.nth(1).locator('.wb-diff');
+        await expect(secondDiff).toContainText(EDITED_IDENTITY);
+        await expect(secondDiff).toContainText(EDITED_IDENTITY_AGAIN);
+        await expect(secondDiff).not.toContainText('Bryn 断崖的常驻海图官。');
+
+        await applyIterBatch(page, 'mg-graph');
+        await expect(workbenchWindow(page).locator('.wb-chg.is-applied')).toHaveCount(2, { timeout: 15_000 });
+        await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity, { timeout: 15_000 })
+            .toBe(EDITED_IDENTITY_AGAIN);
+        await expect(page.locator('#toast-container .toast-error')).toHaveCount(0);
         await closeIterStudio(page);
     });
 

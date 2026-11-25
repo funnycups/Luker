@@ -13,8 +13,8 @@
 // its idle label within a small window. Catches the canonical "abort
 // signal not propagated to fetch" case.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -32,18 +32,19 @@ async function openOrchIterStudio(page) {
     await openIterStudio(page, 'orch', { scope: 'global' });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // 30s latency: mock holds chat/completions for 30s before replying.
     // Stop click must short-circuit that wait via AbortSignal.
     mock = await startMockLLM({ latencyMs: 30_000 });
-    server = await startServer({ batchKey: 'regression', scenarioId: '117-iter-studio-stop', extraConfig: { 'storage.mode': 'fs' } });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '117-iter-studio-stop', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

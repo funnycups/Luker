@@ -17,7 +17,8 @@
 // route through tests/e2e/_lib/ui-worldinfo.js, which clicks the
 // real toolbar icons (no raw fetch, no internal helper imports).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
@@ -29,7 +30,6 @@ import {
     deleteSelectedWorldBook,
     importWorldBook,
 } from '../_lib/ui-worldinfo.js';
-import { startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -127,9 +127,10 @@ async function listDropdownLabels(page) {
     });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startWorldInfoServer({ specBaseName: '29-import-export-roundtrip', scenarioId: 'export-roundtrip' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'export-roundtrip' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -137,7 +138,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 
@@ -187,7 +188,7 @@ test.describe('#29 — WI import/export round-trip via real toolbar', () => {
         try {
             await importWorldBook(page, { filePath: exportedPath, expectedName: BOOK_NAME, timeoutMs: 45_000 });
         } catch (err) {
-            await page.screenshot({ path: `/tmp/wi-29-import-${Date.now()}.png`, fullPage: true });
+            await page.screenshot({ path: test.info().outputPath('worldbook-import.png'), fullPage: true });
             const diag = await page.evaluate(() => ({
                 fileInput: !!document.querySelector('#world_import_file'),
                 fileInputClass: document.querySelector('#world_import_file')?.className || '',

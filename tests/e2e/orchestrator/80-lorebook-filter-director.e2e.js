@@ -27,10 +27,10 @@
 //           returns not_found, `lorebook_list` on the public book omits
 //           `secret_key`.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -42,8 +42,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 import { writeCharacterWithBinding } from '../worldinfo/_helpers.js';
 
 const CHARACTER_NAME = 'Ash Filter Director';
@@ -58,9 +58,10 @@ const PUBLIC_CONTENT = '__ORCH_FILTER_DIR_E2E__PUBLIC_CONTENT__EXPECTED_TO_LEAK_
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '80-lorebook-filter-director' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '80-lorebook-filter-director' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -99,7 +100,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

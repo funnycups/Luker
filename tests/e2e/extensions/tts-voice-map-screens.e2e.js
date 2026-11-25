@@ -9,8 +9,8 @@
 //
 // Run: cd tests && LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test tts-voice-map-screens --project=e2e
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
@@ -24,16 +24,15 @@ let server;
 
 const DOC_SHOTS = resolve(import.meta.dirname, '../../../docs/public/images/tts-npc-attribution');
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'extensions', scenarioId: 'tts-doc-shots' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: 'tts-doc-shots' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:9' });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:9' });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test('capture voice map doc screenshots', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);

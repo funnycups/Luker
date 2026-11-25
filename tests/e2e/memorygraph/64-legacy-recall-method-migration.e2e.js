@@ -4,10 +4,10 @@
 // value (`hybrid_rerank`), the boot pipeline rewrites it to `rag` with the
 // `ragUseRerank` toggle on, and Memory Lens Settings reflects the new shape.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -21,9 +21,10 @@ import { openMemoryWorkspace } from '../_lib/ui-mg-varops.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ack.*'] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'legacy-migration' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'legacy-migration' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -48,7 +49,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

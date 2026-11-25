@@ -19,8 +19,8 @@
 //    disk with preseedPersona (which copies the raw PNG without re-encoding)
 //    and then drive the actual avatar-card click via selectPersonaByName.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, closeRightNavDrawer } from '../_lib/page.js';
@@ -31,11 +31,12 @@ let server, mock;
 const PERSONA_AVATAR_ID = 'iyana-e2e.png';
 const PERSONA_NAME = 'Iyana';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash leans on the rail, gaze sweeping the dark reef.* "The wind has not been honest tonight. Tell me what you saw before the moon turned."',
     ] });
-    server = await startServer({ batchKey: 'personas', scenarioId: 'create-switch' });
+    server = await startServer({ scope, batchKey: 'personas', scenarioId: 'create-switch' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -49,7 +50,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

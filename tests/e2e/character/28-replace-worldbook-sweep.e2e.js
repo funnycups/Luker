@@ -48,11 +48,10 @@
 //     The second turn (a follow-up user prompt asking to apply an
 //     obvious migration) is where we expect the tool call.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
@@ -61,16 +60,8 @@ import { write as writePngCard } from '../../../src/character-card-parser.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 
-// Human-review screenshots — one PNG per meaningful UI step so the
-// developer can walk the flow after a run without re-driving the whole
-// suite. Written under tests/.e2e-screenshots/28-real-llm-sweep/<test>/,
-// which is git-ignored (`.e2e-scratch` sibling). No env-var gate: the
-// whole point of these specs is that the developer wants to inspect
-// each stage of the flow.
-const SCREENSHOT_ROOT = resolve(REPO_ROOT, 'tests/.e2e-screenshots/28-real-llm-sweep');
-
 async function snap(page, testSlug, stepName) {
-    const dir = resolve(SCREENSHOT_ROOT, testSlug);
+    const dir = test.info().outputPath('worldbook-sweep', testSlug);
     mkdirSync(dir, { recursive: true });
     // Zero-padded numeric prefix keeps directory listing in flow order
     // even with 10+ steps per test. Track step count on the page object
@@ -81,7 +72,7 @@ async function snap(page, testSlug, stepName) {
     const file = resolve(dir, `${String(page._snapStepIdx).padStart(2, '0')}-${safeName}.png`);
     // fullPage:true so we capture the whole popup even when it exceeds
     // the viewport (common for the studio + preview pane combo).
-    await page.screenshot({ path: file, fullPage: true }).catch(() => { /* best effort */ });
+    await page.screenshot({ path: file, fullPage: true });
     return file;
 }
 
@@ -291,26 +282,24 @@ async function sendStudioPromptAndWait(page, prompt, { expect: expectKind, timeo
 let cardBPngPath, tmpDir, mock;
 
 test.describe('#28 — post-replace world-book sweep', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-worldbook-'));
+        tmpDir = (await scope.directory('luker-e2e-replace-worldbook')).path;
         cardBPngPath = writeCardPng(CARD_B_NAME, CARD_B_DESCRIPTION, CARD_B_FIRST_MES, CARD_B_BOOK, resolve(tmpDir, 'nireth.png'));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
     // -----------------------------------------------------------------
     // Import new book
     // -----------------------------------------------------------------
-    test('IMPORT: new book materializes + is bound, old book file survives on disk unbound', async ({ page }) => {
+    test('IMPORT: new book materializes + is bound, old book file survives on disk unbound', async ({ resources, page }) => {
         const slug = 'import';
-        const server = await startServer({ batchKey: 'character', scenarioId: 'import' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'import' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -361,18 +350,16 @@ test.describe('#28 — post-replace world-book sweep', () => {
             expect(existsSync(oldBookPath), 'old book file must survive on disk').toBe(true);
             expect((await page.locator('#character_world').inputValue()) || '').toBe(CARD_B_BOOK);
             await snap(page, slug, 'after-import-new-book-bound');
-        } finally {
-            await tearDownServer(server);
         }
     });
 
     // -----------------------------------------------------------------
     // Keep old book
     // -----------------------------------------------------------------
-    test('KEEP: character fields update from new card, but the previous binding + book file are preserved verbatim', async ({ page }) => {
+    test('KEEP: character fields update from new card, but the previous binding + book file are preserved verbatim', async ({ resources, page }) => {
         const slug = 'keep';
-        const server = await startServer({ batchKey: 'character', scenarioId: 'keep' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'keep' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -419,21 +406,19 @@ test.describe('#28 — post-replace world-book sweep', () => {
             const nameField = page.locator('#character_name_pole');
             await expect(nameField).toHaveValue(CARD_B_NAME, { timeout: 5000 });
             await snap(page, slug, 'after-keep-fields-updated-book-preserved');
-        } finally {
-            await tearDownServer(server);
         }
     });
 
     // -----------------------------------------------------------------
     // Merge in editor — happy path (scripted review turn + edit proposal)
     // -----------------------------------------------------------------
-    test('MERGE happy: complete diff + preview + review turn + edit lands on disk + close preserves it', async ({ page }) => {
+    test('MERGE happy: complete diff + preview + review turn + edit lands on disk + close preserves it', async ({ resources, page }) => {
         // Longest sub-test — allocate 5 minutes because it drives two
         // scripted LLM roundtrips.
         test.setTimeout(300_000);
         const slug = 'merge-happy';
-        const server = await startServer({ batchKey: 'character', scenarioId: 'merge-happy' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'merge-happy' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -579,19 +564,17 @@ test.describe('#28 — post-replace world-book sweep', () => {
                 'approved edit still on disk after close',
             ).toBe(true);
             await snap(page, slug, 'close-after-apply-persists');
-        } finally {
-            await tearDownServer(server);
         }
     });
 
     // -----------------------------------------------------------------
     // Merge → close without apply → rollback
     // -----------------------------------------------------------------
-    test('MERGE + close without applying → rollback deletes the new book file and restores previous binding', async ({ page }) => {
+    test('MERGE + close without applying → rollback deletes the new book file and restores previous binding', async ({ resources, page }) => {
         test.setTimeout(120_000);
         const slug = 'merge-rollback';
-        const server = await startServer({ batchKey: 'character', scenarioId: 'merge-rollback' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'merge-rollback' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -659,18 +642,16 @@ test.describe('#28 — post-replace world-book sweep', () => {
             expect(readFileSync(oldBookPath, 'utf8')).toBe(oldBookContentBefore);
             expect((await page.locator('#character_world').inputValue()) || '').toBe(CARD_A_BOOK);
             await snap(page, slug, 'after-rollback-state-restored');
-        } finally {
-            await tearDownServer(server);
         }
     });
 
     // -----------------------------------------------------------------
     // Cancel the popup — nothing happens
     // -----------------------------------------------------------------
-    test('CANCEL: clicking Cancel on the popup makes NO disk / binding changes', async ({ page }) => {
+    test('CANCEL: clicking Cancel on the popup makes NO disk / binding changes', async ({ resources, page }) => {
         const slug = 'cancel';
-        const server = await startServer({ batchKey: 'character', scenarioId: 'cancel' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'cancel' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -721,8 +702,6 @@ test.describe('#28 — post-replace world-book sweep', () => {
             expect(existsSync(oldBookPath)).toBe(true);
             expect(readFileSync(oldBookPath, 'utf8')).toBe(oldBookContentBefore);
             await snap(page, slug, 'after-cancel-no-side-effects');
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

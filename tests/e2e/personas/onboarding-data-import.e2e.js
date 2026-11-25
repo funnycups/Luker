@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { openPersonaPanel } from '../_lib/ui-persona-preset.js';
 import { accountWindow, openAccountTab } from '../_lib/account-window.js';
@@ -24,13 +24,12 @@ function readSecrets(server) {
     return JSON.parse(readFileSync(join(server.dataRoot, 'default-user/secrets.json'), 'utf8'));
 }
 
-async function startFreshServer(name) {
-    const dataRoot = join(scratchRoot, name);
-    mkdirSync(dataRoot);
-    return startServer({
+async function startFreshServer(scope, name) {
+    const data = await scope.directory(`onboarding ${name}`);
+    return startServer({ scope,
         batchKey: 'personas',
         scenarioId: `onboarding-${name}`,
-        useExistingDataRoot: dataRoot,
+        data,
         extraConfig: {
             enableUserAccounts: false,
             allowKeysExposure: true,
@@ -40,10 +39,11 @@ async function startFreshServer(name) {
     });
 }
 
-test.beforeAll(async ({ browser }) => {
-    scratchRoot = mkdtempSync(resolve(import.meta.dirname, '../../.e2e-scratch/onboarding-import-'));
+test.beforeAll(async ({ workerResources, browser }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    scratchRoot = (await scope.directory('onboarding import support')).path;
     mock = await startMockLLM({});
-    source = await startFreshServer('source');
+    source = await startFreshServer(scope, 'source');
     backupPath = join(scratchRoot, 'backup.zip');
     const page = await browser.newPage();
     try {
@@ -103,14 +103,13 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(source);
+
     await mock?.stop();
-    if (scratchRoot) rmSync(scratchRoot, { recursive: true, force: true });
 });
 
-test('finishing onboarding preserves imported API connections, secrets and personas', async ({ page }) => {
-    const destination = await startFreshServer('destination');
-    try {
+test('finishing onboarding preserves imported API connections, secrets and personas', async ({ resources, page }) => {
+    const destination = await startFreshServer(resources, 'destination');
+    {
         await page.goto(destination.baseURL);
         const welcome = onboarding(page);
         await welcome.locator('.popup-input').fill('Fresh desktop');
@@ -133,13 +132,11 @@ test('finishing onboarding preserves imported API connections, secrets and perso
         await page.reload();
         await expect(page.locator('#your_name')).toHaveText(PERSONA_NAME);
         expect(readSettings(destination)).toMatchObject(expectedSettings);
-    } finally {
-        await tearDownServer(destination);
     }
 });
 
-test('onboarding cannot finish while a data import is pending', async ({ page }) => {
-    const destination = await startFreshServer('pending-import');
+test('onboarding cannot finish while a data import is pending', async ({ resources, page }) => {
+    const destination = await startFreshServer(resources, 'pending-import');
     const started = Promise.withResolvers();
     const release = Promise.withResolvers();
     try {
@@ -171,13 +168,13 @@ test('onboarding cannot finish while a data import is pending', async ({ page })
     } finally {
         release.resolve();
         await page.unrouteAll({ behavior: 'wait' });
-        await tearDownServer(destination);
+
     }
 });
 
-test('a rejected archive still allows normal onboarding to save the new persona', async ({ page }) => {
-    const destination = await startFreshServer('failed-import');
-    try {
+test('a rejected archive still allows normal onboarding to save the new persona', async ({ resources, page }) => {
+    const destination = await startFreshServer(resources, 'failed-import');
+    {
         await page.goto(destination.baseURL);
         const welcome = onboarding(page);
         await welcome.locator('.popup-input').fill('Fresh desktop');
@@ -197,7 +194,5 @@ test('a rejected archive still allows normal onboarding to save the new persona'
         await page.reload();
         await expect(page.locator('#your_name')).toHaveText('Fresh desktop');
         await expect(onboarding(page)).toHaveCount(0);
-    } finally {
-        await tearDownServer(destination);
     }
 });

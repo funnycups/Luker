@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 import { testSetup } from './frontent-test-utils.js';
 import { savePresetAsViaButton, selectPresetByName } from '../e2e/preset/_helpers.js';
 
@@ -23,6 +23,11 @@ async function openApiDrawer(page) {
     }
     await page.locator('#API-status-top').click();
     await expect(page.locator('#rm_api_block')).toBeVisible();
+    // The chat completion source select only shows under the Chat Completion API.
+    const mainApi = page.locator('#main_api');
+    if (await mainApi.inputValue() !== 'openai') {
+        await mainApi.selectOption('openai');
+    }
     await expect(page.locator('#chat_completion_source')).toBeVisible();
 }
 

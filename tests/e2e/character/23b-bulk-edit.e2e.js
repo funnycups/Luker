@@ -13,8 +13,8 @@
 // modifiers + popup state — covered by other tests; this spec focuses
 // on the load-bearing bulk-delete path.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
@@ -27,9 +27,10 @@ const ASH_NAME = 'Ash the Cartographer';
 const BRYN_NAME = 'Bryn the Reefwarden';
 const CAEL_NAME = 'Cael of the Causeway';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'bulk-edit' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'bulk-edit' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -40,7 +41,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -133,14 +134,11 @@ test.describe('#23b — Bulk delete via UI', () => {
         // Click #bulkDeleteButton → handle the confirm popup (which
         // includes a "Also delete chat files" checkbox + OK).
         await page.locator('#bulkDeleteButton').click();
-        const popup = page.locator('dialog.popup[open]').last();
+        const popup = page.locator('dialog.popup[open]', { has: page.locator('#del_char_checkbox') });
         await popup.waitFor({ state: 'visible', timeout: 5000 });
-        const delChats = popup.locator('#del_char_checkbox');
-        if (await delChats.isVisible({ timeout: 500 }).catch(() => false)) {
-            await delChats.check().catch(() => {});
-        }
+        await popup.locator('#del_char_checkbox').check();
         await popup.locator('.popup-button-ok').first().click();
-        await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+        await popup.waitFor({ state: 'detached', timeout: 15_000 });
 
         // Wait for both Bryn and Cael to be gone from ctx.
         await page.waitForFunction(({ avatars }) => {

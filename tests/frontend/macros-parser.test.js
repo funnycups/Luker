@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 import { testSetup } from './frontent-test-utils.js';
 
 // Tests for the deprecated MacrosParser shim to ensure it continues to work

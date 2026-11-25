@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { s3Fixture } from '../_lib/sync-s3.js';
 import { restoreChatCorpus, openCorpusChat, readChat, COMPANIONS, closeChatPopups } from '../_lib/s3-chat.js';
 import { openTopDrawer } from '../_lib/page.js';

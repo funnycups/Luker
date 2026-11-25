@@ -7,11 +7,10 @@
 // Real flow: seed Ash → click card → setInputFiles on #add_avatar_button
 // → verify the avatar preview img src changed in the DOM.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
@@ -22,9 +21,10 @@ let server, mock, avatar, tmpDir, newAvatarPath;
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const ASH_NAME = 'Ash the Cartographer';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'avatar-upload' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'avatar-upload' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -33,17 +33,14 @@ test.beforeAll(async () => {
 
     // Build a "new avatar" PNG by copying the seed (Jimp re-encoding
     // will make the bytes differ from the original).
-    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-avatar-'));
+    tmpDir = (await scope.directory('luker-e2e-avatar')).path;
     newAvatarPath = resolve(tmpDir, 'new-avatar.png');
     writeFileSync(newAvatarPath, readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png')));
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
-    if (tmpDir && existsSync(tmpDir)) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-    }
 });
 
 test.describe('#21 — Avatar upload via UI file input', () => {
@@ -60,20 +57,21 @@ test.describe('#21 — Avatar upload via UI file input', () => {
         const beforeSize = readFileSync(avatarOnDisk).length;
         const beforeSrc = await page.locator('#avatar_load_preview').getAttribute('src');
 
-        // Trigger the visible label click for the avatar input. Even if
-        // click is best-effort (the input is hidden behind the label
-        // image), setInputFiles works directly on the input element.
-        await page.locator('#avatar_div_div').click().catch(() => {});
-        await page.locator('#add_avatar_button').setInputFiles(newAvatarPath);
+        // The avatar image is the label of the hidden file input; clicking
+        // it opens the file chooser.
+        const chooserPromise = page.waitForEvent('filechooser');
+        await page.locator('#avatar_div_div').click();
+        const chooser = await chooserPromise;
+        await chooser.setFiles(newAvatarPath);
 
-        // Avatar upload triggers a crop popup (POPUP_TYPE.CROP) unless
-        // `power_user.never_resize_avatars` is set. Accept the crop with
-        // the default region by clicking OK on the popup.
+        // Avatar upload opens a crop popup (POPUP_TYPE.CROP); the seed
+        // leaves `power_user.never_resize_avatars` off. Accept the crop
+        // with the default region.
         const cropPopup = page.locator('dialog.popup[open]').last();
-        if (await cropPopup.isVisible({ timeout: 5000 }).catch(() => false)) {
-            await cropPopup.locator('.popup-button-ok').first().click();
-            await cropPopup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
-        }
+        await cropPopup.waitFor({ state: 'visible', timeout: 10_000 });
+        const cropId = await cropPopup.getAttribute('data-id');
+        await cropPopup.locator('.popup-button-ok').first().click();
+        await page.locator(`dialog.popup[data-id="${cropId}"]`).waitFor({ state: 'detached', timeout: 10_000 });
 
         // The upload + save round-trip completes via
         // read_avatar_load → createOrEditCharacter → /api/characters/edit

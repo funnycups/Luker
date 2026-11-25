@@ -1,12 +1,18 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { loginAs } from '../_lib/sync.js';
 import { awaitMainUI, openUserSettingsDrawer } from '../_lib/page.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server;
 
 test.beforeAll(async () => {
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'server',
         scenarioId: 'resource-cache-account',
         extraConfig: { enableUserAccounts: true },
@@ -14,7 +20,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test('resource metadata keeps account identity across reload and a new login', async ({ page }) => {

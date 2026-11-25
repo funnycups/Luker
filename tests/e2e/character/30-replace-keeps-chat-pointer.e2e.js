@@ -29,11 +29,10 @@
 // write (merge-attributes) and a failed post-replace refresh whose
 // fallback refresh still succeeds.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
@@ -139,13 +138,14 @@ async function cancelReplaceChoicePopup(page) {
 let mock, tmpDir, briallenPngPath, briallenYamlPath;
 
 test.describe('#30 — replace keeps the active chat pointer', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({
             scriptedReplies: [
                 '*Ash taps the chart with a knuckle.* "Then we wait for the tide to turn."',
             ],
         });
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-chat-pointer-'));
+        tmpDir = (await scope.directory('luker-e2e-replace-chat-pointer')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
         briallenPngPath = resolve(tmpDir, 'briallen-replace.png');
         writeFileSync(briallenPngPath, buildBriallenPng(seed));
@@ -165,19 +165,16 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('pointer survives the replace in memory, on disk, and across reload', async ({ page }) => {
+    test('pointer survives the replace in memory, on disk, and across reload', async ({ resources, page }) => {
         test.setTimeout(120_000);
-        const server = await startServer({
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-chat-pointer',
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -240,19 +237,17 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             expect(afterReload.chatId, 'pointer after reload').toBe(expectedChatId);
             const rendered = await getRenderedChatTexts(page);
             expect(rendered.join('\n'), 'conversation still rendered after reload').toContain(userLine);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('a dropped pointer persist write must not cost the open chat on next open', async ({ page }) => {
+    test('a dropped pointer persist write must not cost the open chat on next open', async ({ resources, page }) => {
         test.setTimeout(120_000);
-        const server = await startServer({
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-chat-pointer-drop-persist',
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -301,19 +296,17 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             expect(afterReload.chatId, 'chat reopened after a dropped pointer write').toBe(expectedChatId);
             const rendered = await getRenderedChatTexts(page);
             expect(rendered.join('\n'), 'conversation still rendered after reload').toContain(userLine);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('the post-replace event refresh must not clobber the live pointer when its direct fetch fails', async ({ page }) => {
+    test('the post-replace event refresh must not clobber the live pointer when its direct fetch fails', async ({ resources, page }) => {
         test.setTimeout(120_000);
-        const server = await startServer({
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-chat-pointer-emit-fallback',
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -382,19 +375,17 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             });
             expect(afterReplace.chatId, 'in-memory pointer survives the emit fallback refresh').toBe(expectedChatId);
             expect(afterReplace.pole, 'selected-chat pole survives the emit fallback refresh').toBe(expectedChatId);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('a fresh import without a chat still starts its first chat on open', async ({ page }) => {
+    test('a fresh import without a chat still starts its first chat on open', async ({ resources, page }) => {
         test.setTimeout(120_000);
-        const server = await startServer({
+        const server = await startServer({ scope: resources,
             batchKey: 'character',
             scenarioId: 'replace-chat-pointer-fresh-import',
-            extraConfig: { 'performance.lazyLoadCharacters': true },
+            extraConfig: { performance: { lazyLoadCharacters: true } },
         });
-        try {
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -415,8 +406,6 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             expect(snapshot.chatId, 'opening a fresh import starts a chat').toBeTruthy();
             await expect.poll(async () => (await getRenderedChatTexts(page)).join('\n'), { timeout: 20_000 })
                 .toContain('Close the hatch');
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

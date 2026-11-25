@@ -23,8 +23,9 @@ import { accountWindow, openUserManagement, pageHead } from './account-window.js
 
 /**
  * Navigate to baseURL and wait for ST to leave the preloader. Clicks the
- * user-select gate if present and completes fresh-user onboarding through
- * its visible form. Connection setup belongs to explicit DOM actions.
+ * user-select gate if present, completes fresh-user onboarding through its
+ * visible form, and waits for an auto-connect handshake when the fixture
+ * enabled Auto-connect.
  */
 export async function awaitMainUI(page, baseURL) {
     if (baseURL) await page.goto(baseURL);
@@ -37,6 +38,8 @@ export async function awaitMainUI(page, baseURL) {
     await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext
         && performance.getEntriesByName('[init] complete').length > 0, null, { timeout: 60_000 });
     await completeOnboarding(page);
+    const autoConnect = await page.evaluate(() => window.Luker.getContext().powerUserSettings?.auto_connect === true);
+    if (autoConnect) await waitForConnected(page);
 }
 
 export async function reloadAndAwait(page, baseURL) {
@@ -44,23 +47,68 @@ export async function reloadAndAwait(page, baseURL) {
 }
 
 /**
+ * Wait until the app shows it is connected: #send_but un-hides once the
+ * status check succeeds. Generation helpers call this before acting, as
+ * a user waits for the connection before generating.
+ */
+export async function waitForConnected(page, { timeoutMs = 30_000 } = {}) {
+    await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: timeoutMs });
+}
+
+/**
+ * Connect to the active API the way a user does without auto-connect:
+ * open API Connections from the plug icon, click the visible Connect
+ * button, wait for the status check to finish and close the drawer.
+ * Whether the check reaches a backend is left to the caller.
+ */
+export async function connectViaApiDrawer(page) {
+    const plug = page.locator('#API-status-top');
+    const apiBlock = page.locator('#rm_api_block');
+    await plug.click();
+    await expect(apiBlock).toHaveClass(/\bopenDrawer\b/, { timeout: 5000 });
+    const connect = apiBlock.locator('.api_button:visible').first();
+    await connect.click();
+    await expect(connect).not.toHaveClass(/\bdisabled\b/, { timeout: 30_000 });
+    await plug.click();
+    await expect(apiBlock).toHaveClass(/\bclosedDrawer\b/, { timeout: 5000 });
+}
+
+/**
  * Save an open welcome form and await its actual settings persistence.
  */
 export async function completeOnboarding(page) {
     const welcome = page.locator('dialog.popup[open]', { has: page.locator('.onboarding') });
-    if (!(await welcome.isVisible())) return;
+    if (!(await welcome.isVisible())) {
+        // Onboarding is shown non-blocking after the init marker, so a fresh
+        // data root can still open it a moment later. Wait before concluding
+        // that this page has no welcome form.
+        try {
+            await welcome.waitFor({ state: 'visible', timeout: 1000 });
+        } catch {
+            return;
+        }
+    }
     const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings/save' && response.request().method() === 'POST');
     await welcome.locator('.popup-button-ok').click();
     await welcome.waitFor({ state: 'detached', timeout: 10_000 });
     if (!(await saved).ok()) throw new Error('Onboarding settings were not saved');
 }
 
+async function setDrawerState(drawer, open) {
+    const content = drawer.locator('> .drawer-content');
+    const icon = drawer.locator('> .drawer-toggle > .drawer-icon');
+    const wanted = open ? /\bopenDrawer\b/ : /\bclosedDrawer\b/;
+    if (await content.evaluate((element, open) => element.classList.contains(open ? 'closedDrawer' : 'openDrawer'), open)) {
+        // The document mousedown consumer autocloses wrappers before their
+        // click toggles them. Its explicit .drawer-icon target is exempt.
+        await icon.and(drawer.page().locator(open ? '.closedIcon' : '.openIcon')).click();
+    }
+    await expect(content).toHaveClass(wanted, { timeout: 5000 });
+    await expect(icon).toHaveClass(open ? /\bopenIcon\b/ : /\bclosedIcon\b/, { timeout: 5000 });
+}
+
 export async function openExtensionsDrawer(page) {
-    const block = page.locator('#rm_extensions_block');
-    const isOpen = await block.evaluate(el => el && !el.classList.contains('closedDrawer')).catch(() => false);
-    if (isOpen) return;
-    await page.locator('#extensions-settings-button .drawer-toggle').first().click();
-    await block.waitFor({ state: 'visible', timeout: 5000 });
+    await setDrawerState(page.locator('#extensions-settings-button'), true);
 }
 
 /**
@@ -79,13 +127,7 @@ export async function openExtensionsDrawer(page) {
  * sendMessageAndAwaitReply.
  */
 export async function closeExtensionsDrawer(page) {
-    const block = page.locator('#rm_extensions_block');
-    const isOpen = await block.evaluate(el => el && el.classList.contains('openDrawer')).catch(() => false);
-    if (!isOpen) return;
-    // Use the .drawer-toggle handler (doNavbarIconClick) so the icon
-    // state stays in sync with the drawer state.
-    await page.locator('#extensions-settings-button .drawer-toggle').click();
-    await block.waitFor({ state: 'hidden', timeout: 5000 });
+    await setDrawerState(page.locator('#extensions-settings-button'), false);
 }
 
 /**
@@ -96,9 +138,15 @@ export async function closeExtensionsDrawer(page) {
  * them closed before clicking the chat composer.
  */
 export async function closeAnyOpenTopSettingsDrawer(page) {
-    const drawers = page.locator('#top-settings-holder .drawer').filter({ has: page.locator('> .drawer-content.openDrawer:not(.pinnedOpen)') });
-    while (await drawers.count()) {
-        await drawers.first().locator('> .drawer-toggle').click();
+    const drawers = page.locator('#top-settings-holder .drawer');
+    const openIndices = await drawers.evaluateAll(elements => elements.flatMap((el, idx) => {
+        const content = el.querySelector(':scope > .drawer-content');
+        return content && content.classList.contains('openDrawer') && !content.classList.contains('pinnedOpen')
+            ? [idx]
+            : [];
+    }));
+    for (const idx of openIndices) {
+        await setDrawerState(drawers.nth(idx), false);
     }
 }
 
@@ -112,12 +160,11 @@ export async function openInlineDrawer(page, hostId) {
     // `#regex_container > .regex_settings > .inline-drawer`). Look for
     // a direct child first; fall back to first descendant otherwise.
     let drawer = host.locator('> .inline-drawer').first();
-    if ((await drawer.count().catch(() => 0)) === 0) {
+    if ((await drawer.count()) === 0) {
         drawer = host.locator('.inline-drawer').first();
     }
     const content = drawer.locator('> .inline-drawer-content');
     const isHidden = await content.evaluate(el => {
-        if (!el) return true;
         const style = el.style.display;
         if (style === 'none') return true;
         if (style === 'block' || style === '') {
@@ -125,7 +172,7 @@ export async function openInlineDrawer(page, hostId) {
             return computed.display === 'none';
         }
         return false;
-    }).catch(() => true);
+    });
     if (!isHidden) return;
     await drawer.locator('> .inline-drawer-toggle').first().click();
     await content.waitFor({ state: 'visible', timeout: 5000 });
@@ -140,16 +187,15 @@ export async function openInlineDrawer(page, hostId) {
  * click vs API selection).
  */
 export async function selectCharacterByName(page, name) {
-    // Dismiss onboarding modal if it ever flashes.
-    const onboardingHeader = page.locator('.popup', { hasText: /Welcome to Luker|歡迎使用|欢迎使用/ }).first();
-    if (await onboardingHeader.isVisible().catch(() => false)) {
-        await page.locator('.popup .popup-button-cancel, .popup .popup-button-ok').first().click().catch(() => {});
-        await onboardingHeader.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    // Seed data roots that were not marked as onboarded show the welcome
+    // popup on boot; a user dismisses it before reaching the list.
+    const onboarding = page.locator('dialog.popup[open]', { hasText: /Welcome to Luker|歡迎使用|欢迎使用/ }).first();
+    if (await onboarding.isVisible()) {
+        await onboarding.locator('.popup-button-cancel, .popup-button-ok').first().click();
+        await onboarding.waitFor({ state: 'detached', timeout: 5000 });
     }
 
-    const drawer = page.locator('#rightNavDrawerIcon');
-    const drawerClosed = await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
-    if (drawerClosed) await drawer.click();
+    await setDrawerState(page.locator('#rightNavHolder'), true);
 
     // If a prior character was already selected, the right drawer is
     // showing the character-edit panel rather than the list. Click the
@@ -162,22 +208,21 @@ export async function selectCharacterByName(page, name) {
     }
 
     const charBlock = page.locator('#rm_print_characters_block');
+    if (!(await charBlock.isVisible())) {
+        await page.locator('#rm_button_characters').click();
+    }
     await charBlock.waitFor({ state: 'visible', timeout: 10_000 });
 
     const card = charBlock.locator('.character_select', { hasText: name }).first();
     await card.waitFor({ state: 'visible', timeout: 10_000 });
     await card.click();
 
-    await page.waitForFunction(() => {
-        const ctx = window.Luker?.getContext?.();
-        return ctx && (typeof ctx.characterId === 'number' || typeof ctx.characterId === 'string');
-    }, { timeout: 10_000 }).catch(() => { /* welcome panel ok */ });
+    await expect(page.locator('#character_name_pole')).toHaveValue(name, { timeout: 10_000 });
 
     // Selecting a character opens the character editor panel inside the
     // right drawer, which then overlays the chat composer. Close the
     // drawer so subsequent send-area gestures aren't intercepted by the
-    // character_name_pole / description_textarea inputs. The drawer
-    // toggle is idempotent — clicking it again folds the panel away.
+    // character_name_pole / description_textarea inputs.
     await closeRightNavDrawer(page);
 }
 
@@ -204,10 +249,7 @@ export async function openUserSettingsDrawer(page) {
     await openTopDrawer(page, 'user-settings-button');
 }
 
-/**
- * Close the right nav (character management) drawer if it's open. The
- * Uses the visible drawer toggle.
- */
+/** Close the right nav (character management) drawer if it's open. */
 export async function closeRightNavDrawer(page) {
     const isOpen = await page.evaluate(() => {
         const i = document.querySelector('#rightNavDrawerIcon');
@@ -245,6 +287,23 @@ export async function selectCharacterProgrammatic(page, name) {
 }
 
 /**
+ * Type into #send_textarea and click #send_but without waiting for the
+ * reply. For specs that act while the generation is in flight; use
+ * sendMessageAndAwaitReply otherwise.
+ */
+export async function sendMessageViaUI(page, text) {
+    await page.locator('#send_textarea').fill(text);
+    await waitForConnected(page);
+    // Any drawer-content under #top-settings-holder that's currently in
+    // the .openDrawer state sits on top of #send_but and intercepts the
+    // click. Close them all (the standard .drawer-toggle handler) so the
+    // click lands on the composer. This is idempotent / no-op when no
+    // drawer is open.
+    await closeAnyOpenTopSettingsDrawer(page);
+    await page.locator('#send_but').click();
+}
+
+/**
  * Send a user message by typing into #send_textarea and clicking #send_but.
  *
  * This is the DEFAULT send path. Waits for GENERATION_ENDED (the post-
@@ -268,24 +327,7 @@ export async function sendMessageAndAwaitReply(page, text, { timeoutMs = 120_000
         });
     }), timeoutMs);
 
-    const textarea = page.locator('#send_textarea');
-    await textarea.fill(text);
-    await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-    // Any drawer-content under #top-settings-holder that's currently in
-    // the .openDrawer state sits on top of #send_but and intercepts the
-    // click. Close them all (the standard .drawer-toggle handler) so the
-    // click lands on the composer. This is idempotent / no-op when no
-    // drawer is open.
-    await closeAnyOpenTopSettingsDrawer(page);
-    // Dispatch the click via JS so we bypass any residual overlay (e.g.
-    // a popup that closed mid-flight, a drawer mid-animation). The
-    // #send_but element's bound handler reads from #send_textarea, which
-    // we already filled.
-    await page.evaluate(() => {
-        const btn = document.querySelector('#send_but');
-        if (!btn) throw new Error('#send_but not present');
-        btn.click();
-    });
+    await sendMessageViaUI(page, text);
 
     const replyId = await generationPromise;
     // Read the rendered DOM, not ctx.chat — that's the whole point.
@@ -326,14 +368,19 @@ export async function sendMessageProgrammatic(page, text, { timeoutMs = 120_000 
 }
 
 /**
+ * Hover the last message so its swipe chevrons fade in, then click one.
+ * The chevrons carry visibility:hidden while the fade runs, so the
+ * actionability wait in click() covers the transition.
+ */
+async function clickLastMessageSwipe(page, chevronClass) {
+    const lastMes = page.locator('#chat .last_mes');
+    await lastMes.hover();
+    await lastMes.locator(`.${chevronClass}`).click();
+}
+
+/**
  * Trigger a swipe (regen variant) on the latest assistant message via the
  * real .swipe_right button. Returns the new variant text from DOM.
- *
- * The .swipe_right element is normally invisible until the cursor hovers
- * the message — we use force:true to bypass the hover gate, which is
- * accurate enough since the user does see this control on mobile (always
- * visible) and via tab navigation. If you want to test the hover-reveal
- * specifically, write a separate test that hovers the message first.
  */
 export async function swipeRightOnLatest(page, { timeoutMs = 120_000 } = {}) {
     const swipePromise = page.evaluate((to) => new Promise((resolve, reject) => {
@@ -345,15 +392,8 @@ export async function swipeRightOnLatest(page, { timeoutMs = 120_000 } = {}) {
             resolve(id);
         });
     }), timeoutMs);
-    // The .swipe_right chevron has a .fade opacity transition that adds
-    // visibility:hidden + pointer-events:none for ~200ms. Playwright's
-    // click({force:true}) still respects pointer-events:none in headless,
-    // so dispatch the click via JS (mobile-tap equivalent) instead.
-    await page.evaluate(() => {
-        const el = document.querySelector('.last_mes .swipe_right');
-        if (!el) throw new Error('.last_mes .swipe_right not present');
-        el.click();
-    });
+    await waitForConnected(page);
+    await clickLastMessageSwipe(page, 'swipe_right');
     const swipeId = await swipePromise;
     const text = await page.locator(`.mes[mesid="${swipeId}"] .mes_text`).first().innerText({ timeout: 30_000 });
     return { swipeId, text };
@@ -369,11 +409,7 @@ export async function swipeLeftOnLatest(page, { timeoutMs = 120_000 } = {}) {
             resolve(id);
         });
     }), timeoutMs);
-    await page.evaluate(() => {
-        const el = document.querySelector('.last_mes .swipe_left');
-        if (!el) throw new Error('.last_mes .swipe_left not present');
-        el.click();
-    });
+    await clickLastMessageSwipe(page, 'swipe_left');
     const swipeId = await swipePromise;
     const text = await page.locator(`.mes[mesid="${swipeId}"] .mes_text`).first().innerText({ timeout: 30_000 });
     return { swipeId, text };
@@ -390,14 +426,14 @@ export async function swipeLeftOnLatest(page, { timeoutMs = 120_000 } = {}) {
 export async function editMessageViaUI(page, mesid, newText) {
     const mes = page.locator(`.mes[mesid="${mesid}"]`);
     await mes.waitFor({ state: 'visible', timeout: 10_000 });
-    // The .mes_edit pencil lives inside the message; hovering reveals it
-    // but force:true is enough here since we only care about the click.
-    await mes.locator('.mes_edit').first().click({ force: true });
+    // The .mes_edit pencil is revealed by hovering the message.
+    await mes.hover();
+    await mes.locator('.mes_edit').first().click();
     const editArea = mes.locator('.edit_textarea, .mes_text').first();
     await editArea.waitFor({ state: 'visible', timeout: 5000 });
     // .mes_text becomes contenteditable; .fill works on textarea elements
     // only, so for the contenteditable path we select-all + type.
-    const isTextarea = await editArea.evaluate(el => el.tagName.toLowerCase() === 'textarea').catch(() => false);
+    const isTextarea = await editArea.evaluate(el => el.tagName.toLowerCase() === 'textarea');
     if (isTextarea) {
         await editArea.fill(newText);
     } else {
@@ -414,40 +450,25 @@ export async function editMessageViaUI(page, mesid, newText) {
 
 /**
  * Delete a message via the real UI: click .mes_edit, then .mes_edit_delete,
- * then accept the in-DOM confirm popup if it appears (ST's
- * `power_user.confirm_message_delete` defaults to true, so a Popup.CONFIRM
- * modal renders before the actual delete fires).
+ * then accept the confirm popup when `power_user.confirm_message_delete`
+ * is on (the default), exactly as a user answers it.
  *
- * Returns after `MESSAGE_DELETED` has fired. The MG extension's
- * MESSAGE_DELETED listener defers its server-fetch chain to a microtask,
- * so it no longer blocks the emit loop.
- *
- * Implementation notes:
- *   - Dispatch the click via a synthetic MouseEvent inside a page.evaluate
- *     rather than `locator.click()`. The .mes_edit_delete target sits
- *     inside .mes, which gets removed from DOM the instant deleteMessage
- *     runs (synchronously, before its first await). With
- *     `confirm_message_delete=false` that removal races with Playwright's
- *     post-action stability check and the click hangs indefinitely; the
- *     synthetic dispatch fires the jQuery delegated handler identically
- *     to a real click without any actionability heuristics.
- *   - Park the MESSAGE_DELETED signal on `window.__deleteSignal` and poll
- *     for it via waitForFunction, NOT a long-lived page-side Promise
- *     returned via JSHandle. The latter pattern stalls the CDP
- *     execution context against subsequent page.evaluate calls in
- *     some environments, producing a hang that looks like a popup-
- *     dismiss eval timing out.
+ * Returns after `MESSAGE_DELETED` has fired. The signal is parked on
+ * `window.__deleteSignal` and polled with waitForFunction rather than
+ * returned through a long-lived page-side Promise.
  */
 export async function deleteMessageViaUI(page, mesid) {
     const mes = page.locator(`.mes[mesid="${mesid}"]`);
     await mes.waitFor({ state: 'visible', timeout: 10_000 });
-    await mes.locator('.mes_edit').first().click({ force: true });
-    await mes.locator('.mes_edit_delete').first().waitFor({ state: 'visible', timeout: 5000 });
+    await mes.hover();
+    await mes.locator('.mes_edit').first().click();
+    const deleteButton = mes.locator('.mes_edit_delete').first();
+    await deleteButton.waitFor({ state: 'visible', timeout: 5000 });
 
-    // Register the MESSAGE_DELETED listener and a window-level signal
-    // BEFORE dispatching the click so the listener is in place by the
-    // time deleteMessage emits.
-    await page.evaluate(() => {
+    // Register the MESSAGE_DELETED listener BEFORE the click so it is in
+    // place by the time deleteMessage emits. The confirm flag is read, not
+    // written: it decides whether the user sees a dialog to answer.
+    const confirmDelete = await page.evaluate(() => {
         const ctx = window.Luker.getContext();
         window.__deleteSignal = { resolved: false, id: null };
         const off = (id) => {
@@ -456,32 +477,18 @@ export async function deleteMessageViaUI(page, mesid) {
             window.__deleteSignal.id = id;
         };
         ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, off);
+        return ctx.powerUserSettings?.confirm_message_delete !== false;
     });
 
-    // Dispatch via synthetic MouseEvent from the page side.
-    await page.evaluate((mid) => {
-        const el = document.querySelector(`.mes[mesid="${mid}"] .mes_edit_delete`);
-        if (!el) throw new Error(`mes_edit_delete not found for mesid=${mid}`);
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    }, mesid);
+    await deleteButton.click();
 
-    // Dismiss the confirm popup if it surfaced. We do NOT poll for the
-    // dialog up front: when `confirm_message_delete` is false (the
-    // common path in MG/var-ops specs) no dialog ever appears, and a
-    // page.waitForFunction here would burn its full timeout. Instead,
-    // dismiss-on-arrival via waitForFunction on the signal: poll the
-    // sentinel, and on each poll also check for an open dialog and
-    // click its OK button if present. That keeps the helper responsive
-    // to both confirm=true and confirm=false paths without a fixed
-    // pre-roll wait.
-    await page.waitForFunction(() => {
-        const openDlg = Array.from(document.querySelectorAll('dialog.popup')).reverse().find(d => d.hasAttribute('open'));
-        if (openDlg) {
-            const ok = openDlg.querySelector('.popup-button-ok');
-            if (ok) ok.click();
-        }
-        return window.__deleteSignal?.resolved === true;
-    }, null, { timeout: 20_000 });
+    if (confirmDelete) {
+        const popup = page.locator('dialog.popup[open]').last();
+        await popup.waitFor({ state: 'visible', timeout: 5000 });
+        await popup.locator('.popup-button-ok').click();
+    }
+
+    await page.waitForFunction(() => window.__deleteSignal?.resolved === true, null, { timeout: 20_000 });
 }
 
 /**
@@ -495,6 +502,7 @@ export async function openOptionsAndClick(page, optionId) {
     // visible one so strict mode doesn't reject the locator.
     const item = page.locator(`#${optionId}:visible`).first();
     await item.waitFor({ state: 'visible', timeout: 5000 });
+    // The item handler hides the menu itself once its action has run.
     await item.click();
 }
 
@@ -512,6 +520,7 @@ export async function continueViaUI(page, { timeoutMs = 120_000 } = {}) {
             resolve(id);
         });
     }), timeoutMs);
+    await waitForConnected(page);
     await openOptionsAndClick(page, 'option_continue');
     const id = await continuePromise;
     const text = await page.locator(`.mes[mesid="${id}"] .mes_text`).first().innerText({ timeout: 30_000 });
@@ -532,6 +541,7 @@ export async function regenerateViaUI(page, { timeoutMs = 120_000 } = {}) {
             resolve(id);
         });
     }), timeoutMs);
+    await waitForConnected(page);
     await openOptionsAndClick(page, 'option_regenerate');
     const id = await regenPromise;
     const text = await page.locator(`.mes[mesid="${id}"] .mes_text`).first().innerText({ timeout: 30_000 });
@@ -544,6 +554,7 @@ export async function regenerateViaUI(page, { timeoutMs = 120_000 } = {}) {
  * proposed user line into the input bar, not into chat).
  */
 export async function impersonateViaUI(page, { timeoutMs = 60_000 } = {}) {
+    await waitForConnected(page);
     await openOptionsAndClick(page, 'option_impersonate');
     // Wait until #send_textarea contains non-empty text (the impersonate
     // payload). We bound by mock latency.
@@ -564,7 +575,8 @@ export async function branchFromMessageViaUI(page, mesid, { timeoutMs = 30_000 }
     await mes.waitFor({ state: 'visible', timeout: 10_000 });
     // Reveal the extra mes buttons (ellipsis hint) so .mes_create_branch
     // is clickable, then click.
-    await mes.locator('.extraMesButtonsHint').first().click({ force: true });
+    await mes.hover();
+    await mes.locator('.extraMesButtonsHint').first().click();
     const branchBtn = mes.locator('.mes_create_branch').first();
     await branchBtn.waitFor({ state: 'visible', timeout: 5000 });
     const chatPromise = page.evaluate((to) => new Promise((resolve, reject) => {

@@ -5,9 +5,9 @@
 // the right postgres schema under the right handle so a regression in
 // pg-side encoding or transactional isolation surfaces here.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startPostgresContainer } from '../_lib/db-containers.js';
 import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
 import { importWorldDocument } from '../_lib/ui-worldinfo.js';
@@ -42,30 +42,25 @@ const SEED_WORLD_DATA = {
 let pgContainer;
 let A, B;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     pgContainer = await startPostgresContainer({ databases: [A_DB, B_DB] });
 
-    A = await startServer({
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'pg-A',
-        extraConfig: {
-            'storage.mode': 'postgres',
-            'storage.postgres.url': pgContainer.urlFor(A_DB),
-        },
+        extraConfig: { storage: { mode: 'postgres', postgres: { url: pgContainer.urlFor(A_DB) } } },
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'pg-B',
-        extraConfig: {
-            'storage.mode': 'postgres',
-            'storage.postgres.url': pgContainer.urlFor(B_DB),
-        },
+        extraConfig: { storage: { mode: 'postgres', postgres: { url: pgContainer.urlFor(B_DB) } } },
     });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
+
+
     if (pgContainer) await pgContainer.stop();
 });
 

@@ -12,10 +12,10 @@
 // #request_inspector_button and click the chat row. Assert the displayed
 // value equals the value the mock upstream actually received.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -25,9 +25,10 @@ let server, mock;
 const EFFORT = 'high';
 const REPLY = '*Ash lowers the spyglass and marks the chart.* "The reef holds. We keep the lantern lit."';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
-    server = await startServer({ batchKey: 'regression', scenarioId: '132-inspector-reasoning-effort' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '132-inspector-reasoning-effort' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     // Keep the memory-graph extractor from firing its own LLM calls so the
@@ -43,7 +44,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

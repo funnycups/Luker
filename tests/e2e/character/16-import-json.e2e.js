@@ -5,11 +5,10 @@
 // hidden #character_import_file. Then clicks the new card and asserts
 // the imported fields are visible on the character edit panel.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { writeFileSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
@@ -46,25 +45,23 @@ const V2_PAYLOAD = {
     data: V2_DATA,
 };
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'import-json' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'import-json' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-json-'));
+    tmpDir = (await scope.directory('luker-e2e-json')).path;
     jsonPath = resolve(tmpDir, 'mira.json');
     writeFileSync(jsonPath, JSON.stringify(V2_PAYLOAD, null, 2));
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
-    if (tmpDir && existsSync(tmpDir)) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-    }
 });
 
 test.describe('#16 — Import JSON character card via UI file picker', () => {

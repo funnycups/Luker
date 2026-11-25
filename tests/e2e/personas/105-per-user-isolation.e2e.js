@@ -12,22 +12,22 @@
 // access scoping — driving the chat UI for both users in parallel
 // would be far slower and add no signal beyond the API contract.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
+import { startServer } from '../../harness/server.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'isolation',
         extraConfig: { enableUserAccounts: true },
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 async function newSession(baseURL) {
     const ctx = await pwRequest.newContext({ baseURL });

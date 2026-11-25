@@ -9,11 +9,12 @@
 // Doc screenshots 05/06 are gated behind LUKER_UPDATE_DOC_SCREENSHOTS
 // (see _lib/doc-screenshots.js).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, createUserViaAdminUI } from '../_lib/page.js';
 import { accountWindow, closeAccountWindow, openAdminPage } from '../_lib/account-window.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { loginAs } from '../_lib/sync.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
@@ -22,12 +23,14 @@ const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images
 
 let server;
 
-test.beforeAll(async ({ browser }) => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources, browser }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'storage-inspector',
         scenarioId: 'admin-aggregate',
         extraConfig: { enableUserAccounts: true },
     });
+    markOnboarded({ dataRoot: server.dataRoot });
 
     const bootCtx = await browser.newContext();
     const bootPage = await bootCtx.newPage();
@@ -42,9 +45,7 @@ test.beforeAll(async ({ browser }) => {
     await seedFixtureUser(server.dataRoot, 'bob');
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('Storage Inspector · admin aggregate view', () => {
     test('aggregate L1 sums categories; L2 shows per-user rows; click redirects to that user', async ({ page }) => {

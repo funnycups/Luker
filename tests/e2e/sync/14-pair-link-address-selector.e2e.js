@@ -8,9 +8,9 @@
 // rebuilt client-side, so no peer fetch is needed here — the pair-over-LAN
 // path is covered by `01-pair-and-first-sync`.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openLanSyncPanel, generatePairingLink, pairingLinkField, accountWindow } from '../_lib/sync.js';
 
@@ -19,8 +19,9 @@ const loopbackWarning = page => accountWindow(page).locator('.dw-banner.warning'
 
 let A;
 
-test.beforeAll(async () => {
-    A = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'pair-address',
         // `listen: true` binds the interfaces so the server can report LAN
@@ -30,9 +31,7 @@ test.beforeAll(async () => {
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-});
+
 
 test.describe('LAN Sync — pairing link address selector', () => {
     test('defaults to an interface address and rebuilds the link on change', async ({ browser }) => {

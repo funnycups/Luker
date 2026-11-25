@@ -25,8 +25,8 @@
 // and even if the WS replay itself worked, any downstream code that
 // reads `job.text` (e.g. the recovery preview) would show empty.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -41,19 +41,20 @@ const SCRIPTED_REPLY = CHUNKS.join(' ');
 // most of the stream ahead of us on Tab B.
 const CHUNK_DELAY_MS = 500;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [SCRIPTED_REPLY],
         streamChunkDelayMs: CHUNK_DELAY_MS,
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'close-tab' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'close-tab' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

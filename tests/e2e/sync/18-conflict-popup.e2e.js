@@ -9,13 +9,13 @@
 // the hostile-name test writes its world file straight to disk as spec 02
 // does. Device labels are configured through Device settings before pairing.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { selectWorldBook, addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { normalizeDeviceLabel } from '../../../src/sync/device-label.js';
@@ -25,6 +25,12 @@ import {
     chooseConflictVersion, applyConflictChoices, closeSyncPopup, readUserFile, userRootOf, backendIdOf, shadowMain, setSyncDeviceLabel,
     conflictRow, accountWindow,
 } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const GLADE = 'worlds/Glade.json';
 const FERN = 'worlds/Fern Hollow.json';
@@ -36,8 +42,8 @@ let contexts = [];
 let pauseDir = null;
 
 async function start(testInfo, envB = {}) {
-    A = await startServer({ batchKey: 'sync', scenarioId: `popup-${testInfo.testId}-A` });
-    B = await startServer({ batchKey: 'sync', scenarioId: `popup-${testInfo.testId}-B`, extraEnv: envB });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `popup-${testInfo.testId}-A` });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `popup-${testInfo.testId}-B`, extraEnv: envB });
     if (process.env.LUKER_TASK11_ACTUAL_JITLESS === '1') {
         for (const server of [A, B]) {
             const cache = path.join(server.dataRoot, '_webpack');
@@ -51,7 +57,7 @@ async function start(testInfo, envB = {}) {
 
 /** Start B with a test pausepoint that holds a conflict choice before it reaches live data. */
 async function startPausable(testInfo, name) {
-    pauseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-e2e-pause-'));
+    pauseDir = (await fileScope.directory(`conflict-${testInfo.testId}-pause`)).path;
     await start(testInfo, { LUKER_SYNC_PAUSEPOINT: name, LUKER_SYNC_PAUSE_DIR: pauseDir });
 }
 const arm = name => fs.writeFileSync(path.join(pauseDir, `${name}.arm`), '');
@@ -108,9 +114,6 @@ function seedWorld(server, rel) {
 test.afterEach(async () => {
     for (const ctx of contexts) await ctx.close();
     contexts = [];
-    await tearDownServer(A);
-    await tearDownServer(B);
-    if (pauseDir) fs.rmSync(pauseDir, { recursive: true, force: true });
     pauseDir = null;
 });
 
@@ -358,21 +361,33 @@ test.describe('LAN Sync — Sync issues page', () => {
             // Keep the original window open. Edits use independent real browser tabs.
             const editorB = await contexts[1].newPage();
             await awaitMainUI(editorB, B.baseURL);
+            await waitForStatusChecks(editorB, 1);
             await closeAllPopups(editorB);
+            await reloadAndAwait(pageA, A.baseURL);
+            await waitForStatusChecks(pageA, 1);
             await closeAllPopups(pageA);
-            for (const [page, side] of [[pageA, 'A'], [editorB, 'B']]) {
+            for (const [page, server, side] of [[pageA, A, 'A'], [editorB, B, 'B']]) {
                 await selectWorldBook(page, 'Glade');
                 await addWorldEntry(page, { key: `fresh-${side}`, content: `fresh conflict from ${side}` });
+                await expect.poll(() => fileText(server, GLADE), { timeout: 30_000 }).toContain(`fresh conflict from ${side}`);
             }
             await openLanSyncPanel(editorB);
             expect(await clickSyncNow(editorB, 'A device')).toBe('warning');
             await expect.poll(() => heldReads).toBeGreaterThan(0);
             const before = await statusChecks(pageB);
             // Release all already-admitted reads: older responses are invalidated
-            // by the newest request. Later reads stay held for this assertion.
+            // by the newest request. If a timer poll starts mid-flight and bumps
+            // statusVersion before the released batch settles, release it too so
+            // the first delivered refresh is observed rather than discarded.
             releasedReads = heldReads;
             releaseStatus();
             await waitForStatusChecks(pageB, before + releasedReads);
+            if (heldReads > releasedReads) {
+                const target = before + heldReads;
+                releasedReads = heldReads;
+                releaseRemaining();
+                await waitForStatusChecks(pageB, target);
+            }
             await expect(conflictRow(pageB, GLADE)).toBeVisible();
             expect((await readConflictDiff(pageB, GLADE)).text).toContain('fresh conflict');
             await closeSyncPopup(pageB);
@@ -383,10 +398,14 @@ test.describe('LAN Sync — Sync issues page', () => {
             // the Sync issues page with the still-pending same-path record included.
             await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
             await expect(syncPopup(pageB)).toHaveCount(0);
-            for (const [page, side] of [[pageA, 'A'], [editorB, 'B']]) {
+            await expect.poll(() => pendingPaths(pageA), { timeout: 60_000 }).toContain(GLADE);
+            for (const [page, server, side] of [[pageA, A, 'A'], [editorB, B, 'B']]) {
+                await reloadAndAwait(page, server.baseURL);
+                await waitForStatusChecks(page, 1);
                 await closeAllPopups(page);
                 await selectWorldBook(page, 'Willow');
                 await addWorldEntry(page, { key: side, content: `unseen Willow conflict ${side}` });
+                await expect.poll(() => fileText(server, 'worlds/Willow.json'), { timeout: 30_000 }).toContain(`unseen Willow conflict ${side}`);
             }
             await openLanSyncPanel(editorB);
             expect(await clickSyncNow(editorB, 'A device')).toBe('warning');

@@ -31,16 +31,16 @@
 // fire change, accept the first confirm popup's "Replace with File"
 // custom button, setInputFiles, await the post-replace popup.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
-import { write as writePngCard } from '../../../src/character-card-parser.js';
+import { read as readPngCard, write as writePngCard } from '../../../src/character-card-parser.js';
+import { applyWorkbenchChanges, sendWorkbenchIterationPrompt } from '../_lib/ui-workbench.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 
@@ -72,7 +72,7 @@ const BRIALLEN_EMBEDDED_BOOK = {
     extensions: {},
 };
 
-function buildBriallenPng(seedPng) {
+function buildBriallenPng(seedPng, characterBook = BRIALLEN_EMBEDDED_BOOK) {
     const data = {
         name: BRIALLEN_NAME,
         description: BRIALLEN_DESCRIPTION,
@@ -90,7 +90,7 @@ function buildBriallenPng(seedPng) {
         extensions: {
             depth_prompt: { prompt: '', depth: 4, role: 'system' },
         },
-        character_book: BRIALLEN_EMBEDDED_BOOK,
+        character_book: characterBook,
     };
     const payload = {
         spec: 'chara_card_v2',
@@ -104,21 +104,14 @@ function buildBriallenPng(seedPng) {
 async function openReplaceWithFile(page, pngPath) {
     // Open the More dropdown, fire 'replace_update'. The change handler
     // pops a confirm popup with two custom buttons (URL / File).
-    await page.evaluate(() => {
-        const sel = document.querySelector('#char-management-dropdown');
-        if (!sel) throw new Error('#char-management-dropdown not found');
-        const opt = sel.querySelector('#replace_update');
-        if (!opt) throw new Error('#replace_update option not found');
-        opt.selected = true;
-        if (window.jQuery) window.jQuery(sel).trigger('change');
-        else sel.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    const label = (await page.locator('#replace_update').textContent()).trim();
+    await page.locator('#char-management-dropdown').selectOption({ label });
     // First popup: choose "Replace with File".
     const firstPopup = page.locator('dialog.popup[open]').last();
     await firstPopup.waitFor({ state: 'visible', timeout: 5000 });
     const fileBtn = firstPopup.locator('.popup-button-custom', { hasText: /Replace with File/i }).first();
     await fileBtn.click();
-    await firstPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await firstPopup.waitFor({ state: 'detached', timeout: 5000 });
     // The click triggers `$('#character_replace_file').trigger('click')`
     // which opens the OS file picker. Hand Playwright the file path on
     // the hidden input directly.
@@ -140,9 +133,10 @@ async function waitForReplaceChoicePopup(page) {
 let mock, tmpDir, briallenPngPath;
 
 test.describe('#25 — post-replace popup three-choice flow', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-popup-'));
+        tmpDir = (await scope.directory('luker-e2e-replace-popup')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
         briallenPngPath = resolve(tmpDir, 'briallen.png');
         writeFileSync(briallenPngPath, buildBriallenPng(seed));
@@ -150,14 +144,131 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    });
+
+    test('applying another character draft does not acknowledge a replacement review', async ({ resources, page }) => {
+        await page.setViewportSize({ width: 1920, height: 1080 });
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-editor-cancel-owner' });
+        markOnboarded({ dataRoot: server.dataRoot });
+        disableTagImportPopup({ dataRoot: server.dataRoot });
+        bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+        appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+        const oldBook = writeWorldBook({ dataRoot: server.dataRoot, name: ASH_BOOK, entries: BRYN_ENTRIES });
+        let avatar = 'ash-cancel-owner.png';
+        writeEmbeddedCharacter({ dataRoot: server.dataRoot, avatarFile: avatar, overrides: { extensions: { world: oldBook } } });
+        const card = () => JSON.parse(readPngCard(readFileSync(resolve(server.dataRoot, 'default-user', 'characters', avatar))));
+        await awaitMainUI(page, server.baseURL);
+        await clickCharacterCard(page, ASH_NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+        await openReplaceWithFile(page, briallenPngPath);
+        const popup = await waitForReplaceChoicePopup(page);
+        avatar = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            return ctx.characters[ctx.characterId].avatar;
+        });
+        mock.scriptReply('The replacement review remains pending without edits.');
+        await popup.locator('.popup-button-custom', { hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/ }).click();
+        const win = page.locator('.wbench .wb-win').first();
+        await expect(win.locator('.wb-msg-ai')).toContainText('The replacement review remains pending without edits.');
+        const newBook = resolve(server.dataRoot, 'default-user', 'worlds', `${BRIALLEN_BOOK_NAME}.json`);
+        expect(existsSync(newBook)).toBe(true);
+        await clickCharacterCard(page, 'Seraphina');
+        await dismissAnyPopup(page);
+        await expect(page.locator('#character_name_pole')).toHaveValue('Seraphina');
+        const description = 'Seraphina records the relief watch in a blue tide ledger.';
+        mock.scriptToolCall({ name: 'cea_set_card_field', arguments: { field: 'description', value: description } });
+        mock.scriptReply('The relief watch description is ready.');
+        await sendWorkbenchIterationPrompt(page, 'Describe the relief watch tide ledger.');
+        await applyWorkbenchChanges(page);
+        await expect.poll(() => page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            return ctx.characters[ctx.characterId].description;
+        })).toBe(description);
+        expect(existsSync(newBook)).toBe(true);
+        await win.locator('.wb-titlebar .is-close').click();
+        await expect.poll(() => existsSync(newBook)).toBe(false);
+        await expect.poll(() => card().data.extensions.world).toBe(oldBook);
+        await server.restart();
+        await reloadAndAwait(page, server.baseURL);
+        expect(existsSync(newBook)).toBe(false);
+        expect(card().data.extensions.world).toBe(oldBook);
+        await clickCharacterCard(page, 'Seraphina');
+        await dismissAnyPopup(page);
+        await expect(page.locator('#description_textarea')).toHaveValue(description);
+    });
+
+    test('a character change during book materialization cannot retarget the merge review', async ({ resources, page, context }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-editor-owner-change' });
+        markOnboarded({ dataRoot: server.dataRoot });
+        disableTagImportPopup({ dataRoot: server.dataRoot });
+        bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+        appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+        const oldBook = writeWorldBook({ dataRoot: server.dataRoot, name: ASH_BOOK, entries: BRYN_ENTRIES });
+        writeEmbeddedCharacter({
+            dataRoot: server.dataRoot,
+            avatarFile: 'ash-owner-branch.png',
+            overrides: { extensions: { world: oldBook } },
+        });
+        await awaitMainUI(page, server.baseURL);
+        await clickCharacterCard(page, ASH_NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+        await openReplaceWithFile(page, briallenPngPath);
+        const popup = await waitForReplaceChoicePopup(page);
+        const replacedAvatar = await page.evaluate(() => {
+            const c = window.Luker.getContext();
+            return c.characters[c.characterId].avatar;
+        });
+        const completions = () => mock.requests.filter(r => r.url.includes('/chat/completions')).length;
+        const before = completions();
+        const foreignWrites = [];
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/worldinfo/edit', requestStage: 'Response' }] });
+        try {
+            const paused = new Promise(resolve => cdp.once('Fetch.requestPaused', resolve));
+            await popup.locator('.popup-button-custom', { hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/ }).click();
+            const pending = await paused;
+            expect(pending.responseStatusCode).toBe(200);
+            expect(JSON.parse(pending.request.postData).name).toBe(BRIALLEN_BOOK_NAME);
+            await expect(popup).toHaveCount(0);
+            await clickCharacterCard(page, 'Seraphina');
+            await dismissAnyPopup(page);
+            await expect(page.locator('#character_name_pole')).toHaveValue('Seraphina');
+            const avatar = await page.evaluate(() => {
+                const c = window.Luker.getContext();
+                return c.characters[c.characterId].avatar;
+            });
+            const cardPath = resolve(server.dataRoot, 'default-user', 'characters', avatar);
+            const selectedCard = readFileSync(cardPath);
+            page.on('request', request => {
+                if (request.url().endsWith('/api/characters/state/patch')) {
+                    const body = request.postDataJSON();
+                    if (body.avatar_url === avatar && body.operations.some(op => /^\/sessions\/\d+(?:\/|$)/.test(op.path))) {
+                        foreignWrites.push(body);
+                    }
+                }
+            });
+            await cdp.send('Fetch.continueRequest', { requestId: pending.requestId });
+            await cdp.send('Fetch.disable');
+            await expect(page.locator('.wbench .wb-toast')).toContainText('The iteration target changed before the editor opened.');
+            await expect.poll(() => existsSync(resolve(server.dataRoot, 'default-user', 'worlds', `${BRIALLEN_BOOK_NAME}.json`))).toBe(false);
+            await expect.poll(() => page.evaluate(avatar => {
+                const c = window.Luker.getContext();
+                return c.characters.find(character => character.avatar === avatar)?.data?.extensions?.world;
+            }, replacedAvatar)).toBe(oldBook);
+            expect(completions()).toBe(before);
+            expect(foreignWrites).toEqual([]);
+            expect(readFileSync(cardPath)).toEqual(selectedCard);
+            await expect(page.locator('#character_name_pole')).toHaveValue('Seraphina');
+        } finally {
+            await cdp.detach();
         }
     });
 
-    test('IMPORT path: clicking "Import the new card\'s embedded world book" creates the new world file, binds it as primary, and the old book stays on disk untouched', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-import' });
-        try {
+    test('IMPORT path: clicking "Import the new card\'s embedded world book" creates the new world file, binds it as primary, and the old book stays on disk untouched', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-popup-import' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -198,8 +309,10 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await expect(editorBtn).toBeVisible();
             await expect(skipBtn).toBeVisible();
 
+            const savedBook = page.waitForResponse(response => response.url().endsWith('/api/worldinfo/edit') && response.request().postDataJSON().name === BRIALLEN_BOOK_NAME);
             await importBtn.click();
-            await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+            expect((await savedBook).ok()).toBe(true);
+            await expect(popup).toHaveCount(0);
 
             // The new card's embedded book must now exist on disk as
             // its own world file.
@@ -243,14 +356,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
                 const bound = idx >= 0 ? ctx.characters[idx]?.data?.extensions?.world : '';
                 return String(bound || '').trim() === want;
             }, { name: BRIALLEN_NAME, want: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('KEEP path: clicking "Keep old book" preserves the old binding and does NOT create the new card\'s embedded book', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-keep' });
-        try {
+    test('KEEP path: clicking "Keep old book" preserves the old binding and does NOT create the new card\'s embedded book', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-popup-keep' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -307,14 +418,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
                 return String(bound || '').trim() === want;
             }, { name: BRIALLEN_NAME, want: ashBook }, { timeout: 10_000 });
             expect(existsSync(newBookPath), 'still no embedded book file after restart').toBe(false);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('OPEN_EDITOR path: materializes new book to disk FIRST, then opens studio with a seed whose diff has both prev removals AND next additions', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-editor' });
-        try {
+    test('OPEN_EDITOR path: materializes new book to disk FIRST, then opens studio with a seed whose diff has both prev removals AND next additions', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-popup-editor' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -325,6 +434,15 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
                 avatarFile: 'ash-editor-branch.png',
                 overrides: { extensions: { world: ashBook } },
             });
+            const importedBook = structuredClone(BRIALLEN_EMBEDDED_BOOK);
+            const completeEntry = `${'The keeper records the entire night watch. '.repeat(30)}Final ledger entry.`;
+            importedBook.entries[0].content = completeEntry;
+            const importDirectory = await resources.directory('complete replacement preview');
+            const completeCardPath = resolve(importDirectory.path, 'complete-card.png');
+            writeFileSync(completeCardPath, buildBriallenPng(
+                readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png')),
+                importedBook,
+            ));
 
             await awaitMainUI(page, server.baseURL);
             await clickCharacterCard(page, ASH_NAME);
@@ -336,7 +454,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             const newBookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${BRIALLEN_BOOK_NAME}.json`);
             expect(existsSync(newBookPath), `${BRIALLEN_BOOK_NAME}.json must NOT exist before replace`).toBe(false);
 
-            await openReplaceWithFile(page, briallenPngPath);
+            await openReplaceWithFile(page, completeCardPath);
             const popup = await waitForReplaceChoicePopup(page);
             const editorBtn = popup.locator('.popup-button-custom', {
                 hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
@@ -371,21 +489,36 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             }, { timeout: 30_000 }).toBe(true);
             await expect(win.locator('.wb-msg-user')).toHaveCount(0);
 
+            await page.setViewportSize({ width: 600, height: 960 });
+            await expect(page.locator('.wbench')).toHaveClass(/is-compact/);
+            const previewButton = win.getByRole('button', { name: /^(Preview|预览|預覽)$/ });
+            await expect(previewButton).toBeVisible();
+            await previewButton.click();
+            const preview = win.locator('.wb-iter-preview');
+            await expect(preview).toBeVisible();
+            await preview.getByText(/^(View full replace diff|查看完整替换差异|檢視完整替換差異)$/).click();
+            const overview = preview.locator('.wb-replace-diff');
+            await expect(overview).toBeVisible();
+            await expect(overview).toContainText('description');
+            await expect(overview).toContainText(ashBook);
+            await expect(overview).toContainText(BRIALLEN_BOOK_NAME);
+            await expect(overview).toContainText(completeEntry);
+            const currentBook = preview.locator(`[data-worldbook="${BRIALLEN_BOOK_NAME}"]`);
+            await currentBook.locator('summary').click();
+            await expect(currentBook.locator('pre').first()).toHaveText(completeEntry);
+            await previewButton.click();
+
             // Wait for auto-turn to settle, then collapse Workbench.
             await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 });
             const closeBtn = win.locator('.wb-titlebar .is-close').first();
-            if (await closeBtn.isVisible().catch(() => false)) {
-                await closeBtn.click();
-                await expect(win).toBeHidden({ timeout: 10_000 });
-            }
-        } finally {
-            await tearDownServer(server);
+            await closeBtn.click();
+            await expect(win).toBeHidden({ timeout: 10_000 });
         }
     });
 
-    test('NO PREVIOUS BOOK: when the replaced card had no bound world book, the "Skip and keep" button is hidden', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-nobound' });
-        try {
+    test('NO PREVIOUS BOOK: when the replaced card had no bound world book, the "Skip and keep" button is hidden', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-popup-nobound' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -423,20 +556,18 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             const cancelBtn = popup.locator('.popup-button-cancel').first();
             await cancelBtn.click({ timeout: 3000 }).catch(() => {});
             await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('OPEN_EDITOR + close-without-apply: rolls back the pre-materialized new book (delete file + restore previous binding)', async ({ page }) => {
+    test('OPEN_EDITOR + close-without-apply: rolls back the pre-materialized new book (delete file + restore previous binding)', async ({ resources, page }) => {
         // Regression for the bug where picking OPEN_EDITOR and then
         // closing the studio without proposing anything left the
         // character silently bound to the new book and the new file
         // sitting on disk — indistinguishable from having picked
         // Import New Book. With the rollback wired, "opened and did
         // nothing" restores the exact pre-replace disk state.
-        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-editor-rollback' });
-        try {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-editor-rollback' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -463,8 +594,9 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             const editorBtn = popup.locator('.popup-button-custom', {
                 hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
             }).first();
+            mock.scriptReply('Reviewed the replacement. No edits were requested.');
             await editorBtn.click();
-            await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+            await expect(popup).toHaveCount(0);
 
             // Workbench appears with the new book materialized.
             const win = page.locator('.wbench .wb-win').first();
@@ -479,7 +611,8 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
 
             // Let the autoSend seed review turn settle, then collapse Workbench
             // WITHOUT applying changes — triggers `onCancelWithoutApply` rollback.
-            await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 }).catch(() => {});
+            await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 });
+            await expect(win.locator('.wb-msg-ai')).toContainText('Reviewed the replacement. No edits were requested.', { timeout: 30_000 });
             await win.locator('.wb-titlebar .is-close').first().click();
             await expect(win).toBeHidden({ timeout: 10_000 });
 
@@ -492,8 +625,6 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
             expect(existsSync(newBookPath), 'new book file must be deleted after close-without-apply').toBe(false);
             expect((await page.locator('#character_world').inputValue()) || '').toBe(ashBook);
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

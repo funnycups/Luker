@@ -28,8 +28,8 @@
 //     the explicit "create new chat" path when the user really
 //     wants one.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -52,13 +52,14 @@ function listCharChats(dataRoot, avatarFile) {
     return readdirSync(dir).filter(f => f.endsWith('.jsonl')).sort();
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Ash sets the chart down and watches the lantern flicker once before answering.* "It will hold. The wind has chosen the cliff tonight, not us."',
         ],
     });
-    server = await startServer({ batchKey: 'regression', scenarioId: 'recent-chat-phantom' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'recent-chat-phantom' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -70,7 +71,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -20,8 +20,8 @@
 //   page.route is the smallest mock surface that exercises the full
 //   onSelectImage → getCaptionForFile → sendCaptionedMessage chain.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -34,18 +34,19 @@ const STUB_CAPTION = 'A wind-bitten cartographer\'s spyglass laid across a reef 
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash glances at the picture, then folds the chart.* "Good likeness of the spyglass."',
     ] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '96-caption' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '96-caption' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

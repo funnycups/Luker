@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { launchLukerDesktop } from '../_lib/desktop.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -17,8 +17,10 @@ test.describe.configure({ mode: 'serial' });
 let desktop;
 let exited = false;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     desktop = await launchLukerDesktop({
+        scope,
         scenarioId: 'close-to-tray',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_DATA_DIR: '1' },
     });

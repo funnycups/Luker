@@ -12,9 +12,9 @@
 // for (b)/(c) because they speak different request/response shapes than the
 // OpenAI-compatible mock.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import http from 'node:http';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -109,17 +109,18 @@ async function startKoboldMock() {
     return { baseURL, requests, stop: () => new Promise((r) => srv.close(() => r())) };
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     ccMock = await startMockLLM({ scriptedReplies: [
         '*Ash answers — chat-completions path.* "The lantern caught the second breaker before the chart updated."',
     ] });
-    server = await startServer({ batchKey: 'server', scenarioId: 'four-sources' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'four-sources' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: ccMock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await ccMock?.stop();
     for (const m of sideMocks) await m.stop().catch(() => {});
 });

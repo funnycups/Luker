@@ -18,8 +18,8 @@
 //      the AI Iteration Studio Connection profile `<select>` is populated with
 //      at least one option.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
@@ -32,14 +32,13 @@ let server;
 
 const REQUEST_PROMPT_MARKER = 'REGRESSION-119 marker: hydrate the request system prompt from live settings.';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '119-orch-popup-hydrate', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '119-orch-popup-hydrate', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#119 — orchestrator Settings view hydrates from live settings', () => {
     test.setTimeout(90_000);

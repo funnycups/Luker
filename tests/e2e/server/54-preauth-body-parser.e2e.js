@@ -29,9 +29,15 @@
 //   6. Reviewed conflict decisions fit their current applying route.
 //   7. Sync user routes reject an absent account before parsing a body.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import net from 'node:net';
-import { startServer, tearDownServer } from '../_lib/server.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server;
 
@@ -41,7 +47,7 @@ let server;
 const BASIC_AUTH_HEADER = 'Basic ' + Buffer.from('user:password').toString('base64');
 
 test.beforeAll(async () => {
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'server',
         scenarioId: 'preauth-body-parse',
         // listen: true drives --listen=true; basicAuthMode goes through
@@ -53,7 +59,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 async function mintCsrf(handle = server) {
@@ -186,21 +191,17 @@ test.describe('#54 — body parsing must not run before access control', () => {
     });
 
     test('sync user routes authenticate before parsing their bodies', async () => {
-        const accountServer = await startServer({
+        const accountServer = await startServer({ scope: fileScope,
             batchKey: 'server', scenarioId: 'sync-preauth-body-parse',
             extraConfig: { listen: true, basicAuthMode: true, enableUserAccounts: true },
         });
-        try {
-            const csrf = await mintCsrf(accountServer);
-            for (const route of ['pair/start', 'pair/accept', 'backends/s3', 'backends/unknown', 'backends/unknown/s3', 'backends/unknown/unlock', 'device', 'conflicts/resolve', 'notices/dismiss', 'schedule']) {
-                const res = await fetch(`${accountServer.baseURL}/api/sync/v1/${route}`, {
-                    method: 'POST', headers: authenticatedHeaders(csrf), body: '{',
-                });
-                expect(res.status, route).toBe(401);
-                expect(await res.json(), route).toEqual({ error: 'Auth required' });
-            }
-        } finally {
-            await tearDownServer(accountServer);
+        const csrf = await mintCsrf(accountServer);
+        for (const route of ['pair/start', 'pair/accept', 'backends/s3', 'backends/unknown', 'backends/unknown/s3', 'backends/unknown/unlock', 'device', 'conflicts/resolve', 'notices/dismiss', 'schedule']) {
+            const res = await fetch(`${accountServer.baseURL}/api/sync/v1/${route}`, {
+                method: 'POST', headers: authenticatedHeaders(csrf), body: '{',
+            });
+            expect(res.status, route).toBe(401);
+            expect(await res.json(), route).toEqual({ error: 'Auth required' });
         }
     });
 });

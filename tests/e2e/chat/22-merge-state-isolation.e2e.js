@@ -24,10 +24,10 @@
 // the merge writes only the .jsonl body+header — it must not copy the
 // source's state sidecars onto the new chat.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -44,19 +44,20 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina pencils a tally in the margin.* "rA: the breeze is freshening."',
         '*Seraphina trims the lantern wick a half-turn.* "rB: the watch is yours next."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'merge-state-isolation' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'merge-state-isolation' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

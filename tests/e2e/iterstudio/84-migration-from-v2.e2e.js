@@ -15,10 +15,10 @@
 //   4. Close the studio and inspect the sidecar on disk — it must now be
 //      v3-shape (top-level `version: 3`, edits in patch form).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writePreset } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
@@ -93,11 +93,12 @@ function plantLegacySidecar(dataRoot) {
 }
 
 test.describe('#84 — iter-studio v2 session auto-migrates to v3 on first read', () => {
-    test.beforeAll(async () => {
-        server = await startServer({
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
+        server = await startServer({ scope,
             batchKey: 'iterstudio',
             scenarioId: '84-migration-from-v2',
-            extraConfig: { 'storage.mode': 'fs' },
+            extraConfig: { storage: { mode: 'fs' } },
         });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:65535' });
@@ -107,9 +108,7 @@ test.describe('#84 — iter-studio v2 session auto-migrates to v3 on first read'
         plantLegacySidecar(server.dataRoot);
     });
 
-    test.afterAll(async () => {
-        await tearDownServer(server);
-    });
+
 
     test('opening Workbench AI iteration on preset lazily imports legacy CPA session into workbench_sessions', async ({ page }) => {
         const beforePath = cpaSidecarPath(server.dataRoot);

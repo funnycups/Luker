@@ -25,13 +25,14 @@
 //
 // Restart between sub-steps locks the on-disk metadata persistence.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, openOptionsAndClick } from '../_lib/page.js';
-import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+import { writeCharacterWithBinding } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -69,13 +70,14 @@ function scrubPresetPrompts(dataRoot, handle = 'default-user') {
     writeFileSync(path, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 16 }, (_, i) =>
             `*A patient reply, watching the water.* Acknowledged turn ${i + 1}.`,
         ),
     });
-    server = await startWorldInfoServer({ specBaseName: '28-chat-lore-binding', scenarioId: 'chat-lore' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'chat-lore' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -91,7 +93,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
+
     await mock?.stop();
 });
 

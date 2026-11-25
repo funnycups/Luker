@@ -13,8 +13,8 @@
 //      explicitly do NOT accept CHARACTER_MESSAGE_RENDERED as success;
 //      that's the upstream trigger, not pipeline evidence.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -27,18 +27,19 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash trims the lantern wick.* "The reef has been restless tonight, but the lantern still holds."',
     ] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '94-tts' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '94-tts' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

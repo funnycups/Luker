@@ -14,10 +14,10 @@
 //      settings and `extensions.regex_scripts` instead of stranding the
 //      card-bound body on the global preset and overwriting it on save.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -79,12 +79,14 @@ function makeRegexScript(id, scriptName, findRegex, replaceString) {
     };
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
     server = await startServer({
+        scope,
         batchKey: 'preset',
         scenarioId: 'card-bound-active-name-and-cold-reload',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
     markOnboarded({ dataRoot: server.dataRoot });
@@ -169,7 +171,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

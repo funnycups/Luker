@@ -21,8 +21,8 @@
 //      instead of an extraction failure, and no stale batch commits.
 //   6. The regenerated turn's own extraction still runs and succeeds.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -34,6 +34,12 @@ import {
 } from '../_lib/page.js';
 import { closeWorkbench } from '../_lib/ui-workbench.js';
 import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const SETUP_TURN = 'The reef line shifted overnight; the third buoy drags its mooring.';
 const LAST_FLOOR_TURN = 'The tide gauge at the mole reads higher than last night.';
@@ -108,7 +114,7 @@ test.beforeAll(async () => {
         return EXTRACT_STALL_MS;
     });
 
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'regenerate-aborts-inflight-extract' });
+    server = await startServer({ scope: fileScope, batchKey: 'memorygraph', scenarioId: 'regenerate-aborts-inflight-extract' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -117,7 +123,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

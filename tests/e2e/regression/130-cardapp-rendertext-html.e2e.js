@@ -27,11 +27,10 @@
 // them from inside real CardApp code (not a page.evaluate of the function in
 // isolation): sync call, awaited `.html`, and awaited template interpolation.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import { awaitMainUI, closeRightNavDrawer, selectCharacterByName } from '../_lib/page.js';
@@ -91,9 +90,10 @@ const CARD_APP_ENTRY = [
 
 let server, mock, tmpDir, pngPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'regression', scenarioId: '130-cardapp-rendertext' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '130-cardapp-rendertext' });
     // The fixture card carries tags, so an import would open the tag-import
     // modal and block the UI behind it. Sibling specs pre-disable it too.
     disableTagImportPopup({ dataRoot: server.dataRoot });
@@ -104,7 +104,7 @@ test.beforeAll(async () => {
     // Build a PNG card carrying an embedded CardApp. Importing it makes the
     // server extract `card_app.files` into the per-character card-apps dir,
     // which is the production path real cards take.
-    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-130-'));
+    tmpDir = (await scope.directory('luker-e2e-130')).path;
     const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
 
     const v2 = {
@@ -137,11 +137,8 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
-    if (tmpDir && existsSync(tmpDir)) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-    }
 });
 
 test.describe('#130 — CardApp ctx.renderText awaited `.html`', () => {

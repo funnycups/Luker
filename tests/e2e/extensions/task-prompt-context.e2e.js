@@ -3,9 +3,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { write as writePngCard } from '../../../src/character-card-parser.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     awaitMainUI,
@@ -122,10 +122,12 @@ async function taskContextApplication(ctx) {
     });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     llm = await startMockLLM({});
     llm.scriptCompletion(() => ({ text: 'The supplied task is complete.' }));
     server = await startServer({
+        scope,
         batchKey: 'extensions',
         scenarioId: 'task-prompt-context',
         extraConfig: { enableUserAccounts: false, disableUpdateCheck: true },
@@ -133,7 +135,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await llm?.stop();
 });
 

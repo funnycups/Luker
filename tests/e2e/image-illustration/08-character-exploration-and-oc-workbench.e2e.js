@@ -3,8 +3,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, closeAnyOpenTopSettingsDrawer, fillTopmostPopupAndAccept, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { selectWorkbenchTab } from '../_lib/ui-workbench.js';
@@ -14,9 +14,11 @@ import { openCharacterList } from '../_lib/ui-character.js';
 let server;
 let llm;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     llm = await startMockLLM();
     server = await startServer({
+        scope,
         batchKey: 'image-illustration',
         scenarioId: 'character-source-scope',
         extraConfig: { enableUserAccounts: false },
@@ -24,8 +26,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
-    await llm.stop();
+    await llm?.stop();
 });
 
 async function uiText(page, text) {

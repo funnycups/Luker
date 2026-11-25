@@ -8,11 +8,10 @@
 // on disk, after a server restart + reload, and in the preset selector
 // (the card-bound "ghost" option must be live again).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter, openReplaceWithFile } from './_helpers.js';
@@ -94,22 +93,20 @@ function readReplacedCard(dataRoot) {
 let mock, tmpDir, replacementPath;
 
 test.describe('#31 — replace keeps every local binding', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-31-'));
+        tmpDir = (await scope.directory('luker-e2e-31')).path;
         replacementPath = writeReplacementPng(resolve(tmpDir, 'briallen.png'));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('all five binding categories survive a replace with a binding-free card', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'binding-preserve' });
-        try {
+    test('all five binding categories survive a replace with a binding-free card', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'binding-preserve' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -185,8 +182,6 @@ test.describe('#31 — replace keeps every local binding', () => {
                 const optgroup = document.querySelector('#settings_preset_openai optgroup[data-luker-card-bound="1"]');
                 return !!optgroup && Array.from(optgroup.querySelectorAll('option')).some(option => option.textContent === name);
             }, BOUND_PRESET, { timeout: 15_000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

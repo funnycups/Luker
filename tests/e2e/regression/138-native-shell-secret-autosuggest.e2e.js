@@ -1,8 +1,14 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 // The saved-key autosuggest hangs a <datalist> off every API key input, one
 // <option> per saved key, whose value is the secret's opaque uuid. Both native
@@ -15,12 +21,10 @@ const ANDROID_MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/
 let server;
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'native-shell-secret-autosuggest' });
+    server = await startServer({ scope: fileScope, batchKey: 'regression', scenarioId: 'native-shell-secret-autosuggest' });
     markOnboarded({ dataRoot: server.dataRoot });
     seedOpenAiKey(server.dataRoot);
 });
-
-test.afterAll(async () => { await tearDownServer(server); });
 
 function seedOpenAiKey(dataRoot) {
     const secretsPath = resolve(dataRoot, 'default-user', 'secrets.json');

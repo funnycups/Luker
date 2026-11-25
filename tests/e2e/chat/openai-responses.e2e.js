@@ -17,10 +17,10 @@
 //      and scripted reasoning survives the non-streaming pipeline
 //   7. upstream 500 surfaces as an error toast and the UI recovers
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapResponsesBackend,
@@ -71,9 +71,10 @@ async function openApiSettingsDrawer(page) {
     await block.waitFor({ state: 'visible', timeout: 5000 });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'chat', scenarioId: 'responses-api' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'responses-api' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapResponsesBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, stream: true });
     appendConnectionProfile({
@@ -94,6 +95,10 @@ test.beforeAll(async () => {
     // "Show thoughts" toggle would have persisted.
     s.oai_settings = s.oai_settings || {};
     s.oai_settings.show_thoughts = true;
+    // Scenario 6 reads the usage-derived badge, which the writer only
+    // stamps while message token counts are enabled.
+    s.power_user = s.power_user || {};
+    s.power_user.message_token_count_enabled = true;
     // Same for inline media: scenario 5 exercises the image-attachment
     // pipeline, which only runs when "Send inline media" is enabled.
     s.oai_settings.media_inlining = true;
@@ -101,7 +106,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

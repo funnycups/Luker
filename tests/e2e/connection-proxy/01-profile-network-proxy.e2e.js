@@ -6,10 +6,10 @@
 // before reaching the mock LLM. The value must survive a reload and clearing
 // the field must remove the profile key (fall back to the global proxy).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { startRecordingProxy } from '../_lib/recording-proxy.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
@@ -42,17 +42,17 @@ function readProfileFromDisk(dataRoot) {
     return (settings.extension_settings?.connectionManager?.profiles || []).find(profile => profile.name === PROFILE_NAME);
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY] });
     proxy = await startRecordingProxy();
-    server = await startServer({ batchKey: 'server', scenarioId: 'profile-network-proxy' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'profile-network-proxy' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, name: PROFILE_NAME });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await proxy?.stop();
     await mock?.stop();
 });

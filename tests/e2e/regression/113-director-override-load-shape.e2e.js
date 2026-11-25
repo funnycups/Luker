@@ -1,4 +1,4 @@
-// #113 — director-mode character override survives reload with the flat shape
+// #113 — director-mode character preset survives reload with the flat shape
 // (memory: known_bug_director_override_load_shape, resolved 2026-05-28)
 //
 // Bug shape: pre-fix, character-card director overrides were saved as the
@@ -23,12 +23,15 @@
 //      the character card override.
 //   4. In Flow view, select the Lead writer (`main`) card, edit "Role prompt
 //      (system prompt)" with a marker, click Done, and Save via `.ol-savebar`.
-//   5. Reload the page; re-select the character; open Workbench -> Orchestration.
-//   6. Verify character scope remains active and `main` role prompt still
+//   5. Verify the card on disk holds the marker in the flat preset library shape.
+//   6. Reload the page; re-select the character; open Workbench -> Orchestration.
+//   7. Verify character scope remains active and `main` role prompt still
 //      contains the marker.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
@@ -42,31 +45,36 @@ import {
     saveOrchDraftIfVisible,
     closeWorkbench,
 } from '../_lib/ui-workbench.js';
+import { read as readPngCard } from '../../../src/character-card-parser.js';
 
 let server;
 
+const CHARACTER_NAME = 'Seraphina';
+const CHARACTER_AVATAR = 'default_Seraphina.png';
 const OVERRIDE_MARKER = 'REGRESSION-113 marker: Ash stands on the Bryn cliff at slow tide and watches the salt-mark drifters.';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '113-director-override', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '113-director-override', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+function readCardOrchestrator() {
+    const png = readFileSync(resolve(server.dataRoot, 'default-user', 'characters', CHARACTER_AVATAR));
+    return JSON.parse(readPngCard(png))?.data?.extensions?.orchestrator || null;
+}
 
 async function openDirectorInWorkbench(page) {
     await setOrchMode(page, 'director');
     await setOrchEnabled(page, true);
 }
 
-test.describe('#113 — director-mode character override survives reload', () => {
+test.describe('#113 — director-mode character preset survives reload', () => {
     test.setTimeout(120_000);
 
-    test('save-to-character then reload reloads the override with its flat shape and the marker intact', async ({ page }) => {
+    test('save-to-character then reload reloads the card preset with its flat shape and the marker intact', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await selectCharacterByName(page, 'Seraphina');
+        await selectCharacterByName(page, CHARACTER_NAME);
         await openDirectorInWorkbench(page);
 
         // Step 1: Fork global director profile to a character-card override in Setup view.
@@ -113,9 +121,19 @@ test.describe('#113 — director-mode character override survives reload', () =>
         await expect(flowLens.locator('.ol-flow-meta .ol-pill[data-source="character"]')).toBeVisible({ timeout: 10_000 });
         await closeWorkbench(page);
 
+        // On disk: flat director shape, no legacy `director` wrapper.
+        await expect.poll(() => {
+            const ext = readCardOrchestrator();
+            const activeId = ext?.activePresetIds?.director || '';
+            return activeId ? (ext?.presetLibraries?.director?.[activeId]?.mainAgent?.systemPrompt || '') : '';
+        }, { timeout: 15_000 }).toBe(OVERRIDE_MARKER);
+        const savedExt = readCardOrchestrator();
+        const savedEntry = savedExt.presetLibraries.director[savedExt.activePresetIds.director];
+        expect(savedEntry.director, 'card director preset must be stored flat').toBeUndefined();
+
         // Step 3: RELOAD — the load-bearing leg.
         await reloadAndAwait(page, server.baseURL);
-        await selectCharacterByName(page, 'Seraphina');
+        await selectCharacterByName(page, CHARACTER_NAME);
         await openDirectorInWorkbench(page);
 
         const setupAfter = await openOrchWorkspace(page, 'setup');
@@ -141,11 +159,9 @@ test.describe('#113 — director-mode character override survives reload', () =>
             has: page.locator('.ol-section-title', { hasText: /Role prompt|角色提示/i }),
         }).first();
         await expect(roleAfter).toBeVisible({ timeout: 10_000 });
-        const promptText = await roleAfter.locator('.ol-prompt').first().textContent();
-
-        expect(promptText || '',
-            'director main agent systemPrompt must round-trip through the override sanitizer; ' +
+        await expect(roleAfter.locator('.ol-prompt').first(),
+            'director main agent systemPrompt must round-trip through the card preset sanitizer; ' +
             'if the loader regresses to the bare-shape misread, defaults overwrite the marker',
-        ).toContain(OVERRIDE_MARKER);
+        ).toHaveText(OVERRIDE_MARKER);
     });
 });

@@ -52,10 +52,10 @@
 //   Task 3 (onWorldInfoFinalized hook mutates payload) — covered by (A).
 //   Task 4 (source-side filter in every lorebook tool) — covered by (B).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -68,6 +68,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
+import { enableOrchestratorMode, importOrchestratorPreset, setOrchestratorToolCallRetries } from '../_lib/ui-orchestrator.js';
 import { writeCharacterWithBinding } from '../worldinfo/_helpers.js';
 
 const CHARACTER_NAME = 'Ash Filter Loop';
@@ -85,9 +86,10 @@ const PUBLIC_CONTENT = '__ORCH_FILTER_E2E__PUBLIC_CONTENT__EXPECTED_TO_LEAK__';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '79-lorebook-filter-loop' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '79-lorebook-filter-loop' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -137,7 +139,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -209,49 +211,26 @@ test.describe('#79 — Loop mode lorebookFilter blocks context injection and lor
         expect(worldInfoSanity.entryCountByBook[PUBLIC_BOOK], 'PUBLIC_BOOK has 2 entries loaded').toBe(2);
 
         // Configure the loop profile: enable orchestrator, switch to loop
-        // mode, and write an active loop preset whose lorebookFilter
+        // mode, and import a loop preset whose lorebookFilter
         // hides `PRIVATE_BOOK` (whole book, by book-pattern) plus any
         // entry whose comment starts with `secret_` (in any book).
-        await page.evaluate(async ({ privateBook }) => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.orchestrator;
-            if (!settings) throw new Error('orchestrator settings missing — extension not loaded');
-            settings.enabled = true;
-            settings.executionMode = 'loop';
-            settings.singleAgentModeEnabled = false;
-            settings.toolCallRetryMax = 1;
-            // Nuke per-agent connection overrides — mirror the reasoning
-            // in `installMinimalDirectorProfile`: dev settings.json may
-            // leave a real-provider name in llmNodeApiPresetName and
-            // send agent traffic AWAY from the mock.
-            settings.llmNodeApiPresetName = '';
-            settings.llmNodePresetName = '';
-            settings.requestApiPresetName = '';
-            settings.requestLlmPresetName = '';
-
-            const [presetLib, persistence] = await Promise.all([
-                import('/scripts/extensions/orchestrator/preset-library.js'),
-                import('/scripts/extensions/orchestrator/persistence.js'),
-            ]);
-
-            const loopProfile = persistence.sanitizeLoopProfile({
+        await enableOrchestratorMode(page, 'loop');
+        await setOrchestratorToolCallRetries(page, 1);
+        await importOrchestratorPreset(page, {
+            mode: 'loop',
+            name: 'e2e-lorebook-filter-loop',
+            profile: {
                 system_prompt: 'You are the test loop agent. Call finalize with a short capsule when you have enough context.',
                 lorebookFilter: {
-                    bookPattern: `^${privateBook}$`,
+                    bookPattern: `^${PRIVATE_BOOK}$`,
                     entryPattern: '^secret_',
                 },
                 // Force max_rounds low so a misbehaving router can't wedge
                 // the loop into infinite retries.
                 max_rounds: 6,
                 wall_clock_budget_ms: 60000,
-            });
-
-            const write = presetLib.writeActivePreset(settings, 'loop', 'global', loopProfile);
-            if (!write.ok) throw new Error(`writeActivePreset(loop) failed: ${write.reason}: ${write.hint}`);
-
-            try { await ctx.saveSettings?.(0, { directSave: true }); } catch { /* best-effort */ }
-            ctx.saveSettingsDebounced?.();
-        }, { privateBook: PRIVATE_BOOK });
+            },
+        });
 
         // Observed state for post-run assertions. The router captures
         // loop-agent bodies and the tool-message contents it saw so we

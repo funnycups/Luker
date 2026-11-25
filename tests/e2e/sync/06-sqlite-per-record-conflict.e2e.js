@@ -17,13 +17,11 @@
 
 import os from 'node:os';
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import sanitize from 'sanitize-filename';
-
 import { normalizeDeviceLabel } from '../../../src/sync/device-label.js';
 import { SIDECAR_INFIX } from '../../../src/storage/engines/sidecar-naming.js';
-
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, selectCharacterByName, openOptionsAndClick } from '../_lib/page.js';
 import { migrateViaAdminUI, fetchStorageStatus, closeAdminPanel } from '../_lib/storage-ui.js';
 import {
@@ -146,21 +144,19 @@ async function fetchChat(page, fileName) {
     }, { cardName: CARD_NAME, fileName });
 }
 
-test.beforeAll(async () => {
-    A = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'sqlite-A',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'sqlite-B',
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — SQLite per-record chat conflict', () => {
     test('the same chat edited on both sqlite devices keeps both versions, the other one as a branch chat', async ({ browser }) => {

@@ -1,13 +1,19 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, createUserViaAdminUI, completeOnboarding } from '../_lib/page.js';
 import { openLanSyncPanel, generatePairingLink, acceptPairingLink, listPeers, loginAs, clickSyncNow, closeAllPopups, setSyncSchedule, waitForBackgroundSync, readUserFile, backendCard, pairingLinkField, syncFlash } from '../_lib/sync.js';
 import { accountWindow, formError } from '../_lib/account-window.js';
 import { createWorldBook } from '../_lib/ui-worldinfo.js';
 import { onboardS3Page, awaitS3Page } from '../_lib/sync-s3.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 test('a failed LAN reverse callback keeps the pairing code usable after a listener restart', async ({ browser }) => {
     test.setTimeout(180000);
@@ -18,8 +24,8 @@ test('a failed LAN reverse callback keeps the pairing code usable after a listen
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
     try {
-        A = await startServer({ batchKey: 'sync', scenarioId: 'callback-A', extraConfig: { listen: true, securityOverride: true, whitelistMode: false } });
-        B = await startServer({ batchKey: 'sync', scenarioId: 'callback-B' });
+        A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'callback-A', extraConfig: { listen: true, securityOverride: true, whitelistMode: false } });
+        B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'callback-B' });
         const pageA = await contextA.newPage();
         const pageB = await contextB.newPage();
         await awaitMainUI(pageA, A.baseURL);
@@ -45,8 +51,6 @@ test('a failed LAN reverse callback keeps the pairing code usable after a listen
     } finally {
         await contextA.close();
         await contextB.close();
-        await tearDownServer(A);
-        await tearDownServer(B);
     }
 });
 
@@ -56,8 +60,8 @@ for (const enableUserAccounts of [false, true]) test(`local loopback pairing wor
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
     try {
-        A = await startServer({ batchKey: 'sync', scenarioId: 'local-A', extraConfig: { enableUserAccounts } });
-        B = await startServer({ batchKey: 'sync', scenarioId: 'local-B', extraConfig: { enableUserAccounts } });
+        A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'local-A', extraConfig: { enableUserAccounts } });
+        B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'local-B', extraConfig: { enableUserAccounts } });
         const pageA = await contextA.newPage();
         const pageB = await contextB.newPage();
         if (enableUserAccounts) {
@@ -74,8 +78,6 @@ for (const enableUserAccounts of [false, true]) test(`local loopback pairing wor
     } finally {
         await contextA.close();
         await contextB.close();
-        await tearDownServer(A);
-        await tearDownServer(B);
     }
 });
 
@@ -85,7 +87,7 @@ test('nonadmin default policy refuses pairing and the administrator switch permi
     const contexts = [];
     try {
         for (const side of ['A', 'B']) {
-            const server = await startServer({ batchKey: 'sync', scenarioId: `policy-${side}`, extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': side === 'A' } });
+            const server = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `policy-${side}`, extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: side === 'A' } } });
             if (side === 'A') A = server;
             else B = server;
             const admin = await browser.newContext();
@@ -109,22 +111,20 @@ test('nonadmin default policy refuses pairing and the administrator switch permi
         expect(await acceptPairingLink(pageB, link, { categories: ['worlds'], localLabel: 'A policy' })).toBe('error');
         await expect(formError(pageB)).toContainText('private addresses');
         expect(await listPeers(pageB)).toEqual([]);
-        await B.restart({ extraConfig: { 'sync.allowPrivateAddressesForUsers': true } });
+        await B.restart({ extraConfig: { sync: { allowPrivateAddressesForUsers: true } } });
         await pageB.reload();
         await pageB.waitForFunction(() => !document.getElementById('preloader'));
         await openLanSyncPanel(pageB);
         expect(await acceptPairingLink(pageB, link, { categories: ['worlds'], localLabel: 'A policy' })).toBe('success');
     } finally {
         for (const context of contexts) await context.close();
-        await tearDownServer(A);
-        await tearDownServer(B);
     }
 });
 
 test('paired maintenance rejects symmetric offers with 409 and a later DOM Sync now converges', async ({ browser }) => {
     // Budget covers two real server boots, browser pairing and transport barriers.
     test.setTimeout(240_000);
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-maintenance-dom-'));
+    const root = (await fileScope.directory('maintenance-dom')).path;
     const name = 'offer-before-admission';
     const contexts = [];
     const servers = [];
@@ -135,7 +135,7 @@ test('paired maintenance rejects symmetric offers with 409 and a later DOM Sync 
         for (const side of ['A', 'B']) {
             const pauseRoot = path.join(root, side);
             const folder = path.join(pauseRoot, 'default-user'); fs.mkdirSync(folder, { recursive: true }); folders.push(folder);
-            const server = await startServer({ batchKey: 'sync', scenarioId: `maintenance-${side}`, extraEnv: { LUKER_SYNC_PAUSEPOINT: name, LUKER_SYNC_PAUSE_DIR: pauseRoot } });
+            const server = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `maintenance-${side}`, onboarding: true, extraEnv: { LUKER_SYNC_PAUSEPOINT: name, LUKER_SYNC_PAUSE_DIR: pauseRoot } });
             servers.push(server);
         }
         const pages = [];
@@ -207,9 +207,7 @@ test('paired maintenance rejects symmetric offers with 409 and a later DOM Sync 
         for (const folder of folders) fs.writeFileSync(path.join(folder, `${name}.release`), '');
         const closed = await Promise.allSettled(contexts.map(context => context.close()));
         await Promise.all(owned);
-        const stopped = await Promise.allSettled(servers.map(server => tearDownServer(server)));
-        failures.push(...[...closed, ...stopped].filter(result => result.status === 'rejected').map(result => result.reason));
-        fs.rmSync(root, { recursive: true, force: true });
+        failures.push(...closed.filter(result => result.status === 'rejected').map(result => result.reason));
     }
     // eslint-disable-next-line playwright/no-conditional-in-test -- Preserve real verification and cleanup errors after every owned resource settles.
     if (failures.length) throw new AggregateError(failures, 'Paired maintenance verification or cleanup failed', { cause: failures[0] });

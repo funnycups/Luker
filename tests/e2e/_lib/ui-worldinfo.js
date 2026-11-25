@@ -1,9 +1,5 @@
-// Real-UI helpers for World Info / lorebook flows.
-//
-// All gestures go through real DOM affordances: WI drawer toggle, book
-// import via setInputFiles on #world_import_button's hidden input, entry
-// creation via #world_popup_new, field edits via the rendered entry form,
-// bulk-edit popup via the bulk-edit button + apply, export/delete via
+// Real-UI helpers for World Info / lorebook flows: the WI drawer toggle,
+// book selection, import through the file chooser, and export/delete via
 // the dedicated icons.
 
 
@@ -14,7 +10,7 @@ import { expect } from '@playwright/test';
  */
 export async function openWorldInfoDrawer(page) {
     const icon = page.locator('#WIDrawerIcon');
-    const isClosed = await icon.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
+    const isClosed = await icon.evaluate(el => el.classList.contains('closedIcon'));
     if (isClosed) {
         await icon.click();
     }
@@ -35,16 +31,16 @@ export async function selectWorldBook(page, name) {
 }
 
 /**
- * Import a world book file via the real import button.
- *
- * The icon #world_import_button triggers the hidden #world_import_file
- * input. Drive setInputFiles directly.
+ * Import a world book file via the real import button. Its handler clicks
+ * the hidden #world_import_file input, which opens the file chooser.
  */
 export async function importWorldBook(page, { filePath, expectedName, timeoutMs = 30_000 } = {}) {
     if (!filePath) throw new Error('importWorldBook: filePath required');
     await openWorldInfoDrawer(page);
-    await page.locator('#world_import_button').click().catch(() => { /* visible icon */ });
-    await page.locator('#world_import_file').setInputFiles(filePath);
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.locator('#world_import_button').click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(filePath);
     if (expectedName) {
         await page.waitForFunction((wanted) => {
             const sel = document.querySelector('#world_editor_select');
@@ -83,10 +79,10 @@ export async function exportSelectedWorldBook(page, { timeoutMs = 15_000 } = {})
 export async function deleteSelectedWorldBook(page, { timeoutMs = 10_000 } = {}) {
     await openWorldInfoDrawer(page);
     await page.locator('#world_popup_delete').click();
-    const popup = page.locator('.popup:visible').last();
+    const popup = page.locator('dialog.popup[open]').last();
     await popup.waitFor({ state: 'visible', timeout: 5000 });
-    await popup.locator('.popup-button-ok').first().click();
-    await popup.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
+    await popup.locator('.popup-button-ok').click();
+    await expect(page.locator('dialog.popup[open]')).toHaveCount(0, { timeout: timeoutMs });
 }
 
 /**

@@ -13,8 +13,8 @@
 //      again; the rendered rows must still match because the per-message
 //      var_ops record is the durable persistence boundary.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
@@ -35,16 +35,17 @@ const RICH_REPLY = [
 // from a fresh page load.
 const RESTART_REPLY = '*Seraphina nods.* "The tally still reads as it did at the third bell."';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [RICH_REPLY, RESTART_REPLY] });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'multi-ops-per-turn' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'multi-ops-per-turn' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

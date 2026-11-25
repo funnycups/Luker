@@ -11,8 +11,8 @@
 //      the live SqliteEngine).
 //   7. Assert the previously-sent message is present.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
@@ -20,18 +20,19 @@ import { migrateViaAdminUI, closeAdminPanel, fetchStorageStatus } from '../_lib/
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash sets the spyglass down and answers without turning.* "Hold that thought. I see something at the north breaker — count three slow breaths before you speak."',
     ] });
-    server = await startServer({ batchKey: 'storage', scenarioId: 'fs-to-sqlite' });
+    server = await startServer({ scope, batchKey: 'storage', scenarioId: 'fs-to-sqlite' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -51,7 +51,7 @@ describe('mockLLM /v1/responses', () => {
         });
         const raw = await resp.text();
         expect(raw).toContain('"type":"function_call"');
-        expect(raw).toContain('mock-call-1');
+        expect(raw).toMatch(/"call_id":"mock-call-\d+-1"/);
         expect(raw).toContain(JSON.stringify(JSON.stringify({ city: 'Paris' })).slice(1, -1));
     });
 

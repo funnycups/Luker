@@ -9,8 +9,8 @@
 //   (3) count value matches the server-side tokenizer for the same messages
 //   (4) count value matches the in-thread fallback path
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -35,14 +35,13 @@ function buildHeavyMessages() {
     return messages;
 }
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'tiktoken-worker', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'tiktoken-worker', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('tiktoken client tokenizer runs off the main thread', () => {
     test('countMessages spawns a worker, keeps rAFs firing, and matches server + fallback counts', async ({ page }) => {

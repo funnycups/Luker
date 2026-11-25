@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,8 +17,9 @@ async function openedExternally(electronApp) {
     return electronApp.evaluate(() => globalThis.__lukerExternalOpens ?? []);
 }
 
-test('an external link opens outside the app instead of in a bare window', async () => {
+test('an external link opens outside the app instead of in a bare window', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-link',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -47,8 +48,9 @@ test('an external link opens outside the app instead of in a bare window', async
     }
 });
 
-test('a link that would navigate the app window away is handed to the browser instead', async () => {
+test('a link that would navigate the app window away is handed to the browser instead', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-navigate',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -86,8 +88,9 @@ test('a link that would navigate the app window away is handed to the browser in
     }
 });
 
-test('turning the setting off keeps an external link inside the app', async () => {
+test('turning the setting off keeps an external link inside the app', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-link-toggle-off',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -126,8 +129,9 @@ test('turning the setting off keeps an external link inside the app', async () =
     }
 });
 
-test('a blank popup is never handed to the browser', async () => {
+test('a blank popup is never handed to the browser', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-blank-popup',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -157,8 +161,9 @@ test('a blank popup is never handed to the browser', async () => {
     }
 });
 
-test('a feature popup opens as an app window that can talk to its opener', async () => {
+test('a feature popup opens as an app window that can talk to its opener', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-popup',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -233,8 +238,9 @@ test('a feature popup opens as an app window that can talk to its opener', async
 // page keeps the handle the authorization flow depends on. Even though the
 // target is external, the request has to open inside the app instead of being
 // handed to the system browser.
-test('an external feature popup opens in an app window instead of the browser', async () => {
+test('an external feature popup opens in an app window instead of the browser', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-popup-external',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -278,8 +284,9 @@ test('an external feature popup opens in an app window instead of the browser', 
 // A form post that opens a new window has to reach that window with its body
 // intact. The system browser only receives a URL, so the request stays in the
 // app even though its target is external.
-test('a form post that opens a new window keeps its body in the app', async () => {
+test('a form post that opens a new window keeps its body in the app', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-form-post-popup',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });
@@ -341,8 +348,9 @@ test('a form post that opens a new window keeps its body in the app', async () =
 // The window can be showing a page from another origin once external links are
 // allowed to replace the app page. That page reaches the same preload bridge,
 // so the installer has to check the sender frame before it downloads anything.
-test('an external page cannot drive the desktop update installer', async () => {
+test('an external page cannot drive the desktop update installer', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-update-sender',
         extraEnv: {
             LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1',
@@ -401,8 +409,9 @@ test('an external page cannot drive the desktop update installer', async () => {
 // session mid-way. The window reaches that state through a programmatic load
 // here because `will-navigate` does not fire for programmatic loads, which is
 // exactly how the shell admits a redirect.
-test('a page that is already outside the app keeps its own navigation in the window', async () => {
+test('a page that is already outside the app keeps its own navigation in the window', async ({ resources }) => {
     const desktop = await launchLukerDesktop({
+        scope: resources,
         scenarioId: 'external-off-site-navigation',
         extraEnv: { LUKER_DESKTOP_SKIP_OPEN_EXTERNAL: '1' },
     });

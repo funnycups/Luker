@@ -8,8 +8,8 @@
 // then click Regenerate from the options dropdown. The last bubble's
 // rendered body becomes Variant C and chat length is unchanged.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -28,16 +28,17 @@ const REPLIES = [
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'regenerate' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'regenerate' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -61,9 +62,13 @@ async function swipeRightToVariant(page, targetCounter, marker, { timeoutMs = 30
     });
     await page.waitForFunction(
         ({ targetCounter, marker }) => {
+            const stop = document.querySelector('#mes_stop');
+            const stopHidden = !stop || getComputedStyle(stop).display === 'none';
+            const swiping = document.body.dataset.swiping === 'true';
+            const generating = document.body.dataset.generating === 'true';
             const counter = document.querySelector('#chat .last_mes .swipes-counter');
             const mes = document.querySelector('#chat .last_mes .mes_text');
-            if (!counter || !mes) return false;
+            if (!stopHidden || swiping || generating || !counter || counter.hidden || !mes) return false;
             const counterText = (counter.innerText || '').replace(/[\u200b]/g, '');
             return counterText === targetCounter && (mes.innerText || '').includes(marker);
         },

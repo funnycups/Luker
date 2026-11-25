@@ -12,8 +12,8 @@
 // with moonshot they are hidden, and the last /chat/completions request the
 // mock received carries none of the four keys.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapMoonshotBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -70,15 +70,16 @@ function lastChatRequest() {
     return [...mock.requests].reverse().find(r => r.url.endsWith('/chat/completions'));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [MOCK_REPLY, MOCK_REPLY] });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'moonshot-fixed-sampling' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'moonshot-fixed-sampling' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapMoonshotBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, model: 'kimi-k3' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

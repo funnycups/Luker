@@ -2,10 +2,10 @@
 // supports deleting single sessions and clearing scope sessions with full
 // on-disk body cleanup.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writePreset } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
@@ -66,11 +66,13 @@ function plantV1InlineWorkbenchSessions(dataRoot) {
 }
 
 test.describe('#94 — Workbench session split migration and deletion', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         server = await startServer({
+            scope,
             batchKey: 'iterstudio',
             scenarioId: '94-workbench-session-delete',
-            extraConfig: { 'storage.mode': 'fs' },
+            extraConfig: { storage: { mode: 'fs' } },
         });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:65535' });
@@ -78,10 +80,6 @@ test.describe('#94 — Workbench session split migration and deletion', () => {
         normalizeIterStudioSettings(server.dataRoot);
         writePreset({ dataRoot: server.dataRoot, name: 'Default', overrides: { temperature: 1.0 } });
         plantV1InlineWorkbenchSessions(server.dataRoot);
-    });
-
-    test.afterAll(async () => {
-        await tearDownServer(server);
     });
 
     test('lazily splits v1 sessions on open, deletes single session and clears remaining sessions on disk and across reload', async ({ page }) => {

@@ -10,8 +10,8 @@
 //   4. Reset the retained resume state through the UI.
 //   5. Migrate to sqlite to prove the same page still works after a failure.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { accountWindow, answerWindowConfirm, openAdminPage } from '../_lib/account-window.js';
@@ -19,13 +19,10 @@ import { fetchStorageStatus } from '../_lib/storage-ui.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'storage', scenarioId: 'migrate-failure-recovery' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'storage', scenarioId: 'migrate-failure-recovery' });
     markOnboarded({ dataRoot: server.dataRoot });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test('a failed migration can be retried from the admin UI', async ({ page }) => {

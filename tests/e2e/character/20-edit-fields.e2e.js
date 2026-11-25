@@ -10,8 +10,8 @@
 //   4. click #create_button_label (save = same submit handler)
 //   5. restart + reload + re-click + re-read fields
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
@@ -23,9 +23,10 @@ const ASH_NAME = 'Ash the Cartographer';
 const NEW_DESC = 'Updated: Ash now carries a second brass spyglass calibrated to the shifting reef. Her sleeves are still ink-stained.';
 const NEW_FIRST_MES = '*Ash looks up from the new chart, ink on her thumb.* "The reef changed again last night. Sit. Tell me what you saw."';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'character', scenarioId: 'edit-fields' });
+    server = await startServer({ scope, batchKey: 'character', scenarioId: 'edit-fields' });
     markOnboarded({ dataRoot: server.dataRoot });
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -34,7 +35,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

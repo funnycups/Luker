@@ -1,14 +1,20 @@
 // Deleting a character Data Bank attachment must persist its removal from
 // settings, not just delete the file and hide its row until the next reload.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { openTopDrawer, closeTopDrawer } from '../_lib/page.js';
 import { recordDirtyWrites, readUserFile, userRootOf } from '../_lib/sync.js';
 import { writeCharacterPng } from '../groups/_helpers.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const ATTACHMENT = { url: '/user/files/glade-ledger.txt', name: 'Glade ledger.txt', size: 41, created: Date.parse('2026-10-01T10:00:00Z') };
 let server;
@@ -16,7 +22,7 @@ let server;
 test.use({ actionTimeout: 15_000 });
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'character-attachment-delete' });
+    server = await startServer({ scope: fileScope, batchKey: 'regression', scenarioId: 'character-attachment-delete' });
     markOnboarded({ dataRoot: server.dataRoot });
     writeCharacterPng({ dataRoot: server.dataRoot, avatarFile: 'Seraphina.png', card: { name: 'Seraphina', first_mes: 'Welcome back to the glade.' } });
     const root = userRootOf(server);
@@ -28,7 +34,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 async function loadUI(page) {

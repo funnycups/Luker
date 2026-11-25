@@ -13,8 +13,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -42,16 +42,13 @@ function seedChat(name, greeting) {
     fs.writeFileSync(path.join(directory, `${name}.jsonl`), lines.map(line => JSON.stringify(line)).join('\n') + '\n');
 }
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'chat-rename-failure-reason' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'chat-rename-failure-reason' });
     markOnboarded({ dataRoot: server.dataRoot });
     writeEmbeddedCharacter({ dataRoot: server.dataRoot, avatarFile: AVATAR });
     seedChat(OCCUPIED, 'Ash taps the first marker on the inked coastline.');
     seedChat(EDITING, 'Ash unrolls the second chart beside the lantern.');
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test.describe('#142 — refused chat rename names its reason', () => {

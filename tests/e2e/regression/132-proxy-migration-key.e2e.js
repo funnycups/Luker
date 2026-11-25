@@ -17,10 +17,10 @@
 // profile and assert the upstream mock received the proxy credential, not
 // the stored provider secret.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -33,9 +33,10 @@ const PROFILE_NAME = 'e2e-migrated-proxy';
 const PROFILE_ID = 'e2e-migrated-proxy-id';
 const PROXY_PRESET_NAME = 'e2e-legacy-preset';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['migration reply.'] });
-    server = await startServer({ batchKey: 'regression', scenarioId: '132-proxy-migration-key' });
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '132-proxy-migration-key' });
     markOnboarded({ dataRoot: server.dataRoot });
 
     const settingsPath = resolve(server.dataRoot, 'default-user', 'settings.json');
@@ -72,7 +73,6 @@ test.beforeAll(async () => {
         proxy: PROXY_PRESET_NAME,
         'proxy-url': mock.baseURL,
         // No 'proxy-password' snapshot — historical shape keeps it in the preset.
-        'chat-completion-source': 'custom',
         'api-url': mock.baseURL,
         'custom-url': mock.baseURL,
     }];
@@ -91,7 +91,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -14,11 +14,10 @@
 //   6. Inspect `lastRecallTrace` and assert meta.rewriteApplied=true and
 //      n_1 was selected.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -31,7 +30,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
-import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
+import { importMgGraph, rebuildMgVectors, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath, mockProfileName;
 
@@ -71,18 +70,19 @@ const SEED_RECORDS = [
     },
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 8 }, (_, i) => `*Seraphina nods.* "Note ${i + 1}."`),
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'rag-rewrite' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'rag-rewrite' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     const cp = appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, api: 'custom' });
     mockProfileName = cp.name;
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-rag-rewrite-'));
+    const tmpDir = (await scope.directory('mg-rag-rewrite')).path;
     importPath = resolve(tmpDir, 'seed.json');
     const nodes = {};
     let seq = 0;
@@ -111,7 +111,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -135,21 +135,8 @@ test.describe('#62 — RAG recall with query rewrite hits the LLM and embeds the
         await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
 
-        // Force vector index sync against the seeded store.
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            const main = await import('/scripts/extensions/memory-graph/main.js');
-            const vi = await import('/scripts/extensions/memory-graph/vector-index.js');
-            const profile = vi.getVectorConfigFromSettings(settings);
-            if (!profile) return;
-            const chatKey = main.resolveChatKeyForSession(ctx);
-            const store = await main.ensureMemoryStoreLoaded(ctx);
-            if (!store) return;
-            const beforeSync = structuredClone(store);
-            await vi.syncVectorIndex(store, profile, chatKey, { purge: true, tolerateErrors: false });
-            await main.commitSessionMutation(ctx, chatKey, beforeSync, store);
-        });
+        // Index the imported nodes through the Graph tab "Rebuild Vectors" button.
+        await rebuildMgVectors(page);
 
         // Pre-queue the rewrite tool call — the next chat-completion call the
         // mock receives will return this tool_call instead of a reply.

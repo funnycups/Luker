@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 
 test.describe.configure({ mode: 'default' });
@@ -7,12 +7,9 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '07-settings-layout' });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '07-settings-layout' });
 });
 
 for (const locale of ['en', 'zh-cn', 'zh-tw']) {

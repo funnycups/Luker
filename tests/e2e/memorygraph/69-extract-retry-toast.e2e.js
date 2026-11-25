@@ -22,8 +22,8 @@
 // text the DOM ever renders via a MutationObserver installed before MG is
 // enabled, then asserts on that capture.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -38,11 +38,12 @@ const SETUP_TURN = 'The reef line shifted overnight; the third buoy drags its mo
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash folds the chart and studies the buoy line.* "Then we move before the turn of the tide."',
     ] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-retry-toast' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-retry-toast' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -72,7 +73,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -123,10 +124,13 @@ test.describe('#69 — an extraction retry surfaces exactly one info toast', () 
         }).toBeGreaterThanOrEqual(1);
 
         // The retry actually reached the model: at least a second request.
-        const extractRequests = mock.requests.filter((r) =>
+        await expect.poll(() => mock.requests.filter((r) =>
             Array.isArray(r.body?.tools)
-            && r.body.tools.some((t) => t?.function?.name === 'luker_rpg_extract_event_create'));
-        expect(extractRequests.length, 'extraction must have been retried').toBeGreaterThanOrEqual(2);
+            && r.body.tools.some((t) => t?.function?.name === 'luker_rpg_extract_event_create')).length, {
+            message: 'extraction must have been retried',
+            timeout: 120_000,
+            intervals: [200, 300, 500, 1000],
+        }).toBeGreaterThanOrEqual(2);
 
         // Exactly one retry toast for the single failed round — the batch
         // layer must not add a second toast for the same failure. The mock's

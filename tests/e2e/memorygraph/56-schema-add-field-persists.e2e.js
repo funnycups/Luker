@@ -2,8 +2,8 @@
 //
 // #56 — MG schema editor in Memory Lens: add field → save → restart → field still there.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -17,7 +17,8 @@ import { openMgSchemaEditor, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina looks up from the chart.* "The lantern wants more oil before the next watch."',
@@ -25,14 +26,14 @@ test.beforeAll(async () => {
             '*A measured nod.* "Hold here. The watch will turn at the third bell."',
         ],
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'schema-add-field' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'schema-add-field' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

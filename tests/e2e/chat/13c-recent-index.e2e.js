@@ -21,8 +21,8 @@
 // fresh PNG with the embedded chara JSON, which is what the real "Create
 // character" UI flow does under the hood.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -54,14 +54,15 @@ async function navigateBackToCharacterList(page) {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina answers first.* "Reply S1."',
         '*Seraphina answers again.* "Reply S2."',
         '*Iyana folds her arms.* "Reply I1."',
         '*Seraphina speaks last.* "Reply S3."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'recent-index' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'recent-index' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -87,7 +88,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 
 /**
  * Boot-only smoke: loading SillyTavern + clearing the preloader

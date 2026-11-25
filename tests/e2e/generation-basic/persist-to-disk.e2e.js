@@ -19,10 +19,10 @@
 // into a single delta-free `mes` string at persist time. Both variants
 // use the mockLLM so the scripted upstream reply is byte-exact.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -67,9 +67,10 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
     test.describe('non-stream variant', () => {
         let server, mock;
 
-        test.beforeAll(async () => {
+        test.beforeAll(async ({ workerResources }, testInfo) => {
+            const scope = await workerResources.scenario(testInfo.file);
             mock = await startMockLLM({ scriptedReplies: [NONSTREAM_REPLY] });
-            server = await startServer({ batchKey: 'generation', scenarioId: 'persist-nonstream' });
+            server = await startServer({ scope, batchKey: 'generation', scenarioId: 'persist-nonstream' });
             markOnboarded({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -86,7 +87,7 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
         });
 
         test.afterAll(async () => {
-            await tearDownServer(server);
+
             await mock?.stop();
         });
 
@@ -141,12 +142,13 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
     test.describe('stream variant', () => {
         let server, mock;
 
-        test.beforeAll(async () => {
+        test.beforeAll(async ({ workerResources }, testInfo) => {
+            const scope = await workerResources.scenario(testInfo.file);
             mock = await startMockLLM({
                 scriptedReplies: [STREAM_REPLY],
                 streamChunkDelayMs: 50,
             });
-            server = await startServer({ batchKey: 'generation', scenarioId: 'persist-stream' });
+            server = await startServer({ scope, batchKey: 'generation', scenarioId: 'persist-stream' });
             markOnboarded({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -155,7 +157,7 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
         });
 
         test.afterAll(async () => {
-            await tearDownServer(server);
+
             await mock?.stop();
         });
 

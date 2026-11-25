@@ -15,10 +15,10 @@
 // Locks the conflict-resolution naming contract from
 // src/endpoints/chats.js resolveAvailableTargetName().
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { readdirSync } from 'node:fs';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile } from '../_lib/fixtures.js';
 import {
@@ -36,20 +36,21 @@ import {
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina sketches a quick note in the margin.* "rOcc: I will hold this corner of the chart."',
         '*Seraphina taps the rim of the lantern.* "rA: the southern reef is calm now."',
         '*Seraphina folds the spyglass shut.* "rB: but the north is shifting again."',
     ] });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'merge-name-conflict' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'merge-name-conflict' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

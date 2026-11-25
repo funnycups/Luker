@@ -2,8 +2,8 @@
 // 的流状态。否则重试的 `resume from_seq: 1` 会回放上一轮 abort 的
 // error/trailer 帧，客户端把上一轮的失败当成重试的结果；上一轮的上游请求
 // 也会因 AbortController 只被置空而继续并发运行。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -12,7 +12,8 @@ let server, mock;
 
 const REPLY = 'the second beacon answers once the tide settles over the reef line';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     let chatCalls = 0;
     mock = await startMockLLM({
         scriptedReplies: [REPLY],
@@ -23,7 +24,7 @@ test.beforeAll(async () => {
             return chatCalls === 1 ? 600_000 : 0;
         },
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'recycled-job-retry' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'recycled-job-retry' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, stream: true });
     appendConnectionProfile({
@@ -35,7 +36,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

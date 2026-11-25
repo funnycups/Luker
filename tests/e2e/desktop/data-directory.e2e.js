@@ -1,22 +1,32 @@
-import { test, expect } from '@playwright/test';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { test, expect } from '../../harness/playwright.js';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { awaitMainUI } from '../_lib/page.js';
 import { accountWindow, openAccountTab } from '../_lib/account-window.js';
-import { cloneDataDir, SCRATCH_ROOT, SEED_CONFIG } from '../_lib/server.js';
+import { materializeSeed } from '../../harness/seed.js';
 import { directoryIdentity } from '../../../desktop-app/data-location.js';
 import { launchLukerDesktop, spawnLukerDesktop } from '../_lib/desktop.js';
 
-test('a pointer target is used at startup and shown in Storage', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-pointer-default-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-pointer-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
-    mkdirSync(targetDir, { recursive: true });
+const SEED_CONFIG = resolve(import.meta.dirname, '../../../default/config.yaml');
+
+async function seedDataInto(scope, dirPath) {
+    const seeded = await materializeSeed(scope, { settingsOverrides: { firstRun: false, power_user: { auto_connect: false } } });
+    renameSync(seeded.dataRoot, resolve(dirPath, 'data'));
+}
+
+test('a pointer target is used at startup and shown in Storage', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-pointer-default');
+    const targetDirReceipt = await resources.directory('desktop-pointer-target');
+    const defaultDir = defaultDirReceipt.path;
+    const targetDir = targetDirReceipt.path;
     writeFileSync(resolve(defaultDir, 'data-location.json'), JSON.stringify({ version: 1, userData: targetDir }));
-    cloneDataDir(resolve(targetDir, 'data'));
+    await seedDataInto(resources, targetDir);
 
     const d = await launchLukerDesktop({
-        scenarioId: 'pointer-target', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'pointer-target',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
     });
     try {
         await awaitMainUI(d.page, d.baseURL);
@@ -25,42 +35,43 @@ test('a pointer target is used at startup and shown in Storage', async () => {
         expect(existsSync(resolve(targetDir, 'data', 'luker-boot.log'))).toBe(true);
     } finally {
         await d.close();
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
     }
 });
 
-test('a missing data directory stops startup and exits on request', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-missing-default-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
+test('a missing data directory stops startup and exits on request', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-missing-default');
+    const defaultDir = defaultDirReceipt.path;
     writeFileSync(resolve(defaultDir, 'data-location.json'), JSON.stringify({
         version: 1, userData: resolve(defaultDir, 'missing-target'),
     }));
-    const d = spawnLukerDesktop({
-        defaultUserData: defaultDir,
+    const d = await spawnLukerDesktop({
+        scope: resources,
+        defaultUserData: defaultDirReceipt,
         extraEnv: { LUKER_DESKTOP_TEST_LOCATION_DIALOG: 'quit' },
     });
     try {
         await d.waitForExit();
         expect(existsSync(resolve(defaultDir, 'missing-target', 'data'))).toBe(false);
     } finally {
-        if (d.child.exitCode === null) d.child.kill('SIGKILL');
-        rmSync(defaultDir, { recursive: true, force: true });
+        await d.stop();
     }
 });
 
-test('changing to an existing Luker folder adopts it', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-adopt-default-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-adopt-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
-    mkdirSync(targetDir, { recursive: true });
-    cloneDataDir(resolve(defaultDir, 'data'));
+test('changing to an existing Luker folder adopts it', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-adopt-default');
+    const targetDirReceipt = await resources.directory('desktop-adopt-target');
+    const defaultDir = defaultDirReceipt.path;
+    const targetDir = targetDirReceipt.path;
+    await seedDataInto(resources, defaultDir);
     writeFileSync(resolve(defaultDir, 'config.yaml'), readFileSync(SEED_CONFIG));
     writeFileSync(resolve(targetDir, 'config.yaml'), readFileSync(SEED_CONFIG));
-    cloneDataDir(resolve(targetDir, 'data'));
+    await seedDataInto(resources, targetDir);
 
     const d = await launchLukerDesktop({
-        scenarioId: 'adopt', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'adopt',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
         extraEnv: { LUKER_DESKTOP_TEST_NO_RELAUNCH: '1' },
     });
     try {
@@ -77,13 +88,11 @@ test('changing to an existing Luker folder adopts it', async () => {
         expect(existsSync(resolve(defaultDir, 'data'))).toBe(true);
     } finally {
         await d.close();
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
     }
 });
 
-test('the data directory is read-only when the launch environment sets it', async () => {
-    const d = await launchLukerDesktop({ scenarioId: 'env-locked' });
+test('the data directory is read-only when the launch environment sets it', async ({ resources }) => {
+    const d = await launchLukerDesktop({ scope: resources, scenarioId: 'env-locked' });
     try {
         await awaitMainUI(d.page, d.baseURL);
         await openAccountTab(d.page, 'storage');
@@ -94,16 +103,19 @@ test('the data directory is read-only when the launch environment sets it', asyn
     }
 });
 
-test('changing to an empty folder writes a pending move', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-move-default-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-move-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
-    mkdirSync(targetDir, { recursive: true });
-    cloneDataDir(resolve(defaultDir, 'data'));
+test('changing to an empty folder writes a pending move', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-move-default');
+    const targetDirReceipt = await resources.directory('desktop-move-target');
+    const defaultDir = defaultDirReceipt.path;
+    const targetDir = targetDirReceipt.path;
+    await seedDataInto(resources, defaultDir);
     writeFileSync(resolve(defaultDir, 'config.yaml'), readFileSync(SEED_CONFIG));
 
     const d = await launchLukerDesktop({
-        scenarioId: 'move-pending', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'move-pending',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
         extraEnv: { LUKER_DESKTOP_TEST_NO_RELAUNCH: '1' },
     });
     try {
@@ -123,19 +135,18 @@ test('changing to an empty folder writes a pending move', async () => {
         });
     } finally {
         await d.close();
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
     }
 });
 
-test('a pending move migrates data and cleans the old folder after the new server starts', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-move-default-${Date.now()}`);
-    const sourceDir = resolve(SCRATCH_ROOT, `desktop-move-source-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-move-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
-    mkdirSync(sourceDir, { recursive: true });
-    mkdirSync(targetDir, { recursive: true });
-    cloneDataDir(resolve(sourceDir, 'data'));
+test('a pending move migrates data and cleans the old folder after the new server starts', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-move-default');
+    const sourceParentReceipt = await resources.directory('desktop-move-source-root');
+    const targetDirReceipt = await resources.directory('desktop-move-target');
+    const defaultDir = defaultDirReceipt.path;
+    const sourceDir = resolve(sourceParentReceipt.path, 'source');
+    mkdirSync(sourceDir);
+    const targetDir = targetDirReceipt.path;
+    await seedDataInto(resources, sourceDir);
     writeFileSync(resolve(sourceDir, 'config.yaml'), readFileSync(SEED_CONFIG));
     writeFileSync(resolve(sourceDir, 'http-auth.json'), JSON.stringify({ '127.0.0.1:8000:': { username: 'u', password: 'p' } }));
     mkdirSync(resolve(sourceDir, 'Cache'));
@@ -147,7 +158,10 @@ test('a pending move migrates data and cleans the old folder after the new serve
     }));
 
     const first = await launchLukerDesktop({
-        scenarioId: 'move-migrate', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'move-migrate',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
         waitForWindow: false,
         extraEnv: { LUKER_DESKTOP_TEST_NO_RELAUNCH: '1' },
     });
@@ -161,11 +175,14 @@ test('a pending move migrates data and cleans the old folder after the new serve
             version: 1, userData: targetDir, pendingDeleteFrom: sourceDir,
         });
     } finally {
-        await first.close({ removeData: false });
+        await first.close();
     }
 
     const second = await launchLukerDesktop({
-        scenarioId: 'move-final', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'move-final',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
     });
     try {
         await awaitMainUI(second.page, second.baseURL);
@@ -174,17 +191,16 @@ test('a pending move migrates data and cleans the old folder after the new serve
             .toEqual({ version: 1, userData: targetDir });
     } finally {
         await second.close();
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(sourceDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
     }
 });
 
-test('the old folder stays when the new backend fails to start', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-cleanup-default-${Date.now()}`);
-    const sourceDir = resolve(SCRATCH_ROOT, `desktop-cleanup-source-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-cleanup-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
+test('the old folder stays when the new backend fails to start', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-cleanup-default');
+    const sourceDirReceipt = await resources.directory('desktop-cleanup-source');
+    const targetDirReceipt = await resources.directory('desktop-cleanup-target');
+    const defaultDir = defaultDirReceipt.path;
+    const sourceDir = sourceDirReceipt.path;
+    const targetDir = targetDirReceipt.path;
     mkdirSync(resolve(sourceDir, 'data'), { recursive: true });
     mkdirSync(resolve(targetDir, 'data'), { recursive: true });
     writeFileSync(resolve(sourceDir, 'data', 'keep.txt'), 'keep');
@@ -194,7 +210,10 @@ test('the old folder stays when the new backend fails to start', async () => {
     }));
 
     const d = await launchLukerDesktop({
-        scenarioId: 'cleanup-failure', defaultUserData: defaultDir, seed: false,
+        scope: resources,
+        scenarioId: 'cleanup-failure',
+        defaultUserData: defaultDirReceipt,
+        seed: false,
     });
     try {
         await expect(d.page.locator('body')).toContainText(resolve(targetDir, 'data', 'luker-boot.log'));
@@ -203,24 +222,22 @@ test('the old folder stays when the new backend fails to start', async () => {
             .toBe(sourceDir);
     } finally {
         await d.close();
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(sourceDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
     }
 });
 
-test('a missing data directory can be recovered by choosing another folder', async () => {
-    const defaultDir = resolve(SCRATCH_ROOT, `desktop-recover-default-${Date.now()}`);
-    const targetDir = resolve(SCRATCH_ROOT, `desktop-recover-target-${Date.now()}`);
-    mkdirSync(defaultDir, { recursive: true });
-    mkdirSync(targetDir, { recursive: true });
-    cloneDataDir(resolve(targetDir, 'data'));
+test('a missing data directory can be recovered by choosing another folder', async ({ resources }) => {
+    const defaultDirReceipt = await resources.directory('desktop-recover-default');
+    const targetDirReceipt = await resources.directory('desktop-recover-target');
+    const defaultDir = defaultDirReceipt.path;
+    const targetDir = targetDirReceipt.path;
+    await seedDataInto(resources, targetDir);
     writeFileSync(resolve(targetDir, 'config.yaml'), readFileSync(SEED_CONFIG));
     writeFileSync(resolve(defaultDir, 'data-location.json'), JSON.stringify({
         version: 1, userData: resolve(defaultDir, 'missing-target'),
     }));
-    const d = spawnLukerDesktop({
-        defaultUserData: defaultDir,
+    const d = await spawnLukerDesktop({
+        scope: resources,
+        defaultUserData: defaultDirReceipt,
         extraEnv: {
             LUKER_DESKTOP_TEST_LOCATION_DIALOG: 'choose',
             LUKER_DESKTOP_TEST_LOCATION_DIRECTORY: targetDir,
@@ -233,8 +250,6 @@ test('a missing data directory can be recovered by choosing another folder', asy
         expect(JSON.parse(readFileSync(resolve(defaultDir, 'data-location.json'), 'utf8')))
             .toEqual({ version: 1, userData: targetDir });
     } finally {
-        if (d.child.exitCode === null) d.child.kill('SIGKILL');
-        rmSync(defaultDir, { recursive: true, force: true });
-        rmSync(targetDir, { recursive: true, force: true });
+        await d.stop();
     }
 });

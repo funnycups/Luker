@@ -11,11 +11,11 @@
 // handler notified the scheduler independently of those accompanying writes.
 // The only mock is the upstream LLM API the connection checks reach.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { awaitMainUI, openExtensionsDrawer, openInlineDrawer, openTopDrawer, closeTopDrawer } from '../_lib/page.js';
 import { openPersonaPanel } from '../_lib/ui-persona-preset.js';
@@ -24,6 +24,12 @@ import {
     openLanSyncPanel, generatePairingLink, acceptPairingLink, setSyncSchedule, closeAllPopups,
     readUserFile, userRootOf, waitForBackgroundSync, recordDirtyWrites, categoryStep,
 } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 const SAMPLE_PNG = path.join(REPO_ROOT, 'default/content/default_Seraphina.png');
@@ -49,10 +55,10 @@ let traceFile;
 
 test.beforeAll(async () => {
     mock = await startMockLLM({});
-    tmp = fs.mkdtempSync(path.join(REPO_ROOT, 'tests/.e2e-scratch/dirty2-trace-'));
+    tmp = (await fileScope.directory('dirty2-trace')).path;
     traceFile = path.join(tmp, 'dirty-A.jsonl');
-    A = await startServer({ batchKey: 'sync', scenarioId: 'dirty2-A', extraEnv: { LUKER_TEST_DIRTY_TRACE: traceFile } });
-    B = await startServer({ batchKey: 'sync', scenarioId: 'dirty2-B' });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'dirty2-A', extraEnv: { LUKER_TEST_DIRTY_TRACE: traceFile } });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: 'dirty2-B' });
     for (const server of [A, B]) {
         const root = userRootOf(server);
         writeCharacterPng({ dataRoot: server.dataRoot, avatarFile: 'Seraphina.png', card: { name: 'Seraphina', first_mes: 'Welcome back to the glade.' } });
@@ -71,10 +77,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
     for (const ctx of contexts) await ctx.close();
-    await tearDownServer(A);
-    await tearDownServer(B);
     await mock.stop();
-    fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 /** The newest open popup, pinned by its id so it stays the same dialog once newer ones close. */

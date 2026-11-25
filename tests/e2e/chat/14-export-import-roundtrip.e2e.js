@@ -16,8 +16,8 @@
 //      We use setInputFiles to upload the JSONL bytes from step 2.
 //   5. The imported chat appears in Iyana's chats directory.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -34,9 +34,8 @@ import {
     getChatSnapshot,
 } from '../_lib/page.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
-import { readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 
 /**
  * After a previous selectCharacterByName, the right-nav drawer's
@@ -65,9 +64,10 @@ const REPLIES = [
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'export-import' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'export-import' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -96,7 +96,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -114,11 +114,8 @@ async function openManageChats(page) {
  * Close Manage Chat Files popup.
  */
 async function closeManageChats(page) {
-    const cross = page.locator('#select_chat_cross');
-    if (await cross.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await cross.click();
-    }
-    await page.waitForTimeout(300);
+    await page.locator('#select_chat_cross').click();
+    await page.locator('#shadow_select_chat_popup').waitFor({ state: 'hidden', timeout: 5000 });
 }
 
 test.describe('#14 — export/import roundtrip', () => {
@@ -178,10 +175,7 @@ test.describe('#14 — export/import roundtrip', () => {
             ? readdirSync(iyanaChatsDir).filter(f => f.endsWith('.jsonl'))
             : [];
         const importFile = page.locator('#chat_import_file');
-        // Write the JSONL to a temp file so setInputFiles can read it.
-        const tmpJsonl = resolve(tmpdir(), `luker-e2e-roundtrip-${Date.now()}.jsonl`);
-        writeFileSync(tmpJsonl, exportedJsonl, 'utf8');
-        await importFile.setInputFiles(tmpJsonl);
+        await importFile.setInputFiles({ name: 'roundtrip.jsonl', mimeType: 'application/x-ndjson', buffer: Buffer.from(exportedJsonl, 'utf8') });
 
         // Wait for the imported chat file to land on disk. The import
         // handler doesn't highlight the new row (highlight=true is the
@@ -219,9 +213,10 @@ test.describe('#14 — export/import roundtrip', () => {
 
         // DOM-side: the imported chat is loaded and contains the
         // roundtripped turns.
-        const renderedAfterImport = await getRenderedChatTexts(page);
-        expect(renderedAfterImport.some(t => /Roundtrip turn A/.test(t))).toBe(true);
-        expect(renderedAfterImport.some(t => /Roundtrip reply C/.test(t))).toBe(true);
+        await expect.poll(async () => (await getRenderedChatTexts(page)).join('\n'))
+            .toContain('Roundtrip turn A');
+        await expect.poll(async () => (await getRenderedChatTexts(page)).join('\n'))
+            .toContain('Roundtrip reply C');
 
         // Restart and verify the imported file survives.
         await server.restart();
@@ -247,9 +242,10 @@ test.describe('#14 — export/import roundtrip', () => {
             return ctx.getCurrentChatId?.() === wantId;
         }, importedFile, { timeout: 15_000 });
 
-        const renderedFinal = await getRenderedChatTexts(page);
-        expect(renderedFinal.some(t => /Roundtrip turn A/.test(t))).toBe(true);
-        expect(renderedFinal.some(t => /Roundtrip reply C/.test(t))).toBe(true);
+        await expect.poll(async () => (await getRenderedChatTexts(page)).join('\n'))
+            .toContain('Roundtrip turn A');
+        await expect.poll(async () => (await getRenderedChatTexts(page)).join('\n'))
+            .toContain('Roundtrip reply C');
 
         // Secondary: ctx.chat structural snapshot.
         const finalSnap = await getChatSnapshot(page);

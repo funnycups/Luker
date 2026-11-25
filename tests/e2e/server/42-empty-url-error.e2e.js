@@ -9,17 +9,18 @@
 // state. The ACT is sending a chat turn — the regression we guard
 // against is "URL empty → page hangs forever".
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
+import { awaitMainUI, connectViaApiDrawer, selectCharacterByName } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'server', scenarioId: 'no-url' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'no-url' });
     markOnboarded({ dataRoot: server.dataRoot });
     // Bootstrap CUSTOM source with EMPTY custom_url so the user-visible
     // URL input is empty when the UI loads. The test then attempts a send.
@@ -36,9 +37,7 @@ test.beforeAll(async () => {
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#42 — profile with no URL surfaces a friendly error', () => {
     test('empty URL: send fails fast with a user-visible signal, no eternal spinner', async ({ page }) => {
@@ -48,6 +47,8 @@ test.describe('#42 — profile with no URL surfaces a friendly error', () => {
         page.on('pageerror', e => { errors.push(`pageerror: ${e.message}`); });
 
         await awaitMainUI(page, server.baseURL);
+        // Auto-connect skips an empty URL, so the user connects by hand.
+        await connectViaApiDrawer(page);
         await selectCharacterByName(page, 'Seraphina');
 
         // Wait for greeting so any failure we observe is the attempted

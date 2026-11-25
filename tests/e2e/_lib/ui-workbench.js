@@ -646,6 +646,7 @@ export async function setOrchMode(page, mode) {
     const matcher = ORCH_MODE_MATCHERS[mode];
     if (!matcher) throw new Error(`Unknown Orchestrator mode: ${mode}`);
     const lens = await openOrchWorkspace(page);
+    await closeOrchInspectorSheet(lens);
     const modeBtn = lens.locator('.ol-modebtn:visible').first();
     await expect(modeBtn).toBeVisible({ timeout: 10_000 });
     await modeBtn.click();
@@ -655,6 +656,13 @@ export async function setOrchMode(page, mode) {
     }).first();
     await expect(menuItem).toBeVisible({ timeout: 10_000 });
     await menuItem.click();
+    await expect(modeBtn.locator('.ol-modebtn-value')).toHaveText(matcher);
+}
+
+export async function closeOrchInspectorSheet(lens) {
+    if (!/\bsheet-open\b/.test(await lens.getAttribute('class'))) return;
+    await lens.locator('aside.ol-inspector').getByRole('button', { name: /^(Close|关闭|關閉)$/ }).click();
+    await expect(lens).not.toHaveClass(/\bsheet-open\b/);
 }
 
 /**
@@ -665,7 +673,8 @@ export async function selectOrchPreset(page, nameOrId, opts = {}) {
     const select = lens.locator('.ol-setup-bar select.ol-select').first();
     await expect(select).toBeVisible({ timeout: 10_000 });
 
-    const optionValue = await select.evaluate((sel, arg) => {
+    let optionValue;
+    await expect.poll(async () => (optionValue = await select.evaluate((sel, arg) => {
         const options = Array.from(sel.options);
         const match = options.find((o) => {
             const sep = o.value.indexOf(':');
@@ -678,11 +687,7 @@ export async function selectOrchPreset(page, nameOrId, opts = {}) {
                 || o.textContent.includes(arg.target);
         });
         return match ? match.value : null;
-    }, { target: nameOrId, scope: opts.scope || null });
-
-    if (!optionValue) {
-        throw new Error(`Orchestrator preset option not found: ${nameOrId}`);
-    }
+    }, { target: nameOrId, scope: opts.scope || null })), { message: `Orchestrator preset option not found: ${nameOrId}` }).not.toBeNull();
     await select.selectOption(optionValue);
 }
 
@@ -691,20 +696,12 @@ export async function selectOrchPreset(page, nameOrId, opts = {}) {
  */
 export async function saveOrchDraftIfVisible(page) {
     const lens = page.locator('.wbench .olens').first();
-    if (await lens.evaluate((el) => el.classList.contains('is-compact') && el.classList.contains('sheet-open')).catch(() => false)) {
-        await lens.locator('.ol-scrim').first().click({ position: { x: 8, y: 8 } });
-        await expect.poll(
-            () => lens.evaluate((el) => el.classList.contains('sheet-open')),
-            { timeout: 5_000 },
-        ).toBe(false);
-    }
+    await closeOrchInspectorSheet(lens);
     const saveBar = lens.locator('.ol-savebar').first();
-    if (await saveBar.isVisible().catch(() => false)) {
+    if (await saveBar.isVisible()) {
         const saveBtn = saveBar.locator('button').filter({ hasText: /^(Save|保存|儲存)$/i }).first();
-        if (await saveBtn.isVisible().catch(() => false)) {
-            await saveBtn.click();
-            await expect(saveBar).toBeHidden({ timeout: 10_000 });
-        }
+        await saveBtn.click();
+        await expect(saveBar).toBeHidden({ timeout: 10_000 });
     }
 }
 

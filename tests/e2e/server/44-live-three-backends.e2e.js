@@ -8,10 +8,10 @@
 // IMPORTANT: per memory `feedback_llm_conventions`, do not add timeouts to
 // LLM-request paths. Playwright's per-test timeout is enough.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 
@@ -20,15 +20,14 @@ const liveDescribe = LIVE ? test.describe : test.describe.skip;
 
 let server;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     if (!LIVE) return;
-    server = await startServer({ batchKey: 'server', scenarioId: 'live-smoke' });
+    server = await startServer({ scope, batchKey: 'server', scenarioId: 'live-smoke' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    if (server) await tearDownServer(server);
-});
+
 
 function configureBackend({ dataRoot, source, model, secretKey, value }) {
     const settingsPath = resolve(dataRoot, 'default-user', 'settings.json');

@@ -1,9 +1,9 @@
 // 连接配置请求超时 #7 — 真实 UI 路径：Advanced 抽屉里给选中 profile 设置
 // request-timeout，落盘持久化，刷新后仍在；随后该超时真实触发 abort。
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, closeAnyOpenTopSettingsDrawer, openInlineDrawer, reloadAndAwait } from '../_lib/page.js';
@@ -25,17 +25,18 @@ async function openAdvancedProfileSettings(page) {
     await openInlineDrawer(page, 'rm_api_block');
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['first beacon lantern stays lit while the tide turns'] });
     mock.setStreamStall({ afterChunks: 1, stallMs: 30_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-ui' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-ui' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, name: 'e2e-ui-timeout' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

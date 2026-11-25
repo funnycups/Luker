@@ -1,17 +1,16 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 test.use({ browserName: 'webkit', viewport: { width: 430, height: 932 }, isMobile: true, hasTouch: true });
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'ios-safe-area-theme-bars' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'ios-safe-area-theme-bars' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
-
-test.afterAll(async () => { await tearDownServer(server); });
 
 async function openApp(page, { bridge = true } = {}) {
     await page.route('**/css/mobile-styles.css', async route => {

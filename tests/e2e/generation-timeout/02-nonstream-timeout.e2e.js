@@ -1,20 +1,21 @@
 // 连接配置请求超时 #2 — 非流式：上游迟迟不响应，在"最终出字"之前超时。
 // latencyMs(8s) > profile 超时(2s) → head 未解析 → fetch 抛出 TimeoutError；
 // 请求体必须携带 request_timeout_ms；客户端发 abort；不重试（max-retries=0）。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: ['*Ash checks the chart twice before answering.*'],
         latencyMs: 8_000,
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-nonstream' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-nonstream' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, stream: false });
     appendConnectionProfile({
@@ -26,7 +27,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

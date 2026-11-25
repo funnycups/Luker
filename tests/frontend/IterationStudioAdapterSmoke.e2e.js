@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../harness/frontend.js';
 
 /**
  * UI-driven full Workbench target smoke. Opens Unified Workbench from its entry

@@ -17,11 +17,10 @@
 //      assert the nodes survived (the floor_log + meta sidecars are the
 //      durable record).
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -35,7 +34,8 @@ import { importMgGraph, openMgGraphView, setMgSettings } from '../_lib/ui-mg-var
 
 let server, mock, importPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
         '*She traces a line on the chart with one knuckle.* "Three breakers north of the gull rocks."',
@@ -43,7 +43,7 @@ test.beforeAll(async () => {
         '*She turns to the rail, spyglass raised.* "Hold. Don\'t speak for a moment."',
         '*Seraphina nods once.* "Then it is decided. We wait."',
     ] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-render' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-render' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -51,7 +51,7 @@ test.beforeAll(async () => {
     // Build a pre-seeded MG store payload — three nodes across the
     // canonical types (event/character_sheet/location_state). This is the
     // raw export shape `importMemoryGraphStore` accepts.
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-import-'));
+    const tmpDir = (await scope.directory('mg-import')).path;
     importPath = resolve(tmpDir, 'seed-store.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -94,7 +94,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

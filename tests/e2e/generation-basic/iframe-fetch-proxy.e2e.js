@@ -37,8 +37,8 @@
 //      (dispatch actually ran) and a WebSocket to /api/ws-delivery was
 //      opened (payload came via WS).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -47,16 +47,17 @@ let server, mock;
 
 const IFRAME_REPLY = 'This reply arrived at an iframe fetch caller.';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [IFRAME_REPLY] });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'iframe-fetch-proxy' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'iframe-fetch-proxy' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

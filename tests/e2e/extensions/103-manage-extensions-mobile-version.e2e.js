@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, openExtensionsDrawer } from '../_lib/page.js';
 
@@ -54,8 +53,9 @@ let scratch;
 let repoUrl;
 let headSha;
 
-test.beforeAll(async () => {
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-e2e-ext-ver-'));
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    scratch = (await scope.directory('luker-e2e-ext-ver')).path;
     const emptyGitConfig = path.join(scratch, 'empty-gitconfig');
     fs.writeFileSync(emptyGitConfig, '');
     const gitRun = (cwd, ...args) => execFileSync('git', [...IDENTITY, ...args], {
@@ -84,7 +84,7 @@ test.beforeAll(async () => {
     gitHttpServer = await startGitHttpServer(httpRoot, emptyGitConfig);
     repoUrl = `http://127.0.0.1:${gitHttpServer.address().port}/helper-toolbox.git`;
 
-    server = await startServer({ batchKey: 'extensions', scenarioId: '103-mobile-ext-version' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '103-mobile-ext-version' });
     markOnboarded({ dataRoot: server.dataRoot });
 
     // Seed a synced/non-git extension directory (no .git) to verify it does not render '(-)'
@@ -99,12 +99,8 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     if (gitHttpServer?.listening) {
         await new Promise((resolve) => gitHttpServer.close(resolve));
-    }
-    if (scratch) {
-        fs.rmSync(scratch, { recursive: true, force: true });
     }
 });
 

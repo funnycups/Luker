@@ -19,9 +19,10 @@
 // reference them without a separate capture pass. The writes are gated
 // behind LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openStorageInspectorPage } from '../_lib/account-window.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
@@ -31,17 +32,17 @@ const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'storage-inspector',
         scenarioId: 'self-drilldown',
     });
+    markOnboarded({ dataRoot: server.dataRoot });
     await seedFixtureUser(server.dataRoot, 'default-user');
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('Storage Inspector · self drill-down', () => {
     test('drills L1 → chats → character → chat → back via breadcrumb', async ({ page }) => {

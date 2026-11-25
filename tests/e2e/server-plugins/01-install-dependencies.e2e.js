@@ -12,13 +12,12 @@
 // backend, and confirm the plugin route answers using the installed
 // dependency.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { accountWindow, answerWindowConfirm, openAdminPage, windowConfirm } from '../_lib/account-window.js';
 import { markOnboarded } from '../_lib/fixtures.js';
@@ -84,10 +83,11 @@ function createExamplePluginRepo(baseDir) {
     return bare;
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // Keep the plugin source and the server's plugin directory outside the
     // repository so the clone never lands in the project's own plugins/.
-    scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'server-plugins-e2e-'));
+    scratchRoot = (await scope.directory('server plugin fixtures')).path;
     pluginsDir = path.join(scratchRoot, 'plugins');
     fs.mkdirSync(pluginsDir, { recursive: true });
     bareRepo = createExamplePluginRepo(path.join(scratchRoot, 'repo'));
@@ -106,7 +106,7 @@ test.beforeAll(async () => {
     const copiedEntry = path.join(copiedPluginDir, 'index.mjs');
     fs.writeFileSync(copiedEntry, fs.readFileSync(copiedEntry, 'utf8').replace('"example-plugin"', '"copied-plugin"'));
 
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'server-plugins',
         scenarioId: 'install-deps',
         extraConfig: {
@@ -117,12 +117,6 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (scratchRoot) {
-        fs.rmSync(scratchRoot, { recursive: true, force: true });
-    }
-});
 
 test.describe('Server plugins · dependency install', () => {
     test('installs dependencies from the row and admin prompt and resolves them after restart', async ({ page, request }, testInfo) => {

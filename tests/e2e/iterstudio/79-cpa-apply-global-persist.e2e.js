@@ -14,8 +14,8 @@
 //      #settings_preset_openai select, read the rendered #temp_counter_openai
 //      input value — it must reflect the value we applied through Apply.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
@@ -30,17 +30,18 @@ const TARGET_TEMPERATURE = 0.42;
 // orchestrator preset names which override our mock-bound oai_settings on
 // every iter-studio LLM request. Use the shared normalizeIterStudioSettings.
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash glances at the chart and nods.* "We can hold for one more turn."',
     ] });
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'iterstudio',
         scenarioId: '79-cpa-apply-global',
         // Tests need fs storage so the bootstrap fixtures' settings.json edits
         // land where the server reads from (the seed config.yaml may be sqlite
         // in dev checkouts).
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -49,7 +50,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

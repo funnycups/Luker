@@ -14,8 +14,8 @@
 //
 // Run: cd tests && npx playwright test tts-voice-map-disabled --project=e2e
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
@@ -28,16 +28,15 @@ let server;
 
 const NPC_NAME = 'Bryn the Harbourmaster';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'extensions', scenarioId: 'tts-voice-map-disabled' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: 'tts-voice-map-disabled' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:9' });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:9' });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('TTS voice map popup with TTS disabled', () => {
     test.describe.configure({ timeout: 240_000 });

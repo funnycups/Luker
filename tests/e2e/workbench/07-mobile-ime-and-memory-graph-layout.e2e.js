@@ -9,28 +9,29 @@
 //      input + send stay visible and usable, and preferred mobile window height
 //      restores when the keyboard closes.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 import { writeEmbeddedCharacter, disableTagImportPopup } from '../character/_helpers.js';
-import { openWorkbench, switchWorkbenchTab, workbenchWindow } from '../_lib/ui-workbench.js';
+import { openWorkbench, switchWorkbenchTab } from '../_lib/ui-workbench.js';
 import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: ['*Ash sketches the lighthouse bearing onto the vellum.* "Safe harbor lies north."'],
     });
     server = await startServer({
+        scope,
         batchKey: 'workbench',
         scenarioId: '07-mobile-ime-mg-layout',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -41,7 +42,7 @@ test.beforeAll(async () => {
         avatarFile: 'ash-mobile-layout.png',
     });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'wb-mobile-mg-'));
+    const tmpDir = (await scope.directory('wb-mobile-mg')).path;
     importPath = resolve(tmpDir, 'seed-graph.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
@@ -77,7 +78,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

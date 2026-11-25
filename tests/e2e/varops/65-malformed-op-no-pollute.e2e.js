@@ -21,8 +21,8 @@
 //   (3) A new write in the next turn lands cleanly. No phantom keys
 //       inherited from the malformed op survive.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -47,16 +47,17 @@ const REPLY_TURN_2 = [
     ' "Lantern is trimmed; the wick will hold the next bell."',
 ].join('');
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY_TURN_1, REPLY_TURN_2] });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'failure-no-pollute' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'failure-no-pollute' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

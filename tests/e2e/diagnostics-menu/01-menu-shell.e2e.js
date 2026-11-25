@@ -6,21 +6,20 @@
 // inside the viewport rather than being clipped by the settings scroll
 // container.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'diagnostics', scenarioId: 'menu-shell' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'diagnostics', scenarioId: 'menu-shell' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /** Load the UI and open the User Settings drawer, where the trigger lives. */
 async function openSettings(page) {

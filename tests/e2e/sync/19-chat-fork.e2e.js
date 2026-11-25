@@ -10,12 +10,12 @@
 // without the deleting device; the last test commits one into A's sync
 // history the way an older version would have, and B receives it by sync.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName, editMessageViaUI } from '../_lib/page.js';
 import { writeCharacterPng } from '../groups/_helpers.js';
 import {
@@ -23,6 +23,12 @@ import {
     waitForBackgroundSync, waitForStatusChecks, syncPopup, listPopupNotices, listPopupConflicts, openBranchFromNotice, dismissNotice,
     openChatByName, readUserFile, userRootOf, backendIdOf, shadowMain, setSyncDeviceLabel,
 } from '../_lib/sync.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const LABELS = { A: 'Glade desk', B: 'Fen tablet' };
 const INTEGRITY = '7d6b3c9e-1f2a-4b5c-8d9e-0a1b2c3d4e5f';
@@ -55,8 +61,8 @@ let B;
 let contexts = [];
 
 test.beforeEach(async ({}, testInfo) => {
-    A = await startServer({ batchKey: 'sync', scenarioId: `fork-${testInfo.testId}-A` });
-    B = await startServer({ batchKey: 'sync', scenarioId: `fork-${testInfo.testId}-B` });
+    A = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `fork-${testInfo.testId}-A` });
+    B = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `fork-${testInfo.testId}-B` });
     for (const server of [A, B]) {
         seed(server);
     }
@@ -65,8 +71,6 @@ test.beforeEach(async ({}, testInfo) => {
 test.afterEach(async () => {
     for (const ctx of contexts) await ctx.close();
     contexts = [];
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
 
 async function pairedPages(browser) {

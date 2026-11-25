@@ -1,19 +1,14 @@
 // e2e/storage/cross-mode-recovery/10-postgres-to-sqlite.e2e.js
 
-import { test } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { test } from '../../../harness/playwright.js';
 
 import { runCrossModeRecoveryFlow } from './_lib/recovery-flow.js';
 
-test('cross-mode recovery: postgres → sqlite preserves chat through engine swap', async ({ page }) => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'xmode-postgres-to-sqlite-'));
-    try {
-        await runCrossModeRecoveryFlow({
+test('cross-mode recovery: postgres → sqlite preserves chat through engine swap', async ({ resources, page }) => {
+    const tempDir = (await resources.directory('xmode-postgres-to-sqlite')).path;
+    {
+        await runCrossModeRecoveryFlow({ scope: resources,
             page, sourceMode: 'postgres', destMode: 'sqlite', specId: '10-postgres-to-sqlite', tempDir,
         });
-    } finally {
-        rmSync(tempDir, { recursive: true, force: true });
     }
 });

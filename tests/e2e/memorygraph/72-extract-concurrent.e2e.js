@@ -16,8 +16,8 @@
 // proves the node requests overlapped. Unit tests stay out of the prompt body,
 // so the request shape is pinned here, through the real Fill Graph button.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -252,11 +252,12 @@ async function waitForExtractionQuiescence(mock, { stableMs = 2500, timeoutMs = 
 test.describe('#72 — a concurrent round runs a node stage and an edge stage', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         // A little latency keeps the in-flight node requests overlapping and
         // makes the intermediate toast states observable.
         mock = await startMockLLM({ latencyMs: 250, scriptedReplies: [] });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-concurrent' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-concurrent' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -266,7 +267,7 @@ test.describe('#72 — a concurrent round runs a node stage and an edge stage', 
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
+
         await mock?.stop();
     });
 
@@ -356,9 +357,10 @@ test.describe('#72 — a concurrent round runs a node stage and an edge stage', 
 test.describe('#72 — a failed edge stage discards the round', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: [] });
-        server = await startServer({ batchKey: 'memorygraph', scenarioId: 'extract-concurrent-edge-fail' });
+        server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'extract-concurrent-edge-fail' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -368,7 +370,7 @@ test.describe('#72 — a failed edge stage discards the round', () => {
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
+
         await mock?.stop();
     });
 

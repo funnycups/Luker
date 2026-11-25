@@ -1,15 +1,17 @@
 // Real-UI helpers for embedded Memory Lens (inside Workbench) and
 // Variable-Op-Log flows.
 //
-// MG (Workbench → Memory graph workspace `.mlens`):
+// MG (Workbench -> Memory graph workspace `.mlens`):
 //   - openMemoryWorkspace(page, { subview })
 //   - setMgSettings(page, settings, { saveScope })
+//   - configureMg(page, opts)
 //   - openMgGraphView(page)
 //   - openMgSchemaEditor(page)
 //   - importMgGraph(page, filePath, { mode })
 //   - exportMgGraph(page)
 //   - fillMgGraph(page)
 //   - rebuildMgIndex(page)
+//   - rebuildMgVectors(page)
 //
 // var-ops:
 //   - openVarOpsPanel(page, mesid)
@@ -133,13 +135,7 @@ export async function openMemoryWorkspace(page, { subview = 'graph', timeoutMs =
 
 /**
  * Configure Memory Graph settings via the real `.ml-settings` controls in
- * Workbench → Memory graph → Settings. Handles switches, selects, inputs,
- * expanding the Technical Tuning section when needed, and saving advanced
- * settings if any advanced/technical key is modified.
- *
- * @param {import('@playwright/test').Page} page
- * @param {Record<string, boolean|string|number>} settings
- * @param {{ saveScope?: 'global'|'character', closeAfter?: boolean, timeoutMs?: number }} [opts]
+ * Workbench -> Memory graph -> Settings.
  */
 export async function setMgSettings(page, settings, { saveScope = 'global', closeAfter = false, timeoutMs = 15_000 } = {}) {
     const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
@@ -202,12 +198,26 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
         const saveBtn = panel.locator('.ml-settings-sticky button').filter({ hasText: saveLabel }).first();
         await saveBtn.waitFor({ state: 'visible', timeout: timeoutMs });
         await saveBtn.click();
-        await panel.locator('.ml-settings-error').waitFor({ state: 'hidden', timeout: timeoutMs }).catch(() => {});
+        await panel.locator('.ml-settings-dirty-pill').waitFor({ state: 'hidden', timeout: timeoutMs });
+        await panel.locator('.ml-settings-error').waitFor({ state: 'hidden', timeout: timeoutMs });
     }
 
     if (closeAfter) {
         await closeWorkbench(page);
     }
+}
+
+/**
+ * Configure common Memory Graph toggles/knobs via Memory Lens Settings.
+ */
+export async function configureMg(page, { enabled, autoExtraction, recallEnabled, recallMethod, recentRawTurns, closeAfter = true } = {}) {
+    const patch = {};
+    if (enabled !== undefined) patch.enabled = enabled;
+    if (autoExtraction !== undefined) patch.autoExtractionEnabled = autoExtraction;
+    if (recallEnabled !== undefined) patch.recallEnabled = recallEnabled;
+    if (recallMethod !== undefined) patch.recallMethod = recallMethod;
+    if (recentRawTurns !== undefined) patch.recentRawTurns = recentRawTurns;
+    await setMgSettings(page, patch, { closeAfter });
 }
 
 /**
@@ -232,15 +242,17 @@ export async function openMgSchemaEditor(page, { timeoutMs = 15_000 } = {}) {
 
 /**
  * Import a graph store JSON via the real `Import Graph` button in
- * Memory Lens → Settings → Operations, handling the file chooser and the
- * import-mode popup ("Restore Exported Floor" / "Bind Latest Floor" /
- * "Bind Specific Floor").
- *
- * @param {import('@playwright/test').Page} page
- * @param {string} filePath
- * @param {{ mode?: 'restore'|'bind-latest'|'bind-specific', closeAfter?: boolean, timeoutMs?: number }} [opts]
+ * Memory Lens -> Settings -> Operations.
  */
 export async function importMgGraph(page, filePath, { mode = 'bind-latest', closeAfter = false, timeoutMs = 15_000 } = {}) {
+    const labelMap = {
+        restore: /Restore Exported Floor|恢复导出时楼层|恢復導出時樓層/,
+        'bind-latest': /Bind Latest Floor|绑定到当前最新楼层|綁定到目前最新樓層/,
+        'bind-specific': /Bind Specific Floor|绑定到指定楼层|綁定到指定樓層/,
+    };
+    const pattern = labelMap[mode];
+    if (!pattern) throw new Error(`importMgGraph: unknown mode "${mode}"`);
+
     const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
     const importBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Import Graph|导入图谱|導入圖譜)$/ }).first();
     await importBtn.waitFor({ state: 'visible', timeout: timeoutMs });
@@ -252,14 +264,10 @@ export async function importMgGraph(page, filePath, { mode = 'bind-latest', clos
 
     const popup = page.locator('.popup:visible').last();
     await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    const labelMap = {
-        restore: /Restore Exported Floor|恢复导出时楼层|恢復導出時樓層/,
-        'bind-latest': /Bind Latest Floor|绑定到当前最新楼层|綁定到目前最新樓層/,
-        'bind-specific': /Bind Specific Floor|绑定到指定楼层|綁定到指定樓層/,
-    };
-    const pattern = labelMap[mode] || labelMap['bind-latest'];
     await popup.locator('.popup-button-custom, button, .popup-button, [role="button"]', { hasText: pattern }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
+    await popup.waitFor({ state: 'detached', timeout: timeoutMs });
+    await page.locator('#toast-container .toast', { hasText: /Importing memory graph|正在导入记忆图|正在導入記憶圖/ }).first()
+        .waitFor({ state: 'detached', timeout: 30_000 });
 
     if (closeAfter) {
         await closeWorkbench(page);
@@ -279,7 +287,7 @@ export async function exportMgGraph(page, { timeoutMs = 15_000 } = {}) {
 }
 
 /**
- * Click `Fill Graph` in Memory Lens → Settings → Operations.
+ * Click `Fill Graph` in Memory Lens -> Settings -> Operations.
  */
 export async function fillMgGraph(page, { closeAfter = false, timeoutMs = 15_000 } = {}) {
     const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
@@ -292,7 +300,7 @@ export async function fillMgGraph(page, { closeAfter = false, timeoutMs = 15_000
 }
 
 /**
- * Click `Rebuild Graph` in Memory Lens → Settings → Operations and accept the
+ * Click `Rebuild Graph` in Memory Lens -> Settings -> Operations and accept the
  * confirmation modal.
  */
 export async function rebuildMgIndex(page, { closeAfter = false, timeoutMs = 60_000 } = {}) {
@@ -304,32 +312,50 @@ export async function rebuildMgIndex(page, { closeAfter = false, timeoutMs = 60_
     const modal = lens.locator('.ml-dialog-backdrop:has(.ml-schema-modal)').last();
     await modal.waitFor({ state: 'visible', timeout: 5000 });
     await modal.locator('.ml-schema-modal-foot button').filter({ hasText: /^(Rebuild Graph|重建图谱|重建圖譜)$/ }).first().click();
-    await modal.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
+    await modal.waitFor({ state: 'detached', timeout: timeoutMs });
 
     if (closeAfter) {
         await closeWorkbench(page);
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Variable-op-log panel (unchanged)
-// ──────────────────────────────────────────────────────────────────────────
+/**
+ * Re-embed every eligible node via Memory Lens -> Settings -> Operations -> `Full Rebuild`.
+ */
+export async function rebuildMgVectors(page, { closeAfter = true, timeoutMs = 60_000 } = {}) {
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const fullBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Full Rebuild|全量重建|完整重建)$/ }).first();
+    await fullBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await fullBtn.click();
+    await page.locator('#toast-container .toast-success', { hasText: /Vector recompute complete|向量重算完成/ }).first()
+        .waitFor({ state: 'visible', timeout: timeoutMs });
+    if (closeAfter) {
+        await closeWorkbench(page);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Variable-op-log panel
+// --------------------------------------------------------------------------
 
 /**
- * Click the flask icon on a message to open the var-ops panel.
+ * Open the var-ops panel of a message: reveal the message's extra action
+ * buttons through the ellipsis, then click the flask icon.
  */
 export async function openVarOpsPanel(page, mesid) {
-    const flask = page.locator(`.mes[mesid="${mesid}"] .mes_var_ops`).first();
-    await flask.waitFor({ state: 'attached', timeout: 5000 });
-    await flask.dispatchEvent('click');
+    const mes = page.locator(`.mes[mesid="${mesid}"]`);
+    await mes.hover();
+    await mes.locator('.extraMesButtonsHint').first().click();
+    const flask = mes.locator('.mes_var_ops').first();
+    await flask.waitFor({ state: 'visible', timeout: 5000 });
+    await flask.click();
     const panel = page.locator('.var-ops-panel').last();
     await panel.waitFor({ state: 'visible', timeout: 10_000 });
     return panel;
 }
 
 /**
- * Read the rendered op rows from the open var-ops panel. Returns an array
- * of `{ op, key, value, path }`.
+ * Read the rendered op rows from the open var-ops panel.
  */
 export async function getRenderedVarOpsRows(page) {
     return page.evaluate(() => {
@@ -367,10 +393,8 @@ export async function addVarOpRow(page, { op = 'setvar', key, value = '' }) {
     }
     if (value != null && (op === 'setvar' || op === 'addvar' || op === 'pushvar')) {
         const vi = row.locator('.var-ops-panel__value').first();
-        if (await vi.isVisible({ timeout: 500 }).catch(() => false)) {
-            await vi.fill(String(value));
-            await vi.dispatchEvent('change');
-        }
+        await vi.fill(String(value));
+        await vi.press('Tab');
     }
 }
 
@@ -380,5 +404,5 @@ export async function addVarOpRow(page, { op = 'setvar', key, value = '' }) {
 export async function saveVarOpsPanel(page) {
     const popup = page.locator('.popup:visible').last();
     await popup.locator('.popup-button-ok').first().click();
-    await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+    await popup.waitFor({ state: 'detached', timeout: 10_000 });
 }

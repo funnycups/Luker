@@ -8,11 +8,10 @@
 // Part 2: same setup, choosing Keep old book leaves the new book
 // unmaterialized and keeps the previous binding.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { disableTagImportPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter, openReplaceWithFile } from './_helpers.js';
@@ -86,8 +85,9 @@ async function disableCharacterEditorAssistant(page, server) {
     await expect.poll(() => page.evaluate(() =>
         window.Luker.getContext().extensionSettings.disabledExtensions.includes('character-editor-assistant'),
     ), { timeout: 5000 }).toBe(true);
+    const reloaded = page.waitForEvent('load', { timeout: 30_000 });
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(500);
+    await reloaded;
     await awaitMainUI(page, server.baseURL);
     const disabled = await page.evaluate(() => window.Luker.getContext().extensionSettings.disabledExtensions.includes('character-editor-assistant'));
     expect(disabled).toBe(true);
@@ -109,22 +109,20 @@ function writeBoundAsh(dataRoot, avatarFile) {
 let mock, tmpDir, replacementPath;
 
 test.describe('#34 — world book decisions without the editor plugin', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-34-'));
+        tmpDir = (await scope.directory('luker-e2e-34')).path;
         replacementPath = buildReplacementPng(resolve(tmpDir, 'briallen-embedded.png'));
     });
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
-        }
     });
 
-    test('importing the new embedded book works with the editor plugin disabled', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'worldbook-no-cea-import' });
-        try {
+    test('importing the new embedded book works with the editor plugin disabled', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'worldbook-no-cea-import' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -163,14 +161,12 @@ test.describe('#34 — world book decisions without the editor plugin', () => {
             // No lingering dialog: the legacy ST popup was suppressed and the
             // core popup closed with the click.
             await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('keeping the old book works with the editor plugin disabled', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: 'worldbook-no-cea-keep' });
-        try {
+    test('keeping the old book works with the editor plugin disabled', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'worldbook-no-cea-keep' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -200,8 +196,6 @@ test.describe('#34 — world book decisions without the editor plugin', () => {
             expect(existsSync(oldBookPath)).toBe(true);
             expect(readFileSync(oldBookPath, 'utf8')).toContain('The reef shifts three feet a year.');
             await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

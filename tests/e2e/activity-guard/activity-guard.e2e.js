@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_helpers.js';
@@ -151,14 +151,14 @@ async function configureEveryTurnExtractionViaUI(page) {
 test.describe('activity-guard: settings cleanup', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: ['*Seraphina marks the harbor chart.*'] });
-        server = await startServer({ batchKey: 'generation', scenarioId: 'activity-guard-settings' });
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-settings' });
         await seedStandardDataRoot(server.dataRoot, mock.baseURL);
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 
@@ -177,7 +177,8 @@ test.describe('activity-guard: settings cleanup', () => {
 test.describe('activity-guard: Memory Graph extraction unload and chat-switch confirmation', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM();
         mock.scriptCompletion((req) => {
             const names = req.toolNames || [];
@@ -204,12 +205,11 @@ test.describe('activity-guard: Memory Graph extraction unload and chat-switch co
             return isExtract ? EXTRACT_STALL_MS : 0;
         });
 
-        server = await startServer({ batchKey: 'generation', scenarioId: 'activity-guard-mg' });
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-mg' });
         await seedStandardDataRoot(server.dataRoot, mock.baseURL);
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 
@@ -304,17 +304,17 @@ test.describe('activity-guard: Memory Graph extraction unload and chat-switch co
 test.describe('activity-guard: mid-generation chat switch discards stale reply', () => {
     let server, mock, ashAvatar;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({
             scriptedReplies: [STREAM_REPLY],
             streamChunkDelayMs: STREAM_CHUNK_DELAY_MS,
         });
-        server = await startServer({ batchKey: 'generation', scenarioId: 'activity-guard-stream-switch' });
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-stream-switch' });
         ashAvatar = await seedStandardDataRoot(server.dataRoot, mock.baseURL);
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 
@@ -393,16 +393,16 @@ test.describe('activity-guard: mid-generation chat switch discards stale reply',
 test.describe('activity-guard: idle /newchat command', () => {
     let server, mock;
 
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({
             scriptedReplies: ['*Seraphina closes the logbook.* "Everything up to this hour is recorded."'],
         });
-        server = await startServer({ batchKey: 'generation', scenarioId: 'activity-guard-newchat' });
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-newchat' });
         await seedStandardDataRoot(server.dataRoot, mock.baseURL);
     });
 
     test.afterAll(async () => {
-        await tearDownServer(server);
         await mock?.stop();
     });
 

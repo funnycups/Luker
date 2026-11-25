@@ -1,17 +1,18 @@
 // 连接配置请求超时 #5 — 主聊天 text completion 流式路径
 // (generateTextGenWithStreaming 注入)。TC profile 的 request-timeout 生效。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { appendConnectionProfile, bootstrapTextgenMain, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['first beacon lantern stays lit while the tide turns and the reef whispers back to us'] });
     mock.setStreamStall({ afterChunks: 1, stallMs: 30_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-tc-stream' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-tc-stream' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapTextgenMain({ dataRoot: server.dataRoot, baseURL: mock.baseURL, streaming: true });
     appendConnectionProfile({
@@ -25,7 +26,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

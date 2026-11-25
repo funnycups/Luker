@@ -20,11 +20,12 @@
 // deletions must propagate (the stale-workdir sweep for SQL-backed
 // records, the live walk for disk-backed ones) and hold on A.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { importWorldDocument, selectWorldBook, deleteSelectedWorldBook } from '../_lib/ui-worldinfo.js';
 import { migrateViaAdminUI, fetchStorageStatus, closeAdminPanel } from '../_lib/storage-ui.js';
@@ -93,16 +94,19 @@ function listDir(dir) {
     return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
 }
 
-test.beforeAll(async () => {
-    A = await startServer({ batchKey: 'sync', scenarioId: 'sqlite-chars-A' });
-    B = await startServer({ batchKey: 'sync', scenarioId: 'sqlite-chars-B' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope, batchKey: 'sync', scenarioId: 'sqlite-chars-A' });
+    B = await startServer({ scope, batchKey: 'sync', scenarioId: 'sqlite-chars-B' });
+    markOnboarded({ dataRoot: A.dataRoot });
+    markOnboarded({ dataRoot: B.dataRoot });
 });
+
 
 test.afterAll(async () => {
     for (const context of ownedContexts.splice(0)) await context.close();
-    await tearDownServer(A);
-    await tearDownServer(B);
 });
+
 
 const ownedContexts = [];
 

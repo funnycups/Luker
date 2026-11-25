@@ -1,9 +1,15 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 import { importWorldDocument, selectWorldBook } from '../_lib/ui-worldinfo.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let server;
 
@@ -12,15 +18,14 @@ const SENTINEL = 'The ledger records every revalidated resource.';
 const QR_SET = 'cache-set';
 
 test.beforeAll(async () => {
-    server = await startServer({
+    server = await startServer({ scope: fileScope,
         batchKey: 'server',
         scenarioId: 'resource-documents',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test('loads world books and quick replies through domain resources', async ({ page }) => {

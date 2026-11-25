@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -13,7 +13,8 @@ const IMAGE_PROMPT = '1girl, brass spyglass, dusk';
 
 let server, mock, sdMock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM();
     mock.scriptCompletion(({ toolNames }) => {
@@ -29,14 +30,13 @@ test.beforeAll(async () => {
         }
         return { text: MAIN_REPLY };
     });
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '06-lifecycle' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '06-lifecycle' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, api: 'custom' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
     await sdMock?.stop();
 });

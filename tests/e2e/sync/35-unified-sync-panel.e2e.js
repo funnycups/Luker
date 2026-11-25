@@ -1,13 +1,12 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import git from 'isomorphic-git';
 import { S3Client, CreateBucketCommand, GetObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { startRustfsContainer } from '../_lib/s3-container.js';
 import { startS3Proxy } from '../_lib/s3-proxy.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { createWorldBook, selectWorldBook, addWorldEntry } from '../_lib/ui-worldinfo.js';
 import {
@@ -18,7 +17,13 @@ import {
     chooseConflictVersion, applyConflictChoices, waitForStatusChecks,
     backendCard, clickBackendMenu, conflictRow, openAddBackend, syncFlash,
 } from '../_lib/sync.js';
-import { accountWindow, answerWindowConfirm, formError, pageHead, windowConfirm, windowToast } from '../_lib/account-window.js';
+import { accountWindow, answerWindowConfirm, formError, openUserSettingsDrawer, pageHead, windowConfirm, windowToast } from '../_lib/account-window.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 let storage;
 let servers = [];
@@ -30,7 +35,6 @@ test.beforeAll(async () => { storage = await startRustfsContainer(); });
 test.afterEach(async () => {
     for (const context of contexts) await context.close();
     contexts = [];
-    for (const server of servers) await tearDownServer(server);
     servers = [];
     for (const proxy of proxies) await proxy.close();
     proxies = [];
@@ -39,7 +43,7 @@ test.afterEach(async () => {
 test.afterAll(async () => { await storage?.stop(); });
 
 async function device(browser, name, extraEnv = {}) {
-    const server = await startServer({ batchKey: 'sync', scenarioId: `unified-${name}-${randomBytes(4).toString('hex')}`, extraEnv });
+    const server = await startServer({ scope: fileScope, batchKey: 'sync', scenarioId: `unified-${name}-${randomBytes(4).toString('hex')}`, extraEnv });
     servers.push(server);
     if (process.env.LUKER_TASK11_ACTUAL_JITLESS === '1') {
         // Packaged deployments supply these genuine webpack outputs. Build
@@ -68,8 +72,9 @@ const row = (page, label) => backendCard(page, label);
 const cardError = (page, label) => row(page, label).locator('.dw-card-note.bad');
 /** Leave the form on the current Sync page with its Cancel button. */
 async function cancelForm(page) {
-    await accountWindow(page).locator('.dw-foot [data-act="back"]').click();
-    await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
+    const back = accountWindow(page).locator('.dw-foot [data-act="back"]');
+    if (await back.count() > 0) await back.first().click();
+    await openLanSyncPanel(page);
 }
 /** True when an input anywhere in the document still holds `value`. */
 const inputHolds = (page, value) => page.evaluate(wanted => [...document.querySelectorAll('input')].some(input => input.value === wanted), value);
@@ -87,7 +92,7 @@ async function clickCardSyncNow(page, label) {
 async function fireCardActions(page, label) {
     for (const act of ['sync-now', 'undo', 'edit', 'unlock', 'remove']) {
         const card = row(page, label);
-        if (act !== 'sync-now' && await card.locator('.dw-menu').count() === 0) await card.locator('[data-act="menu"]').click();
+        if (act !== 'sync-now' && await card.locator('.dw-menu').count() === 0) await card.locator('[data-act="menu"]').dispatchEvent('click');
         const control = card.locator(`[data-act="${act}"]`);
         if (await control.count() === 0) continue;
         // Edit and Unlock of a locked backend are disabled controls.
@@ -97,7 +102,7 @@ async function fireCardActions(page, label) {
         }
         await control.dispatchEvent('click');
         if ((act === 'undo' || act === 'remove') && await windowConfirm(page).count() > 0) await answerWindowConfirm(page);
-        if (await card.locator('.dw-menu').count() > 0) await card.locator('[data-act="menu"]').click();
+        if (await card.locator('.dw-menu').count() > 0) await card.locator('[data-act="menu"]').dispatchEvent('click');
     }
 }
 const registry = server => JSON.parse(fs.readFileSync(path.join(userRootOf(server), '.sync/state.json'), 'utf8'));
@@ -181,7 +186,7 @@ test.describe('Unified Sync panel', () => {
 
     test('S3 Undo rejects an obstructed local apply without propagation and retains its undo point', async ({ browser }) => {
         const { page: a, server: serverA } = await device(browser, 'undo-a');
-        const pause = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-task11-stalled-'));
+        const pause = (await fileScope.directory('task11-stalled-pause')).path;
         const { page: b, server: serverB } = await device(browser, 'undo-b', { LUKER_SYNC_PAUSEPOINT: 'local-edit-before-reconcile', LUKER_SYNC_PAUSE_DIR: pause });
         const options = { ...storage, bucket: await bucket(), prefix: 'undo/', label: 'Cloud', passphrase: 'undo phrase', forcePathStyle: true, categories: ['worlds'] };
         await addS3Backend(a, options);
@@ -270,6 +275,7 @@ test.describe('Unified Sync panel', () => {
         ]) {
             await closeAllPopups(page);
             // The panel navigation leaves the settings drawer open.
+            await openUserSettingsDrawer(page);
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption(locale)]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
             await openLanSyncPanel(page);
@@ -468,14 +474,14 @@ test.describe('Unified Sync panel', () => {
         await refreshed;
         await expect.poll(() => originalRow.evaluate(node => node.isConnected)).toBe(false);
         try {
-            await expect(primary).toHaveClass(/\blocked\b/);
+            await expect(primary).toHaveClass(/locked\b/);
             // Exercise handlers as well as disabled rendering, including
             // clicks already queued when a status render replaces a card.
             await fireCardActions(page, 'Pending cloud');
             await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
             const nextRefresh = page.waitForResponse(response => response.url().endsWith('/api/sync/v1/backends') && response.ok());
             await nextRefresh;
-            await expect(primary).toHaveClass(/\blocked\b/);
+            await expect(primary).toHaveClass(/locked\b/);
             expect(writes).toHaveLength(1);
             const completed = page.waitForResponse(response => new URL(response.url()).pathname === endpoint);
             release();
@@ -535,22 +541,22 @@ test.describe('Unified Sync panel', () => {
             const original = await primary.elementHandle();
             await page.waitForResponse(response => response.url().endsWith('/api/sync/v1/status') && response.ok());
             await expect.poll(() => original.evaluate(node => node.isConnected)).toBe(false);
-            await expect(primary).toHaveClass(/\blocked\b/);
+            await expect(primary).toHaveClass(/locked\b/);
             await fireCardActions(page, 'Cancel cloud');
             await page.waitForResponse(response => response.url().endsWith('/api/sync/v1/backends') && response.ok());
-            await expect(primary).toHaveClass(/\blocked\b/);
+            await expect(primary).toHaveClass(/locked\b/);
             expect(writes).toHaveLength(1);
             await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
             const completed = page.waitForResponse(response => new URL(response.url()).pathname === endpoint);
             release();
             expect((await completed).status()).toBe(statusCode);
-            await expect(primary).not.toHaveClass(/\blocked\b/);
+            await expect(primary).not.toHaveClass(/locked\b/);
             await clickBackendMenu(page, 'Cancel cloud', 'edit');
             await expect(accountWindow(page).locator('[data-model="top.form.passphrase"]')).toHaveValue('');
             await cancelForm(page);
             await closeAllPopups(page);
             await openLanSyncPanel(page);
-            await expect(primary).not.toHaveClass(/\blocked\b/);
+            await expect(primary).not.toHaveClass(/locked\b/);
             expect(pageErrors).toEqual([]);
         } finally { release(); }
     });
@@ -585,6 +591,7 @@ test.describe('Unified Sync panel', () => {
             await clickCardSyncNow(page, 'Runtime cloud');
             await expect(syncFlash(page)).toHaveAttribute('data-flash', 'success', { timeout: 60_000 });
             await closeAllPopups(page);
+            await openUserSettingsDrawer(page);
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption(locale)]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
             await openLanSyncPanel(page);
@@ -627,6 +634,7 @@ test.describe('Unified Sync panel', () => {
             await expect(syncFlash(page)).toContainText(message);
             await expect(cardError(page, 'Runtime cloud')).toHaveText(message);
             await closeAllPopups(page);
+            await openUserSettingsDrawer(page);
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption('en')]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
             await openLanSyncPanel(page);

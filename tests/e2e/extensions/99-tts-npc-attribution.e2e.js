@@ -23,8 +23,8 @@
 //      [Default Voice] marker value, and the sidecar on disk carries a
 //      commit patching /<reply mesid>.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -46,7 +46,8 @@ const REPLY_TEXT = `*Seraphina leans on the rail.*
 "We will reach the port by dawn," Seraphina says.
 ${NPC_NAME} calls from the pier, "Tie up the lantern lines before the tide turns."`;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // ONLY the reply is scripted up front — the tool queue starts
     // EMPTY. mockLLM serves scripted tool calls BEFORE scripted replies
     // (a real model returns either content or tool_calls per turn), so
@@ -58,14 +59,14 @@ test.beforeAll(async () => {
         scriptedReplies: [REPLY_TEXT],
         scriptedToolCalls: [],
     });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '99-tts-npc' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '99-tts-npc' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

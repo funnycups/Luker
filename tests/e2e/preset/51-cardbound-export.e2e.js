@@ -22,14 +22,14 @@
 //      (d) The global colliding preset file on disk was not touched
 //          (mtime unchanged, body unchanged) — export must not write.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
-import { normalizeIterStudioSettings } from './_helpers.js';
+import { normalizeIterStudioSettings, openAiResponseConfigDrawer } from './_helpers.js';
 import { writeEmbeddedCharacter, disableTagImportPopup } from '../character/_helpers.js';
 
 let server, mock;
@@ -41,14 +41,6 @@ const SLOT_TEMPERATURE = 0.31;
 const GLOBAL_COLLIDING_TEMPERATURE = 0.99;
 const FIXTURE_SKILL_NAME = 'p51-cardbound-export-skill';
 const FIXTURE_BODY_ANCHOR = '# Body anchor: card-bound export v1\n\nRoundtrip fixture body.';
-
-async function openAiResponseConfigDrawer(page) {
-    const block = page.locator('#left-nav-panel');
-    const isOpen = await block.evaluate(el => el && el.classList.contains('openDrawer')).catch(() => false);
-    if (isOpen) return;
-    await page.locator('#leftNavDrawerIcon').click();
-    await block.waitFor({ state: 'visible', timeout: 5000 });
-}
 
 /**
  * Click the visible Export button; auto-accept the skills-include popup so
@@ -109,12 +101,13 @@ async function installFixtureSkillInPresetScope(page, presetName, skillName, bod
     }, { scope: { kind: 'preset', name: presetName }, payload });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'cardbound-export',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -154,7 +147,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -163,10 +156,7 @@ test.describe('#51 — card-bound preset export uses slot body + slot name', () 
         test.setTimeout(180_000);
         await awaitMainUI(page, server.baseURL);
 
-        // Wait for orchestrator to register its OAI_PRESET_EXPORT_READY
-        // listener (mounted inside jQuery(() => { ... }) after settings
-        // hydrate). Without it the popup never appears, assertion (c)
-        // fails for the wrong reason.
+        // Wait for the core skill export listener to be ready.
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             return !!ctx?.extensionSettings?.orchestrator;

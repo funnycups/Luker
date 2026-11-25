@@ -21,11 +21,11 @@
 // assert against the *actual* documented behavior, not the brief's
 // shorthand. Each sub-test documents the divergence inline.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
 import { copyFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { write as writeCharaPng } from '../../../src/character-card-parser.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -141,7 +141,8 @@ async function chatSnapshot(page) {
     });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Ash trims the lantern.* "The reef is settling."',
         '*Ash watches the gull rocks.* "Quieter than yesterday."',
@@ -152,7 +153,7 @@ test.beforeAll(async () => {
         '*Ash glances up.* "Another step."',
         '*Ash glances up again.* "And another."',
     ] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '97-slash-commands' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '97-slash-commands' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -166,7 +167,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

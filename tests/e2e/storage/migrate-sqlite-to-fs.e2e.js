@@ -8,8 +8,8 @@
 // SettingsRepo). The migration round-trip is the realistic way to land
 // in SQLite for an existing dataRoot.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
@@ -17,18 +17,19 @@ import { migrateViaAdminUI, closeAdminPanel, fetchStorageStatus } from '../_lib/
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina marks the chart with a stub of charcoal.* "If the gulls fly seaward at first light, the swell will calm before noon — write that down."',
     ] });
-    server = await startServer({ batchKey: 'storage', scenarioId: 'sqlite-to-fs' });
+    server = await startServer({ scope, batchKey: 'storage', scenarioId: 'sqlite-to-fs' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

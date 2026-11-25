@@ -10,8 +10,8 @@
 // fires, rebuild reruns against the persisted ops, and the materialized
 // state reproduces the post-delete snapshot.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -43,16 +43,17 @@ const TURN_PROMPTS = [
     'How is Alice after the breaker?',
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [...REPLIES] });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'roster-replay' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'roster-replay' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -65,13 +66,6 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
-
-        // Disable delete-confirmation so deleteMessageViaUI does not need
-        // to chase a second OK click.
-        await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            if (ctx.powerUserSettings) ctx.powerUserSettings.confirm_message_delete = false;
-        });
 
         // ── Six turns, asserting the flask panel matches each turn's op ─
         const expectedOps = [

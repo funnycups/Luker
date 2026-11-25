@@ -6,14 +6,14 @@
 // in book A dropped B's pending write. This drives both actions through the
 // real editor and asserts the second book lands on disk after the debounce.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
-import { startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
 let server, mock;
 
@@ -33,9 +33,10 @@ async function selectBook(page, name, uid, comment) {
         .toHaveValue(comment, { timeout: 10_000 });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM();
-    server = await startWorldInfoServer({ specBaseName: '36-pending-saves', scenarioId: 'cross-book' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'cross-book' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -57,7 +58,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownWorldInfoServer(server);
     await mock?.stop();
 });
 

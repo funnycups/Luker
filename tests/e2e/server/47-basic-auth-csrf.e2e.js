@@ -11,8 +11,8 @@
 //     protected endpoint without an x-csrf-token header → 403, and with
 //     the minted token → 2xx
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 let server;
@@ -21,84 +21,22 @@ let server;
 const BASIC_USER = 'user';
 const BASIC_PASS = 'password';
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'server',
         scenarioId: 'basic-auth',
-        extraEnv: {
-            // No env override needed for the basic auth credentials — the
-            // bundled config.yaml ships the defaults this test uses.
+        extraConfig: {
+            listen: true,
+            basicAuthMode: true,
+            basicAuthUser: { username: BASIC_USER, password: BASIC_PASS },
+            whitelist: ['127.0.0.1'],
         },
     });
     markOnboarded({ dataRoot: server.dataRoot });
-    // Re-spawn with --listen + --basicAuthMode. The default startServer call
-    // passes --listen=false, which skips the basicAuth middleware mount.
-    // Tear it down and re-spawn here in beforeAll.
-    await server.stop();
-
-    // Stash the helpful fields, then manually spawn a node child with the
-    // overrides. We replicate the spawn pattern from _lib/server.js but only
-    // need a subset of behavior.
-    const { spawn } = await import('node:child_process');
-    const { resolve } = await import('node:path');
-    const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-    let child = null;
-    const port = server.port;
-    const dataRoot = server.dataRoot;
-
-    async function probe(p) {
-        const deadline = Date.now() + 30_000;
-        while (Date.now() < deadline) {
-            try {
-                // `redirect: 'manual'` keeps Node fetch from following the
-                // login/root redirect chain past its limit before our 401/302/200
-                // ready signal lands. (Without this, basicAuth + multi-redirect
-                // configurations hit "redirect count exceeded" forever.)
-                const res = await fetch(`http://127.0.0.1:${p}/`, { method: 'GET', redirect: 'manual' });
-                if (res.status === 401 || res.status === 302 || res.status === 200) return;
-            } catch { /* ignore */ }
-            await new Promise(r => setTimeout(r, 250));
-        }
-        throw new Error(`server on port ${p} did not become ready`);
-    }
-
-    async function spawnOnce() {
-        child = spawn('node', [
-            'server.js',
-            `--port=${port}`,
-            `--dataRoot=${dataRoot}`,
-            '--browserLaunchEnabled=false',
-            '--listen=true',
-            '--basicAuthMode=true',
-            '--whitelist=127.0.0.1',
-            '--disableCsrf=false',
-        ], {
-            cwd: REPO_ROOT,
-            env: { ...process.env, NODE_ENV: 'production' },
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        child.stdout.on('data', () => {});
-        child.stderr.on('data', d => process.stderr.write(`[srv:${port}] ${d}`));
-        await probe(port);
-    }
-    await spawnOnce();
-
-    server.stop = async () => {
-        if (!child) return;
-        try {
-            child.kill('SIGTERM');
-            await new Promise((resolve) => {
-                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ }  resolve(); }, 3000);
-                child.once('exit', () => { clearTimeout(t); resolve(); });
-            });
-        } catch { /* ignore */ }
-        child = null;
-    };
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#47 — basicAuth + CSRF full flow', () => {
     test('basicAuth: unauthenticated → 401; correct credentials → 200', async () => {

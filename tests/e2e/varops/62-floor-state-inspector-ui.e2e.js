@@ -18,8 +18,8 @@
 //   d) The materialized chat_metadata.variables reflects the full forward
 //      apply of every recorded op across all floors.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
@@ -31,16 +31,17 @@ const REPLY_TURN_1 = '*Seraphina lights the lantern with the patience of long ha
 const REPLY_TURN_2 = '*She glances toward the dark beyond the lantern\'s glow.* {{incvar::hp}}{{setvar::weather::clear}} "The sea is steady tonight."';
 const REPLY_TURN_3 = '*A gull cries over the breaker; she does not flinch.* {{pushvar::inventory::lantern}}{{pushvar::inventory::spyglass}} "Hold these — both at once if it comes to that."';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [REPLY_TURN_1, REPLY_TURN_2, REPLY_TURN_3] });
-    server = await startServer({ batchKey: 'varops', scenarioId: 'inspector-ui' });
+    server = await startServer({ scope, batchKey: 'varops', scenarioId: 'inspector-ui' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -72,6 +73,13 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
 
         // For each assistant floor with ops, the button's inline display style
         // should have been flipped from "none" to "" by refreshButtonVisibility.
+        // GENERATION_ENDED (hideStopButton) fires before the finishing message's
+        // MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED emits, so wait for the
+        // visibility handler rather than reading the style at the event edge.
+        await page.waitForFunction((idxs) => idxs.every((idx) => {
+            const el = document.querySelector(`.mes[mesid="${idx}"] .mes_var_ops`);
+            return el && el.style.display !== 'none';
+        }), replyIds, { timeout: 15_000 });
         const buttonStyles = await page.evaluate((idxs) => {
             return idxs.map((idx) => {
                 const el = document.querySelector(`.mes[mesid="${idx}"] .mes_var_ops`);

@@ -25,8 +25,8 @@
 //     preset resets the four controls; switching to the saved preset
 //     rehydrates them.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapMoonshotBackend, markOnboarded, writePreset } from '../_lib/fixtures.js';
 import {
@@ -61,9 +61,10 @@ function lastChatRequest() {
     return [...mock.requests].reverse().find(r => r.url.endsWith('/chat/completions'));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [MOCK_REPLY, MOCK_REPLY, MOCK_REPLY, MOCK_REPLY] });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'kimi-partial' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'kimi-partial' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapMoonshotBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, model: 'kimi-e2e' });
     // Seed the shipped default preset body under a dedicated name so Test C
@@ -73,7 +74,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

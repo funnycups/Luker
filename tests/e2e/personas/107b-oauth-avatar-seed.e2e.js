@@ -38,16 +38,14 @@
 // preload replaces globalThis.fetch for github.com/Discord CDN hosts
 // only and passes everything else through.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
-
-const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-const SCRATCH_ROOT = resolve(REPO_ROOT, 'tests/.e2e-scratch');
-const PRELOAD_PATH = resolve(SCRATCH_ROOT, 'oauth-stub-preload.mjs');
+import { startServer } from '../../harness/server.js';
+let preloadPath;
 
 // 1x1 transparent PNG.
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -63,7 +61,8 @@ const STUB_PROFILE = {
 let stubServer;
 let stubUrl;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // Local stub for avatar.stubs.example — the preload rewrites only
     // this host, so the GitHub token/profile round-trip must go through
     // the same rewrite (the real github.com is not reachable from CI).
@@ -89,18 +88,19 @@ test.beforeAll(async () => {
     await new Promise(r => stubServer.listen(0, '127.0.0.1', r));
     stubUrl = `http://127.0.0.1:${stubServer.address().port}`;
 
+    preloadPath = resolve((await scope.directory('oauth stub preload')).path, 'preload.mjs');
     writePreload();
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'oauth-avatar-seed',
         extraConfig: { enableUserAccounts: true },
-        extraEnv: { NODE_OPTIONS: `--import "${PRELOAD_PATH}"` },
-        useExistingDataRoot: await seedDataRoot(),
+        extraEnv: { NODE_OPTIONS: `--import "${preloadPath}"` },
+        data: await seedDataRoot(scope),
     });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await new Promise(r => stubServer.close(r));
 });
 
@@ -134,16 +134,16 @@ globalThis.fetch = async (input, init) => {
     return realFetch(input, init);
 };
 `;
-    mkdirSync(SCRATCH_ROOT, { recursive: true });
-    writeFileSync(PRELOAD_PATH, preload);
+    writeFileSync(preloadPath, preload);
 }
 
 /**
  * Scratch dataRoot: oauth enabled + allowAutoCreate, so the callback
  * creates the account on first login.
  */
-async function seedDataRoot() {
-    const dataRoot = resolve(SCRATCH_ROOT, 'personas-oauth-avatar-seed');
+async function seedDataRoot(scope) {
+    const directory = await scope.directory('personas-oauth-avatar-seed');
+    const dataRoot = directory.path;
     mkdirSync(resolve(dataRoot, '_storage'), { recursive: true });
 
     const adminSettings = {
@@ -156,7 +156,7 @@ async function seedDataRoot() {
     };
     writeFileSync(resolve(dataRoot, '_storage', storageFile('luker:admin-settings:v1')), JSON.stringify({ key: 'luker:admin-settings:v1', value: adminSettings }));
 
-    return dataRoot;
+    return directory;
 }
 
 /** node-persist stores datums at sha256(key) under _storage. */

@@ -13,8 +13,8 @@
 // .mes_translate on the message to also exercise the explicit user
 // gesture (proves the button is wired).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -32,16 +32,17 @@ const EN_USER_TRANSLATED = 'I walked the cliff path; the wind was cold but the l
 const EN_REPLY = '*Ash trims the lantern wick and the flame settles.* "The reef has been restless tonight, but the lantern still holds."';
 const ZH_REPLY_TRANSLATED = '*阿什修剪灯芯,火焰稳定下来。*「礁岩今晚不安,但灯笼仍然稳固。」';
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [EN_REPLY] });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '93-translate' });
+    server = await startServer({ scope, batchKey: 'extensions', scenarioId: '93-translate' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -139,22 +140,18 @@ test.describe('#93 — Translate auto-mode "both" via real dropdowns', () => {
         expect(msg.mes).toContain('lantern');
         expect(msg.displayText).toBe(ZH_REPLY_TRANSLATED);
 
-        // Bonus: click .mes_translate on the assistant message to confirm
-        // the per-message button is wired. The translate handler is
-        // idempotent — re-translating just refreshes display_text.
-        const mesTranslate = page.locator(`.mes[mesid="${replyId}"] .mes_translate`).first();
-        if (await mesTranslate.isVisible({ timeout: 1000 }).catch(() => false)) {
-            await mesTranslate.click({ force: true });
-            // Wait briefly for any toast or re-render.
-            await page.waitForTimeout(300);
-        }
+        // The per-message translate button toggles: the first click
+        // reverts to the original text, the second translates again.
+        const mes = page.locator(`.mes[mesid="${replyId}"]`);
+        const readDisplayText = () => page.evaluate((id) => window.Luker.getContext().chat[id]?.extra?.display_text || '', replyId);
+        await mes.hover();
+        await mes.locator('.extraMesButtonsHint').first().click();
+        const mesTranslate = mes.locator('.mes_translate').first();
+        await mesTranslate.click();
+        await expect.poll(readDisplayText).toBe('');
+        await expect(mes.locator('.mes_text')).toContainText('lantern');
 
-        // After the explicit click, display_text is still the zh translation.
-        const afterClick = await page.evaluate((id) => {
-            const ctx = window.Luker.getContext();
-            const m = ctx.chat[id];
-            return m?.extra?.display_text || '';
-        }, replyId);
-        expect(afterClick).toBe(ZH_REPLY_TRANSLATED);
+        await mesTranslate.click();
+        await expect.poll(readDisplayText, { timeout: 15_000 }).toBe(ZH_REPLY_TRANSLATED);
     });
 });

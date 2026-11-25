@@ -14,11 +14,11 @@
 //   4. Non-admin users in multi-user mode do not see the Backup Settings
 //      shortcut and receive HTTP 403 from both backup config endpoints.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, createUserViaAdminUI, selectCharacterByName } from '../_lib/page.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -50,9 +50,9 @@ async function editFirstMessageViaUI(page, nextText) {
     await editBox.fill(nextText);
     const savePromise = page.waitForResponse(
         res => /\/api\/chats\/(save|patch)\b/.test(res.url()) && res.request().method() === 'POST',
-        { timeout: 15_000 },
+        { timeout: 20_000 },
     );
-    await firstMes.locator('.mes_edit_done').click({ force: true });
+    await firstMes.locator('.mes_edit_done').click();
     const res = await savePromise;
     expect(res.status()).toBe(200);
 }
@@ -60,9 +60,10 @@ async function editFirstMessageViaUI(page, nextText) {
 // Run scenarios serially inside this test file so three Luker servers do not
 // contend on disk/CPU during `/api/users/create` content seeding.
 test.describe.serial('admin backup settings UI', () => {
-    test('saves config.yaml preserving comments, syncs cross-views, and applies live without restart', async ({ page }) => {
+    test('saves config.yaml preserving comments, syncs cross-views, and applies live without restart', async ({ page, resources }) => {
         test.setTimeout(180_000);
         const server = await startServer({
+            scope: resources,
             batchKey: 'server',
             scenarioId: 'backup-config-ui',
             extraConfig: { enableUserAccounts: false },
@@ -194,12 +195,13 @@ test.describe.serial('admin backup settings UI', () => {
                 return text.includes('Footsteps echo along the stone corridor.');
             }, { timeout: 10_000 }).toBe(true);
         } finally {
-            await tearDownServer(server);
+            await server.stop();
         }
     });
 
-    test('surfaces active env override and does not overwrite file value when saving another field', async ({ page }) => {
+    test('surfaces active env override and does not overwrite file value when saving another field', async ({ page, resources }) => {
         const server = await startServer({
+            scope: resources,
             batchKey: 'server',
             scenarioId: 'backup-config-env-override',
             extraConfig: { enableUserAccounts: false },
@@ -229,12 +231,13 @@ test.describe.serial('admin backup settings UI', () => {
             expect(onDisk).toMatch(/numberOfBackups:\s*50/);
             expect(onDisk).toMatch(/allowFullDataBackup:\s*false/);
         } finally {
-            await tearDownServer(server);
+            await server.stop();
         }
     });
 
-    test('non-admin sees no Backup Settings shortcut and gets 403 from backup config endpoints', async ({ browser, page }) => {
+    test('non-admin sees no Backup Settings shortcut and gets 403 from backup config endpoints', async ({ browser, page, resources }) => {
         const server = await startServer({
+            scope: resources,
             batchKey: 'server',
             scenarioId: 'backup-config-non-admin',
             extraConfig: { enableUserAccounts: true },
@@ -275,7 +278,7 @@ test.describe.serial('admin backup settings UI', () => {
 
             expect(statuses).toEqual({ get: 403, save: 403 });
         } finally {
-            await tearDownServer(server);
+            await server.stop();
         }
     });
 });

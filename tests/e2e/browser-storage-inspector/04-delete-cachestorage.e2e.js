@@ -1,17 +1,18 @@
 // Browser Storage Inspector · delete a single Cache Storage cache.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'browser-storage-inspector', scenarioId: 'delete-cache' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'browser-storage-inspector', scenarioId: 'delete-cache' });
 });
 
-test.afterAll(async () => { await tearDownServer(server); });
+
 
 test.describe('Browser Storage Inspector · delete Cache Storage', () => {
     test('deletes a single cache; other caches remain', async ({ page }) => {

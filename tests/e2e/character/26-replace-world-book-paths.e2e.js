@@ -8,11 +8,10 @@
 //  - Scenario E: New card's extensions.world points to a NEW book name (doesn't exist locally) →
 //    button gray, world button should import the embedded book.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
@@ -80,9 +79,10 @@ async function inspectState(page) {
 let mock, tmpDir, briallenPath, briallenWithExtWorldPath, briallenWithGhostBookPath;
 
 test.describe('#26 — post-replace world-book paths actually work', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({});
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-26-'));
+        tmpDir = (await scope.directory('luker-e2e-26')).path;
         const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
         briallenPath = resolve(tmpDir, 'briallen.png');
         writeFileSync(briallenPath, buildBriallenPng(seed));
@@ -100,14 +100,11 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
 
     test.afterAll(async () => {
         await mock?.stop();
-        if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-        }
     });
 
-    test('A: after CEA Cancel, world_button click imports the embedded book and binds it', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '26-A' });
-        try {
+    test('A: after CEA Cancel, world_button click imports the embedded book and binds it', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '26-A' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -177,14 +174,12 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
             const persisted = await inspectState(page);
             expect(persisted.buttonGreen, 'world button is green after restart').toBe(true);
             expect(persisted.ext_world).toBe(BRIALLEN_BOOK_NAME);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('B: after CEA Cancel, More→Import Card Lore also imports', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '26-B' });
-        try {
+    test('B: after CEA Cancel, More→Import Card Lore also imports', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '26-B' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -221,14 +216,12 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
 
             const newBookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${BRIALLEN_BOOK_NAME}.json`);
             expect(existsSync(newBookPath), `${BRIALLEN_BOOK_NAME}.json on disk`).toBe(true);
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('C: second replace on the same page works (no reload needed)', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '26-C' });
-        try {
+    test('C: second replace on the same page works (no reload needed)', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '26-C' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -258,14 +251,12 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
             await expect(popup2).toBeVisible();
             await popup2.locator('.popup-button-cancel').first().click();
             await popup2.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('D: new card with extensions.world pointing to existing local book → binding preserved', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '26-D' });
-        try {
+    test('D: new card with extensions.world pointing to existing local book → binding preserved', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '26-D' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -295,14 +286,12 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
             await page.waitForFunction(() => {
                 return document.querySelector('#world_button')?.classList.contains('world_set');
             }, null, { timeout: 5000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 
-    test('E: new card with extensions.world pointing to a ghost name → world button can still import the embedded book', async ({ page }) => {
-        const server = await startServer({ batchKey: 'character', scenarioId: '26-E' });
-        try {
+    test('E: new card with extensions.world pointing to a ghost name → world button can still import the embedded book', async ({ resources, page }) => {
+        const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: '26-E' });
+        {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -334,8 +323,6 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
             await page.locator('#world_button').click({ timeout: 5000 });
             const importConfirm = page.locator('dialog.popup[open]', { hasText: new RegExp(`import '${BRIALLEN_BOOK_NAME}'|要导入.*${BRIALLEN_BOOK_NAME}|要匯入.*${BRIALLEN_BOOK_NAME}`) }).last();
             await importConfirm.waitFor({ state: 'visible', timeout: 5000 });
-        } finally {
-            await tearDownServer(server);
         }
     });
 });

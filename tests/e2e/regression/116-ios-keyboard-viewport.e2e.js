@@ -1,17 +1,18 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 test.use({ browserName: 'webkit', viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true });
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'ios-keyboard-viewport' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'ios-keyboard-viewport' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => { await tearDownServer(server); });
+
 
 async function openApp(page, { ios = true, visualViewport = true } = {}) {
     // Desktop WebKit cannot open an iPhone keyboard or enable iOS-only CSS.

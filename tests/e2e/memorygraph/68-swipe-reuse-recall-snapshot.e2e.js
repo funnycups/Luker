@@ -22,11 +22,10 @@
 //        identical (snapshot blocks re-projected, not recomputed).
 //   5. Contrast guard: a normal send (new anchor) MUST trigger fresh recall.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -39,7 +38,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
-import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
+import { importMgGraph, rebuildMgVectors, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -74,15 +73,16 @@ const REPLIES = [
 // turns burn replies 1-2, so the anchor turn lands on reply 3 and the
 // first overswipe lands on reply 4. Make replies 3+ cycle deterministically:
 // anchor = 'Third variant', swipe variant 2 = 'First variant'.
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: [...REPLIES, ...REPLIES, ...REPLIES] });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'swipe-reuse-recall' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'swipe-reuse-recall' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-swipe-reuse-'));
+    const tmpDir = (await scope.directory('mg-swipe-reuse')).path;
     importPath = resolve(tmpDir, 'seed.json');
     const nodes = {};
     let seq = 0;
@@ -111,7 +111,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -136,9 +136,10 @@ async function waitForSwipeIdle(page, timeoutMs = 30_000) {
         const stop = document.querySelector('#mes_stop');
         const stopHidden = !stop || getComputedStyle(stop).display === 'none';
         const swiping = document.body.dataset.swiping === 'true';
-        return stopHidden && !swiping;
+        const generating = document.body.dataset.generating === 'true';
+        const counter = document.querySelector('#chat .last_mes .swipes-counter');
+        return stopHidden && !swiping && !generating && Boolean(counter) && !counter.hidden;
     }, { timeout: timeoutMs });
-    await page.waitForTimeout(150);
 }
 
 test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
@@ -160,25 +161,12 @@ test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
         await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
 
-        // Sync the vector index so the imported nodes are searchable, then
-        // count embeddings baseline (index sync embeds nodes once).
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            const main = await import('/scripts/extensions/memory-graph/main.js');
-            const vi = await import('/scripts/extensions/memory-graph/vector-index.js');
-            const profile = vi.getVectorConfigFromSettings(settings);
-            if (!profile) return;
-            const chatKey = main.resolveChatKeyForSession(ctx);
-            const store = await main.ensureMemoryStoreLoaded(ctx);
-            if (!store) return;
-            const beforeSync = structuredClone(store);
-            await vi.syncVectorIndex(store, profile, chatKey, { purge: true, tolerateErrors: false });
-            await main.commitSessionMutation(ctx, chatKey, beforeSync, store);
-        });
+        // Index the imported nodes through the Graph tab "Rebuild Vectors" button.
+        const embedsBeforeSync = embedRequestCount();
+        await rebuildMgVectors(page);
 
         const embedsAfterSync = embedRequestCount();
-        expect(embedsAfterSync, 'vector index sync should have embedded seeded nodes').toBeGreaterThan(0);
+        expect(embedsAfterSync - embedsBeforeSync, 'vector index sync should have embedded seeded nodes').toBeGreaterThan(0);
 
         // The anchor turn: a normal send runs fresh RAG recall. The user
         // message mentions the seeded lantern so the recall has real hits.
@@ -236,11 +224,7 @@ test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
                 }
             });
         }));
-        await page.evaluate(() => {
-            const arrow = document.querySelector('#chat .last_mes .swipe_right');
-            if (!arrow) throw new Error('.swipe_right not in DOM');
-            arrow.click();
-        });
+        await page.locator('#chat .last_mes .swipe_right').click();
         // After the anchor (reply 3), the swipe regen consumes reply 4 —
         // the first entry of the second REPLIES cycle ('First variant').
         await page.waitForFunction(
@@ -248,6 +232,7 @@ test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
             { timeout: 120_000 },
         );
         const swipeRecallState = await swipeRecallStatePromise;
+        await waitForSwipeIdle(page, 120_000);
 
         // Reuse contract: the focus packet is re-projected from the snapshot
         // (identical blocks), NOT recomputed by a new rag_recall pass.

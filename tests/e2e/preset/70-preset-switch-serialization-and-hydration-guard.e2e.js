@@ -18,10 +18,10 @@
 //      the previous selection, an error toast surfaces, and `oai_settings`
 //      remains untouched.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -29,7 +29,9 @@ import {
     markOnboarded,
     writePreset,
 } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
+import { openIterStudio, sendIterPrompt, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { holdWorkbenchSnapshots } from '../_lib/workbench-snapshot-gate.js';
 import {
     normalizeIterStudioSettings,
     selectPresetByName,
@@ -77,12 +79,14 @@ function readDiskPreset(dataRoot, name) {
     return JSON.parse(readFileSync(filePath, 'utf8'));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
     server = await startServer({
+        scope,
         batchKey: 'preset',
         scenarioId: 'preset-switch-serialization-and-hydration-guard',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 
     markOnboarded({ dataRoot: server.dataRoot });
@@ -123,11 +127,61 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 
 test.describe('#70 — preset switch serialization & hydration guards', () => {
+    test('a delayed presentation snapshot cannot assign a new preset conversation to the previous preset', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await selectPresetByName(page, PRESET_ALPHA);
+        const win = await openIterStudio(page, 'preset', { scope: 'preset' });
+        await expect(win.locator('.wb-scope-seg')).toContainText(PRESET_ALPHA);
+        await closeIterStudio(page);
+        const held = await holdWorkbenchSnapshots(page);
+        const prompt = 'Inspect the currently selected beacon preset.';
+        const readOwnership = () => page.evaluate(async ({ before, after, prompt }) => {
+            const ctx = window.Luker.getContext();
+            const { sessionBodyNamespace } = await import('/scripts/workbench/model/sessions.js');
+            const read = async name => {
+                const target = { collection: 'openai', name };
+                const result = await ctx.presets.state.get('workbench_sessions', { target });
+                if (!result.ok) throw new Error(JSON.stringify(result));
+                const matched = [];
+                for (const session of (result.state?.sessions || [])) {
+                    const bodyRes = await ctx.presets.state.get(sessionBodyNamespace(session.id), { target });
+                    if (!bodyRes.ok) throw new Error(JSON.stringify(bodyRes));
+                    const turns = bodyRes.state?.turns || [];
+                    if (turns.some(turn => turn.role === 'user' && turn.text === prompt)) {
+                        matched.push(session);
+                    }
+                }
+                return matched;
+            };
+            return { before: await read(before), after: await read(after) };
+        }, { before: PRESET_ALPHA, after: PRESET_BETA, prompt });
+        let sessionId;
+        try {
+            await selectPresetByName(page, PRESET_BETA);
+            await openIterStudio(page, 'preset', { scope: 'preset', newSession: true });
+            await held.requested();
+            mock.scriptReply('The selected beacon preset has been inspected.');
+            await sendIterPrompt(page, 'preset', prompt);
+            const ownership = await readOwnership();
+            expect(ownership.before).toEqual([]);
+            expect(ownership.after).toHaveLength(1);
+            expect(ownership.after[0].scopeName).toBe(PRESET_BETA);
+            sessionId = ownership.after[0].id;
+        } finally {
+            await held.release();
+        }
+        await closeIterStudio(page);
+        await server.restart();
+        await reloadAndAwait(page, server.baseURL);
+        const persisted = await readOwnership();
+        expect(persisted.before).toEqual([]);
+        expect(persisted.after.map(session => session.id)).toEqual([sessionId]);
+    });
+
     test('rejects null savePreset payloads, orders events inside getPresetApplicationPromise, serializes overlapping switches, and rolls back failed hydrations', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 

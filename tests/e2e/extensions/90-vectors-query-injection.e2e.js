@@ -34,8 +34,8 @@
 // CI green where Ollama is absent while still exercising the real
 // pipeline on dev machines that have it.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -121,7 +121,8 @@ const QUERY_USER_TEXT = 'How did the brass lantern on the headland behave tonigh
 const QUERY_AI_REPLY = '*Seraphina glances at the cliff-side post.* "The brass lantern holds — three flashes, as before."';
 
 vectorsDescribe('#90 — vectors vectorize+query+inject (real ollama embedder)', () => {
-    test.beforeAll(async () => {
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
         const probe = await probeOllama();
         // LIVE_OLLAMA=1 was set, so failures here are setup bugs (daemon
         // down, model not pulled) — fail loud, do not skip.
@@ -133,7 +134,7 @@ vectorsDescribe('#90 — vectors vectorize+query+inject (real ollama embedder)',
                 QUERY_AI_REPLY,
             ],
         });
-        server = await startServer({ batchKey: 'extensions', scenarioId: 'vectors-query-injection' });
+        server = await startServer({ scope, batchKey: 'extensions', scenarioId: 'vectors-query-injection' });
         markOnboarded({ dataRoot: server.dataRoot });
         bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -182,7 +183,7 @@ vectorsDescribe('#90 — vectors vectorize+query+inject (real ollama embedder)',
     });
 
     test.afterAll(async () => {
-        if (server) await tearDownServer(server);
+
         if (mock) await mock.stop();
     });
 

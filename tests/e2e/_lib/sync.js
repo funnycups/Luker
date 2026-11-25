@@ -55,21 +55,20 @@ export async function loginAs(page, baseURL, { handle, password }) {
         const card = page.locator('#userList .userSelect').filter({
             has: page.locator('.userHandle', { hasText: new RegExp(`^${escapeRegex(handle)}$`) }),
         }).first();
-        const cardVisible = await card.isVisible({ timeout: 1500 }).catch(() => false);
-        if (cardVisible) {
+        // The wait above settled the login page: the card is either listed
+        // now or the page is in discreet mode.
+        if (await card.isVisible()) {
             await card.click();
         } else {
             const handleInput = page.locator('#userHandle');
             await handleInput.waitFor({ state: 'visible', timeout: 5000 });
             await handleInput.fill(handle);
         }
-        const passwordInput = page.locator('#userPassword');
-        if (await passwordInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (password) {
+            const passwordInput = page.locator('#userPassword');
+            await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
             await passwordInput.fill(password);
-            const loginBtn = page.locator('#loginButton');
-            if (await loginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await loginBtn.click();
-            }
+            await page.locator('#loginButton').click();
         }
     }
 
@@ -441,10 +440,12 @@ export async function waitForSyncIssuesPage(page, timeout = 60_000) {
  */
 export async function waitForSyncPopup(page, timeout = 60_000) {
     await expect.poll(async () => {
-        if (await syncPopup(page).count() > 0) return true;
+        // The pagehead renders before the window's first status read lands;
+        // its marker is set once pending issues are in the snapshot.
+        if (await syncPopup(page).count() > 0 && await accountWindow(page).locator('[data-sync-loaded="1"]').count() > 0) return true;
         const resolve = accountWindow(page).locator('[data-act="conflicts"]');
         if (await resolve.count() > 0) await resolve.first().click({ timeout: 2_000 }).catch(() => {});
-        return syncPopup(page).count().then(n => n > 0);
+        return false;
     }, { timeout, intervals: [250, 500, 1000] }).toBe(true);
     return syncPopup(page);
 }
@@ -561,6 +562,48 @@ export async function conflictChoiceShowing(page, rel, text) {
     return outcome;
 }
 
+/**
+ * The merge role (`ours` or `theirs`) of the version whose shadow blob
+ * contains `text`. Delete-versus-edit conflicts carry no rendered values
+ * because one side has no file, so the choice is read from the recorded
+ * version ids instead of the diff pane.
+ */
+export async function conflictSideFromShadow(server, page, rel, text) {
+    const entry = await page.evaluate(async path => {
+        const status = await (await fetch('/api/sync/v1/status')).json();
+        return (status.conflicts ?? []).find(item => item.path === path) ?? null;
+    }, rel);
+    if (!entry) throw new Error(`No pending conflict for ${rel}`);
+    const gitdir = path.join(userRootOf(server), '.sync', backendIdOf(server), 'repo.git');
+    const read = async oid => {
+        if (oid === null) return '';
+        try {
+            return Buffer.from((await git.readBlob({ fs, gitdir, oid })).blob).toString('utf8');
+        } catch (cause) {
+            throw new Error(`Cannot read conflict shadow ${oid} for ${rel} at ${gitdir}`, { cause });
+        }
+    };
+    const [ours, theirs] = await Promise.all([read(entry.ours), read(entry.theirs)]);
+    const oursHas = ours.includes(text);
+    const theirsHas = theirs.includes(text);
+    if (oursHas === theirsHas) throw new Error(`Conflict versions for ${rel} do not identify one side by ${JSON.stringify(text)}`);
+    return oursHas ? 'ours' : 'theirs';
+}
+
+/**
+ * The merge role of the recorded version that is not in use. A conflict
+ * keeps one side in the live file; resolving to the other side picks the
+ * version the other device recorded.
+ */
+export async function conflictOtherSide(page, rel) {
+    const entry = await page.evaluate(async path => {
+        const status = await (await fetch('/api/sync/v1/status')).json();
+        return (status.conflicts ?? []).find(item => item.path === path) ?? null;
+    }, rel);
+    if (!entry) throw new Error(`No pending conflict for ${rel}`);
+    return entry.kept === entry.ours ? 'theirs' : 'ours';
+}
+
 export async function chooseConflictVersion(page, rel, choice) {
     const version = conflictRow(page, rel).locator(`.dw-version[data-v="${choice}"]`);
     await version.click();
@@ -593,8 +636,10 @@ export async function applyConflictChoices(page, { confirmOverwrite = false } = 
         await answerWindowConfirm(page);
         result = await next();
     }
-    const failed = await accountWindow(page).locator('.dw-conflict.is-failed, .dw-toast.error').count();
-    return failed > 0 ? 'error' : 'success';
+    const failed = await accountWindow(page).locator('.dw-conflict.is-failed, .dw-toast.error, .dw-banner.error').count();
+    if (failed > 0) return 'error';
+    const status = await page.evaluate(async () => (await (await fetch('/api/sync/v1/status')).json()));
+    return status.ok === false || Object.keys(status.errors ?? {}).length > 0 ? 'error' : 'success';
 }
 
 /**
@@ -645,7 +690,7 @@ export async function openChatByName(page, name) {
     const escaped = chatId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const exact = new RegExp(`^\\s*${escaped}(\\.jsonl)?\\s*$`);
     const row = page.locator('.select_chat_block_wrapper', { has: page.locator('.select_chat_block_filename', { hasText: exact }) }).first();
-    await row.locator('.select_chat_block').click();
+    await row.locator('.select_chat_block_filename').click();
     await page.waitForFunction(wanted => window.Luker.getContext().getCurrentChatId() === wanted, chatId, { timeout: 30_000 });
     // The chat loader covers the page until the past chats popup closes.
     await page.locator('#shadow_select_chat_popup').waitFor({ state: 'hidden', timeout: 30_000 });

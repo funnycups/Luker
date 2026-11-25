@@ -19,8 +19,8 @@
 //   previously paid the per-spec server-boot cost despite testing
 //   stand-alone module contracts.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -31,21 +31,22 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '78-multi-skill' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '78-multi-skill' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -56,46 +57,16 @@ test.describe('#78 — Multi-skill visible: live director dispatch', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Install a minimal profile that sets the mode-level visible list
-        // to our 3 test skills and configures one sub-agent that inherits.
+        // Install a minimal profile whose mode-level visible list holds
+        // the 3 test skills; the main agent and the sub-agent inherit it.
         await installMinimalDirectorProfile(page, {
             mainSystemPrompt: 'Test director.',
             subAgents: [
                 { id: 'scout', description: 'noop scout', systemPrompt: 'You are scout.' },
             ],
+            modeSkills: { visible: [...SKILL_NAMES], deny: [] },
+            agentSkills: { visible: ['+'], deny: [] },
         });
-
-        // Override the profile's mode-level skills + main-agent + sub-agent
-        // skills to all inherit the 3 SKILL_NAMES. installMinimalDirectorProfile
-        // sets them to empty lists by default for a clean baseline; we
-        // explicitly opt into the 3-skill catalog here.
-        await page.evaluate(async (names) => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings.orchestrator;
-            const presetLib = await import('/scripts/extensions/orchestrator/preset-library.js');
-            const dirDefaults = await import('/scripts/extensions/orchestrator/director-defaults.js');
-            const currentResult = presetLib.getActivePreset(settings, 'director', { scope: 'global', context: ctx });
-            const current = (currentResult.ok && currentResult.state) ? currentResult.state : {};
-            const next = dirDefaults.sanitizeDirectorProfile({
-                ...current,
-                skills: { visible: [...names], deny: [] },
-                mainAgent: {
-                    ...(current?.mainAgent || {}),
-                    skills: { visible: ['+'], deny: [] }, // inherit mode
-                },
-                subAgents: (current?.subAgents || []).map(a => ({
-                    ...a,
-                    skills: { visible: ['+'], deny: [] }, // inherit mode
-                })),
-            });
-            const writeResult = presetLib.writeActivePreset(settings, 'director', 'global', next);
-            if (!writeResult.ok) {
-                throw new Error(`writeActivePreset failed: ${writeResult.reason}: ${writeResult.hint}`);
-            }
-            // No saveSettings flush needed — this spec does not restart the
-            // server; the in-memory preset write is all the director-runtime
-            // reads from on the very next turn.
-        }, SKILL_NAMES);
 
         // Install the skill inventory stub + invalidate the cache so the
         // director's resolver picks up our test skills on this turn.

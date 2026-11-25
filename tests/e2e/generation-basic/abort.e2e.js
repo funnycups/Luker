@@ -7,8 +7,8 @@
 //   - the assistant bubble keeps the partial reply already rendered
 //   - no error toast is shown
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -25,19 +25,20 @@ const CHUNKS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh
 const REPLY_TEXT = CHUNKS.join(' ');
 const CHUNK_DELAY_MS = 300;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [REPLY_TEXT],
         streamChunkDelayMs: CHUNK_DELAY_MS,
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'abort' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'abort' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

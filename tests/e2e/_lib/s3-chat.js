@@ -7,7 +7,7 @@ import { expect } from '@playwright/test';
 import { write as writeCardToPng } from '../../../src/character-card-parser.js';
 import { awaitS3Page, reloadS3Page } from './sync-s3.js';
 import { closeAllPopups, openChatByName, waitForStatusChecks, userRootOf } from './sync.js';
-import { accountWindow, answerWindowConfirm, openAccountTab } from './account-window.js';
+import { accountWindow, answerWindowConfirm, closeAccountWindow, openAccountTab } from './account-window.js';
 import { registryOf } from './sync-s3.js';
 import { readCommitFiles, readBlobBytes } from '../../../src/sync/pipeline/git-tree.js';
 import { normalizeLog, computeTargetState, buildSwipeMapFromChat } from '../../../public/scripts/floor-state/core.js';
@@ -203,7 +203,7 @@ export async function deleteCorpusChat(device, rel) {
 export async function closeChatPopups(page) {
     const historyClose = page.locator('#select_chat_cross:visible');
     const open = page.locator('dialog.popup[open]');
-    while (await open.count() || await historyClose.count()) {
+    while (await open.count() || await historyClose.count() || await accountWindow(page).count()) {
         if (await open.count()) {
             const id = await open.last().getAttribute('data-id');
             const dialog = page.locator(`dialog.popup[data-id="${id}"]`);
@@ -211,9 +211,13 @@ export async function closeChatPopups(page) {
             // must not redirect it to another dialog or overlay.
             await dialog.locator('.popup-button-ok').dispatchEvent('click');
             await expect(dialog).toHaveCount(0);
-        } else {
+        } else if (await historyClose.count()) {
             await historyClose.dispatchEvent('click');
             await expect(page.locator('#shadow_select_chat_popup')).toBeHidden();
+        } else {
+            // The Account window owns a modal layer; leaving it open makes
+            // the next drawer gesture land on its scrim.
+            await closeAccountWindow(page);
         }
     }
 }

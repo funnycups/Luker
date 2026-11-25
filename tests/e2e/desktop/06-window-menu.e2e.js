@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { launchLukerDesktop } from '../_lib/desktop.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -7,8 +7,8 @@ import { awaitMainUI } from '../_lib/page.js';
 // the standard Edit roles there also carry the clipboard accelerators. Only the
 // running platform's expectation can be asserted here.
 
-test('the application menu matches what the platform needs', async () => {
-    const desktop = await launchLukerDesktop({ scenarioId: 'window-menu' });
+test('the application menu matches what the platform needs', async ({ resources }) => {
+    const desktop = await launchLukerDesktop({ scope: resources, scenarioId: 'window-menu' });
 
     try {
         await awaitMainUI(desktop.page, desktop.baseURL);

@@ -14,8 +14,8 @@
 //   tool call so the panel's text section gets non-zero bytes (mock
 //   supports both — see `_lib/mockLLM.js`#respondFromRouter).
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -25,8 +25,8 @@ import {
 import {
     awaitMainUI,
     selectCharacterByName,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 const FINAL_REPLY =
     '*She does not look up from the chart, but her voice carries.* '
@@ -34,16 +34,17 @@ const FINAL_REPLY =
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '68-run-panel-stream' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '68-run-panel-stream' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

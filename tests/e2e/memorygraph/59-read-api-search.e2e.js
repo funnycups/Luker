@@ -17,11 +17,10 @@
 //      (the data MG hands to the LLM each turn), proving the user-facing
 //      recall pipeline reaches the imported nodes.
 
-import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -38,7 +37,8 @@ import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina folds the chart and meets your eyes.* "The lantern will hold."',
@@ -46,14 +46,14 @@ test.beforeAll(async () => {
             '*Seraphina exhales slowly.* "The drifters know the channel."',
         ],
     });
-    server = await startServer({ batchKey: 'memorygraph', scenarioId: 'read-api-search' });
+    server = await startServer({ scope, batchKey: 'memorygraph', scenarioId: 'read-api-search' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
     // 10 records: 4 events, 3 character_sheets, 3 location_states.
-    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-search-'));
+    const tmpDir = (await scope.directory('mg-search')).path;
     importPath = resolve(tmpDir, 'corpus.json');
     const nodes = {};
     const add = (i, type, title, fields) => {
@@ -117,7 +117,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

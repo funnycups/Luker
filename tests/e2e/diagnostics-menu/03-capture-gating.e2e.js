@@ -4,21 +4,20 @@
 // so the entries must stay hidden rather than offering an action that cannot
 // run.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'diagnostics', scenarioId: 'capture-gating' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'diagnostics', scenarioId: 'capture-gating' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /** Load the UI and open the User Settings drawer, where the trigger lives. */
 async function openSettings(page) {

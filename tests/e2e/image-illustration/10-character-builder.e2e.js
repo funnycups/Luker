@@ -3,8 +3,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, closeAnyOpenTopSettingsDrawer, fillTopmostPopupAndAccept, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { openChangeHistory, selectWorkbenchTab, undoLatestHistoryEntry } from '../_lib/ui-workbench.js';
@@ -18,9 +18,11 @@ const COMFY_URL = 'http://127.0.0.1:8188';
 let server;
 let llm;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     llm = await startMockLLM();
     server = await startServer({
+        scope,
         batchKey: 'image-illustration',
         scenarioId: '10-character-builder',
         extraConfig: { enableUserAccounts: false, disableUpdateCheck: true },
@@ -28,7 +30,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await llm.stop();
 });
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
@@ -19,7 +19,7 @@ const readStatus = page => page.evaluate(async () => (await fetch('/api/sync/v1/
 
 async function accountServer(browser, name, allowPrivateAddressesForUsers) {
     const device = await fixture.device(browser, name);
-    await device.server.restart({ extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': allowPrivateAddressesForUsers } });
+    await device.server.restart({ extraConfig: { enableUserAccounts: true, sync: { allowPrivateAddressesForUsers: allowPrivateAddressesForUsers } } });
     await loginAs(device.page, device.server.baseURL, { handle: 'default-user', password: '' });
     await awaitS3Page(device.page);
     return device;
@@ -49,6 +49,7 @@ async function userPage(browser, device, handle) {
             return JSON.parse((await response.json()).settings).firstRun;
         })).toBe(false);
         await openLanSyncPanel(page); await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
+        await closeAccountWindow(page);
         return { page, context };
     } catch (primary) {
         const [closed] = await Promise.all([context.close().then(() => ({}), error => ({ error })), observedSave]);
@@ -151,13 +152,17 @@ test('default-off DOM policy rejects private S3 and LAN then revokes existing ow
         const manual = [];
         alice.page.on('request', request => { if (request.method() === 'POST' && /\/backends\/[^/]+\/sync$/.test(new URL(request.url()).pathname)) manual.push(request.url()); });
         await setSyncSchedule(alice.page, { idleSeconds: 3600, pollSeconds: 1 });
+        await openLanSyncPanel(alice.page);
+        const originalWindow = await accountWindow(alice.page).elementHandle();
         await expect.poll(async () => {
             const { backends, running } = await readBackends(alice.page);
             return Object.values(backends).length === 2 && !Object.values(running).some(Boolean)
-                && Object.values(backends).every(backend => backend.lastSync.error?.code === 'SYNC_PRIVATE_ADDRESS' && backend.lastSync.error.at >= revokedAt);
+                && Object.values(backends).every(backend => backend.lastSync.error?.code === 'SYNC_PRIVATE_ADDRESS' && backend.lastSync.error.at >= revokedAt)
+                && await accountWindow(alice.page).locator('.dw-card[data-backend] .dw-card-note.bad').count() === 2;
         }, { timeout: 60_000 }).toBe(true);
-        await openLanSyncPanel(alice.page);
         await expect(accountWindow(alice.page).locator('.dw-card[data-backend] .dw-card-note.bad')).toHaveCount(2);
+        expect(await originalWindow.evaluate(element => element.isConnected)).toBe(true);
+        await originalWindow.dispose();
         expect(manual).toEqual([]);
         expect(proxy.requests.filter(request => request.relativeKey.startsWith('alice/'))).toHaveLength(s3Hits);
         expect(lanProxy.hits).toHaveLength(lanHits);

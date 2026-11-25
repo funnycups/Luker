@@ -36,10 +36,10 @@
 // coverage of the helper's popup wiring (the profile fingerprint the
 // helper reads varies per mode but the popup path is identical).
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -66,12 +66,13 @@ function normalizeSettings(dataRoot) {
     writeFileSync(sp, JSON.stringify(s, null, 4));
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'iter-studio-apply-embed-summary',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -85,7 +86,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -215,9 +216,11 @@ test.describe('#50 — iter-studio Apply to Character embed-summary popup', () =
         expect(state.presets[0].temperature).toBeCloseTo(SLOT_A_TEMP, 5);
         // First-add bootstraps the default (Layer 1 contract).
         expect(state.defaultPresetName).toBe(SLOT_A);
-        // Loop override persisted with the AI's promptPresetName patch.
-        const override = await readCharacterOrchestratorOverride(page);
-        expect(override).not.toBeNull();
+        // Loop override persisted with the AI's promptPresetName patch (sequential write after embed).
+        await expect.poll(
+            async () => (await readCharacterOrchestratorOverride(page)) !== null,
+            { timeout: 15_000 },
+        ).toBe(true);
 
         await closeIterStudio(page).catch(() => {});
     });

@@ -1,9 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { ensureOaiDrawerOpen } from './_helpers.js';
@@ -11,25 +8,17 @@ import { ensureOaiDrawerOpen } from './_helpers.js';
 test.use({ viewport: { width: 1280, height: 1400 } });
 
 let server;
-let directory;
 
-test.beforeAll(async () => {
-    directory = mkdtempSync(join(tmpdir(), 'luker-pm-lazy-sortable-'));
-    const dataRoot = join(directory, 'data');
-    mkdirSync(dataRoot);
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'preset',
         scenarioId: 'pm-lazy-sortable',
-        useExistingDataRoot: dataRoot,
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: 'http://127.0.0.1:1/v1' });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
 test('skips Sortable setup while drawer is closed and activates automatically on drawer open for real drag', async ({ page }) => {
@@ -57,6 +46,15 @@ test('skips Sortable setup while drawer is closed and activates automatically on
         Boolean(window.$ && window.$('#completion_prompt_manager_list').sortable('instance') !== undefined),
     ), { timeout: 5_000 }).toBe(true);
 
+    // Wait for the left drawer's CSS open transition (`@starting-style` height)
+    // to finish before scrolling and measuring drag coordinates; measuring
+    // mid-transition leaves the pointer above the handle by the time mouse.down fires.
+    await page.evaluate(async () => {
+        const panel = document.getElementById('left-nav-panel');
+        if (!panel || typeof panel.getAnimations !== 'function') return;
+        await Promise.all(panel.getAnimations({ subtree: false }).map(animation => animation.finished.catch(() => {})));
+    });
+
     const initialOrder = await page.evaluate(() =>
         Array.from(document.querySelectorAll('#completion_prompt_manager_list li.completion_prompt_manager_prompt_draggable'))
             .slice(0, 3)
@@ -80,10 +78,13 @@ test('skips Sortable setup while drawer is closed and activates automatically on
     const targetBox = await targetRow.boundingBox();
     if (!sourceBox || !targetBox) throw new Error('missing drag bounding boxes');
 
+    // PromptManager shrinks the drag placeholder to 4px + 8px vertical margins (20px),
+    // pulling rows below the lifted first row upward; targeting just below the initial
+    // top of the third row crosses it without entering the fourth row.
     const startX = sourceBox.x + sourceBox.width / 2;
     const startY = sourceBox.y + sourceBox.height / 2;
     const endX = targetBox.x + targetBox.width / 2;
-    const endY = targetBox.y + targetBox.height - 2;
+    const endY = targetBox.y + 4;
 
     await page.mouse.move(startX, startY);
     await page.mouse.down();

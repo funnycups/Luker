@@ -11,10 +11,10 @@
 // rewrites it to `PLUGOUTCOOKED`. The parent's outgoing request carries the
 // tool_result, so the wire must show COOKED and never the raw sentinel.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import {
     bootstrapCustomBackend,
@@ -25,8 +25,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    installMinimalDirectorProfile,
 } from '../_lib/page.js';
+import { installMinimalDirectorProfile } from '../_lib/ui-orchestrator.js';
 
 const SENTINEL = 'PLUGOUTSENTINEL';
 const COOKED = 'PLUGOUTCOOKED';
@@ -35,9 +35,10 @@ const DIRECTOR_DRAFT = '*Ash unrolls the survey chart and weights its corners.* 
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*ack*'] });
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '136-plugin-output-regex' });
+    server = await startServer({ scope, batchKey: 'orchestrator', scenarioId: '136-plugin-output-regex' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -63,7 +64,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

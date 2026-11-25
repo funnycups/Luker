@@ -31,34 +31,33 @@
 //      password-login (both credentials valid) — the OAuth flag
 //      removes the passwordless loophole, not the password path.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { request as pwRequest } from '@playwright/test';
 import { createHash, scryptSync } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
+import { DEFAULT_USER } from '../../../src/constants.js';
 
-const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-const SCRATCH_ROOT = resolve(REPO_ROOT, 'tests/.e2e-scratch');
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'oauth-login-hardening',
         extraConfig: { enableUserAccounts: true },
-        useExistingDataRoot: await seedDataRoot(),
+        data: await seedDataRoot(scope),
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /**
  * Build a scratch dataRoot seeded with an OAuth-bound account.
  *
- * The server is started with useExistingDataRoot, so the seed layout is
+ * The server receives the registered owned directory, so the seed layout is
  * ours to define. We clone nothing — instead we write the minimal
  * node-persist datums the users endpoints read (user records are stored
  * as sha256(key) files under <dataRoot>/_storage with a
@@ -66,21 +65,20 @@ test.afterAll(async () => {
  * verbatim from the seed data so the admin paths (session bootstrap,
  * /api/users/create) behave exactly as in every other file.
  */
-async function seedDataRoot() {
-    const dataRoot = resolve(SCRATCH_ROOT, 'personas-oauth-login-hardening');
+async function seedDataRoot(scope) {
+    const directory = await scope.directory('personas-oauth-login-hardening');
+    const dataRoot = directory.path;
     mkdirSync(resolve(dataRoot, '_storage'), { recursive: true });
     mkdirSync(resolve(dataRoot, 'default-user'), { recursive: true });
 
-    // default-user: copy the seed datum byte-for-byte (admin, no
-    // password, no oauth — the classic passwordless admin).
-    const seedStorage = resolve(REPO_ROOT, 'data', '_storage');
-    const defaultUserDatum = resolve(seedStorage, storageFile('user:default-user'));
-    if (existsSync(defaultUserDatum)) {
-        writeFileSync(
-            resolve(dataRoot, '_storage', storageFile('user:default-user')),
-            readFileSync(defaultUserDatum),
-        );
-    }
+    // default-user: the record the server writes on first boot
+    // (DEFAULT_USER in src/constants.js) — admin, no password, no oauth.
+    // The server only creates it when no user exists, and this seed has
+    // other users, so write it here.
+    writeFileSync(
+        resolve(dataRoot, '_storage', storageFile('user:default-user')),
+        JSON.stringify({ key: 'user:default-user', value: { ...DEFAULT_USER, created: Date.now() } }),
+    );
 
     // octocat: GitHub-bound account exactly as createUserFromOAuth
     // writes it (password: '', salt: '', oauth: { github: {...} }).
@@ -125,7 +123,7 @@ async function seedDataRoot() {
         }),
     );
 
-    return dataRoot;
+    return directory;
 }
 
 /** node-persist stores datums at sha256(key) under _storage. */

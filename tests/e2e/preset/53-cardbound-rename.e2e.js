@@ -17,10 +17,10 @@
 //      (d) ghost <option> textContent === 'Y';
 //      (e) oai_settings.preset_settings_openai 保持原 stale 全局名 (卡绑分派不动)。
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -35,12 +35,13 @@ const OLD_NAME = 'CardSlotX';
 const NEW_NAME = 'CardSlotY';
 const SLOT_TEMPERATURE = 0.42;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({});
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'preset',
         scenarioId: 'cardbound-rename',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -67,7 +68,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -83,10 +84,12 @@ test.describe('#53 — card-bound rename 走铅笔按钮', () => {
             { timeout: 15_000 },
         );
 
-        // 记录 stale 全局名 (rename 不应触碰它)。
-        const staleGlobalName = await page.evaluate(() =>
-            window.SillyTavern?.getContext()?.chatCompletionSettings?.preset_settings_openai || '',
-        );
+        // 记录全局 fallback 预设名 (rename 不应触碰它)，以及当前激活预设名 (应随 rename 更新)。
+        const globalBefore = await page.evaluate(() => ({
+            globalName: window.SillyTavern?.getContext()?.chatCompletionSettings?.global_preset_settings_openai || '',
+            activeName: window.SillyTavern?.getContext()?.chatCompletionSettings?.preset_settings_openai || '',
+        }));
+        expect(globalBefore.activeName).toBe(OLD_NAME);
 
         // 记录全局 preset 目录 snapshot (rename 不应新增 X.json / Y.json)。
         const presetsDir = path.join(server.dataRoot, 'default-user/OpenAI Settings');
@@ -134,10 +137,12 @@ test.describe('#53 — card-bound rename 走铅笔按钮', () => {
         });
         expect(ghostText).toBe(NEW_NAME);
 
-        // (e) oai_settings.preset_settings_openai 保持原 stale 全局名。
-        const staleAfter = await page.evaluate(() =>
-            window.SillyTavern?.getContext()?.chatCompletionSettings?.preset_settings_openai || '',
-        );
-        expect(staleAfter).toBe(staleGlobalName);
+        // (e) global_preset_settings_openai 保持原全局预设名，preset_settings_openai 跟踪重命名后的卡绑名。
+        const namesAfter = await page.evaluate(() => ({
+            globalName: window.SillyTavern?.getContext()?.chatCompletionSettings?.global_preset_settings_openai || '',
+            activeName: window.SillyTavern?.getContext()?.chatCompletionSettings?.preset_settings_openai || '',
+        }));
+        expect(namesAfter.globalName).toBe(globalBefore.globalName);
+        expect(namesAfter.activeName).toBe(NEW_NAME);
     });
 });

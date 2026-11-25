@@ -3,8 +3,8 @@
 // restart. Every gesture below is a real DOM interaction; page.evaluate is
 // only used to read persisted state.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -15,17 +15,17 @@ import { startSdWebUiMock } from '../_lib/sdMock.js';
 
 let server, mock, sdMock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM({ scriptedReplies: ['*Ash trims the lantern wick and waits for the tide.*'] });
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '01-presets' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '01-presets' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
     await sdMock?.stop();
 });
@@ -83,9 +83,8 @@ test.describe('generation presets', () => {
 
         // Directly editing the model control is the one path that writes it.
         await page.locator('#sd_model').selectOption({ index: 0 });
-        const selectedModel = await page.locator('#sd_model').inputValue();
-        expect(selectedModel).toBe('mock-model [abc]');
-        expect((await readPresetConfig()).model).toBe(selectedModel);
+        await expect(page.locator('#sd_model')).toHaveValue('mock-model [abc]');
+        expect((await readPresetConfig()).model).toBe('mock-model [abc]');
 
         const presetSelect = page.locator('#sd_generation_preset');
         await expect(presetSelect).toBeVisible();

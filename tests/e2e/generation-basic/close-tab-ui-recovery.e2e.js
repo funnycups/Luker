@@ -27,10 +27,10 @@
 // not filter dry runs. The preview vanished mid-stream and the persisted
 // reply only appeared after a manual refresh.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
@@ -89,19 +89,20 @@ test.describe('generation-basic: close-tab real-user-path recovery', () => {
     test.describe('scenario 1: server persists after silent tab close', () => {
         let server, mock;
 
-        test.beforeAll(async () => {
+        test.beforeAll(async ({ workerResources }, testInfo) => {
+            const scope = await workerResources.scenario(testInfo.file);
             mock = await startMockLLM({
                 scriptedReplies: [SCRIPTED_REPLY],
                 streamChunkDelayMs: CHUNK_DELAY_MS,
             });
-            server = await startServer({ batchKey: 'generation', scenarioId: 'close-tab-silent-persist' });
+            server = await startServer({ scope, batchKey: 'generation', scenarioId: 'close-tab-silent-persist' });
             markOnboarded({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         });
 
         test.afterAll(async () => {
-            await tearDownServer(server);
+
             await mock?.stop();
         });
 
@@ -138,19 +139,20 @@ test.describe('generation-basic: close-tab real-user-path recovery', () => {
     test.describe('scenario 2: reopened tab resumes via recovery preview', () => {
         let server, mock;
 
-        test.beforeAll(async () => {
+        test.beforeAll(async ({ workerResources }, testInfo) => {
+            const scope = await workerResources.scenario(testInfo.file);
             mock = await startMockLLM({
                 scriptedReplies: [SCRIPTED_REPLY],
                 streamChunkDelayMs: CHUNK_DELAY_MS,
             });
-            server = await startServer({ batchKey: 'generation', scenarioId: 'close-tab-ui-resume' });
+            server = await startServer({ scope, batchKey: 'generation', scenarioId: 'close-tab-ui-resume' });
             markOnboarded({ dataRoot: server.dataRoot });
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
         });
 
         test.afterAll(async () => {
-            await tearDownServer(server);
+
             await mock?.stop();
         });
 

@@ -6,11 +6,11 @@
 // conflicts are always per-file with no line merge, so we MUST see a
 // concrete pick UI, not a silent auto-merge.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
@@ -28,33 +28,35 @@ import {
 
 let A, B;
 
-test.beforeAll(async () => {
-    A = await startServer({
+const sharedBook = content => JSON.stringify({
+    entries: { 0: { uid: 0, displayIndex: 0, comment: 'Shared', content, key: ['shared'], keysecondary: [] } },
+});
+const sharedContent = file => Object.values(JSON.parse(file).entries)[0].content;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'bothmod-A',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'bothmod-B',
     });
 
-    // Seed a shared file with the SAME content on both sides BEFORE the
-    // pair. After pairing it'll be in the shared history; subsequent
-    // divergent edits will register as the bothModified case rather than
-    // the no-common-ancestor case.
+    // Seed a shared world book with the SAME content on both sides BEFORE the
+    // pair. After pairing it'll be in the shared history; the later divergent
+    // edits register as the bothModified case rather than no-common-ancestor.
     const aWorlds = path.join(A.dataRoot, 'default-user', 'worlds');
     const bWorlds = path.join(B.dataRoot, 'default-user', 'worlds');
     fs.mkdirSync(aWorlds, { recursive: true });
     fs.mkdirSync(bWorlds, { recursive: true });
-    const initial = JSON.stringify({ name: 'shared', notes: 'pre-pair' });
+    const initial = sharedBook('pre-pair');
     fs.writeFileSync(path.join(aWorlds, 'shared.json'), initial);
     fs.writeFileSync(path.join(bWorlds, 'shared.json'), initial);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+
 
 test.describe('LAN Sync — bothModified conflict', () => {
     test('same file edited on both sides → Sync issues page → B picks its own version → it wins on both sides', async ({ browser }) => {
@@ -89,11 +91,11 @@ test.describe('LAN Sync — bothModified conflict', () => {
         // which side's content survived.
         fs.writeFileSync(
             path.join(A.dataRoot, 'default-user', 'worlds', 'shared.json'),
-            JSON.stringify({ name: 'shared', notes: 'A-edit-after-pair' }),
+            sharedBook('A-edit-after-pair'),
         );
         fs.writeFileSync(
             path.join(B.dataRoot, 'default-user', 'worlds', 'shared.json'),
-            JSON.stringify({ name: 'shared', notes: 'B-edit-after-pair' }),
+            sharedBook('B-edit-after-pair'),
         );
 
         // B clicks Sync now. Both sides share the post-pair commit and
@@ -108,9 +110,9 @@ test.describe('LAN Sync — bothModified conflict', () => {
         const bChoice = await conflictChoiceShowing(pageB, 'worlds/shared.json', 'B-edit-after-pair');
         await chooseConflictVersion(pageB, 'worlds/shared.json', bChoice);
         expect(await applyConflictChoices(pageB)).toBe('success');
-        expect(JSON.parse(readUserFile(B, 'worlds/shared.json')).notes).toBe('B-edit-after-pair');
+        expect(sharedContent(readUserFile(B, 'worlds/shared.json'))).toBe('B-edit-after-pair');
         // B pushes the resolution and A applies it from the notify-driven run.
-        await expect.poll(() => { try { return JSON.parse(readUserFile(A, 'worlds/shared.json')).notes; } catch { return null; } }, { timeout: 30_000 }).toBe('B-edit-after-pair');
+        await expect.poll(() => { try { return sharedContent(readUserFile(A, 'worlds/shared.json')); } catch { return null; } }, { timeout: 30_000 }).toBe('B-edit-after-pair');
 
         await ctxA.close();
         await ctxB.close();

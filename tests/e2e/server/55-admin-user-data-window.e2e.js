@@ -16,12 +16,10 @@
 // after reopening keeps the content of the link it replaces. API keys are
 // an ordinary, selectable category.
 
-import { test, expect } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import os from 'node:os';
+import { test, expect } from '../../harness/playwright.js';
 import path from 'node:path';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, createUserViaAdminUI } from '../_lib/page.js';
 import {
     accountWindow,
@@ -35,14 +33,13 @@ import { loginAs } from '../_lib/sync.js';
 import { seedFixtureUser } from '../storage-inspector/_helpers.js';
 
 const HANDLES = ['alice', 'bob'];
-let server;
-let tempDir;
-let backupZip;
+let scope, server, tempDir, backupZip;
 
-test.beforeAll(async ({ browser }) => {
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'admin-user-data-'));
+test.beforeAll(async ({ workerResources, browser }, testInfo) => {
+    scope = await workerResources.scenario(testInfo.file);
+    tempDir = (await scope.directory('admin user data')).path;
     backupZip = path.join(tempDir, 'alice-backup.zip');
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'server',
         scenarioId: 'admin-user-data',
         extraConfig: { enableUserAccounts: true },
@@ -63,8 +60,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-    if (server) await tearDownServer(server);
-    rmSync(tempDir, { recursive: true, force: true });
+    server = scope = tempDir = null;
 });
 
 const chip = (page, id) => accountWindow(page).locator(`[data-act="bcat"][data-id="${id}"]`);

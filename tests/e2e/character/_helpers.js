@@ -140,18 +140,21 @@ export async function clickCharacterCard(page, nameOrSpec, { timeoutMs = 10_000 
 export async function dismissAnyPopup(page, { maxRounds = 3, perRoundTimeoutMs = 1500 } = {}) {
     for (let i = 0; i < maxRounds; i++) {
         const popup = page.locator('dialog.popup[open]').last();
-        const visible = await popup.isVisible({ timeout: perRoundTimeoutMs }).catch(() => false);
-        if (!visible) return;
+        // Deliberately optional: these confirms appear only for some cards,
+        // so give one a short window to show up and stop when none does.
+        const appeared = await popup.waitFor({ state: 'visible', timeout: perRoundTimeoutMs }).then(() => true, () => false);
+        if (!appeared) return;
+        const popupId = await popup.getAttribute('data-id');
         const cancel = popup.locator('.popup-button-cancel').first();
         const ok = popup.locator('.popup-button-ok').first();
-        if (await cancel.isVisible({ timeout: 200 }).catch(() => false)) {
-            await cancel.click().catch(() => {});
-        } else if (await ok.isVisible({ timeout: 200 }).catch(() => false)) {
-            await ok.click().catch(() => {});
+        if (await cancel.isVisible()) {
+            await cancel.click();
+        } else if (await ok.isVisible()) {
+            await ok.click();
         } else {
-            await page.keyboard.press('Escape').catch(() => {});
+            await page.keyboard.press('Escape');
         }
-        await popup.waitFor({ state: 'detached', timeout: perRoundTimeoutMs }).catch(() => {});
+        await page.locator(`dialog.popup[data-id="${popupId}"]`).waitFor({ state: 'detached', timeout: 5000 });
     }
 }
 

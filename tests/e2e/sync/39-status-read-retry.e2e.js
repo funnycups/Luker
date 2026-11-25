@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { closeAllPopups, generatePairingLink, openLanSyncPanel } from '../_lib/sync.js';
@@ -8,12 +8,11 @@ test.describe.configure({ timeout: 180_000 });
 
 const fixture = { server: null };
 
-test.beforeAll(async () => {
-    fixture.server = await startServer({ batchKey: 'sync', scenarioId: 'status-read-retry' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    fixture.server = await startServer({ scope, batchKey: 'sync', scenarioId: 'status-read-retry' });
     markOnboarded({ dataRoot: fixture.server.dataRoot });
 });
-
-test.afterAll(async () => { await tearDownServer(fixture.server); });
 
 const STATUS_PATH = '/api/sync/v1/status';
 const checks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));

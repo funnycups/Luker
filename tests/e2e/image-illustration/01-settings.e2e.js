@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 import { accountWindow, openAccountTab, windowConfirm } from '../_lib/account-window.js';
 import { selectWorkbenchTab, workbenchWindow } from '../_lib/ui-workbench.js';
@@ -9,16 +9,14 @@ import { LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT } from '../../../public/scri
 
 let server;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'image-illustration',
         scenarioId: 'prompt-settings',
         extraConfig: { enableUserAccounts: false },
     });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 function readSettings() {

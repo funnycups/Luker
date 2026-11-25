@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, openUserSettingsDrawer } from '../_lib/page.js';
 
@@ -7,12 +7,11 @@ test.use({ browserName: 'webkit', viewport: { width: 430, height: 932 }, isMobil
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'ios-external-link-policy' });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: 'ios-external-link-policy' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
-
-test.afterAll(async () => { await tearDownServer(server); });
 
 test('the iOS shell receives the external link policy from the user setting', async ({ page }) => {
     await page.addInitScript(() => {

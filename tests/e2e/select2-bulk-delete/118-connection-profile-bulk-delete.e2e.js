@@ -8,8 +8,8 @@
 // The one exception is reading state: everything else is asserted through
 // the native <select> and through `extension_settings.connectionManager`.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { appendConnectionProfile, bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -24,9 +24,10 @@ let mock;
 
 test.describe.configure({ mode: 'serial' });
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ash nods, the lantern steady between you.* The relay holds.'] });
-    server = await startServer({ batchKey: 'bulkdelete', scenarioId: 'profiles' });
+    server = await startServer({ scope, batchKey: 'bulkdelete', scenarioId: 'profiles' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     for (const name of PROFILE_NAMES) {
@@ -35,7 +36,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -179,13 +180,15 @@ test('deleting the active profile falls back to <None> and undo applies it again
     await openProfileDropdown(page);
     await selectProfileRow(page, 'tide-relay');
 
-    const { activeId, activeModel } = await page.evaluate(() => {
+    const { activeId, activeModel, activeModelField } = await page.evaluate(() => {
         const manager = window.Luker.getContext().extensionSettings.connectionManager;
         const profile = manager.profiles.find((item) => item.id === manager.selectedProfile);
-        return { activeId: manager.selectedProfile, activeModel: profile?.model || '' };
+        const field = profile?.api === 'custom' ? 'custom_model' : 'openai_model';
+        return { activeId: manager.selectedProfile, activeModel: profile?.model || '', activeModelField: field };
     });
     expect(activeId).toBeTruthy();
     expect(activeModel).toBeTruthy();
+    expect(await page.evaluate((field) => window.Luker.getContext().chatCompletionSettings[field], activeModelField)).toBe(activeModel);
 
     await openProfileDropdown(page);
     await toggleRow(page, 'tide-relay');
@@ -205,8 +208,8 @@ test('deleting the active profile falls back to <None> and undo applies it again
     // applied again, otherwise the picker names one profile while the live
     // connection is whatever the user picked in the meantime.
     await page.waitForFunction(
-        (model) => window.Luker.getContext().chatCompletionSettings.openai_model === model,
-        activeModel,
+        ({ field, model }) => window.Luker.getContext().chatCompletionSettings[field] === model,
+        { field: activeModelField, model: activeModel },
         { timeout: 15_000 },
     );
 });
@@ -238,14 +241,15 @@ test('undo applies the restored profile instead of leaving the newly picked one 
 
     await openProfileDropdown(page);
     await selectProfileRow(page, 'reef-watch');
-    const { activeId, activeModel } = await page.evaluate(() => {
+    const { activeId, activeModel, activeModelField } = await page.evaluate(() => {
         const ctx = window.Luker.getContext();
         const manager = ctx.extensionSettings.connectionManager;
         const profile = manager.profiles.find((item) => item.id === manager.selectedProfile);
-        return { activeId: manager.selectedProfile, activeModel: profile?.model || '' };
+        const field = profile?.api === 'custom' ? 'custom_model' : 'openai_model';
+        return { activeId: manager.selectedProfile, activeModel: profile?.model || '', activeModelField: field };
     });
     expect(activeModel).toBe('mock-reef');
-    await page.waitForFunction((model) => window.Luker.getContext().chatCompletionSettings.openai_model === model, activeModel, { timeout: 20_000 });
+    await page.waitForFunction(({ field, model }) => window.Luker.getContext().chatCompletionSettings[field] === model, { field: activeModelField, model: activeModel }, { timeout: 20_000 });
 
     await openProfileDropdown(page);
     await toggleRow(page, 'reef-watch');
@@ -257,13 +261,16 @@ test('undo applies the restored profile instead of leaving the newly picked one 
     // move the picker's selection.
     await openProfileDropdown(page);
     await selectProfileRow(page, 'tide-relay');
-    await page.waitForFunction(() => window.Luker.getContext().chatCompletionSettings.openai_model === 'mock-tide', undefined, { timeout: 20_000 });
+    await page.waitForFunction(() => window.Luker.getContext().chatCompletionSettings.custom_model === 'mock-tide', undefined, { timeout: 20_000 });
 
     await page.evaluate(() => { window.__bulkLoadedEvents = []; });
     await page.locator(UNDO_BUTTON).click();
 
-    await page.waitForFunction((id) => window.Luker.getContext().extensionSettings.connectionManager.selectedProfile === id, activeId, { timeout: 15_000 });
-    await page.waitForFunction((model) => window.Luker.getContext().chatCompletionSettings.openai_model === model, activeModel, { timeout: 20_000 });
+    await page.waitForFunction(({ id, field, model }) => {
+        const ctx = window.Luker.getContext();
+        return ctx.extensionSettings.connectionManager.selectedProfile === id
+            && ctx.chatCompletionSettings[field] === model;
+    }, { id: activeId, field: activeModelField, model: activeModel }, { timeout: 20_000 });
 });
 
 test('committing after another profile was picked does not announce <None>', async ({ page }) => {

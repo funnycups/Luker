@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { launchLukerDesktop } from '../_lib/desktop.js';
 import { awaitMainUI } from '../_lib/page.js';
 
@@ -14,8 +14,8 @@ async function openUserSettingsDrawer(page) {
     }
 }
 
-test('reload prompts when beforeunload guards unsaved input and app quit exits cleanly', async () => {
-    const desktop = await launchLukerDesktop({ scenarioId: 'unload-and-quit' });
+test('reload prompts when beforeunload guards unsaved input and app quit exits cleanly', async ({ resources }) => {
+    const desktop = await launchLukerDesktop({ scope: resources, scenarioId: 'unload-and-quit' });
     let exited = false;
 
     try {
@@ -42,7 +42,6 @@ test('reload prompts when beforeunload guards unsaved input and app quit exits c
         await expect(reloadButton).toBeVisible();
         await expect(reloadButton).toBeInViewport();
 
-        // 1. User cancels the confirmation dialog -> page stays put and keeps draft.
         const initialOrigin = await desktop.page.evaluate(() => performance.timeOrigin);
         await reloadButton.click({ noWaitAfter: true });
 
@@ -53,7 +52,6 @@ test('reload prompts when beforeunload guards unsaved input and app quit exits c
         expect(await desktop.page.evaluate(() => document.getElementById('send_textarea').value))
             .toBe('unsaved draft message');
 
-        // 2. User confirms leaving -> page reloads.
         await desktop.electronApp.evaluate(() => {
             globalThis.__nextUnloadChoice = 0;
         });
@@ -72,7 +70,6 @@ test('reload prompts when beforeunload guards unsaved input and app quit exits c
         const afterConfirmDialogs = await desktop.electronApp.evaluate(() => globalThis.__unloadDialogs.length);
         expect(afterConfirmDialogs).toBe(2);
 
-        // 3. Window hidden to tray with unsaved draft -> app.quit() exits the process cleanly without hanging.
         await desktop.page.locator('#send_textarea').fill('draft before tray quit');
         await desktop.electronApp.evaluate(({ BrowserWindow }) => {
             BrowserWindow.getAllWindows()[0].hide();

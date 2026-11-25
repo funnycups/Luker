@@ -39,6 +39,7 @@ export function writeCharacterPng({ dataRoot, handle = 'default-user', avatarFil
 
     const seedBuf = readFileSync(SEED_PNG);
     // Build a v2-shaped card (both flat + nested data so any consumer path works).
+    // The root `extensions` copy reproduces cards placed out-of-band; the server keeps `data.extensions` over it.
     const flat = {
         spec: 'chara_card_v2',
         spec_version: '2.0',

@@ -19,13 +19,12 @@
 // per-request ensureDirectory regresses, the second import 5xx's and
 // no card lands; we also watch the toastr stream for any error popups.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
-import { existsSync, rmSync, statSync, copyFileSync, mkdtempSync } from 'node:fs';
+import { existsSync, rmSync, statSync, copyFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const SEED_PNG = resolve(REPO_ROOT, 'default/content/default_Seraphina.png');
@@ -35,26 +34,21 @@ let tmpDir;
 let firstUploadPath;
 let secondUploadPath;
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '107-uploads-enoent', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '107-uploads-enoent', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 
     // Stage two copies of the seed PNG with distinct file names. Same
     // image bytes either way — the regression cares about the upload
     // path, not the contents.
-    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-107-'));
+    tmpDir = (await scope.directory('luker-e2e-107')).path;
     firstUploadPath = resolve(tmpDir, 'card-warmup.png');
     secondUploadPath = resolve(tmpDir, 'card-post-wipe.png');
     copyFileSync(SEED_PNG, firstUploadPath);
     copyFileSync(SEED_PNG, secondUploadPath);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-    if (tmpDir) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
-});
 
 test.describe('#107 — character import survives _uploads/ wipe', () => {
     test('second character import after rm -rf _uploads/ still lands a new card', async ({ page }) => {

@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -11,17 +11,17 @@ import { startSdWebUiMock } from '../_lib/sdMock.js';
 
 let server, mock, sdMock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM();
-    server = await startServer({ batchKey: 'image-illustration', scenarioId: '05-studio' });
+    server = await startServer({ scope, batchKey: 'image-illustration', scenarioId: '05-studio' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, api: 'custom' });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
     await sdMock?.stop();
 });

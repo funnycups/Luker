@@ -1,23 +1,24 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 
 test.describe.configure({ mode: 'serial' });
 
 let server;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     server = await startServer({
+        scope,
         batchKey: 'server',
         scenarioId: 'resource-settings',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
 });
 
 test('revalidates unchanged settings fields after a real toggle', async ({ page }) => {

@@ -10,8 +10,8 @@
 //   - Turn detection back on and send another turn. The same script must now
 //     surface the warning, proving the toggle gates detection without a reload.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -20,6 +20,12 @@ import {
     sendMessageAndAwaitReply,
     openExtensionsDrawer,
 } from '../_lib/page.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const SLOW_REPLY = 'a'.repeat(28);
 
@@ -36,14 +42,13 @@ test.beforeAll(async () => {
         }
         return null;
     });
-    server = await startServer({ batchKey: 'extensions', scenarioId: '101-regex-perf-toggle' });
+    server = await startServer({ scope: fileScope, batchKey: 'extensions', scenarioId: '101-regex-perf-toggle' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
 });
 

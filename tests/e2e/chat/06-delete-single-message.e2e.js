@@ -2,8 +2,8 @@
 // pencil flow. After the delete, the chat should re-pack to the
 // surrounding turns, and that delete persists.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
@@ -13,6 +13,7 @@ import {
     sendMessageAndAwaitReply,
     getChatSnapshot,
     getRenderedChatTexts,
+    deleteMessageViaUI,
 } from '../_lib/page.js';
 
 const REPLIES = [
@@ -23,60 +24,19 @@ const REPLIES = [
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: REPLIES });
-    server = await startServer({ batchKey: 'chat', scenarioId: 'delete-single' });
+    server = await startServer({ scope, batchKey: 'chat', scenarioId: 'delete-single' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
-
-/**
- * Delete a message via the real pencil → delete-icon → confirm flow.
- *
- * Note: page.js's deleteMessageViaUI uses `.popup:visible` to find the
- * confirm dialog, which is unreliable for ST's `<dialog>` element popup.
- * We poll for an open dialog via the DOM API directly and click the
- * delete-button via `el.click()` — same path a real tap takes.
- */
-async function deleteMessageRealUI(page, mesid) {
-    const mes = page.locator(`.mes[mesid="${mesid}"]`);
-    await mes.waitFor({ state: 'visible', timeout: 10_000 });
-    await mes.locator('.mes_edit').first().click({ force: true });
-    await mes.locator('.mes_edit_delete').first().waitFor({ state: 'visible', timeout: 5000 });
-
-    const deletePromise = page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.Luker.getContext();
-        const t = setTimeout(() => reject(new Error('delete timeout')), 20_000);
-        const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, (id) => {
-            clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch { /* ignore */ }
-            resolve(id);
-        });
-    }));
-
-    await mes.locator('.mes_edit_delete').first().click();
-
-    // ST's `power_user.confirm_message_delete` defaults to true → a
-    // `<dialog class="popup" open>` renders. Poll for an open dialog
-    // with a result-control button and click the ok variant.
-    await page.waitForFunction(() => {
-        return Array.from(document.querySelectorAll('dialog.popup')).some(d => d.hasAttribute('open'));
-    }, { timeout: 5000 }).catch(() => {});
-    await page.evaluate(() => {
-        const openDlg = Array.from(document.querySelectorAll('dialog.popup')).reverse().find(d => d.hasAttribute('open'));
-        if (openDlg) {
-            const ok = openDlg.querySelector('.popup-button-ok');
-            if (ok) ok.click();
-        }
-    });
-    await deletePromise;
-}
 
 test.describe('#6 — delete single message via pencil', () => {
     test('deleting a middle assistant message leaves the others intact across restart', async ({ page }) => {
@@ -95,7 +55,7 @@ test.describe('#6 — delete single message via pencil', () => {
         expect(targetIdx).toBeGreaterThanOrEqual(0);
         const lenBefore = renderedBefore.length;
 
-        await deleteMessageRealUI(page, targetIdx);
+        await deleteMessageViaUI(page, targetIdx);
         await page.waitForFunction(({ wantLen }) => {
             return document.querySelectorAll('#chat .mes').length === wantLen;
         }, { wantLen: lenBefore - 1 }, { timeout: 10_000 });

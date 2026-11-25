@@ -10,25 +10,26 @@
 // Both tests exercise the same server + fixture from a fresh Inspector
 // popup — no shared UI state between them.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openStorageInspectorPage } from '../_lib/account-window.js';
 import { seedFixtureUser } from './_helpers.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'storage-inspector',
         scenarioId: 'sensitive-refresh',
     });
+    markOnboarded({ dataRoot: server.dataRoot });
     await seedFixtureUser(server.dataRoot, 'default-user');
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 async function openInspector(page) {
     await awaitMainUI(page, server.baseURL);

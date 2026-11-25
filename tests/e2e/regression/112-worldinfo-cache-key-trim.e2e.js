@@ -19,8 +19,8 @@
 // row count) is non-empty. Pre-fix the editor would show empty entry
 // rows on first open (cache poisoning); only a manual reselect fixed it.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openWorldInfoDrawer, selectWorldBook, getRenderedWorldEntries } from '../_lib/ui-worldinfo.js';
@@ -29,8 +29,9 @@ let server;
 
 const BOOK_NAME_WITH_TRAILING_SPACE = 'regression-112-trailing-space ';
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '112-wi-cache-key-trim', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '112-wi-cache-key-trim', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 
     writeWorldBook({
@@ -40,9 +41,7 @@ test.beforeAll(async () => {
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 test.describe('#112 — WI editor opens populated for a trailing-space book name', () => {
     test('selecting the book from the dropdown surfaces entries on first open (no stale-dummy cache hit)', async ({ page }) => {

@@ -3,9 +3,9 @@
 // Drives the real rendered Select2 dropdown (the checkbox rows and the batch
 // toolbar), not the hidden native <select>.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import AdmZip from 'adm-zip';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writePreset } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -18,12 +18,13 @@ let server, mock;
 
 test.describe.configure({ mode: 'serial' });
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Seraphina folds the chart away.* The lantern still holds.'] });
-    server = await startServer({
+    server = await startServer({ scope,
         batchKey: 'bulkdelete',
         scenarioId: 'preset',
-        extraConfig: { 'storage.mode': 'fs' },
+        extraConfig: { storage: { mode: 'fs' } },
     });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -35,7 +36,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 
@@ -86,10 +87,12 @@ test('bulk delete removes the ticked presets and undo brings them back', async (
     await expect(popup).toContainText('reef-draft');
     await popup.locator('.popup-button-ok').click();
 
-    await page.waitForFunction(() => {
+    await page.waitForFunction((names) => {
         const select = document.querySelector('#settings_preset_openai');
-        return !!select && !Array.from(select.options).some((option) => option.textContent.trim() === 'reef-notes');
-    }, undefined, { timeout: 10_000 });
+        if (!select) return false;
+        const texts = Array.from(select.options).map((option) => option.textContent.trim());
+        return names.every((name) => !texts.includes(name));
+    }, ['reef-notes', 'reef-draft'], { timeout: 10_000 });
     expect(await presetOptionLabels(page)).not.toContain('reef-draft');
 
     await page.locator('.prompt-manager-toggle-undo-button').click();
@@ -113,12 +116,20 @@ test('undoing a batch delete keeps the preset that is active now active', async 
     await page.locator('.luker-bulk-delete-toolbar__delete').click();
     await page.locator('.popup .popup-button-ok').last().click();
 
-    await page.waitForFunction(() => !Array.from(document.querySelector('#settings_preset_openai').options)
-        .some((option) => option.textContent.trim() === 'reef-notes'), undefined, { timeout: 15_000 });
+    await page.waitForFunction((names) => {
+        const select = document.querySelector('#settings_preset_openai');
+        if (!select) return false;
+        const texts = Array.from(select.options).map((option) => option.textContent.trim());
+        return names.every((name) => !texts.includes(name));
+    }, ['reef-notes', 'reef-draft'], { timeout: 15_000 });
 
     await page.locator('.prompt-manager-toggle-undo-button').click();
-    await page.waitForFunction(() => Array.from(document.querySelector('#settings_preset_openai').options)
-        .some((option) => option.textContent.trim() === 'reef-notes'), undefined, { timeout: 15_000 });
+    await page.waitForFunction((names) => {
+        const select = document.querySelector('#settings_preset_openai');
+        if (!select) return false;
+        const texts = Array.from(select.options).map((option) => option.textContent.trim());
+        return names.every((name) => texts.includes(name));
+    }, ['reef-notes', 'reef-draft'], { timeout: 15_000 });
 
     // Restoring each preset must not make it the active one. Selecting every
     // restored preset would leave the last one restored active, silently

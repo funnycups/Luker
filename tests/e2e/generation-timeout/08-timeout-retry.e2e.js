@@ -1,17 +1,18 @@
 // 连接配置请求超时 #8 — 超时错误是网络类抛出错误，参与 profile 的
 // max-request-retries：非流式 + max-retries=1 时，上游应收到 2 次调用
 // （首次超时 → backoff → 重试再超时 → 最终失败）。
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ash checks the chart twice.*'], latencyMs: 6_000 });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'timeout-retry' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'timeout-retry' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL, stream: false });
     appendConnectionProfile({
@@ -23,7 +24,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

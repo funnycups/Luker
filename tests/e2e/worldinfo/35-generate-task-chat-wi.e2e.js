@@ -8,11 +8,11 @@
 // the main chat did. The fix must not require the main chat to have
 // generated first.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { markOnboarded, bootstrapCustomBackend, appendConnectionProfile, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { writeCharacterWithBinding } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
@@ -22,9 +22,10 @@ const REEF_LORE = 'PROBE_REEF_LORE: the reef shifts on a 19-day cycle.';
 
 let server, mock;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({ scriptedReplies: ['*Ash nods.* "Acknowledged."'] });
-    server = await startServer({ batchKey: 'worldinfo', scenarioId: 'generate-task-chat-wi' });
+    server = await startServer({ scope, batchKey: 'worldinfo', scenarioId: 'generate-task-chat-wi' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -45,7 +46,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop?.();
 });
 

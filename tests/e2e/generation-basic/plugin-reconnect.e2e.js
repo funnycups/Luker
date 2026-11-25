@@ -15,8 +15,8 @@
 // build their reply from — so the "no loss on reconnect" invariant is
 // as important on the plugin path as it is on the chat-UI path.
 
-import { test, expect } from '@playwright/test';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
@@ -32,19 +32,20 @@ const SCRIPTED_REPLY = CHUNKS.join(' ');
 const CHUNK_DELAY_MS = 400;
 const OFFLINE_MS = 900;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     mock = await startMockLLM({
         scriptedReplies: [SCRIPTED_REPLY],
         streamChunkDelayMs: CHUNK_DELAY_MS,
     });
-    server = await startServer({ batchKey: 'generation', scenarioId: 'plugin-reconnect' });
+    server = await startServer({ scope, batchKey: 'generation', scenarioId: 'plugin-reconnect' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
+
     await mock?.stop();
 });
 

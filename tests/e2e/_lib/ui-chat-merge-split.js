@@ -125,14 +125,16 @@ export async function submitMergeDialog(page, dialog, targetName, { awaitNavigat
 }
 
 /**
- * Open the split dialog for a specific message by clicking the message's
- * extras hint to reveal the action row, then clicking .mes_split_chat.
+ * Open the split dialog for a specific message: hover it so its action
+ * buttons show, click the extras hint to reveal the action row, then
+ * click .mes_split_chat.
  * Returns the split dialog locator.
  */
 export async function openSplitDialogViaUI(page, mesid) {
     const mes = page.locator(`.mes[mesid="${mesid}"]`);
     await mes.waitFor({ state: 'visible', timeout: 10_000 });
-    await mes.locator('.extraMesButtonsHint').first().click({ force: true });
+    await mes.hover();
+    await mes.locator('.extraMesButtonsHint').first().click();
     await mes.locator('.mes_split_chat').first().click();
     const dialog = page.locator('.cms-dialog-split').first();
     await dialog.waitFor({ state: 'visible', timeout: 10_000 });

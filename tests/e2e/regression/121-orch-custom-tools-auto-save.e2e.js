@@ -16,10 +16,10 @@
 //   6. Re-open Workbench -> Orchestration -> Setup view -> verify the custom tool row
 //      is still present.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import {
@@ -42,14 +42,13 @@ function readPersistedLoopCustomToolNames(dataRoot) {
     return Array.isArray(tools) ? tools.map(t => t?.name || '') : [];
 }
 
-test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: '121-orch-ct-auto-save', extraConfig: { 'storage.mode': 'fs' } });
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope, batchKey: 'regression', scenarioId: '121-orch-ct-auto-save', extraConfig: { storage: { mode: 'fs' } } });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 async function openLoopSetup(page) {
     await setOrchMode(page, 'loop');

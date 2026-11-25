@@ -4,16 +4,22 @@
 // and the rendered controls on the pre-edit body. The assistant's Apply then
 // looked like it did nothing until the tab was refreshed.
 
-import { test, expect } from '@playwright/test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { test, expect } from '../../harness/playwright.js';
+import { startServer } from '../../harness/server.js';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { writePreset } from '../_lib/fixtures.js';
 import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
 import { selectWorkbenchTab, closeWorkbench } from '../_lib/ui-workbench.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 import { read as readPngCard } from '../../../src/character-card-parser.js';
+
+let fileScope;
+
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    fileScope = await workerResources.scenario(testInfo.file);
+});
 
 const CHAR_NAME = 'Cora the Cartographer';
 const CHAR_AVATAR = 'cpa-live-sync-cora.png';
@@ -24,7 +30,7 @@ const CARD_TEMPERATURE_SEED = 0.27;
 const GLOBAL_TEMPERATURE = 0.55;
 const APPLIED_TEMPERATURE = 0.53;
 
-let scratchRoot, mock, server;
+let mock, server;
 
 function readCardPresetTemperature() {
     const png = readFileSync(join(server.dataRoot, 'default-user', 'characters', CHAR_AVATAR));
@@ -81,15 +87,13 @@ async function applyTemperatureThroughAssistant(page, temperature) {
 }
 
 test.beforeAll(async () => {
-    scratchRoot = mkdtempSync(resolve(import.meta.dirname, '../../.e2e-scratch/cpa-card-bound-live-sync-'));
-    const dataRoot = join(scratchRoot, 'data');
-    mkdirSync(dataRoot);
     mock = await startMockLLM({});
     server = await startServer({
+        scope: fileScope,
+        data: await fileScope.directory('cpa card-bound live sync data'),
         batchKey: 'preset',
         scenarioId: 'cpa-card-bound-live-sync',
-        useExistingDataRoot: dataRoot,
-        extraConfig: { 'storage.mode': 'fs', enableUserAccounts: false },
+        extraConfig: { storage: { mode: 'fs' }, enableUserAccounts: false },
     });
     const basePreset = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../../default/content/presets/openai/Default.json'), 'utf8'));
     writePreset({ dataRoot: server.dataRoot, name: GLOBAL_PRESET, overrides: { temperature: GLOBAL_TEMPERATURE } });
@@ -111,9 +115,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    await tearDownServer(server);
     await mock?.stop();
-    rmSync(scratchRoot, { recursive: true, force: true });
 });
 
 test.describe('#66 — CPA Apply on a card-bound preset updates live state immediately', () => {
@@ -137,8 +139,11 @@ test.describe('#66 — CPA Apply on a card-bound preset updates live state immed
         await page.locator('#API-status-top').click();
 
         const wbSettings = await selectWorkbenchTab(page, 'settings');
-        const presetRow = wbSettings.locator('table.wb-api tbody tr').filter({
-            has: page.locator('td:first-child span', { hasText: /^(Preset|预设|預設)$/i }),
+        const targetsDetails = wbSettings.locator('details.wb-ai-targets');
+        await expect(targetsDetails).toBeVisible({ timeout: 10_000 });
+        await targetsDetails.locator('summary.wb-ai-targets-summary').click();
+        const presetRow = targetsDetails.locator('table.wb-api tbody tr').filter({
+            has: page.locator('td:first-child span', { hasText: /^(Edit preset|修改预设|修改預設)$/i }),
         }).first();
         await expect(presetRow).toBeVisible({ timeout: 10_000 });
         await presetRow.locator('select.lw-select').nth(0).selectOption({ label: PROFILE_NAME });

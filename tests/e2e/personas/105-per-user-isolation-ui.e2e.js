@@ -6,25 +6,24 @@
 // shows only their own character. Proves the user-visible UI surface
 // honours the same scoping as the API contract that #105 locks.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 import { existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { write as embedCardData } from '../../../src/character-card-parser.js';
 
 let server;
 
-test.beforeAll(async () => {
-    server = await startServer({
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
+    server = await startServer({ scope,
         batchKey: 'personas',
         scenarioId: 'isolation-ui',
         extraConfig: { enableUserAccounts: true },
     });
 });
 
-test.afterAll(async () => {
-    await tearDownServer(server);
-});
+
 
 /**
  * Real /login form login. Selects user card or fills handle, types
@@ -69,8 +68,9 @@ async function loginViaForm(page, baseURL, handle, password) {
         const card = page.locator('#userList .userSelect').filter({
             has: page.locator('.userHandle', { hasText: new RegExp(`^${escapeRegex(handle)}$`) }),
         }).first();
-        const cardVisible = await card.isVisible({ timeout: 1500 }).catch(() => false);
-        if (cardVisible) {
+        // The wait above settled the login page: the card is either listed
+        // now or the page is in discreet mode.
+        if (await card.isVisible()) {
             await card.click();
         } else {
             const handleInput = page.locator('#userHandle');
@@ -80,13 +80,11 @@ async function loginViaForm(page, baseURL, handle, password) {
 
         // Password entry block appears after user selection when the user
         // has a password (or always in discreet mode).
-        const passwordInput = page.locator('#userPassword');
-        if (await passwordInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (password) {
+            const passwordInput = page.locator('#userPassword');
+            await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
             await passwordInput.fill(password);
-            const loginBtn = page.locator('#loginButton');
-            if (await loginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await loginBtn.click();
-            }
+            await page.locator('#loginButton').click();
         }
         // For password-less users, onUserSelected → performLogin fires
         // automatically (no Login button click needed).

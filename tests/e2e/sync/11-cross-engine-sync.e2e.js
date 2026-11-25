@@ -23,10 +23,11 @@
 // option; if the container can't come up, that's an infra failure to
 // surface, not hide.
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../harness/playwright.js';
 
-import { startServer, tearDownServer } from '../_lib/server.js';
+import { startServer } from '../../harness/server.js';
 import { startMysqlContainer } from '../_lib/db-containers.js';
+import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
 import { importWorldDocument } from '../_lib/ui-worldinfo.js';
 import { migrateViaAdminUI, fetchStorageStatus, closeAdminPanel } from '../_lib/storage-ui.js';
@@ -60,28 +61,27 @@ const SEED_WORLD_DATA = {
 let mysqlContainer;
 let A, B;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ workerResources }, testInfo) => {
+    const scope = await workerResources.scenario(testInfo.file);
     // Only B needs the container. A runs entirely on sqlite (file-backed,
     // no external dependency) once it migrates via the admin UI.
     mysqlContainer = await startMysqlContainer({ databases: [B_DB] });
 
-    A = await startServer({
+    A = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'cross-A-sqlite',
     });
-    B = await startServer({
+    B = await startServer({ scope,
         batchKey: 'sync',
         scenarioId: 'cross-B-mysql',
-        extraConfig: {
-            'storage.mode': 'mysql',
-            'storage.mysql.url': mysqlContainer.urlFor(B_DB),
-        },
+        extraConfig: { storage: { mode: 'mysql', mysql: { url: mysqlContainer.urlFor(B_DB) } } },
     });
+    markOnboarded({ dataRoot: A.dataRoot });
 });
 
 test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
+
+
     if (mysqlContainer) await mysqlContainer.stop();
 });
 
