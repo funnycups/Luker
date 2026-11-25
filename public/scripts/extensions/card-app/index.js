@@ -5,6 +5,7 @@
 import { createContainer, destroyContainer, injectScopedCSS, loadEntryModule, showError } from './loader.js';
 import { buildContext } from './context.js';
 import { activateRendererBridge, deactivateRendererBridge } from './renderer.js';
+import { i18n as t } from './i18n.js';
 
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
@@ -14,8 +15,6 @@ const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
 const registerCardBindingSlot = __ctx.registerCardBindingSlot;
 const updateCharacterState = __ctx.updateCharacterState;
-const addLocaleData = __ctx.addLocaleData;
-const translate = __ctx.translate;
 
 const MODULE_NAME = 'card-app';
 
@@ -23,24 +22,6 @@ const MODULE_NAME = 'card-app';
 // appended here as a system message so the next Studio session can self-diagnose
 // without the user having to read DevTools or paste stack traces.
 const STUDIO_SESSION_NAMESPACE = 'cardapp_studio_sessions';
-
-function t(text) {
-    return translate(String(text || ''));
-}
-
-// Register i18n locale data (core runtime only; Studio i18n lives in the editor plugin)
-addLocaleData('zh-cn', {
-    'Enable CardApp': '启用 CardApp',
-    'Entry file': '入口文件',
-    'CardApp (card enablement)': 'CardApp（本卡开关）',
-    'Entry configured': '已配置入口文件',
-});
-addLocaleData('zh-tw', {
-    'Enable CardApp': '啟用 CardApp',
-    'Entry file': '入口檔案',
-    'CardApp (card enablement)': 'CardApp（本卡開關）',
-    'Entry configured': '已設定入口檔案',
-});
 
 // State
 let isCardAppActive = false;
@@ -431,7 +412,9 @@ registerCardBindingSlot({
         if (value.entry) {
             next.entry = value.entry;
         }
-        await context.writeExtensionField(characterId, 'card_app', next);
+        if (await context.writeExtensionField(characterId, 'card_app', next) === false) {
+            throw new Error('Failed to save CardApp binding');
+        }
     },
 });
 

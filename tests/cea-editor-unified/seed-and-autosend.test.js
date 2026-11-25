@@ -23,13 +23,22 @@ beforeAll(() => {
 
 function makeApp(ctx) {
     const target = createCardTarget({ getContext: () => ctx });
+    const stored = new Map();
     return {
         sessions: {
-            list: jest.fn(async () => []),
-            get: jest.fn(async () => null),
-            create: jest.fn(async (fields) => ({ id: 's1', turns: [], ...fields })),
-            update: jest.fn(async (_id, patch) => ({ id: 's1', turns: [], ...patch })),
-            remove: jest.fn(async () => {}),
+            list: jest.fn(async () => [...stored.values()]),
+            get: jest.fn(async (id) => stored.get(id) ?? null),
+            create: jest.fn(async (fields) => {
+                const record = { id: 's1', turns: [], ...fields };
+                stored.set(record.id, record);
+                return record;
+            }),
+            update: jest.fn(async (id, patch) => {
+                const next = { ...(stored.get(id) || { id, turns: [] }), ...patch };
+                stored.set(id, next);
+                return next;
+            }),
+            remove: jest.fn(async (id) => { stored.delete(id); }),
         },
         iterateTargets: () => [target],
         snapshot: () => ({

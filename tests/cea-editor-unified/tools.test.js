@@ -1,40 +1,20 @@
-import { jest } from '@jest/globals';
+import { jest, afterEach } from '@jest/globals';
+import { installBrowserModuleContext } from '../util/browser-module-context.js';
+import { STATE_ERROR_REASONS } from '../../public/scripts/lib/state-errors.js';
+import { LOREBOOK_READ_TOOL_DEFS } from '../../public/scripts/iteration-library/tools/lorebook-reads.js';
+import { CHARACTER_PRESET_READ_TOOL_DEFS } from '../../public/scripts/iteration-library/tools/character-presets-reads.js';
 
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return { lodash };
 });
 
-// tools.js only imports `runCharacterEditorHelperToolCall` from main.js;
-// that one helper drags in the entire SillyTavern runtime (jQuery, DOM,
-// world-info popups, etc.) which Node cannot instantiate. Stub it to a
-// minimal record-shape so we can drive `runCeaEditorReadTool` end-to-end
-// without standing up the browser shell. Every other tools.js surface
-// runs against the real implementation.
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async (call) => ({ result: { stub: true, name: call?.name || '' } }),
-}));
-
 let tools;
 beforeAll(async () => {
-    tools = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/tools.js');
+    tools = await import('../../public/scripts/workbench/targets/card-tools.js');
 });
 
 describe('unified CEA editor tools.js', () => {
-    it('exports CONTROL_TOOL_NAMES and isCeaEditorControlCall (no control tools today)', () => {
-        // CEA editor has no popup-side control tools — the multi-round loop
-        // is program-driven by tool-call presence (any tool call → next
-        // round, none → stop). CONTROL_TOOL_NAMES is empty and
-        // isCeaEditorControlCall returns false for everything.
-        expect(tools.CONTROL_TOOL_NAMES.continue).toBeUndefined();
-        expect(tools.CONTROL_TOOL_NAMES.finalize).toBeUndefined();
-        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_continue_iteration' })).toBe(false);
-        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_finalize_iteration' })).toBe(false);
-        expect(tools.isCeaEditorControlCall({ name: 'cea_set_card_field' })).toBe(false);
-        expect(tools.isCeaEditorControlCall({})).toBe(false);
-        expect(tools.isCeaEditorControlCall(null)).toBe(false);
-    });
-
     it('isCeaEditorReadTool classifies helpers correctly', () => {
         expect(tools.isCeaEditorReadTool('lorebook_query')).toBe(true);
         expect(tools.isCeaEditorReadTool('lorebook_list')).toBe(true);
@@ -47,6 +27,30 @@ describe('unified CEA editor tools.js', () => {
         expect(tools.isCeaEditorReadTool('luker_cea_editor_continue_iteration')).toBe(false);
         expect(tools.isCeaEditorReadTool('')).toBe(false);
         expect(tools.isCeaEditorReadTool(null)).toBe(false);
+    });
+
+    it('classifies the shared preset read tool as a read tool', () => {
+        expect(tools.isCeaEditorReadTool('inspect_bound_preset')).toBe(true);
+        expect(tools.isCeaEditorReadTool('cea_read_card_fields')).toBe(true);
+    });
+
+    it('read catalog splices the shared lorebook and preset definitions unchanged', () => {
+        const set = tools.buildCeaEditorToolSet({}, {}, { hasSearchTools: true });
+        const names = set.map(t => t.function?.name);
+        expect(names.slice(names.indexOf('cea_read_card_fields'))).toEqual([
+            'cea_read_card_fields',
+            'world_book_list',
+            'lorebook_list',
+            'lorebook_query',
+            'lorebook_get',
+            'inspect_bound_preset',
+            'simulate_prompt',
+            'web_search',
+        ]);
+        for (const def of LOREBOOK_READ_TOOL_DEFS) {
+            expect(set.find(t => t.function?.name === def.function.name)).toBe(def);
+        }
+        expect(set.find(t => t.function?.name === 'inspect_bound_preset')).toBe(CHARACTER_PRESET_READ_TOOL_DEFS[0]);
     });
 
     it('normalizeToolCallToEdit annotates character target for cea_set_card_field', async () => {
@@ -130,16 +134,20 @@ describe('unified CEA editor tools.js', () => {
         )).rejects.toThrow(/bookName/);
     });
 
-    it('normalizeToolCallToEdit falls back to target.kind=lorebook without bookName when arg missing', async () => {
-        const edits = await tools.normalizeToolCallToEdit(
+    it('normalizeToolCallToEdit rejects a lorebook edit without book_name when no single book can be inferred', async () => {
+        await expect(tools.normalizeToolCallToEdit(
             { id: 'c6', name: 'cea_update_lorebook_entry', args: { uid: 1, patch: {} } },
             { context: {}, live: {} },
+        )).rejects.toThrow(/^cea_update_lorebook_entry: invalid_args — book_name is required/);
+    });
+
+    it('normalizeToolCallToEdit infers the only live book when book_name is missing', async () => {
+        const edits = await tools.normalizeToolCallToEdit(
+            { id: 'c7', name: 'cea_update_lorebook_entry', args: { uid: 1, patch: { content: 'x' } } },
+            { context: {}, live: { lorebooks: { BookE: { entries: { 1: { content: 'old' } } } } } },
         );
-        expect(Array.isArray(edits)).toBe(true);
-        if (edits.length > 0) {
-            expect(edits[0].target?.kind).toBe('lorebook');
-            expect(edits[0].target?.bookName).toBeFalsy();
-        }
+        expect(edits[0].target).toEqual({ kind: 'lorebook', bookName: 'BookE' });
+        expect(edits[0].before).toEqual({ content: 'old' });
     });
 
     it('normalizeToolCallToEdit returns null when args fail to parse / are malformed', async () => {
@@ -231,31 +239,128 @@ describe('unified CEA editor tools.js', () => {
         )).rejects.toThrow(/invalid_args/);
     });
 
-    it('runCeaEditorReadTool delegates to the legacy helper runner', async () => {
-        const out = await tools.runCeaEditorReadTool(
-            { id: 'r1', name: 'lorebook_query', args: { book_name: 'BookA', query: 'x' } },
-            { context: {}, settings: {}, helperApis: [] },
-        );
-        expect(out.ok).toBe(true);
-        expect(out.result?.stub).toBe(true);
+    describe('runCeaEditorReadTool routing', () => {
+        const HARBOR_BOOK = {
+            entries: {
+                3: {
+                    uid: 3,
+                    comment: 'Bryn harbor',
+                    key: ['harbor', 'breakwater'],
+                    keysecondary: [],
+                    content: 'The Bryn harbor wall was raised after the great surge.',
+                    order: 100,
+                },
+            },
+        };
+        function makeLoreContext() {
+            return {
+                characters: [],
+                getWorldInfoNames: () => ['bryn-headland'],
+                loadWorldInfo: async (name) => (name === 'bryn-headland' ? structuredClone(HARBOR_BOOK) : null),
+            };
+        }
+
+        it('dispatches lorebook_query to the shared executor and returns its envelope', async () => {
+            const out = await tools.runCeaEditorReadTool(
+                { id: 'r1', name: 'lorebook_query', args: { book_name: 'bryn-headland', text: 'harbor' } },
+                { context: makeLoreContext() },
+            );
+            expect(out).toEqual({
+                ok: true,
+                result: {
+                    book_name: 'bryn-headland',
+                    total_hits: 1,
+                    entries: [{
+                        uid: 3,
+                        comment: 'Bryn harbor',
+                        key: ['harbor', 'breakwater'],
+                        keysecondary: [],
+                        selective_logic: 'AND_ANY',
+                        constant: false,
+                        enabled: true,
+                        match_fields: ['comment', 'key', 'content'],
+                        matched_excerpt: 'The Bryn harbor wall was raised after the great surge.',
+                    }],
+                },
+            });
+        });
+
+        it('surfaces shared-executor validation failures with their reason code', async () => {
+            const out = await tools.runCeaEditorReadTool(
+                { id: 'r2', name: 'lorebook_query', args: { book_name: 'bryn-headland' } },
+                { context: makeLoreContext() },
+            );
+            expect(out.ok).toBe(false);
+            expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+            expect(typeof out.error).toBe('string');
+        });
+
+        describe('web_search', () => {
+            let browserEnv = null;
+            afterEach(() => {
+                browserEnv?.restore();
+                browserEnv = null;
+            });
+            function installSearchTools(invoke) {
+                browserEnv?.restore();
+                browserEnv = installBrowserModuleContext({}, {
+                    hostProperties: {
+                        searchTools: {
+                            toolNames: { SEARCH: 'luker_web_search', VISIT: 'luker_web_visit' },
+                            getToolDefs: () => [],
+                            isToolName: () => true,
+                            invoke,
+                        },
+                    },
+                });
+            }
+
+            it('maps limit to max_results and forwards the abort signal', async () => {
+                const invoke = jest.fn(async (call) => ({ provider: 'searxng', query: call.args.query, result_count: 0, results: [] }));
+                installSearchTools(invoke);
+                const ac = new AbortController();
+                const out = await tools.runCeaEditorReadTool(
+                    { id: 'w1', name: 'web_search', args: { query: 'Bryn reef tide tables', limit: 3 } },
+                    { context: {}, abortSignal: ac.signal },
+                );
+                expect(invoke).toHaveBeenCalledTimes(1);
+                const [sentCall, sentOpts] = invoke.mock.calls[0];
+                expect(sentCall).toEqual({ name: 'luker_web_search', args: { query: 'Bryn reef tide tables', limit: 3, max_results: 3 } });
+                expect(sentOpts.abortSignal).toBe(ac.signal);
+                expect(out).toEqual({ ok: true, result: { provider: 'searxng', query: 'Bryn reef tide tables', result_count: 0, results: [] } });
+            });
+
+            it('keeps an explicit max_results', async () => {
+                const invoke = jest.fn(async () => ({ results: [] }));
+                installSearchTools(invoke);
+                await tools.runCeaEditorReadTool(
+                    { id: 'w2', name: 'web_search', args: { query: 'salt-mark drifters', limit: 3, max_results: 5 } },
+                    { context: {} },
+                );
+                expect(invoke.mock.calls[0][0].args.max_results).toBe(5);
+            });
+
+            it('reports the tool as unavailable without the search-tools API', async () => {
+                browserEnv?.restore();
+                browserEnv = null;
+                expect(tools.hasCeaSearchTools()).toBe(false);
+                const out = await tools.runCeaEditorReadTool({ id: 'w3', name: 'web_search', args: { query: 'x' } }, { context: {} });
+                expect(out.ok).toBe(false);
+                installSearchTools(jest.fn(async () => ({ results: [] })));
+                expect(tools.hasCeaSearchTools()).toBe(true);
+            });
+        });
     });
 
     it('runCeaEditorReadTool surfaces errors via { ok: false, error }', async () => {
         // Pass a non-read tool name; the wrapper should refuse or surface an error.
         const out = await tools.runCeaEditorReadTool(
             { id: 'bad', name: 'cea_set_card_field', args: {} },
-            { context: {}, settings: {}, helperApis: [] },
+            { context: {} },
         );
         expect(out.ok).toBe(false);
         expect(typeof out.error).toBe('string');
         expect(out.error.length).toBeGreaterThan(0);
-    });
-
-    it('CONTROL_TOOL_DEFS is empty (no popup-side control tools)', () => {
-        expect(tools.CONTROL_TOOL_DEFS.length).toBe(0);
-        const names = tools.CONTROL_TOOL_DEFS.map(d => d.function?.name);
-        expect(names).not.toContain('luker_cea_editor_continue_iteration');
-        expect(names).not.toContain('luker_cea_editor_finalize_iteration');
     });
 
     it('buildCeaEditorToolSet returns edit + read tools (no control tools)', () => {
@@ -283,90 +388,16 @@ describe('unified CEA editor tools.js', () => {
         expect(names).toContain('web_search');
     });
 
+    it('simulate_prompt schema takes a single required text argument', () => {
+        const set = tools.buildCeaEditorToolSet({}, {}, {});
+        const def = set.find(t => t.function?.name === 'simulate_prompt');
+        expect(Object.keys(def.function.parameters.properties)).toEqual(['text']);
+        expect(def.function.parameters.required).toEqual(['text']);
+    });
+
     it('buildCeaEditorToolSet omits web_search when hasSearchTools is false', () => {
         const set = tools.buildCeaEditorToolSet({}, {}, { live: {}, hasSearchTools: false });
         const names = set.map(t => t.function?.name);
         expect(names).not.toContain('web_search');
-    });
-});
-
-describe('CEA editor tool-display map', () => {
-    let map;
-    beforeAll(async () => {
-        ({ CEA_EDITOR_TOOL_DISPLAY: map } = await import(
-            '../../public/scripts/extensions/character-editor-assistant/editor-iteration/tool-display.js'
-        ));
-    });
-
-    it('classifies all 7 edit tools as edit', () => {
-        for (const n of [
-            'cea_set_card_field',
-            'cea_str_replace_card_field',
-            'cea_add_lorebook_entry',
-            'cea_update_lorebook_entry',
-            'cea_str_replace_lorebook_entry_field',
-            'cea_remove_lorebook_entry',
-            'cea_set_lorebook_metadata',
-        ]) {
-            expect(map[n]?.type).toBe('edit');
-            expect(typeof map[n]?.label).toBe('string');
-            expect(map[n]?.label.length).toBeGreaterThan(0);
-            expect(typeof map[n]?.icon).toBe('string');
-        }
-    });
-
-    it('classifies all 6 read tools as read with summarize function', () => {
-        for (const n of [
-            'lorebook_query',
-            'lorebook_list',
-            'lorebook_get',
-            'world_book_list',
-            'web_search',
-            'simulate_prompt',
-        ]) {
-            expect(map[n]?.type).toBe('read');
-            expect(typeof map[n]?.summarize).toBe('function');
-            expect(typeof map[n]?.label).toBe('string');
-            expect(map[n]?.label.length).toBeGreaterThan(0);
-        }
-    });
-
-    it('excludes legacy continue / finalize control tools (program-driven auto-continue)', () => {
-        expect(map.luker_cea_editor_continue_iteration).toBeUndefined();
-        expect(map.luker_cea_editor_finalize_iteration).toBeUndefined();
-    });
-
-    it('summarize functions handle missing args / results without throwing', () => {
-        const readNames = ['lorebook_query', 'lorebook_list', 'lorebook_get', 'world_book_list', 'web_search', 'simulate_prompt'];
-        for (const n of readNames) {
-            expect(() => map[n].summarize(undefined, undefined)).not.toThrow();
-            expect(() => map[n].summarize({}, null)).not.toThrow();
-        }
-    });
-
-    it('summarize for lorebook_query renders hit count when result has matches', () => {
-        const out = map.lorebook_query.summarize({ book_name: 'BookA', query: 'foo' }, { total_hits: 3, entries: [{}, {}, {}] });
-        expect(String(out)).toContain('3');
-    });
-
-    it('summarize for world_book_list renders book count when result has books', () => {
-        const out = map.world_book_list.summarize({}, { books: ['A', 'B'] });
-        expect(String(out)).toContain('2');
-    });
-
-    it('contains exactly the 14 tools spec\'d (7 edit + 7 read, no control)', () => {
-        // 7 edit tools (cea_set_card_field, cea_str_replace_card_field,
-        // cea_add_lorebook_entry, cea_update_lorebook_entry,
-        // cea_str_replace_lorebook_entry_field, cea_remove_lorebook_entry,
-        // cea_set_lorebook_metadata) + 7 read tools (cea_read_card_fields,
-        // lorebook_query, lorebook_list, lorebook_get, world_book_list,
-        // web_search, simulate_prompt). No control tools — the
-        // multi-round loop is program-driven by tool-call presence.
-        const keys = Object.keys(map);
-        expect(keys.length).toBe(14);
-        expect(keys.filter(k => map[k].type === 'edit').length).toBe(7);
-        expect(keys.filter(k => map[k].type === 'read').length).toBe(7);
-        expect(keys.filter(k => map[k].type === 'control').length).toBe(0);
-        expect(keys).toContain('cea_read_card_fields');
     });
 });

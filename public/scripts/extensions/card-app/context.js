@@ -503,7 +503,9 @@ export function buildContext(container, charId, config) {
             }
             // Apply each extension blob via writeExtensionField (replace semantics).
             for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
-                await lukerCtx.writeExtensionField(__ctx.characterId, topKey, value);
+                if (await lukerCtx.writeExtensionField(__ctx.characterId, topKey, value) === false) {
+                    throw new Error(`Failed to save character extension: ${topKey}`);
+                }
             }
         },
 
@@ -1267,9 +1269,7 @@ export function buildContext(container, charId, config) {
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) return null;
             const orch = requireExtensionApi('orchestrator');
-            const savedMode = orch.getCharacterSavedExecutionModeByAvatar
-                ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
-                : '';
+            const savedMode = orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar);
             if (!savedMode) return null;
             return {
                 mode: savedMode,
@@ -1289,7 +1289,7 @@ export function buildContext(container, charId, config) {
          * orchestrator editor to populate it first.
          *
          * @param {{presetId:string}} options card preset id, or '' for global
-         * @returns {Promise<boolean>} true on success
+         * @returns {Promise<boolean>} true when the card was switched and saved
          */
         async setOrchestratorOverride(options) {
             if (!options || typeof options !== 'object' || typeof options.presetId !== 'string') {
@@ -1300,25 +1300,14 @@ export function buildContext(container, charId, config) {
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             const orch = requireExtensionApi('orchestrator');
-            const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
-            if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
-            const savedMode = orch.getCharacterSavedExecutionModeByAvatar
-                ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
-                : '';
-            if (!savedMode) return false;
-            if (options.presetId !== '') {
-                const library = orch.getCharacterPresetLibrary(lukerCtx, avatar, savedMode);
-                if (!library[options.presetId]) return false;
-            }
-            const orchSettings = extension_settings?.orchestrator;
-            const ok = orch.setActivePresetId(orchSettings, savedMode, 'character', options.presetId, {
-                context: lukerCtx,
+            const result = await orch.setCharacterActivePresetForSavedMode(
+                lukerCtx,
+                extension_settings?.orchestrator,
                 avatar,
-            });
-            if (ok) {
-                orch.applyCharacterExecutionModeForAvatar(lukerCtx, orchSettings, avatar);
-            }
-            return ok;
+                options.presetId,
+            );
+            if (result.reason === 'character_not_found') throw new Error('[CardApp] Character not found in context');
+            return result.ok;
         },
 
         /**

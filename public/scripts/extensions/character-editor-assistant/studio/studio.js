@@ -7,7 +7,6 @@
 const __ctx = Luker.getContext();
 const getRequestHeaders = __ctx.getRequestHeaders;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
-const translate = __ctx.translate;
 const DOMPurify = __ctx.lib.DOMPurify;
 const DiffMatchPatch = __ctx.lib.DiffMatchPatch;
 const showdown = __ctx.lib.showdown;
@@ -17,6 +16,10 @@ const getExtensionApi = __ctx.getExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
 const updateCharacterState = __ctx.updateCharacterState;
 import { sendAIMessage, TOOL_NAMES } from './ai-chat.js';
+import { fetchFileList, fetchFileContent, saveFileContent } from './file-api.js';
+import { parseCardAppFilePath } from './file-path.js';
+import { escapeHtml } from '../../../lib/html-escape.js';
+import { i18n as t, i18nFormat as tFormat } from '../i18n.js';
 
 // Markdown converter for AI messages
 const mdConverter = new showdown.Converter({
@@ -34,14 +37,6 @@ const MODULE_NAME = 'card-app/studio';
 async function reloadCardApp() {
     const api = getExtensionApi('card-app');
     if (api?.reloadCardApp) await api.reloadCardApp();
-}
-
-function t(text) {
-    return translate(String(text || ''));
-}
-
-function tFormat(text, ...values) {
-    return t(text).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
 
 /**
@@ -102,6 +97,7 @@ function setAutoApplyEnabled(enabled) {
 
 let isStudioOpen = false;
 let currentCharId = null;
+let currentCharacter = null;
 let currentAvatar = null;
 let currentFile = null;
 let fileList = [];
@@ -121,11 +117,19 @@ let currentSessionId = null;
 let mobileActiveTab = 'left';
 
 const SESSION_NAMESPACE = 'cardapp_studio_sessions';
-const MAX_PERSISTED_MESSAGES = 100;
-const MAX_SESSIONS = 20;
 const SESSION_VERSION = 1;
 
 // ==================== Session Persistence (Character Sidecar) ====================
+
+function resolveStudioCharacter(context, charId) {
+    const chars = Array.isArray(context?.characters) ? context.characters : [];
+    const normalizedCharId = String(charId || '').trim();
+    if (normalizedCharId && typeof context?.getCharaFilename === 'function') {
+        const matched = chars.find(card => card?.avatar && context.getCharaFilename(null, { manualAvatarKey: card.avatar }) === normalizedCharId);
+        return matched || null;
+    }
+    return chars[context?.characterId] || null;
+}
 
 /**
  * Get the current character's avatar string for sidecar storage.
@@ -134,7 +138,7 @@ const SESSION_VERSION = 1;
 function getCurrentAvatar() {
     if (currentAvatar) return currentAvatar;
     const context = getContext();
-    const character = context.characters?.[context.characterId];
+    const character = currentCharacter || resolveStudioCharacter(context, currentCharId);
     return String(character?.avatar || '').trim();
 }
 
@@ -145,94 +149,77 @@ function getCurrentAvatar() {
 async function loadAllSessions() {
     const avatar = getCurrentAvatar();
     if (!avatar) return [];
-    try {
-        // Envelope: `{ok, state}` on hit/empty-miss; `{ok: false, reason,
-        // hint}` on transport/HTTP/validation failure. Read failures fall
-        // back to `[]` so the studio still opens — autosave will recreate
-        // the sidecar on the next AI turn.
-        const result = await getCharacterState(avatar, SESSION_NAMESPACE);
-        if (!result?.ok) {
-            if (result?.reason) {
-                console.warn(`[${MODULE_NAME}] loadAllSessions read failed: ${result.reason} ${result.hint || ''}`);
-            }
-            return [];
-        }
-        const data = result.state;
-        if (!data) return [];
-
-        // Migrate old single-session format to new multi-session format
-        if (Array.isArray(data.messages)) {
-            // Old format: { messages, updatedAt }
-            const migrated = {
-                version: SESSION_VERSION,
-                sessions: [
-                    {
-                        id: generateSessionId(),
-                        messages: data.messages.slice(-MAX_PERSISTED_MESSAGES),
-                        updatedAt: data.updatedAt || Date.now(),
-                        summary: 'Migrated session',
-                    },
-                ],
-            };
-            const migrateResult = await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
-            if (!migrateResult?.ok) {
-                // Migration write failure is non-fatal — return the in-memory
-                // migrated payload so the user sees their old session this
-                // run, and let the next save retry persistence.
-                console.warn(`[${MODULE_NAME}] loadAllSessions migrate-write failed: ${migrateResult?.reason} ${migrateResult?.hint || ''}`);
-            }
-            return migrated.sessions;
-        }
-
-        // New format: { version, sessions }
-        if (data.version === SESSION_VERSION && Array.isArray(data.sessions)) {
-            return data.sessions;
-        }
-
-        return [];
-    } catch (err) {
-        console.warn(`[${MODULE_NAME}] Failed to load sessions from sidecar:`, err);
-        return [];
+    const result = await getCharacterState(avatar, SESSION_NAMESPACE);
+    if (!result?.ok) {
+        const detail = [result?.reason, result?.hint].filter(Boolean).join(' ').trim();
+        throw new Error(detail || 'Failed to read CardApp Studio sessions');
     }
+    const data = result.state;
+    if (!data) return [];
+
+    // Migrate old single-session format to new multi-session format
+    if (Array.isArray(data.messages)) {
+        // Old format: { messages, updatedAt }
+        const migrated = {
+            version: SESSION_VERSION,
+            sessions: [
+                {
+                    id: generateSessionId(),
+                    messages: data.messages,
+                    updatedAt: data.updatedAt || Date.now(),
+                    summary: 'Migrated session',
+                },
+            ],
+        };
+        const migrateResult = await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
+        if (!migrateResult?.ok) {
+            // Migration write failure is non-fatal — return the in-memory
+            // migrated payload so the user sees their old session this
+            // run, and let the next save retry persistence.
+            console.warn(`[${MODULE_NAME}] loadAllSessions migrate-write failed: ${migrateResult?.reason} ${migrateResult?.hint || ''}`);
+        }
+        return migrated.sessions;
+    }
+
+    // New format: { version, sessions }
+    if (data.version === SESSION_VERSION && Array.isArray(data.sessions)) {
+        return data.sessions;
+    }
+
+    throw new Error('CardApp Studio session storage has an unrecognized format');
 }
 
 /**
- * Save all sessions to sidecar.
+ * Save all sessions to character state.
  *
- * `saveAllSessions` is the studio's hot persistence path — autosave invokes it
- * on every AI turn. The `silent` option keeps autosave from spamming toasts on
- * a single transient failure; user-initiated saves (new session / delete /
- * clear chat) pass `silent: false` so the user knows their click did not land.
- * In both cases the warning still goes to console so devs can chase persistence
- * issues without the UI swallowing them.
+ * Always propagates failures by throwing an Error (tagged with `reason` /
+ * `hint` when available) so callers never wipe in-memory conversation state
+ * or toast success after a failed write. Callers decide whether to surface a
+ * toast (user-initiated actions) or log quietly (per-turn autosave).
  *
  * @param {Array} sessions
- * @param {{silent?: boolean}} [options] — `silent: true` suppresses toastr but
- *   still logs to console. Defaults to `false` (toast on failure).
  */
-async function saveAllSessions(sessions, { silent = false } = {}) {
+async function saveAllSessions(sessions) {
     const avatar = getCurrentAvatar();
-    if (!avatar) return;
-    try {
-        const data = {
-            version: SESSION_VERSION,
-            sessions: sessions.slice(-MAX_SESSIONS).map(s => ({
-                ...s,
-                messages: s.messages.slice(-MAX_PERSISTED_MESSAGES),
-            })),
-        };
-        const result = await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
-        if (!result?.ok) {
-            console.warn(`[${MODULE_NAME}] saveAllSessions failed: ${result?.reason} ${result?.hint || ''}`);
-            if (!silent && typeof toastr !== 'undefined') {
-                toastr.error(formatSaveSessionsError(result?.reason, result?.hint));
-            }
-        }
-    } catch (err) {
-        console.warn(`[${MODULE_NAME}] Failed to save sessions to sidecar:`, err);
-        if (!silent && typeof toastr !== 'undefined') {
-            toastr.error(formatSaveSessionsError(undefined));
-        }
+    if (!avatar) {
+        const err = new Error(formatSaveSessionsError('VALIDATION_TARGET'));
+        err.reason = 'VALIDATION_TARGET';
+        throw err;
+    }
+    const data = {
+        version: SESSION_VERSION,
+        sessions: sessions.map(s => ({
+            ...s,
+            messages: Array.isArray(s.messages) ? s.messages : [],
+        })),
+    };
+    const result = await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
+    if (!result?.ok) {
+        console.error(`[${MODULE_NAME}] saveAllSessions failed: ${result?.reason} ${result?.hint || ''}`);
+        const err = new Error(formatSaveSessionsError(result?.reason, result?.hint));
+        err.reason = result?.reason;
+        err.hint = result?.hint;
+        throw err;
     }
 }
 
@@ -252,17 +239,14 @@ async function loadSession(sessionId) {
  * @param {string} sessionId
  * @param {Array} messages
  * @param {string} [summary]
- * @param {{silent?: boolean}} [options] — forwarded to saveAllSessions.
- *   Autosave on AI turn completion passes `silent: true`; user-initiated
- *   saves leave it false so failures surface as toasts.
  */
-async function saveCurrentSession(sessionId, messages, summary = null, { silent = false } = {}) {
+async function saveCurrentSession(sessionId, messages, summary = null) {
     const sessions = await loadAllSessions();
     const existingIndex = sessions.findIndex(s => s.id === sessionId);
 
     const sessionData = {
         id: sessionId,
-        messages: messages.slice(-MAX_PERSISTED_MESSAGES),
+        messages: Array.isArray(messages) ? messages : [],
         updatedAt: Date.now(),
         summary: summary || (existingIndex >= 0 ? sessions[existingIndex].summary : 'New session'),
     };
@@ -273,7 +257,7 @@ async function saveCurrentSession(sessionId, messages, summary = null, { silent 
         sessions.push(sessionData);
     }
 
-    await saveAllSessions(sessions, { silent });
+    await saveAllSessions(sessions);
 }
 
 /**
@@ -304,56 +288,6 @@ function generateSessionSummary(messages) {
  */
 function generateSessionId() {
     return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
-// ==================== File API ====================
-
-async function fetchFileList(charId) {
-    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/files`, {
-        headers: getRequestHeaders(),
-        cache: 'no-cache',
-    });
-    if (!response.ok) throw new Error(`Failed to list files: ${response.status}`);
-    const data = await response.json();
-    return data.files || [];
-}
-
-async function fetchFileContent(charId, filePath) {
-    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
-        headers: getRequestHeaders(),
-        cache: 'no-cache',
-    });
-    if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
-    return await response.text();
-}
-
-async function saveFileContent(charId, filePath, content) {
-    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
-        method: 'PUT',
-        headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-    });
-    if (!response.ok) throw new Error(`Failed to save file: ${response.status}`);
-    return await response.json();
-}
-
-async function deleteFile(charId, filePath) {
-    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
-        method: 'DELETE',
-        headers: getRequestHeaders(),
-    });
-    if (!response.ok) throw new Error(`Failed to delete file: ${response.status}`);
-    return await response.json();
-}
-
-async function renameFile(charId, fromPath, toPath) {
-    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/rename`, {
-        method: 'POST',
-        headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: fromPath, to: toPath }),
-    });
-    if (!response.ok) throw new Error(`Failed to rename file: ${response.status}`);
-    return await response.json();
 }
 
 // ==================== Skeleton Init ====================
@@ -580,12 +514,6 @@ function destroyCMEditor() {
 
 // ==================== UI ====================
 
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
 function getFileIcon(filePath) {
     const ext = filePath.split('.').pop()?.toLowerCase();
     const icons = {
@@ -660,7 +588,7 @@ function buildRightPanelHtml() {
  </div>
  <div class="card-app-studio-history">
  <div class="card-app-studio-file-tree-header">
-        <span>📜 ${escapeHtml(t('History'))}</span>
+        <span>📜 ${escapeHtml(t('Commit history'))}</span>
  <button class="card-app-studio-btn small" data-studio-action="refresh-history" title="${escapeHtml(t('Refresh'))}">↻</button>
  </div>
  <div class="card-app-studio-history-list" data-studio-history></div>
@@ -864,53 +792,41 @@ async function handleNewFile() {
 
 // ==================== Studio Lifecycle ====================
 
-// One-shot wipe of the brief-era session bucket (`cardapp_studio_sessions_v2`).
-// The brief iteration-studio CardApp adapter wrote sessions to a new
-// namespace because it changed the on-disk shape; reverting to the
-// standalone studio means those sessions are no longer reachable, so we
-// clear them once to free the sidecar slot. CardApp files on disk are
-// untouched. Earlier sessions in `cardapp_studio_sessions` were already
-// wiped by the brief-era adapter itself and cannot be recovered.
-const SP2_WIPE_FLAG_KEY = 'cardapp_studio_sp2_wiped_v1';
+// One-shot wipe of the legacy v2 session bucket (`cardapp_studio_sessions_v2`).
+// Clearing it once frees the unused character-state slot without touching
+// CardApp files on disk.
+const LEGACY_V2_WIPE_FLAG_KEY = 'cardapp_studio_sp2_wiped_v1';
 
-async function wipeSp2EraSessionsIfNeeded(avatar) {
+async function wipeLegacyV2SessionsIfNeeded(avatar) {
     try {
         if (typeof localStorage === 'undefined') return;
-        if (localStorage.getItem(SP2_WIPE_FLAG_KEY)) return;
+        if (localStorage.getItem(LEGACY_V2_WIPE_FLAG_KEY)) return;
         const context = getContext();
         if (!avatar || !context?.deleteCharacterState) {
-            localStorage.setItem(SP2_WIPE_FLAG_KEY, '1');
+            localStorage.setItem(LEGACY_V2_WIPE_FLAG_KEY, '1');
             return;
         }
-        let hadSp2Data = false;
-        try {
-            // Envelope read — `result.state` holds the raw payload on hit,
-            // null on empty miss. A real read failure (`!ok` with a reason)
-            // means we can't safely decide whether to wipe; skip the flag so
-            // the next open retries. An empty miss falls through normally.
-            const readResult = await context.getCharacterState?.(avatar, 'cardapp_studio_sessions_v2');
-            if (readResult && !readResult.ok) {
-                console.warn(`[${MODULE_NAME}] SP-2 wipe read failed: ${readResult.reason} ${readResult.hint || ''}`);
-                return;
-            }
-            const sp2 = readResult?.ok ? readResult.state : null;
-            hadSp2Data = sp2 != null && Object.keys(sp2).length > 0;
-        } catch { /* state may not exist */ }
-        if (hadSp2Data) {
+        let hadLegacyData = false;
+        const readResult = await context.getCharacterState?.(avatar, 'cardapp_studio_sessions_v2');
+        if (readResult && !readResult.ok) {
+            console.warn(`[${MODULE_NAME}] legacy v2 session wipe read failed: ${readResult.reason} ${readResult.hint || ''}`);
+            return;
+        }
+        const legacyState = readResult?.ok ? readResult.state : null;
+        hadLegacyData = legacyState != null && Object.keys(legacyState).length > 0;
+        if (hadLegacyData) {
             const deleteResult = await context.deleteCharacterState(avatar, 'cardapp_studio_sessions_v2');
             if (!deleteResult?.ok) {
-                // Best-effort one-shot wipe — log and skip the flag so the next
-                // open retries. The user has no actionable recovery here.
-                console.warn(`[${MODULE_NAME}] SP-2 wipe delete failed: ${deleteResult?.reason} ${deleteResult?.hint || ''}`);
+                console.warn(`[${MODULE_NAME}] legacy v2 session wipe delete failed: ${deleteResult?.reason} ${deleteResult?.hint || ''}`);
                 return;
             }
             if (typeof toastr !== 'undefined') {
                 toastr.info(t('CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.'));
             }
         }
-        localStorage.setItem(SP2_WIPE_FLAG_KEY, '1');
+        localStorage.setItem(LEGACY_V2_WIPE_FLAG_KEY, '1');
     } catch (e) {
-        console.warn('[CardApp Studio] brief-era session wipe failed', e);
+        console.error(`[${MODULE_NAME}] legacy v2 session wipe failed`, e);
     }
 }
 
@@ -921,14 +837,14 @@ export async function openCardAppStudio(charId) {
     }
 
     currentCharId = charId;
-    // Cache the full avatar string for sidecar session storage
+    // Cache the character matching charId for sidecar storage and tool binding
     const context = getContext();
-    const character = context.characters?.[context.characterId];
-    currentAvatar = String(character?.avatar || '').trim();
+    currentCharacter = resolveStudioCharacter(context, charId);
+    currentAvatar = String(currentCharacter?.avatar || '').trim();
     isStudioOpen = true;
 
-    // One-shot wipe of brief-era session bucket.
-    await wipeSp2EraSessionsIfNeeded(currentAvatar);
+    // One-shot wipe of legacy v2 session bucket.
+    await wipeLegacyV2SessionsIfNeeded(currentAvatar);
 
     // Ensure skeleton files exist
     await ensureSkeletonFiles(charId);
@@ -983,7 +899,15 @@ export async function openCardAppStudio(charId) {
     }
 
     // Load or create session
-    const sessions = await loadAllSessions();
+    let sessions = [];
+    try {
+        sessions = await loadAllSessions();
+    } catch (err) {
+        console.error(`[${MODULE_NAME}] Failed to load sessions on open:`, err);
+        if (typeof toastr !== 'undefined') {
+            toastr.error(tFormat('Load failed: ${0}', err?.message || String(err)));
+        }
+    }
     if (sessions.length > 0) {
         // Load most recent session
         sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -1016,7 +940,7 @@ export async function openCardAppStudio(charId) {
     console.log(`[${MODULE_NAME}] Studio opened for ${charId}`);
 }
 
-export async function closeCardAppStudio() {
+async function closeCardAppStudio() {
     if (!isStudioOpen) return;
 
     // Destroy CM6 editor
@@ -1039,10 +963,18 @@ export async function closeCardAppStudio() {
     // Save conversation before clearing state
     if (currentSessionId && conversationMessages.length > 0) {
         const summary = generateSessionSummary(conversationMessages);
-        await saveCurrentSession(currentSessionId, conversationMessages, summary);
+        try {
+            await saveCurrentSession(currentSessionId, conversationMessages, summary);
+        } catch (err) {
+            console.error(`[${MODULE_NAME}] Failed to save session on close:`, err);
+            if (typeof toastr !== 'undefined') {
+                toastr.error(formatSaveSessionsError(err?.reason, err?.hint));
+            }
+        }
     }
     isStudioOpen = false;
     currentCharId = null;
+    currentCharacter = null;
     currentAvatar = null;
     currentFile = null;
     fileList = [];
@@ -1237,10 +1169,7 @@ function renderPendingApproval(batch) {
         const live    = batch?.live    || { files: {} };
         const newLive = batch?.newLive || { files: {} };
 
-        const parseBarePath = (opPath) => {
-            const m = /^files\["?([^"\]]+)"?\]$/.exec(String(opPath || ''));
-            return m ? m[1] : String(opPath || '');
-        };
+        const parseBarePath = parseCardAppFilePath;
 
         const sections = items.map(item => {
             const edit = item.edit;
@@ -1338,7 +1267,14 @@ async function renderSessionList() {
     const listEl = document.querySelector('[data-studio-sessions-list]');
     if (!listEl) return;
 
-    const sessions = await loadAllSessions();
+    let sessions;
+    try {
+        sessions = await loadAllSessions();
+    } catch (err) {
+        console.error(`[${MODULE_NAME}] Failed to render session list:`, err);
+        listEl.innerHTML = `<div class="card-app-studio-empty">${escapeHtml(tFormat('Load failed: ${0}', err?.message || String(err)))}</div>`;
+        return;
+    }
 
     if (sessions.length === 0) {
         listEl.innerHTML = `<div class="card-app-studio-empty">${escapeHtml(t('No sessions yet'))}</div>`;
@@ -1385,24 +1321,29 @@ function toggleSessionsPanel() {
  * Create a new session.
  */
 async function createNewSession() {
-    // Save current session if it has messages
-    if (currentSessionId && conversationMessages.length > 0) {
-        const summary = generateSessionSummary(conversationMessages);
-        await saveCurrentSession(currentSessionId, conversationMessages, summary);
+    try {
+        // Save current session if it has messages
+        if (currentSessionId && conversationMessages.length > 0) {
+            const summary = generateSessionSummary(conversationMessages);
+            await saveCurrentSession(currentSessionId, conversationMessages, summary);
+        }
+
+        // Create new session
+        currentSessionId = generateSessionId();
+        conversationMessages = [];
+
+        // Clear chat UI
+        const chatEl = document.querySelector('[data-studio-chat]');
+        if (chatEl) chatEl.innerHTML = '';
+
+        // Update session list
+        await renderSessionList();
+
+        toastr.info(t('New session created'));
+    } catch (err) {
+        console.error(`[${MODULE_NAME}] Failed to create new session:`, err);
+        toastr.error(formatSaveSessionsError(err?.reason, err?.hint));
     }
-
-    // Create new session
-    currentSessionId = generateSessionId();
-    conversationMessages = [];
-
-    // Clear chat UI
-    const chatEl = document.querySelector('[data-studio-chat]');
-    if (chatEl) chatEl.innerHTML = '';
-
-    // Update session list
-    await renderSessionList();
-
-    toastr.info(t('New session created'));
 }
 
 /**
@@ -1488,6 +1429,7 @@ async function handleAISend() {
         const apiProfileName = String(ceaSettings.requestApiPresetName || '').trim();
         const result = await sendAIMessage(currentCharId, conversationMessages, userText, {
             abortSignal: controller.signal,
+            character: currentCharacter,
             llmPresetName,
             apiPresetName: apiProfileName,
             systemPrompt: ceaSettings.cardAppStudioSystemPrompt,
@@ -1539,11 +1481,15 @@ async function handleAISend() {
         syncComposerState();
         // Auto-save conversation with summary. Hot path — fires on every AI
         // turn — so suppress the toastr error to avoid spamming the user on
-        // a single transient failure. The warning still hits the console.
+        // a single transient failure. The error still hits the console.
         if (currentCharId && currentSessionId && conversationMessages.length > 0) {
             const summary = generateSessionSummary(conversationMessages);
-            await saveCurrentSession(currentSessionId, conversationMessages, summary, { silent: true });
-            await renderSessionList();
+            try {
+                await saveCurrentSession(currentSessionId, conversationMessages, summary);
+                await renderSessionList();
+            } catch (err) {
+                console.error(`[${MODULE_NAME}] Auto-save session failed:`, err);
+            }
         }
     }
 }
@@ -1580,14 +1526,19 @@ async function handleStudioClick(e) {
             handleAIStop();
             break;
         case 'clear-chat': {
-            conversationMessages = [];
-            if (currentSessionId) {
-                await deleteSession(currentSessionId);
+            try {
+                if (currentSessionId) {
+                    await deleteSession(currentSessionId);
+                }
+                conversationMessages = [];
                 currentSessionId = generateSessionId();
+                const chatEl = document.querySelector('[data-studio-chat]');
+                if (chatEl) chatEl.innerHTML = '';
+                await renderSessionList();
+            } catch (err) {
+                console.error(`[${MODULE_NAME}] Failed to clear studio chat session:`, err);
+                toastr.error(tFormat('Delete failed: ${0}', err?.message || String(err)));
             }
-            const chatEl = document.querySelector('[data-studio-chat]');
-            if (chatEl) chatEl.innerHTML = '';
-            await renderSessionList();
             break;
         }
         case 'sessions-toggle':
@@ -1648,6 +1599,3 @@ function handleStudioKeydown(e) {
         return;
     }
 }
-
-// Export file API for AI tool execution (Commit 4)
-export { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile };

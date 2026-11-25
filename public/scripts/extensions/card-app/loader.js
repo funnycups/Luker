@@ -1,6 +1,7 @@
 /**
  * CardApp Loader - handles CSS scoping, JS loading, container management.
  */
+import { escapeHtml } from '../../lib/html-escape.js';
 
 const CONTAINER_ID = 'card-app-container';
 const SCOPED_STYLE_ID = 'card-app-scoped-style';
@@ -251,15 +252,4 @@ export function showError(container, error, onExit) {
         </div>
     `;
     container.querySelector('.card-app-exit-btn')?.addEventListener('click', onExit);
-}
-
-/**
- * Escape HTML special characters.
- * @param {string} str
- * @returns {string}
- */
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
 }

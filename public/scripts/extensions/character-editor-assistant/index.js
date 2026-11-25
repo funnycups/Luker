@@ -14,9 +14,9 @@ import {
 registerOp('cardapp_patch_file',  createCardAppPatchFileOp({ applyPatch }));
 registerOp('cardapp_rename_file', createCardAppRenameFileOp());
 
-// Register lorebook-entry ops so commitLorebookOperations → applyEdits can
-// dispatch 'lorebook_entry_add' / '_update' / '_remove' emitted by the
-// unified editor's normalizeToolCallToEdit. Without these the engine throws
+// Register lorebook-entry ops so applyEdits can dispatch
+// 'lorebook_entry_add' / '_update' / '_remove' emitted by the Workbench
+// card target's normalizeToolCallToEdit. Without these the engine throws
 // `applyEdits: unknown op: lorebook_entry_add` on every lorebook Apply.
 registerOp('lorebook_entry_add',    createLorebookEntryAddOp());
 registerOp('lorebook_entry_update', createLorebookEntryUpdateOp());

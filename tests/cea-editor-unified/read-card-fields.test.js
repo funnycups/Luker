@@ -15,21 +15,11 @@
 //
 // Tested here directly (not through studio.js) so we can pin the
 // contract without dragging the ST-context / jQuery import graph into
-// jest — tools.js only imports `runCharacterEditorHelperToolCall` from
-// main.js which triggers the full runtime.
-
-import { jest } from '@jest/globals';
-
-// Stub the one main.js export tools.js imports at module load. The read
-// dispatcher never routes through the legacy helper runner, so the
-// stub can be a trivial noop.
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-}));
+// jest.
 
 let tools;
 beforeAll(async () => {
-    tools = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/tools.js');
+    tools = await import('../../public/scripts/workbench/targets/card-tools.js');
 });
 
 // Sample card with a mix of every whitelisted shape (string, array) plus

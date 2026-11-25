@@ -6,7 +6,7 @@
  * that list/create/update expose and persist `pluginLanes` only.
  */
 
-import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
 
 const store = [];
 

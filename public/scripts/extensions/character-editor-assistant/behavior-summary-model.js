@@ -4,20 +4,8 @@
 // Pure live behavioral summary model for Character Editor Assistant.
 // No DOM dependencies.
 
-function defaultTranslate(text) {
-    const fn = globalThis.Luker?.getContext?.()?.translate;
-    return typeof fn === 'function' ? fn(String(text ?? '')) : String(text ?? '');
-}
-
-function clampInt(raw, min, max, fallback) {
-    const isBlank = raw === '' || raw === null || raw === undefined
-        || (typeof raw === 'string' && raw.trim() === '');
-    const parsed = isBlank ? NaN : Number.parseInt(String(raw), 10);
-    if (!Number.isFinite(parsed)) {
-        return fallback;
-    }
-    return Math.max(min, Math.min(max, parsed));
-}
+import { normalizeToolCallRetryMax } from '../../lib/iter-tool-calling.js';
+import { i18n as defaultTranslate } from './i18n.js';
 
 /**
  * Builds the 1-row behavioral summary model for Character Editor Assistant
@@ -31,7 +19,7 @@ export function buildCeaSummaryModel(state = {}) {
     const i18n = typeof state.i18n === 'function' ? state.i18n : defaultTranslate;
     const apiPreset = String(state.requestApiPresetName || '').trim();
     const llmPreset = String(state.requestLlmPresetName || '').trim();
-    const retries = clampInt(state.toolCallRetryMax, 0, 10, 2);
+    const retries = normalizeToolCallRetryMax(state.toolCallRetryMax, 2);
 
     return {
         tone: 'active',

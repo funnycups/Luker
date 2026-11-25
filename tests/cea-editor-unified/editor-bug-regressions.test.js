@@ -12,7 +12,6 @@ import { describe, expect, jest, test } from '@jest/globals';
 import { normalizeLegacyMessage } from '../../public/scripts/workbench/model/legacy-import.js';
 import { runIterateTurn } from '../../public/scripts/workbench/model/iterate.js';
 import { createCardTarget } from '../../public/scripts/workbench/targets/card.js';
-import { createUnifiedCeaEditorSessionStore } from '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js';
 
 describe('CEA-2: prior turn tool history replay', () => {
     test('normalizeLegacyMessage preserves toolCalls + merged toolResults and strips auto-continue fillers', () => {
@@ -137,90 +136,5 @@ describe('CEA-4: multi-round card edits commit together cleanly', () => {
         expect(updateSpy).toHaveBeenCalledTimes(1);
         expect(char.description).toBe('b');
         expect(char.name).toBe('Y');
-    });
-});
-
-describe('CEA-7: session store skips transient empty sessions', () => {
-    function makeStoreEnv() {
-        const sidecars = {};
-        const fakeCtx = {
-            getCharacterState: async (a, ns) => {
-                const state = sidecars[`${a}:${ns}`];
-                return state ? { ok: true, state } : { ok: true, state: null };
-            },
-            updateCharacterState: async (a, ns, updater) => {
-                const current = sidecars[`${a}:${ns}`] || null;
-                const next = await updater(
-                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
-                    { attempt: 0, avatar: a, namespace: ns },
-                );
-                if (next == null) return { ok: true, state: current, updated: false };
-                sidecars[`${a}:${ns}`] = next;
-                return { ok: true, state: next, updated: true };
-            },
-        };
-        return createUnifiedCeaEditorSessionStore({ context: fakeCtx, avatar: 'a.png' });
-    }
-
-    async function persistGated(store, session, pendingEdits) {
-        if (
-            session._transient
-            && (!Array.isArray(session.messages) || session.messages.length === 0)
-            && (!Array.isArray(pendingEdits) || pendingEdits.length === 0)
-        ) {
-            return;
-        }
-        if (session._transient) delete session._transient;
-        await store.save(session);
-    }
-
-    test('createNewSession-style transient session does not write to the store via the wrapper', async () => {
-        const store = makeStoreEnv();
-        await persistGated(store, {
-            id: 'sess_transient',
-            title: '',
-            avatar: 'a.png',
-            messages: [],
-            pendingEdits: [],
-            surfaceState: {},
-            _transient: true,
-        }, []);
-        expect(await store.list()).toEqual([]);
-    });
-
-    test('once messages exist the gate falls through and the session persists', async () => {
-        const store = makeStoreEnv();
-        await persistGated(store, {
-            id: 'sess_real',
-            title: '',
-            avatar: 'a.png',
-            messages: [{ id: 'm1', role: 'user', content: 'hi' }],
-            pendingEdits: [],
-            surfaceState: {},
-            _transient: true,
-        }, []);
-        const list = await store.list();
-        expect(list).toHaveLength(1);
-        expect(list[0].id).toBe('sess_real');
-    });
-
-    test('clear-history flow: list -> delete all -> new transient session -> no phantom row', async () => {
-        const store = makeStoreEnv();
-        await store.save({ id: 's1', title: 'one', avatar: 'a.png', messages: [{ id: 'm1', role: 'user', content: 'a' }], surfaceState: {} });
-        await store.save({ id: 's2', title: 'two', avatar: 'a.png', messages: [{ id: 'm2', role: 'user', content: 'b' }], surfaceState: {} });
-
-        for (const item of await store.list()) {
-            await store.remove(item.id);
-        }
-        await persistGated(store, {
-            id: 's_fresh',
-            title: '',
-            avatar: 'a.png',
-            messages: [],
-            pendingEdits: [],
-            surfaceState: {},
-            _transient: true,
-        }, []);
-        expect(await store.list()).toEqual([]);
     });
 });

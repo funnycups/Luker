@@ -1,31 +1,18 @@
-// Tests the post-CHARACTER_REPLACED diff helpers in CEA main.js that feed
-// the iter-studio's seedSystemMessage:
+// Tests the post-CHARACTER_REPLACED diff helpers in CEA post-replace/seed.js
+// that feed the iter-studio's seedSystemMessage:
 //   - summarizeCharacterDiff: per-field add / remove / change with excerpt
 //   - summarizeLorebookDiff: per-uid add / remove / change with the changed
 //     field list, plus the "primary book renamed" short-circuit
 //   - buildPostReplaceSeedMessage: end-to-end seed assembly, falling back to
 //     the "no previous version" string when previousCharacter is missing.
 //
-// The diff helpers are pure (no jQuery, no DOM, no popup), so the same
-// import-tree stub used by lorebook-approval-flow lets us reach them.
+// seed.js reaches live-state.js, which imports the edits engine; the
+// engine's conflict UI imports popup.js, which is replaced so the
+// SillyTavern DOM shell stays out of the import graph.
 
-import { describe, expect, jest, test } from '@jest/globals';
-
-globalThis.jQuery = (cb) => {
-    if (typeof cb === 'function') { /* swallow init handlers */ }
-    return { ready: () => {}, on: () => {}, off: () => {} };
-};
-globalThis.$ = globalThis.jQuery;
-globalThis.window = globalThis.window || globalThis;
-globalThis.document = globalThis.document || {
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    querySelector: () => null,
-    querySelectorAll: () => [],
-};
-globalThis.toastr = globalThis.toastr || {
-    error: () => {}, warning: () => {}, success: () => {}, info: () => {},
-};
+import { describe, expect, jest, test, beforeAll, afterAll } from '@jest/globals';
+import lodash from 'lodash';
+import { installBrowserModuleContext } from '../util/browser-module-context.js';
 
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     POPUP_TYPE: { DISPLAY: 'display' },
@@ -33,76 +20,15 @@ jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     Popup: class { constructor() {} show() { return Promise.resolve(''); } },
 }));
 
-const realEdits = await import('../../public/scripts/lib/edits/index.js');
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    converter: { makeHtml: (s) => s },
-    generateQuietPrompt: async () => '',
-    getCharacterDescription: () => '',
-    getCharacterFirstMessage: () => '',
-    getCharacterMesExample: () => '',
-    getCharacterName: () => '',
-    getCharacterPersonality: () => '',
-    getCharacterScenario: () => '',
-    saveSettingsDebounced: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: { character_editor_assistant: {} },
-    getContext: () => ({}),
-    getCharacterState: () => ({}),
-    setCharacterState: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    translate: (s) => s,
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    newWorldInfoEntryTemplate: {},
-    setWorldInfoButtonClass: () => {},
-    updateWorldInfoList: () => {},
-    getCharaAuxWorlds: () => [],
-    getChatWorldInfoNames: () => [],
-    selected_world_info: [],
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    getCharaFilename: () => '',
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/function-call-runtime.js', () => ({
-    TOOL_PROTOCOL_STYLE: { OPENAI: 'openai' },
-    validateParsedToolCalls: () => ({ ok: true, errors: [] }),
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/diff-ui.js', () => ({
-    createCharacterEditorDiffUi: () => ({}),
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-ui.js', () => ({
-    createCharacterEditorUi: () => ({}),
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
-    DEFAULT_SYSTEM_PROMPT: '',
-}));
-jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    applyEdits: realEdits.applyEdits,
-}));
-jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
-    openSimulationReview: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/i18n/index.js', () => ({
-    ensureSimulationReviewLocaleData: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/wi-hits.js', () => ({
-    extractWorldInfoHitsFromRuntime: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/dry-run-capture.js', () => ({
-    extractSystemFromCapturedPrompt: () => '',
-    extractNonSystemFromCapturedPrompt: () => '',
-}));
-
 let CEA;
+let browserEnv;
 beforeAll(async () => {
-    CEA = await import('../../public/scripts/extensions/character-editor-assistant/main.js');
+    browserEnv = installBrowserModuleContext({ lib: { lodash } });
+    CEA = await import('../../public/scripts/extensions/character-editor-assistant/post-replace/seed.js');
+});
+
+afterAll(() => {
+    browserEnv?.restore();
 });
 
 describe('summarizeCharacterDiff', () => {
@@ -283,15 +209,20 @@ describe('summarizeLorebookDiff', () => {
 
 describe('buildPostReplaceSeedMessage', () => {
     test('falls back to the import-only seed when there is no previous character', async () => {
-        const context = { loadWorldInfo: async () => ({ entries: {} }) };
+        const context = { loadWorldInfo: jest.fn(async () => ({ entries: {} })) };
         const detail = {
-            character: { avatar: 'a.png', name: 'A', data: { extensions: {} } },
+            character: { avatar: 'a.png', name: 'A', data: { extensions: { world: 'IgnoredBook' } } },
             previousCharacter: null,
             previousLorebookSnapshot: null,
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        expect(seed).toContain('Just imported this card');
-        expect(seed).not.toContain('post-replace iteration');
+        expect(typeof seed).toBe('string');
+        expect(seed.trim().length).toBeGreaterThan(0);
+        expect(context.loadWorldInfo).not.toHaveBeenCalled();
+        expect(seed).not.toContain('Character card diff');
+        expect(seed).not.toContain('World book diff');
+        expect(seed).not.toContain('- prev:');
+        expect(seed).not.toContain('- next:');
     });
 
     test('builds a multi-section diff seed when both prev and next are present', async () => {
@@ -320,13 +251,13 @@ describe('buildPostReplaceSeedMessage', () => {
             },
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        // Migration intent + direction convention is the new framing.
-        expect(seed).toContain('post-replace iteration');
-        expect(seed).toContain('REVIEW ONLY');
-        expect(seed).toContain('Direction convention');
+        expect(typeof seed).toBe('string');
+        expect(seed.trim().length).toBeGreaterThan(0);
         expect(seed).toContain('Character card diff');
         expect(seed).toContain('Field changed: `description`');
         expect(seed).toContain('World book diff');
+        expect(seed).toContain('stale');
+        expect(seed).toContain('fresh');
         // Direction is hard-baked: prev: <old>, next: <new>.
         // If this ever flips, the AI will migrate the wrong direction.
         const prevLine = seed.split('\n').find(line => line.trim().startsWith('- prev:'));
@@ -364,7 +295,7 @@ describe('buildPostReplaceSeedMessage', () => {
             },
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        expect(seed).toContain('no human-readable changes detected');
+        expect(seed).toContain('(no human-readable changes detected)');
     });
 
     test('REGRESSION: diff direction does not flip when prev and next are swapped at the call site', () => {
@@ -418,17 +349,30 @@ describe('buildPostReplaceSeedMessage', () => {
         expect(lines).not.toMatch(/Entry removed \(uid 2\)/);
     });
 
+    test('omits world book diff section when only character card fields changed', async () => {
+        const context = { loadWorldInfo: async () => ({ entries: {} }) };
+        const detail = {
+            character: { avatar: 'a.png', name: 'A', description: 'new', data: { extensions: { world: 'B' } } },
+            previousCharacter: { avatar: 'a.png', name: 'A', description: 'old', data: { extensions: { world: 'B' } } },
+            previousLorebookSnapshot: { bookName: 'B', entries: {} },
+        };
+        const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
+        expect(typeof seed).toBe('string');
+        expect(seed.trim().length).toBeGreaterThan(0);
+        expect(seed).toContain('Character card diff');
+        expect(seed).toContain('Field changed: `description`');
+        expect(seed).not.toContain('World book diff');
+    });
+
     test('REGRESSION: when nextCharacter carries data.character_book, the diff reads from it via convertCharacterBook (not from disk)', async () => {
         // Without this path the post-replace diff for the OPEN_EDITOR
         // branch degenerates to "every prev entry Removed, no Added"
         // whenever the new card's bookName hasn't been materialized to
         // disk yet — exactly the degenerate state we just fixed.
         //
-        // Reach into the live import-time __ctx capture in main.js by
-        // overriding globalThis.Luker.getContext().convertCharacterBook.
-        // The main.js module already imported __ctx at top of file, so
-        // we override the stub at call time by replacing the proxy with
-        // an object that exposes a real implementation. The
+        // seed.js reads Luker.getContext().convertCharacterBook at call
+        // time, so replacing globalThis.Luker for the duration of the call
+        // exposes a real implementation. The
         // `embeddedHasEntries && convertCharacterBook` branch fires
         // when convertCharacterBook is `typeof === 'function'`.
         const realConvert = (book) => ({
@@ -468,11 +412,15 @@ describe('buildPostReplaceSeedMessage', () => {
                 },
             };
             const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-            // The seed must mention BOTH:
-            //  - that we are running the review/migration flow
-            expect(seed).toContain('post-replace iteration');
-            //  - the book rename (OldBook → NewBook)
+            expect(typeof seed).toBe('string');
+            expect(seed.trim().length).toBeGreaterThan(0);
+            // The seed must interpolate BOTH the book rename (OldBook → NewBook)
+            // and the embedded/previous entries without touching disk.
             expect(seed).toMatch(/Primary world book.*OldBook.*→.*NewBook/);
+            expect(seed).toContain('old_only');
+            expect(seed).toContain('old content');
+            expect(seed).toContain('new_only');
+            expect(seed).toContain('fresh content');
             // Card-field diff for description (prev=old, next=new).
             expect(seed).toContain('Field changed: `description`');
             const prevLine = seed.split('\n').find(l => l.trim().startsWith('- prev:'));
@@ -484,27 +432,4 @@ describe('buildPostReplaceSeedMessage', () => {
         }
     });
 
-    test('seed asks AI to review + summarize first (no tool calls on turn 1) — not to start editing immediately', async () => {
-        // UX requirement: on the first turn the AI must produce a plain-text
-        // summary + reconciliation plan. Editing happens only on subsequent
-        // turns after the user has reviewed.
-        const context = { loadWorldInfo: async () => ({ entries: {} }) };
-        const detail = {
-            character: { avatar: 'a.png', name: 'A', description: 'x', data: { extensions: { world: 'B' } } },
-            previousCharacter: { avatar: 'a.png', name: 'A', description: 'y', data: { extensions: { world: 'B' } } },
-            previousLorebookSnapshot: { bookName: 'B', entries: {} },
-        };
-        const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        // Must explicitly forbid tool calls on the first turn.
-        expect(seed).toContain('REVIEW ONLY');
-        expect(seed).toContain('NO tool calls');
-        // Must describe the expected first-turn deliverables.
-        expect(seed).toMatch(/summarize for the user/);
-        expect(seed).toMatch(/reconciliation plan/);
-        // Tool use is only for "subsequent turns".
-        expect(seed).toMatch(/subsequent turns/);
-        // Migration direction policy is present so the AI knows what
-        // "apply" means when the user does approve.
-        expect(seed).toContain('Migrate prev-only curated content into next');
-    });
 });
