@@ -6,28 +6,37 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Workbench
 
-- Added single-conversation deletion and per-scope bulk clearing to Workbench AI iteration and Q&A.
-- Split Workbench conversation bodies into per-session state with lazy loading and automatic cleanup of migrated legacy global session data.
+- Expanded Workbench Q&A diagnostics with World Info activation traces, variables, regex scripts, connection profiles, skills, runtime environment details, Memory Graph search and schema, Orchestrator plot notes, image and embedding request inspection, built-in Luker documentation lookup, and clickable Request Inspector links.
+- Added single-conversation deletion to Workbench AI iteration and Q&A, and per-scope bulk clearing to AI iteration.
+- Split Workbench conversation indexes and bodies into per-session state with on-demand loading and automatic cleanup of migrated legacy global iteration sessions.
 - Renamed the Memory Graph AI iteration targets to Memory graph config and Memory graph content across Workbench, and added settings source resolution and Change history filtering for Memory graph content.
 
 ### Update Notice
 
-- Added a post-update modal displaying localized changelog summaries for all versions and dev builds since the previous login.
+- Added a post-update modal displaying localized changelogs for all versions and dev builds since the last visit.
+
+### Notifications
+
+- Replaced the built-in toast notifications with a theme-aware notification engine supporting collapsible stacking, drag-to-reposition, compact capsule minimization for persistent notifications, and display above modal dialogs.
 
 ### Memory Graph
 
+- Unified Memory Graph hierarchical and cross-depth compression onto a single-summary rollup model across all node types in the graph, inspector, table view, and prompt injection, and prevented extraction edits from altering non-summary fields on rollup nodes.
+- Made Memory Graph compression surface errors directly instead of failing silently, saving completed rounds on partial manual compression failures.
 - Added an unlimited compress-until-done option and a live behavioral summary card to the Memory Graph manual compression modal.
-- Fixed Memory Graph manual compression being skipped when Auto compression is disabled.
 - Added rollup node compaction to Memory graph content AI iteration in Workbench.
 - Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.
+- Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
+- Fixed Memory Graph automatic and manual compression loops stopping early at a fixed round cap.
+- Fixed Memory Graph manual compression being skipped when Auto compression is disabled.
+- Fixed Memory Graph extraction, rebuild, fill, and compression errors being mislabeled as recall injection failures.
 - Fixed the Memory Graph inspector listing the same event multiple times across different relation edges, merging them into one row with relation tags.
 - Fixed flattened CJK event summaries with arrow-separated or parenthesized locations failing to split the place header from the prose body.
 - Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
-- Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
 
 ### Multi-Agent Orchestrator
 
-- Fixed agenda and director orchestration profiles ignoring configured worker concurrency, run count, and abort-discard limits.
+- Fixed agenda and director orchestration profiles ignoring configured worker concurrency, run limit, and abort-discard settings.
 
 ### Background Keep-Alive
 
@@ -36,20 +45,25 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Plugin Settings
 
-- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in plugin settings panels.
-
-### Extension API
-
-- Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
-- Added a unified background activity guard API for extensions and lifecycle-scoped CardApps, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
+- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in plugin and Workbench settings panels.
 
 ### Themes
 
 - Separated built-in themes into read-only version-managed assets with on-demand theme loading, standalone theme derivation, and direct theme-level persistence for custom CSS and palettes.
+- Fixed the stop generation button icon alignment in the Lens theme.
+
+### Extension API
+
+- Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
+- Exposed unified background activity guards on `context.activityGuard` and lifecycle-scoped CardApp `ctx.activityGuard`, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
+- Exposed `context.readFloorStateSnapshot`, `context.chatWorldInfo.getActivationTrace`, and `context.openRequestInspector` for extensions.
+- Removed the `fields` option from Memory Graph `compactNodes` so rollup compaction writes only the unified `summary` field.
 
 ### Fixes
 
+- Fixed truncated or malformed server responses clearing chat integrity state or being treated as empty chats, and deduplicated snapshot fetches during chat save-conflict recovery.
 - Fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.
+- Fixed packaged Docker, desktop, and mobile builds omitting built-in documentation files.
 - Fixed login sessions expiring after updating a Docker image.
 - Fixed iOS background action menu buttons closing without triggering when tapped.
 
