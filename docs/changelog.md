@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0-rc.5 (2026-11-25)
 
 ### Workbench
 
@@ -66,6 +66,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed packaged Docker, desktop, and mobile builds omitting built-in documentation files.
 - Fixed login sessions expiring after updating a Docker image.
 - Fixed iOS background action menu buttons closing without triggering when tapped.
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.4...v2.9.0-rc.5
 
 ## v2.9.0-rc.4 (2026-11-23)
 
