@@ -1,10 +1,14 @@
 import { describe, expect, test } from '@jest/globals';
 
 import {
-    normalizeClaudeResponseToOAI,
-    normalizeGeminiResponseToOAI,
-    normalizeCohereResponseToOAI,
-} from '../src/endpoints/backends/chat-completions.js';
+    WIRE_PROTOCOLS,
+    parseProtocolResponse,
+    parsedTurnToChatCompletion,
+} from '../public/scripts/lib/protocol-parser/index.js';
+
+const normalizeClaudeResponseToOAI = (raw) => parsedTurnToChatCompletion(parseProtocolResponse(WIRE_PROTOCOLS.CLAUDE, raw), raw);
+const normalizeGeminiResponseToOAI = (raw) => parsedTurnToChatCompletion(parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, raw), raw);
+const normalizeCohereResponseToOAI = (raw) => parsedTurnToChatCompletion(parseProtocolResponse(WIRE_PROTOCOLS.COHERE, raw), raw);
 
 describe('normalizeClaudeResponseToOAI — usage normalization', () => {
     test('maps input_tokens/output_tokens to OpenAI snake_case shape', () => {
@@ -21,27 +25,58 @@ describe('normalizeClaudeResponseToOAI — usage normalization', () => {
         });
     });
 
-    test('surfaces cache_read/cache_creation under prompt_tokens_details', () => {
+    test('sums disjoint input_tokens + cache_read + cache_creation and preserves thinking_tokens', () => {
         const raw = {
             content: [{ type: 'text', text: 'cached' }],
             stop_reason: 'end_turn',
             usage: {
                 input_tokens: 5,
-                output_tokens: 3,
+                output_tokens: 20,
                 cache_read_input_tokens: 100,
                 cache_creation_input_tokens: 50,
+                output_tokens_details: { thinking_tokens: 12 },
             },
         };
         const reply = normalizeClaudeResponseToOAI(raw);
         expect(reply.usage).toEqual({
-            prompt_tokens: 5,
-            completion_tokens: 3,
-            total_tokens: 8,
+            prompt_tokens: 155,
+            completion_tokens: 20,
+            total_tokens: 175,
             prompt_tokens_details: {
                 cached_tokens: 100,
                 cache_creation_tokens: 50,
             },
+            completion_tokens_details: {
+                reasoning_tokens: 12,
+            },
         });
+    });
+
+    test('preserves pause_turn, model_context_window_exceeded, stop_details, citations, and native_content_blocks', () => {
+        const rawPaused = {
+            content: [
+                { type: 'thinking', thinking: 'plan', signature: 'sig-1' },
+                { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'test' } },
+                { type: 'text', text: 'cited', citations: [{ type: 'web_search_result_location', url: 'https://example.com' }] },
+            ],
+            stop_reason: 'pause_turn',
+            stop_sequence: 'END',
+            stop_details: { reason: 'server_tool' },
+        };
+        const pausedReply = normalizeClaudeResponseToOAI(rawPaused);
+        expect(pausedReply.choices[0].finish_reason).toBe('pause_turn');
+        expect(pausedReply.choices[0].native_finish_reason).toBe('pause_turn');
+        expect(pausedReply.choices[0].stop_sequence).toBe('END');
+        expect(pausedReply.choices[0].stop_details).toEqual({ reason: 'server_tool' });
+        expect(pausedReply.choices[0].message.native_content_blocks).toEqual(rawPaused.content);
+        expect(pausedReply.choices[0].message.citations).toHaveLength(1);
+
+        const truncated = normalizeClaudeResponseToOAI({
+            content: [{ type: 'text', text: 'cut' }],
+            stop_reason: 'model_context_window_exceeded',
+        });
+        expect(truncated.choices[0].finish_reason).toBe('length');
+        expect(truncated.choices[0].native_finish_reason).toBe('model_context_window_exceeded');
     });
 
     test('omits usage entirely when raw.usage is missing', () => {
