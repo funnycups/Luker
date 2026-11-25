@@ -225,9 +225,14 @@ export function replaceIllustrationMarkup(text, id, html) {
     if (!node) {
         return source;
     }
-    const replacement = document.createElement('template');
-    replacement.innerHTML = String(html ?? '');
-    node.replaceWith(replacement.content);
+    const htmlText = String(html ?? '');
+    if (!htmlText) {
+        removeIllustrationNodeCleanly(node);
+    } else {
+        const replacement = document.createElement('template');
+        replacement.innerHTML = htmlText;
+        node.replaceWith(replacement.content);
+    }
     return template.innerHTML;
 }
 

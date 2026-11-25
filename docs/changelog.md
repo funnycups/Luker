@@ -7,6 +7,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Image generation
 
 - Fixed clicking an inline illustration blocking the action dialog on a backend workflow request.
+- Fixed regenerating an inline illustration interrupting other active regenerations in the same message.
 
 ## v2.9.0-rc.5 (2026-11-25)
 

@@ -29,9 +29,29 @@ export class GenerationQueue {
         return this.#pending.length;
     }
 
-    schedule(work) {
+    schedule(work, { signal } = {}) {
         return new Promise((resolve, reject) => {
-            this.#pending.push({ work, resolve, reject });
+            if (signal?.aborted) {
+                const error = new Error('Generation queue task aborted.');
+                error.name = 'AbortError';
+                reject(error);
+                return;
+            }
+            const job = { work, resolve, reject, cleanup: null };
+            if (signal && typeof signal.addEventListener === 'function') {
+                const onAbort = () => {
+                    const index = this.#pending.indexOf(job);
+                    if (index !== -1) {
+                        this.#pending.splice(index, 1);
+                        const error = new Error('Generation queue task aborted.');
+                        error.name = 'AbortError';
+                        reject(error);
+                    }
+                };
+                signal.addEventListener('abort', onAbort, { once: true });
+                job.cleanup = () => signal.removeEventListener('abort', onAbort);
+            }
+            this.#pending.push(job);
             this.#pump();
         });
     }
@@ -50,6 +70,7 @@ export class GenerationQueue {
                 return;
             }
             const job = this.#pending.shift();
+            job.cleanup?.();
             this.#active += 1;
             this.#lastStartAt = Date.now();
             let output;

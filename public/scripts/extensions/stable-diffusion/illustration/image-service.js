@@ -62,7 +62,7 @@ export function createImageService({ bridge, queue, getQueueConfig, context = nu
             const bridgeOptions = hasIllustrationLease && options?.skipActivityLease === undefined
                 ? { ...options, skipActivityLease: true }
                 : options;
-            return queue.schedule(() => bridge.generateImage(prompt, bridgeOptions));
+            return queue.schedule(() => bridge.generateImage(prompt, bridgeOptions), { signal: bridgeOptions?.signal });
         },
     };
 }

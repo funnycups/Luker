@@ -8,7 +8,7 @@ import {
     switchMessageIllustrationVersion,
     syncMessageSwipeData,
 } from './records.js';
-import { buildImageTag, escapeHtml, insertTagsAtAnchors, replaceIllustrationMarkup } from './message.js';
+import { buildImageTag, escapeHtml, ILLUSTRATION_STRIP_FIND_REGEX, insertTagsAtAnchors, replaceIllustrationMarkup } from './message.js';
 import { emitMessageChanged } from './message-events.js';
 import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
@@ -18,6 +18,29 @@ import { deleteMediaFromServer } from '../../../chats.js';
 
 export { filterReplayReferences };
 
+const ILLUSTRATION_STRIP_REGEX = (() => {
+    const match = /^\/([\s\S]+)\/([gimsuy]*)$/.exec(ILLUSTRATION_STRIP_FIND_REGEX);
+    return new RegExp(match[1], match[2]);
+})();
+
+function normalizeMessageTextForFingerprint(text) {
+    const stripped = String(text ?? '').replace(ILLUSTRATION_STRIP_REGEX, '');
+    if (typeof document !== 'undefined') {
+        const template = document.createElement('template');
+        template.innerHTML = stripped;
+        return template.innerHTML;
+    }
+    return stripped;
+}
+
+function messageContentFingerprint(message) {
+    return messageFingerprint({
+        send_date: message?.send_date,
+        original_avatar: message?.original_avatar,
+        mes: normalizeMessageTextForFingerprint(message?.mes),
+    });
+}
+
 export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, t }) {
     const actionControllers = new Map();
     const reportError = typeof notifyError === 'function'
@@ -25,24 +48,25 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         : message => toast(message, 'error');
 
     function cancelMatching(predicate) {
-        for (const [key, controller] of [...actionControllers]) {
-            if (!predicate(key)) {
+        for (const [key, entry] of [...actionControllers]) {
+            if (!predicate(entry)) {
                 continue;
             }
             actionControllers.delete(key);
-            controller.abort('Illustration action cancelled');
+            entry.controller.abort('Illustration action cancelled');
         }
     }
 
     function cancelForMessage(messageId, swipeId = undefined) {
-        cancelMatching(key => {
-            const [id, swipe] = key.split(':').map(Number);
-            return id === messageId && (swipeId === undefined || swipe === swipeId);
-        });
+        cancelMatching(entry => entry.messageId === messageId && (swipeId === undefined || entry.swipeId === swipeId));
+    }
+
+    function cancelForRecord(messageId, swipeId, recordId) {
+        cancelMatching(entry => entry.messageId === messageId && entry.swipeId === swipeId && entry.recordId === recordId);
     }
 
     function cancelFrom(chatLength) {
-        cancelMatching(key => Number(key.split(':')[0]) >= chatLength);
+        cancelMatching(entry => entry.messageId >= chatLength);
     }
 
     function cancelAll() {
@@ -98,11 +122,18 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         const savedAspectRatio = String(parent?.aspectRatio || '');
         const savedCharPrompts = Array.isArray(parent?.characterPrompts) ? parent.characterPrompts : [];
         const swipeId = message.swipe_id ?? 0;
-        const beforeFingerprint = messageFingerprint(message);
+        const beforeFingerprint = messageContentFingerprint(message);
+        const targetRecordId = String(replaceRecord?.id || '');
+        const hadTagBefore = replaceRecord?.status !== 'failed'
+            && Boolean(targetRecordId)
+            && String(message.mes || '').includes(`data-illustration-id="${targetRecordId}"`);
         pipeline.cancelForMessage?.(messageId, swipeId);
-        cancelForMessage(messageId, swipeId);
-        const controllerKey = `${messageId}:${swipeId}`;
-        actionControllers.set(controllerKey, controller);
+        cancelForRecord(messageId, swipeId, targetRecordId);
+        if (controller.signal.aborted) {
+            throw createActionAbortError();
+        }
+        const controllerKey = `${messageId}:${swipeId}:${targetRecordId}`;
+        actionControllers.set(controllerKey, { messageId, swipeId, recordId: targetRecordId, controller });
 
         let loras = [];
         let savedReferences = rawSavedReferences;
@@ -141,7 +172,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                 throw createActionAbortError();
             }
         } finally {
-            if (actionControllers.get(controllerKey) === controller) {
+            if (actionControllers.get(controllerKey)?.controller === controller) {
                 actionControllers.delete(controllerKey);
             }
         }
@@ -153,7 +184,11 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         if (!currentMessage) {
             throw new Error('Message not found.');
         }
-        if ((currentMessage.swipe_id ?? 0) !== swipeId || messageFingerprint(currentMessage) !== beforeFingerprint) {
+        if ((currentMessage.swipe_id ?? 0) !== swipeId || messageContentFingerprint(currentMessage) !== beforeFingerprint) {
+            throw new Error('Message changed, generated image discarded.');
+        }
+        const liveReplaceRecord = getIllustrationRecord(currentMessage, replaceRecord.id);
+        if (!liveReplaceRecord) {
             throw new Error('Message changed, generated image discarded.');
         }
 
@@ -164,7 +199,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             aspectRatio: savedAspectRatio,
             references: savedReferences,
             characterPrompts: savedCharPrompts,
-            locked: Boolean(replaceRecord.locked),
+            locked: Boolean(liveReplaceRecord.locked),
             imageUrl,
             status: 'ready',
             parentId: parent.id,
@@ -192,7 +227,11 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                 }]).text;
             removeIllustrationRecord(currentMessage, replaceRecord.id);
         } else {
-            currentMessage.mes = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+            const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+            if (hadTagBefore && replaced === currentMessage.mes) {
+                throw new Error('Message changed, generated image discarded.');
+            }
+            currentMessage.mes = replaced;
         }
         appendIllustrationRecords(currentMessage, [record]);
         syncMessageSwipeData(currentMessage, ensureSwipes);
@@ -377,6 +416,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                 if (!liveMessage || !targetId || targetId === current.id) {
                     return;
                 }
+                cancelForRecord(messageId, liveMessage.swipe_id ?? 0, current.id);
                 const switched = switchMessageIllustrationVersion({
                     message: liveMessage,
                     fromId: current.id,
@@ -449,6 +489,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             return;
         }
         pipeline.cancelForMessage?.(messageId, message.swipe_id ?? 0);
+        cancelForRecord(messageId, message.swipe_id ?? 0, record.id);
         const removed = removeIllustrationRecord(message, record.id);
         if (removed.length === 0) {
             return;
