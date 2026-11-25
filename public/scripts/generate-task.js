@@ -176,6 +176,20 @@ export function applyMacroSubstitution(taskMessages, substituteParamsFn) {
             const { substituteMacros: _skip, ...rest } = message;
             return rest;
         }
+        if (Array.isArray(message.content)) {
+            let changed = false;
+            const nextParts = message.content.map(part => {
+                if (part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string' && part.text) {
+                    const replaced = substituteParamsFn(part.text, { skipSideEffects: true });
+                    if (replaced !== part.text) {
+                        changed = true;
+                        return { ...part, text: replaced };
+                    }
+                }
+                return part;
+            });
+            return changed ? { ...message, content: nextParts } : message;
+        }
         if (typeof message.content !== 'string' || !message.content) {
             return message;
         }

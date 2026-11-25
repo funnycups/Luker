@@ -17,6 +17,35 @@
 
 import { i18n } from '../i18n.js';
 import { SourceError } from './errors.js';
+import {
+    buildAttachmentSummaryLabel,
+    collectAttachmentPathsFromRecords,
+} from '../../lib/multimodal-messages.js';
+import {
+    deleteChatAttachments,
+    isAiAttachmentPath,
+} from '../../lib/chat-attachments-store.js';
+
+function collectSessionAttachmentPaths(body) {
+    if (!body || typeof body !== 'object') return [];
+    return collectAttachmentPathsFromRecords(
+        [
+            ...(Array.isArray(body.turns) ? body.turns : []),
+            ...(Array.isArray(body.messages) ? body.messages : []),
+        ],
+        { filter: isAiAttachmentPath },
+    );
+}
+
+async function cleanupSessionAttachments(ctx, paths) {
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    if (typeof globalThis.fetch !== 'function') return;
+    try {
+        await deleteChatAttachments(ctx, paths);
+    } catch (err) {
+        console.warn('[workbench/sessions] Failed to clean up session attachments:', err);
+    }
+}
 
 export const SESSIONS_NAMESPACE = 'workbench_sessions';
 export const SESSIONS_INDEX_VERSION = 2;
@@ -425,7 +454,17 @@ export function createSessionStore(ctxOrProvider = null) {
 
         async remove(id, scopeOpts = null) {
             const effectiveScope = scopeOpts || idToScope.get(id) || { scope: 'global' };
-            const adapter = resolveAdapter(getCtx(), effectiveScope);
+            const ctx = getCtx();
+            const adapter = resolveAdapter(ctx, effectiveScope);
+            const bodyNs = sessionBodyNamespace(id);
+            let attachmentPaths = [];
+            try {
+                const bodyRes = await adapter.read(bodyNs);
+                if (bodyRes?.ok && isPlainObject(bodyRes.state)) {
+                    attachmentPaths = collectSessionAttachmentPaths(bodyRes.state);
+                }
+            } catch { /* best-effort read for attachment cleanup */ }
+
             const res = await adapter.update(SESSIONS_NAMESPACE, (current) => {
                 const base = isPlainObject(current) ? current : {};
                 const list = normalizeSessions(base);
@@ -437,16 +476,18 @@ export function createSessionStore(ctxOrProvider = null) {
             if (res.state) {
                 rememberScopes(effectiveScope, normalizeSessions(res.state));
             }
-            const delRes = await adapter.del(sessionBodyNamespace(id));
+            const delRes = await adapter.del(bodyNs);
             assertOk(delRes, 'remove');
             idToScope.delete(id);
+            await cleanupSessionAttachments(ctx, attachmentPaths);
         },
 
         async removeMany(ids, scopeOpts = {}) {
             const uniqueIds = [...new Set((Array.isArray(ids) ? ids : []).map(id => String(id || '').trim()).filter(Boolean))];
             if (!uniqueIds.length) return { removed: [] };
 
-            const adapter = resolveAdapter(getCtx(), scopeOpts);
+            const ctx = getCtx();
+            const adapter = resolveAdapter(ctx, scopeOpts);
             const targetSet = new Set(uniqueIds);
             let removedIds = [];
 
@@ -472,11 +513,22 @@ export function createSessionStore(ctxOrProvider = null) {
             }
 
             const toDelete = removedIds.length ? removedIds : uniqueIds;
+            const attachmentPaths = new Set();
             for (const id of toDelete) {
-                const delRes = await adapter.del(sessionBodyNamespace(id));
+                const bodyNs = sessionBodyNamespace(id);
+                try {
+                    const bodyRes = await adapter.read(bodyNs);
+                    if (bodyRes?.ok && isPlainObject(bodyRes.state)) {
+                        for (const p of collectSessionAttachmentPaths(bodyRes.state)) {
+                            attachmentPaths.add(p);
+                        }
+                    }
+                } catch { /* best-effort read for attachment cleanup */ }
+                const delRes = await adapter.del(bodyNs);
                 assertOk(delRes, 'remove');
                 idToScope.delete(id);
             }
+            await cleanupSessionAttachments(ctx, [...attachmentPaths]);
             return { removed: removedIds };
         },
     };
@@ -494,8 +546,9 @@ export function groupSessions(list, now = Date.now()) {
     ].filter(Boolean);
 }
 
-/** Session title from the first question. */
-export function titleFrom(text) {
-    const one = String(text || '').replace(/\s+/g, ' ').trim();
+/** Session title from the first question (or image placeholder when text is empty). */
+export function titleFrom(text, attachments = []) {
+    const raw = buildAttachmentSummaryLabel(text, attachments, i18n('[Image]'));
+    const one = String(raw || '').replace(/\s+/g, ' ').trim();
     return one.length > 28 ? `${one.slice(0, 27)}…` : one || i18n('New conversation');
 }

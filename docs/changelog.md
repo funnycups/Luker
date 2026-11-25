@@ -58,6 +58,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed scoped regex persistence silently swallowing write failures or removing the source entry before the target scope save succeeded.
 - Fixed missing content in long mobile extension settings drawers and skipped empty blur layers when Blur Strength is set to zero.
 
+### Workbench
+
+- Added lossless image attachment support via file picker, clipboard paste, and drag-and-drop to Workbench Q&A and AI iteration, with multi-turn replay, copy-on-branch isolation, and automatic cleanup on conversation deletion.
+
 ### Image generation
 
 - Added prompt preset creation and deletion to Image Generation AI iteration in Workbench.

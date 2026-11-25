@@ -55,6 +55,7 @@
 .wbench .wb-chip { flex: none; height: 26px; padding: 0 10px; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-surface); color: var(--wb-muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .wbench .wb-chip:hover { color: var(--wb-text); border-color: var(--wb-border-strong); }
 .wbench .wb-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.wbench .wb-att-btn { width: 38px; height: 38px; }
 .wbench .wb-input { flex: 1; min-height: 38px; max-height: 120px; padding: 9px 11px; border: 1px solid var(--wb-border-strong); border-radius: var(--wb-r); background: var(--wb-surface); color: var(--wb-text); resize: none; line-height: 1.45; }
 .wbench .wb-input:focus { outline: none; border-color: var(--wb-accent); }
 .wbench .wb-send { height: 38px; }

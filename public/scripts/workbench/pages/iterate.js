@@ -35,6 +35,22 @@ import { importLegacySessionsOnce, hasLegacySettingsSessions } from '../model/le
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
 import { attachZoomOverlay } from '../../iteration-library/zoom-overlay.js';
 import { withActivityLease } from '../../activity-guard.js';
+import {
+    createImageAttachmentTray,
+    renderMessageAttachments,
+} from '../../lens-shared/image-attachments.js';
+import {
+    collectAttachmentPathsFromRecords,
+    hydrateMessagesForLlm,
+    normalizeImageAttachments,
+} from '../../lib/multimodal-messages.js';
+import {
+    copyChatAttachments,
+    deleteChatAttachments,
+    isAiAttachmentPath,
+    rewriteAttachmentsWithCopyMap,
+    uploadChatAttachments,
+} from '../../lib/chat-attachments-store.js';
 
 const DEFAULT_CHIPS = {
     memory: () => [
@@ -199,7 +215,20 @@ export function createIteratePage(app) {
     const sendBtn = button(i18n('Send'), () => send(), { iconName: 'send', className: 'is-primary wb-send' });
     const chips = h('div', { class: 'wb-chips' });
     const opts = h('div', { class: 'wb-composer-opts' });
-    const composer = h('div', { class: 'wb-composer' }, chips, h('div', { class: 'wb-input-row' }, input, sendBtn), opts);
+    const composer = h('div', { class: 'wb-composer' });
+    const attachmentTray = createImageAttachmentTray({
+        composerEl: composer,
+        textareaEl: input,
+        buttonClass: 'wb-att-btn',
+        onError: (msg) => app.toast(msg, { error: true }),
+    });
+    put(
+        composer,
+        chips,
+        attachmentTray.trayEl,
+        h('div', { class: 'wb-input-row' }, attachmentTray.attachButton, attachmentTray.fileInput, input, sendBtn),
+        opts,
+    );
     const chat = h('section', { class: 'wb-chat' }, head, body, composer);
     const previewPane = h('aside', { class: 'wb-iter-preview', hidden: true });
     const el = h('div', { class: 'wb-page is-split' }, sess, chat, previewPane);
@@ -970,10 +999,13 @@ export function createIteratePage(app) {
 
     // ----- message actions ------------------------------------------------
     function userBlock(turn, i, busy) {
+        const attGrid = renderMessageAttachments(turn.attachments);
         return h('div', { class: 'wb-msg-turn' },
-            h('div', { class: 'wb-msg-me', text: turn.text }),
+            h('div', { class: 'wb-msg-me' },
+                turn.text ? h('div', { text: turn.text }) : null,
+                attGrid),
             msgActions([
-                { iconName: 'copy', label: i18n('Copy'), done: i18n('Copied'), onClick: () => copyText(turn.text) },
+                { iconName: 'copy', label: i18n('Copy'), done: i18n('Copied'), disabled: !turn.text, onClick: () => copyText(turn.text) },
                 {
                     iconName: 'edit',
                     label: i18n('Edit and resend'),
@@ -1000,11 +1032,29 @@ export function createIteratePage(app) {
         if (!store || !session) return null;
         const src = session;
         const sOpts = sessionScopes.get(src.id) || scopeOptsFor(src.scope) || { scope: 'global' };
-        const turns = src.turns.slice(0, upto).map(t => (t.state === 'pending' ? { ...t, state: 'discarded', draft: null } : t));
-        const messages = turns.flatMap(t => (t.role === 'user'
-            ? [{ role: 'user', content: t.text }]
-            : (t.text || t.changes?.length ? [{ role: 'assistant', content: turnText(t) }] : [])));
+        const rawTurns = src.turns.slice(0, upto).map(t => (t.state === 'pending' ? { ...clone(t), state: 'discarded', draft: null } : clone(t)));
+        const ctx = getCtx();
+        const sourcePaths = collectAttachmentPathsFromRecords(rawTurns, { filter: isAiAttachmentPath });
+        let copyMap = new Map();
         try {
+            if (sourcePaths.length > 0) {
+                copyMap = await copyChatAttachments(ctx, sourcePaths);
+            }
+            const turns = rawTurns.map(t => {
+                if (t.role !== 'user' || !Array.isArray(t.attachments) || !t.attachments.length) return t;
+                return { ...t, attachments: rewriteAttachmentsWithCopyMap(t.attachments, copyMap) };
+            });
+            const messages = turns.flatMap(t => {
+                if (t.role === 'user') {
+                    const atts = normalizeImageAttachments(t.attachments);
+                    return [{
+                        role: 'user',
+                        content: t.text || '',
+                        ...(atts.length ? { attachments: atts } : {}),
+                    }];
+                }
+                return (t.text || t.changes?.length ? [{ role: 'assistant', content: turnText(t) }] : []);
+            });
             const created = await store.create({
                 kind: 'iterate',
                 ws: src.ws,
@@ -1024,6 +1074,9 @@ export function createIteratePage(app) {
             paintAll();
             return created;
         } catch (err) {
+            if (copyMap.size > 0) {
+                await deleteChatAttachments(ctx, [...copyMap.values()]).catch(() => {});
+            }
             app.toast(String(err?.message || err), { error: true });
             return null;
         }
@@ -1031,10 +1084,17 @@ export function createIteratePage(app) {
 
     async function editMessage(i) {
         if (!session || currentBusy()) return;
-        const text = session.turns[i].text;
+        const targetTurn = session.turns[i];
+        const text = targetTurn?.text || '';
+        const origAttachments = normalizeImageAttachments(targetTurn?.attachments);
         const created = await forkAt(i);
         if (!created) return;
         input.value = text;
+        if (origAttachments.length > 0) {
+            attachmentTray.setManagedItems(origAttachments, { cloneOnCommit: true });
+        } else {
+            attachmentTray.clear();
+        }
         grow();
         input.focus({ preventScroll: true });
     }
@@ -1057,6 +1117,7 @@ export function createIteratePage(app) {
         if (currentBusy() || applying.has(targetSessionId) || !q || q.role !== 'user' || !canRegen(last)) return;
         const sOpts = sessionScopes.get(targetSessionId) || scopeOptsFor(session.scope) || { scope: 'global' };
         const keep = Number.isInteger(last.msgKeep) ? last.msgKeep : Math.max(0, (session.messages || []).length - 2);
+        const reuseAttachments = normalizeImageAttachments(q.attachments);
         let readyToSend = false;
         try {
             if ((last.state === 'applied' || last.state === 'partial') && app.history.canUndo(last.historyId)) {
@@ -1105,10 +1166,10 @@ export function createIteratePage(app) {
             }
             if (readyToSend) {
                 if (q.hidden) {
-                    await send({ promptText: q.text, hideFromUi: true });
+                    await send({ promptText: q.text, hideFromUi: true, reuseAttachments });
                 } else {
-                    input.value = q.text;
-                    await send();
+                    input.value = q.text || '';
+                    await send({ reuseAttachments });
                 }
             }
         } catch (err) {
@@ -1229,6 +1290,7 @@ export function createIteratePage(app) {
             }));
         sendBtn.disabled = busy;
         input.disabled = busy;
+        attachmentTray.setDisabled(busy);
     }
 
     function paintAll() {
@@ -1312,7 +1374,10 @@ export function createIteratePage(app) {
             if ((m.role === 'user' || m.role === 'assistant') && !m.tool_calls && ('toolCalls' in m || 'reasoning' in m)) {
                 if (isReplayableIterationMessage(m) || hasNativeReplay) {
                     const replayed = { role: m.role, content: String(m.content ?? '') };
-                    if (m.role === 'assistant') {
+                    if (m.role === 'user') {
+                        const atts = normalizeImageAttachments(m.attachments);
+                        if (atts.length) replayed.attachments = atts;
+                    } else if (m.role === 'assistant') {
                         if (typeof m.reasoning === 'string' && m.reasoning.length > 0) replayed.reasoning = m.reasoning;
                         if (typeof m.signature === 'string' && m.signature.length > 0) replayed.signature = m.signature;
                         if (Array.isArray(m.reasoning_blocks) && m.reasoning_blocks.length > 0) replayed.reasoning_blocks = m.reasoning_blocks;
@@ -1334,8 +1399,11 @@ export function createIteratePage(app) {
         const isProgrammatic = typeof sendOpts?.promptText === 'string';
         const text = String(isProgrammatic ? sendOpts.promptText : input.value).trim();
         const hideFromUi = Boolean(sendOpts?.hideFromUi);
+        const hasReuseAttachments = Array.isArray(sendOpts?.reuseAttachments);
+        const hasTrayAttachments = !isProgrammatic && !hasReuseAttachments && attachmentTray.hasItems();
+        const hasAnyAttachments = (hasReuseAttachments && sendOpts.reuseAttachments.length > 0) || hasTrayAttachments;
         const runTargetObj = selectDefaultTarget();
-        if (!text || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
+        if ((!text && !hasAnyAttachments) || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
         if (hasPendingDecision(session)) {
             app.toast(i18n('Save the pending review decision before continuing.'), { error: true });
             return;
@@ -1359,6 +1427,8 @@ export function createIteratePage(app) {
 
         let runId = '';
         let controller = null;
+        let newlyCreatedAttachmentPaths = [];
+        let turnPersisted = false;
 
         try {
             let loaded;
@@ -1383,13 +1453,37 @@ export function createIteratePage(app) {
                 app.toast(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', current.scopeName || targetName(runWs)), { error: true, duration: 7000 });
                 return;
             }
+
+            const ctx = getCtx();
+            let attachments = [];
+            if (hasReuseAttachments) {
+                attachments = normalizeImageAttachments(sendOpts.reuseAttachments);
+            } else if (hasTrayAttachments) {
+                const created = [];
+                attachments = await attachmentTray.commit(
+                    async (files) => {
+                        const uploaded = await uploadChatAttachments(ctx, files);
+                        for (const item of uploaded) created.push(item.path);
+                        return uploaded;
+                    },
+                    {
+                        cloneManaged: async (paths) => {
+                            const map = await copyChatAttachments(ctx, paths);
+                            for (const copiedPath of map.values()) created.push(copiedPath);
+                            return map;
+                        },
+                        clearAfter: false,
+                    },
+                );
+                newlyCreatedAttachmentPaths = created;
+            }
             if (!current) {
                 current = await store.create({
                     kind: 'iterate',
                     ws: runWs,
                     scope: runScope,
                     scopeName,
-                    title: titleFrom(text),
+                    title: titleFrom(text, attachments),
                     messages: [],
                     targetId: id,
                     ...(sendOpts?.context ? { context: clone(sendOpts.context) } : {}),
@@ -1468,15 +1562,28 @@ export function createIteratePage(app) {
             }
             if (withReply) {
                 const reply = await app.source?.lastReply?.();
-                if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;
+                if (reply) userContent += `${userContent ? '\n\n' : ''}<最近一条回复>\n${reply}\n</最近一条回复>`;
             }
             current = await saveTo({
-                turns: [...priorTurns, { role: 'user', text, ...(hideFromUi ? { hidden: true } : {}), at: Date.now() }],
+                turns: [
+                    ...priorTurns,
+                    {
+                        role: 'user',
+                        text,
+                        ...(attachments.length ? { attachments } : {}),
+                        ...(hideFromUi ? { hidden: true } : {}),
+                        at: Date.now(),
+                    },
+                ],
                 note: '',
             });
             if (!current) {
                 draftStore.deleteTurn(ownerId, turnIndex);
                 return;
+            }
+            turnPersisted = true;
+            if (hasTrayAttachments) {
+                attachmentTray.clear();
             }
 
             runId = `it_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -1499,6 +1606,7 @@ export function createIteratePage(app) {
                 current,
                 draft,
                 userContent,
+                attachments,
                 controller,
             });
             const latest = await store.get(ownerId, runScopeOpts);
@@ -1513,6 +1621,9 @@ export function createIteratePage(app) {
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
+            if (!turnPersisted && newlyCreatedAttachmentPaths.length > 0) {
+                await deleteChatAttachments(getCtx(), newlyCreatedAttachmentPaths).catch(() => {});
+            }
             if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (ownerId) pendingSessions.delete(ownerId);
             if (runId) activeRuns.delete(runId);
@@ -1535,7 +1646,7 @@ export function createIteratePage(app) {
     }
 
     /** One model turn. Never throws: failures become the turn's error text. */
-    async function runTurn({ run, runTargetObj, runWs, runScope, current, draft, userContent, controller }) {
+    async function runTurn({ run, runTargetObj, runWs, runScope, current, draft, userContent, attachments = [], controller }) {
         const priorProposalIds = new Set(draft.bus?.listEntries().map(entry => entry.id) || []);
         try {
             return await withActivityLease({
@@ -1554,8 +1665,16 @@ export function createIteratePage(app) {
                     ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx, target: draft.target })
                     : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper, target: draft.target })].filter(Boolean).join('\n\n');
                 const history = replayMessagesForApi(current?.messages);
-                const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
+                const normalizedAtts = normalizeImageAttachments(attachments);
+                const userMsg = {
+                    role: 'user',
+                    content: userContent,
+                    ...(normalizedAtts.length ? { attachments: normalizedAtts } : {}),
+                };
+                const messages = trimMessages([{ role: 'system', content: system }, ...history, userMsg]);
                 const tools = await runTargetObj.tools(draft.ai, runScope, ctx, { target: draft.target });
+                const imageCache = new Map();
+                const hasAttachments = messages.some(m => Array.isArray(m?.attachments) && m.attachments.length > 0);
                 const result = await runIterateTurn({
                     messages,
                     live: draft.ai,
@@ -1566,7 +1685,16 @@ export function createIteratePage(app) {
                     isRead: (n) => runTargetObj.isRead(n),
                     runRead: (call, live, helpers) => runTargetObj.runRead(call, live, helpers),
                     runEdit: (call, live, helpers) => runTargetObj.runEdit(call, live, helpers),
-                    request: (msgs, t) => app.source.aiRequest(runWs, { messages: msgs, tools: t, signal: controller.signal }),
+                    request: async (msgs, t) => {
+                        const outbound = hasAttachments
+                            ? await hydrateMessagesForLlm(msgs, {
+                                context: ctx,
+                                cache: imageCache,
+                                signal: controller.signal,
+                            })
+                            : msgs;
+                        return await app.source.aiRequest(runWs, { messages: outbound, tools: t, signal: controller.signal });
+                    },
                     onRound: (info) => {
                         run.liveStep = i18nFormat('Read ${0} times, edited ${1} times…', info.reads, info.edits);
                         if (session?.id === run.sessionId) paintBody();
@@ -2174,6 +2302,7 @@ export function createIteratePage(app) {
         },
         destroy() {
             detachDiffOverlay();
+            attachmentTray.destroy();
             for (const run of activeRuns.values()) run.abort?.abort();
             activeRuns.clear();
             pendingSessions.clear();

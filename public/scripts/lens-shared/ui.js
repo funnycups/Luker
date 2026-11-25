@@ -25,6 +25,7 @@ const SHARED_ICON_PATHS = {
     moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
     chevronDown: 'M6 9l6 6 6-6',
     chevronRight: 'M9 6l6 6-6 6',
+    image: `M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM4 16l4.5-4.5 3.5 3.5 3-3 5 5${circle(9, 9.5, 1.3)}`,
 };
 
 const i18n = (text) => globalThis.Luker?.getContext?.()?.translate?.(text) ?? String(text ?? '');

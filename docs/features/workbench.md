@@ -27,7 +27,7 @@ A read-only diagnostic assistant. Ask questions in natural language—for exampl
 
 ![Workbench Q&A](/images/workbench/02-qa.png)
 
-Q&A reads local data on demand: recent chat floors, character card, bound world books, chat completion preset, prompt token breakdown, request inspector history, frontend logs, server logs, memory graph, and orchestration records. API keys and endpoint addresses are redacted before anything leaves your device, and **Show me before sending to the AI** lets you review the overview first. You can edit an earlier question in a new branch or branch from any answer.
+Q&A reads local data on demand: recent chat floors, character card, bound world books, chat completion preset, prompt token breakdown, request inspector history, frontend logs, server logs, memory graph, and orchestration records. API keys and endpoint addresses are redacted before anything leaves your device, and **Show me before sending to the AI** lets you review the overview first. You can attach images via **Attach images**, clipboard paste, or drag-and-drop; attached images remain in multi-turn context, copy independently when branching, and are removed automatically when deleting a conversation. You can edit an earlier question in a new branch or branch from any answer.
 
 ### AI iteration
 
@@ -41,7 +41,7 @@ A single conversational workspace for editing Luker artifacts with diff review a
 - **World book** — edit globally active world books or the books bound to the current character and chat.
 - **Image Generation** — edit illustration prompt presets, exploration prompts, archived character visual profiles, and ComfyUI API-format workflows with live node introspection, draft test generation, and sandboxed prompt simulation in **Simulation Review**.
 
-Proposed changes appear in a **Change list** with before/after diffs. Tick the changes to apply, discard them, or enable **Apply automatically** to apply edits immediately while keeping every step undoable.
+Proposed changes appear in a **Change list** with before/after diffs. Tick the changes to apply, discard them, or enable **Apply automatically** to apply edits immediately while keeping every step undoable. You can also attach screenshots or reference images in the composer via **Attach images**, clipboard paste, or drag-and-drop; attached images stay in multi-turn context, copy into new branches with **Branch from here**, and are removed automatically when deleting or clearing conversations.
 
 ![Workbench AI iteration](/images/workbench/03-ai-iteration.png)
 

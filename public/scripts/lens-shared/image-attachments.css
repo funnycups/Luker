@@ -1,0 +1,199 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Shared image attachment tray, message attachment strip, and lightbox overlay
+ * for Workbench, SD Lens, Character Builder, and CardApp Studio composers.
+ */
+
+.lw-att-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--lw-border-strong, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2)));
+    border-radius: var(--lw-r, 8px);
+    background: var(--lw-surface, var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.06)));
+    color: var(--lw-muted, var(--SmartThemeBodyColor, #cfd3dc));
+    cursor: pointer;
+    transition: background var(--lw-dur, 160ms) var(--lw-ease, ease),
+        border-color var(--lw-dur, 160ms) var(--lw-ease, ease),
+        color var(--lw-dur, 160ms) var(--lw-ease, ease);
+}
+
+.lw-att-btn:hover:not(:disabled) {
+    color: var(--lw-text, var(--SmartThemeBodyColor, #ffffff));
+    border-color: var(--lw-accent, #3fd0b4);
+    background: var(--lw-hover, rgba(255, 255, 255, 0.08));
+}
+
+.lw-att-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.lw-att-tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 4px 0 2px;
+}
+
+.lw-att-tray[hidden] {
+    display: none !important;
+}
+
+.lw-att-chip {
+    position: relative;
+    width: 60px;
+    height: 60px;
+    border-radius: var(--lw-r-sm, 6px);
+    border: 1px solid var(--lw-border-strong, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2)));
+    background: var(--lw-surface-2, rgba(0, 0, 0, 0.25));
+    overflow: hidden;
+    flex: none;
+}
+
+.lw-att-chip-preview {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: zoom-in;
+}
+
+.lw-att-chip-preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.lw-att-chip-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(13, 14, 17, 0.82);
+    color: #f4f5f7;
+    cursor: pointer;
+    z-index: 1;
+}
+
+.lw-att-chip-remove:hover:not(:disabled) {
+    background: var(--lw-danger, #ef7d6e);
+    color: #0d0e11;
+}
+
+.lw-att-chip-remove:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.lw-att-drop-active {
+    outline: 2px dashed var(--lw-accent, #3fd0b4) !important;
+    outline-offset: -2px;
+    background: var(--lw-accent-soft, rgba(63, 208, 180, 0.1)) !important;
+}
+
+.lw-att-msg-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.lw-att-msg-grid:first-child {
+    margin-top: 0;
+}
+
+.lw-att-msg-thumb {
+    display: block;
+    width: 96px;
+    height: 96px;
+    padding: 0;
+    border: 1px solid var(--lw-border-strong, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2)));
+    border-radius: var(--lw-r-sm, 6px);
+    background: var(--lw-surface-2, rgba(0, 0, 0, 0.25));
+    overflow: hidden;
+    cursor: zoom-in;
+    flex: none;
+}
+
+.lw-att-msg-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.lw-att-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(4, 5, 7, 0.82);
+    backdrop-filter: blur(4px);
+}
+
+.lw-att-lightbox-inner {
+    position: relative;
+    max-width: min(92vw, 1280px);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.lw-att-lightbox-img {
+    max-width: 100%;
+    max-height: 82vh;
+    object-fit: contain;
+    border-radius: var(--lw-r, 8px);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.4);
+}
+
+.lw-att-lightbox-close {
+    position: absolute;
+    top: -12px;
+    right: -12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+    background: rgba(20, 21, 25, 0.92);
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.lw-att-lightbox-close:hover {
+    background: var(--lw-danger, #ef7d6e);
+    color: #0d0e11;
+}
+
+.lw-att-lightbox-caption {
+    max-width: 100%;
+    color: #d7dbe4;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

@@ -16,6 +16,21 @@ import { runAsk, readsSummary, buildAskHistory } from '../model/ask.js';
 import { finishOverview } from '../model/requests.js';
 import { titleFrom, toSessionSummary } from '../model/sessions.js';
 import { withActivityLease } from '../../activity-guard.js';
+import {
+    createImageAttachmentTray,
+    renderMessageAttachments,
+} from '../../lens-shared/image-attachments.js';
+import {
+    collectAttachmentPathsFromRecords,
+    normalizeImageAttachments,
+} from '../../lib/multimodal-messages.js';
+import {
+    copyChatAttachments,
+    deleteChatAttachments,
+    isAiAttachmentPath,
+    rewriteAttachmentsWithCopyMap,
+    uploadChatAttachments,
+} from '../../lib/chat-attachments-store.js';
 
 const CHIP_KEYS = [
     'Why was this reply written this way',
@@ -62,7 +77,20 @@ export function createAskPage(app) {
     const sendBtn = button(i18n('Send'), () => send(), { iconName: 'send', className: 'is-primary wb-send' });
     const chipsRow = h('div', { class: 'wb-chips' });
     const opts = h('div', { class: 'wb-composer-opts' });
-    const composer = h('div', { class: 'wb-composer' }, chipsRow, h('div', { class: 'wb-input-row' }, input, sendBtn), opts);
+    const composer = h('div', { class: 'wb-composer' });
+    const attachmentTray = createImageAttachmentTray({
+        composerEl: composer,
+        textareaEl: input,
+        buttonClass: 'wb-att-btn',
+        onError: (msg) => app.toast(msg, { error: true }),
+    });
+    put(
+        composer,
+        chipsRow,
+        attachmentTray.trayEl,
+        h('div', { class: 'wb-input-row' }, attachmentTray.attachButton, attachmentTray.fileInput, input, sendBtn),
+        opts,
+    );
     const chat = h('section', { class: 'wb-chat' }, chatHead, body, composer);
     const el = h('div', { class: 'wb-page is-split' }, side, chat);
 
@@ -363,10 +391,13 @@ export function createAskPage(app) {
     const isLast = (i) => i === (session?.turns?.length || 0) - 1;
 
     function userBlock(t, i, busy) {
+        const attGrid = renderMessageAttachments(t.attachments);
         return h('div', { class: 'wb-msg-turn' },
-            h('div', { class: 'wb-msg-me', text: t.text }),
+            h('div', { class: 'wb-msg-me' },
+                t.text ? h('div', { text: t.text }) : null,
+                attGrid),
             msgActions([
-                { iconName: 'copy', label: i18n('Copy'), done: i18n('Copied'), onClick: () => copyText(t.text) },
+                { iconName: 'copy', label: i18n('Copy'), done: i18n('Copied'), disabled: !t.text, onClick: () => copyText(t.text) },
                 { iconName: 'edit', label: i18n('Edit and ask'), title: i18n('Edit this question in a new branch — the original chat stays as it is'), disabled: busy, onClick: () => editQuestion(i) },
             ]));
     }
@@ -375,13 +406,25 @@ export function createAskPage(app) {
         return t.error || [t.answer, t.fixPrompt ? `\n${i18nFormat('Suggested fix in "${0}": ${1}', wsName(t.suggest), t.fixPrompt)}` : ''].join('').trim();
     }
 
+    const getCtx = () => globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
+
     /** New session holding turns [0, upto). */
     async function forkAt(upto) {
         if (!store || !session) return null;
         const src = session;
         const scope = scopeOf(src);
-        const turns = src.turns.slice(0, upto);
+        const rawTurns = src.turns.slice(0, upto).map(t => JSON.parse(JSON.stringify(t)));
+        const ctx = getCtx();
+        const sourcePaths = collectAttachmentPathsFromRecords(rawTurns, { filter: isAiAttachmentPath });
+        let copyMap = new Map();
         try {
+            if (sourcePaths.length > 0) {
+                copyMap = await copyChatAttachments(ctx, sourcePaths);
+            }
+            const turns = rawTurns.map(t => {
+                if (t.role !== 'user' || !Array.isArray(t.attachments) || !t.attachments.length) return t;
+                return { ...t, attachments: rewriteAttachmentsWithCopyMap(t.attachments, copyMap) };
+            });
             const created = await store.create({ kind: 'ask', title: i18nFormat('${0} (branch)', src.title), forkedFrom: src.title, turns }, scope);
             sessionScopes.set(created.id, scope);
             selectionVersion++;
@@ -391,6 +434,9 @@ export function createAskPage(app) {
             paintBody();
             return created;
         } catch (err) {
+            if (copyMap.size > 0) {
+                await deleteChatAttachments(ctx, [...copyMap.values()]).catch(() => {});
+            }
             app.toast(String(err?.message || err), { error: true });
             return null;
         }
@@ -398,10 +444,17 @@ export function createAskPage(app) {
 
     async function editQuestion(i) {
         if (!session || currentBusy()) return;
-        const text = session.turns[i].text;
+        const targetTurn = session.turns[i];
+        const text = targetTurn?.text || '';
+        const origAttachments = normalizeImageAttachments(targetTurn?.attachments);
         const created = await forkAt(i);
         if (!created) return;
         input.value = text;
+        if (origAttachments.length > 0) {
+            attachmentTray.setManagedItems(origAttachments, { cloneOnCommit: true });
+        } else {
+            attachmentTray.clear();
+        }
         grow();
         input.focus({ preventScroll: true });
     }
@@ -414,6 +467,7 @@ export function createAskPage(app) {
         const q = turns[turns.length - 2];
         if (currentBusy() || !q || q.role !== 'user') return;
         const scope = scopeOf(session);
+        const reuseAttachments = normalizeImageAttachments(q.attachments);
         pendingSessions.add(targetId);
         paintOpts();
         let readyToSend = false;
@@ -429,8 +483,8 @@ export function createAskPage(app) {
             paintOpts();
         }
         if (readyToSend) {
-            input.value = q.text;
-            await send();
+            input.value = q.text || '';
+            await send({ reuseAttachments });
         }
     }
 
@@ -500,11 +554,15 @@ export function createAskPage(app) {
         }));
         sendBtn.disabled = busy;
         input.disabled = busy;
+        attachmentTray.setDisabled(busy);
     }
 
-    async function send() {
+    async function send(sendOpts = {}) {
         const question = input.value.trim();
-        if (!question || currentBusy() || !store) return;
+        const hasReuseAttachments = Array.isArray(sendOpts?.reuseAttachments);
+        const hasTrayAttachments = !hasReuseAttachments && attachmentTray.hasItems();
+        const hasAnyAttachments = (hasReuseAttachments && sendOpts.reuseAttachments.length > 0) || hasTrayAttachments;
+        if ((!question && !hasAnyAttachments) || currentBusy() || !store) return;
 
         const selection = selectionVersion;
         const startingSession = session;
@@ -517,6 +575,9 @@ export function createAskPage(app) {
 
         let runId = '';
         let controller = null;
+        let newlyCreatedAttachmentPaths = [];
+        let turnPersisted = false;
+        const ctx = getCtx();
         try {
             const s = app.settings();
             const askCfg = s.ask || {};
@@ -528,11 +589,40 @@ export function createAskPage(app) {
             } catch (err) {
                 overview = finishOverview({ 错误: String(err?.message || err) }, filter);
             }
-            if (askCfg.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) {
+            const pendingCount = hasReuseAttachments
+                ? sendOpts.reuseAttachments.length
+                : (hasTrayAttachments ? attachmentTray.getItems().length : 0);
+            const questionPreview = pendingCount > 0
+                ? `${question || i18n('[Image]')} (${i18n('[Image]')} ×${pendingCount})`
+                : question;
+            if (askCfg.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', questionPreview, JSON.stringify(overview, null, 1).slice(0, 1500)))) {
                 return;
             }
 
-            const owner = startingSession || await store.create({ kind: 'ask', title: titleFrom(question) }, ownerScope);
+            let attachments = [];
+            if (hasReuseAttachments) {
+                attachments = normalizeImageAttachments(sendOpts.reuseAttachments);
+            } else if (hasTrayAttachments) {
+                const created = [];
+                attachments = await attachmentTray.commit(
+                    async (files) => {
+                        const uploaded = await uploadChatAttachments(ctx, files);
+                        for (const item of uploaded) created.push(item.path);
+                        return uploaded;
+                    },
+                    {
+                        cloneManaged: async (paths) => {
+                            const map = await copyChatAttachments(ctx, paths);
+                            for (const copiedPath of map.values()) created.push(copiedPath);
+                            return map;
+                        },
+                        clearAfter: false,
+                    },
+                );
+                newlyCreatedAttachmentPaths = created;
+            }
+
+            const owner = startingSession || await store.create({ kind: 'ask', title: titleFrom(question, attachments) }, ownerScope);
             ownerId = owner.id;
             pendingSessions.add(ownerId);
             sessionScopes.set(ownerId, ownerScope);
@@ -556,8 +646,22 @@ export function createAskPage(app) {
             };
 
             const priorTurns = Array.isArray(started.turns) ? started.turns : [];
-            const saved = await saveTo({ turns: [...priorTurns, { role: 'user', text: question, at: Date.now() }] });
+            const saved = await saveTo({
+                turns: [
+                    ...priorTurns,
+                    {
+                        role: 'user',
+                        text: question,
+                        ...(attachments.length ? { attachments } : {}),
+                        at: Date.now(),
+                    },
+                ],
+            });
             if (!saved) return;
+            turnPersisted = true;
+            if (hasTrayAttachments) {
+                attachmentTray.clear();
+            }
             if (session?.id === ownerId && input.value.trim() === question) {
                 input.value = '';
                 grow();
@@ -583,8 +687,10 @@ export function createAskPage(app) {
                     onCancel: () => controller.abort(),
                 }, () => runAsk({
                     question,
+                    attachments,
                     overview,
                     history,
+                    context: ctx,
                     sources: askSources,
                     extraTools: app.source.askToolsForProviders?.() || [],
                     signal: controller.signal,
@@ -611,6 +717,9 @@ export function createAskPage(app) {
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
+            if (!turnPersisted && newlyCreatedAttachmentPaths.length > 0) {
+                await deleteChatAttachments(ctx, newlyCreatedAttachmentPaths).catch(() => {});
+            }
             if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (ownerId) pendingSessions.delete(ownerId);
             if (runId) activeRuns.delete(runId);
@@ -674,6 +783,7 @@ export function createAskPage(app) {
             return false;
         },
         destroy() {
+            attachmentTray.destroy();
             for (const run of activeRuns.values()) run.abort?.abort();
             activeRuns.clear();
             pendingSessions.clear();

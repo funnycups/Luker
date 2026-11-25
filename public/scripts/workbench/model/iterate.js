@@ -22,6 +22,7 @@ import {
 } from '../../iteration-library/proposal-bus/index.js';
 import { registerTarget, resolveTarget } from '../../iteration-library/storage/target-registry.js';
 import { applyOps } from '../../iteration-library/storage/patch-codec.js';
+import { extractTextContent } from '../../lib/multimodal-messages.js';
 
 const cloneValue = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
@@ -553,7 +554,7 @@ export function trimMessages(messages, maxChars = Infinity) {
         let total = 0;
         kept = [];
         for (let i = rest.length - 1; i >= 0; i--) {
-            total += String(rest[i].content || '').length + JSON.stringify(rest[i].tool_calls || '').length;
+            total += extractTextContent(rest[i].content).length + JSON.stringify(rest[i].tool_calls || '').length;
             if (total > maxChars && kept.length > 4) break;
             kept.unshift(rest[i]);
         }
