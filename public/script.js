@@ -12983,6 +12983,11 @@ export function consumePendingForceOverwrite(target) {
     return null;
 }
 
+function hasPendingForceOverwrite(target) {
+    const key = getChatStateTargetKey(target);
+    return Boolean(key && pendingForceOverwriteTargets.has(key));
+}
+
 export function runSerializedChatWrite(task) {
     if (typeof task !== 'function') {
         return Promise.resolve(undefined);
@@ -13000,7 +13005,8 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
     if (!chat_metadata || typeof chat_metadata !== 'object') {
         return;
     }
-    // 迟到的写回响应或快照刷新不得给尚未加载完成或加载失败的半开态聊天重新授权。
+    // A late write acknowledgement or snapshot refresh must not re-authorize a
+    // half-open chat whose integrity was cleared by a pending or failed load.
     const currentIntegrity = typeof chat_metadata.integrity === 'string'
         ? chat_metadata.integrity.trim()
         : '';
@@ -13012,7 +13018,9 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
         ? metadata.integrity.trim()
         : '';
 
-    // 仅在服务端明确返回非空新令牌时轮换；绝不因快照缺令牌而删空内存令牌，避免防丢数据守卫永久锁死。
+    // Rotate only when the server provides a non-empty token; never delete the
+    // live token because a snapshot omitted it, which would permanently trip
+    // the empty-integrity data-loss guard.
     if (nextIntegrity) {
         chat_metadata.integrity = nextIntegrity;
     }
@@ -13047,7 +13055,8 @@ export function applyIntegrityFromWritePayloadToTarget(payload, target = null, m
 /**
  * Refreshes a queued write's token without replacing its captured metadata.
  * Group acknowledgements remain target-owned while live metadata is unloaded
- * or another chat is active. Solo writes retain their active-live token source.
+ * or another chat is active. Both solo and group writes preserve their captured
+ * token when live integrity is empty so server integrity checks are not bypassed.
  */
 export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     if (!isPlainObject(metadata)) {
@@ -13069,14 +13078,15 @@ export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     const liveIntegrity = typeof chat_metadata.integrity === 'string'
         ? chat_metadata.integrity.trim()
         : '';
-    // 单聊与群聊对称：活动聊天的实时令牌为空时保留队列写任务已捕获的令牌，不剥离令牌以免绕过服务端校验。
+    // Keep the queued write's captured token when live integrity is empty so
+    // an unloaded/failed active state cannot strip it and bypass server checks.
     if (!liveIntegrity) {
         return;
     }
     metadata.integrity = liveIntegrity;
 }
 
-async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget()) {
+async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget(), { throwOnError = false } = {}) {
     const resolvedTarget = resolveChatStateTarget(target);
     if (!resolvedTarget) {
         return null;
@@ -13105,6 +13115,11 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
     try {
         const charName = String(resolvedTarget.char_name || getCharacterName(characters[this_chid]) || '').trim();
         if (!charName) {
+            if (throwOnError) {
+                const error = new Error('Missing character name for server chat snapshot');
+                error.useGenericSaveToast = true;
+                throw error;
+            }
             return null;
         }
 
@@ -13120,19 +13135,36 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
         });
 
         if (!response.ok) {
+            if (throwOnError) {
+                const errorPayload = typeof response.json === 'function'
+                    ? await response.json().catch(() => null)
+                    : null;
+                const error = new Error(`HTTP ${response.status}`);
+                error.useGenericSaveToast = true;
+                if (errorPayload?.corrupted) {
+                    error.corrupted = true;
+                }
+                throw error;
+            }
             return null;
         }
 
-        // 绝不吞掉 JSON 解析异常：响应流截断必须进入 catch 返回 null，不能伪装成空聊天。
+        // Never swallow JSON parse failures: a truncated stream must fail rather
+        // than masquerade as an empty chat.
         const payload = await response.json();
 
-        // /api/chats/get 在磁盘文件损坏时可能以 HTTP 200 返回 { corrupted: true }。
+        // /api/chats/get may return HTTP 200 { corrupted: true } for an unreadable file.
         if (payload?.corrupted) {
             console.warn('Server reported corrupted chat while fetching snapshot', resolvedTarget);
+            if (throwOnError) {
+                const error = new Error('Server reported corrupted chat');
+                error.corrupted = true;
+                throw error;
+            }
             return null;
         }
 
-        // 仅当服务端显式返回 { new_chat: true } 时表示该聊天尚未落盘。
+        // Only an explicit { new_chat: true } means the chat does not exist on disk yet.
         if (isPlainObject(payload) && payload.new_chat === true) {
             return {
                 target: resolvedTarget,
@@ -13142,9 +13174,14 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
             };
         }
 
-        // 已有聊天必须返回非空数组，且首元素为合法对象头。
+        // An existing chat must return a non-empty array with a plain object header.
         if (!Array.isArray(payload) || payload.length === 0 || !isPlainObject(payload[0])) {
             console.warn('Unexpected server chat snapshot payload', resolvedTarget);
+            if (throwOnError) {
+                const error = new Error('Unexpected server chat snapshot payload');
+                error.useGenericSaveToast = true;
+                throw error;
+            }
             return null;
         }
 
@@ -13166,6 +13203,12 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
         };
     } catch (error) {
         console.warn('Failed to fetch current server chat snapshot', error);
+        if (throwOnError) {
+            if (error && typeof error === 'object' && !error.corrupted) {
+                error.useGenericSaveToast = true;
+            }
+            throw error;
+        }
         return null;
     }
 }
@@ -13175,8 +13218,9 @@ function applyServerChatSnapshot(snapshot, metadataToSync = null) {
         return null;
     }
 
-    // 服务端尚无该聊天（单聊 { new_chat: true } 或群聊 []）时，不把缓存污染成 []，
-    // 也不删空内存 integrity，改为失效缓存以让后续写入走完整建档保存。
+    // When the chat does not exist on the server yet ({ new_chat: true } or []),
+    // invalidate caches so the next write performs a full create-save without
+    // poisoning caches with [] or clearing in-memory integrity.
     if (snapshot.existsOnServer === false) {
         invalidateChatWriteSnapshot(snapshot.target);
         return snapshot;
@@ -13201,17 +13245,28 @@ function applyServerChatSnapshot(snapshot, metadataToSync = null) {
     return snapshot;
 }
 
-async function applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadataToSync = null) {
-    // 复用 resolveChatWriteConflictForTarget 阶段已发起的单次快照请求，避免 409 恢复连续拉取两次全量聊天。
+async function applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadataToSync = null, { allowNonForcedReadFailure = false } = {}) {
+    // Reuse the single snapshot fetch already issued during conflict diagnostics
+    // to avoid back-to-back full chat fetches on 409 recovery.
     if (conflictSnapshot?.attempted) {
         if (conflictSnapshot.error) {
-            throw conflictSnapshot.error;
+            if (!allowNonForcedReadFailure || conflictSnapshot.corrupted || hasPendingForceOverwrite(target)) {
+                throw conflictSnapshot.error;
+            }
+            return null;
         }
         return applyServerChatSnapshot(conflictSnapshot.snapshot, metadataToSync);
     }
 
-    const refreshed = await fetchCurrentServerChatSnapshot(target);
-    return applyServerChatSnapshot(refreshed, metadataToSync);
+    try {
+        const refreshed = await fetchCurrentServerChatSnapshot(target, { throwOnError: true });
+        return applyServerChatSnapshot(refreshed, metadataToSync);
+    } catch (error) {
+        if (!allowNonForcedReadFailure || error?.corrupted || hasPendingForceOverwrite(target)) {
+            throw error;
+        }
+        return null;
+    }
 }
 
 export async function refreshChatWriteSnapshotsFromServer(target = resolveChatStateTarget()) {
@@ -14357,11 +14412,12 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     const onServerSnapshot = typeof requestContext?.onServerSnapshot === 'function'
         ? requestContext.onServerSnapshot
         : null;
+    let serverSnapshotCorrupted = false;
     if (Array.isArray(clientSnapshot)) {
         try {
-            const serverSnapshot = await fetchCurrentServerChatSnapshot(target);
+            const serverSnapshot = await fetchCurrentServerChatSnapshot(target, { throwOnError: true });
             if (onServerSnapshot) {
-                onServerSnapshot({ snapshot: serverSnapshot, error: null });
+                onServerSnapshot({ snapshot: serverSnapshot, error: null, corrupted: false });
             }
             if (Array.isArray(serverSnapshot?.messages)) {
                 const result = summarizeChatStateDivergence(clientSnapshot, serverSnapshot.messages);
@@ -14371,8 +14427,11 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
                 }
             }
         } catch (error) {
+            if (error?.corrupted) {
+                serverSnapshotCorrupted = true;
+            }
             if (onServerSnapshot) {
-                onServerSnapshot({ snapshot: null, error });
+                onServerSnapshot({ snapshot: null, error, corrupted: Boolean(error?.corrupted) });
             }
             // Diagnostic refresh is best-effort; never fail conflict resolution because of it.
             console.warn('[ChatWriteConflict] server snapshot refresh failed', error);
@@ -14387,7 +14446,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
             if (isActiveChatStateTarget(target)) {
                 syncCurrentChatIntegrityFromMetadata({ integrity: currentIntegrity });
             }
-        } else {
+        } else if (!serverSnapshotCorrupted) {
             // Server has no current integrity to sync against. Do NOT delete
             // chat_metadata.integrity here — the empty-integrity data-loss
             // guard on saveChatInternal would then refuse every subsequent
@@ -14430,8 +14489,11 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     // on every 409, which is what the append/patch optimistic-snapshot vs
     // BE-normalization drift makes routinely common). The marker keeps
     // chat_metadata.integrity intact so the guard still blocks half-open
-    // writes, and signals the intended overwrite explicitly.
-    markTargetForForceOverwriteOnNextSave(target, 'snapshot-409-recovery');
+    // writes, and signals the intended overwrite explicitly. Never arm force
+    // overwrite when the server explicitly reported the file as corrupted.
+    if (!serverSnapshotCorrupted) {
+        markTargetForForceOverwriteOnNextSave(target, 'snapshot-409-recovery');
+    }
     notifyChatWriteConflict({
         kind: 'snapshot',
         errorType,
@@ -14525,7 +14587,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
                 if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
-                    // 200 响应体被截断或格式异常：不能误判成服务端去重而触发全量快照拉取，清空乐观快照让调用方回退。
+                    // Truncated or malformed 200 body: do not misinterpret as server dedup
+                    // and trigger a full snapshot fetch; drop optimistic snapshot so caller falls back.
                     invalidateChatWriteSnapshot(target);
                     return false;
                 }
@@ -14600,7 +14663,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
         if (response.ok) {
             const payload = await response.json().catch(() => null);
             if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
-                // 200 响应体被截断或格式异常：不能误判成服务端去重而触发全量快照拉取，清空乐观快照让调用方回退。
+                // Truncated or malformed 200 body: do not misinterpret as server dedup
+                // and trigger a full snapshot fetch; drop optimistic snapshot so caller falls back.
                 invalidateChatWriteSnapshot(target);
                 return false;
             }
@@ -14624,7 +14688,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
                 // diffs against a snapshot BE can't match.
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                 if (!refreshed) {
-                    // 刷新失败时必须清理已乐观提交的快照，避免后续 fallback diff 为空而漏存消息。
+                    // Drop the optimistic snapshot on refresh failure so the caller's
+                    // fallback does not compute an empty diff and skip persistence.
                     invalidateChatWriteSnapshot(target);
                     return false;
                 }
@@ -14951,6 +15016,10 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
             console.debug('[ChatWrite] Metadata save dropped: no active chat target.');
             return false;
         }
+        const guardTarget = context?.target ?? resolveChatStateTarget();
+        if (guardTarget) {
+            consumePendingForceOverwrite(guardTarget);
+        }
         console.error('[ChatWrite] Metadata save refused: chat not fully loaded (integrity missing).');
         toastr.error(
             t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
@@ -15013,7 +15082,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
-            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null, corrupted: false };
             const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/meta/patch',
                 opSummary: summarizeJsonPatchOperations(operations),
@@ -15022,18 +15091,26 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                     conflictSnapshot.attempted = true;
                     conflictSnapshot.snapshot = result?.snapshot ?? null;
                     conflictSnapshot.error = result?.error ?? null;
+                    conflictSnapshot.corrupted = Boolean(result?.corrupted);
                 },
             });
             if (conflictResolution !== 'none') {
+                let appliedSnapshot = null;
                 if (conflictResolution === 'integrity') {
-                    await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
+                    appliedSnapshot = await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
                 } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
                     if (conflictSnapshot.error) {
                         throw conflictSnapshot.error;
                     }
                     if (conflictSnapshot.snapshot) {
-                        applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                        appliedSnapshot = applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
                     }
+                }
+                if (appliedSnapshot?.existsOnServer === false) {
+                    // Chat does not exist on server yet; return false so callers fall
+                    // back to a full save instead of creating a header-only chat.
+                    consumePendingForceOverwrite(target);
+                    return false;
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -15070,7 +15147,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
-            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null, corrupted: false };
             const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/meta/patch',
                 opSummary: summarizeJsonPatchOperations(operations),
@@ -15079,18 +15156,26 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                     conflictSnapshot.attempted = true;
                     conflictSnapshot.snapshot = result?.snapshot ?? null;
                     conflictSnapshot.error = result?.error ?? null;
+                    conflictSnapshot.corrupted = Boolean(result?.corrupted);
                 },
             });
             if (conflictResolution !== 'none') {
+                let appliedSnapshot = null;
                 if (conflictResolution === 'integrity') {
-                    await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
+                    appliedSnapshot = await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
                 } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
                     if (conflictSnapshot.error) {
                         throw conflictSnapshot.error;
                     }
                     if (conflictSnapshot.snapshot) {
-                        applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                        appliedSnapshot = applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
                     }
+                }
+                if (appliedSnapshot?.existsOnServer === false) {
+                    // Chat does not exist on server yet; return false so callers fall
+                    // back to a full save instead of creating a header-only chat.
+                    consumePendingForceOverwrite(target);
+                    return false;
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -15102,7 +15187,8 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
         return false;
     } catch (error) {
         if (resolvedTarget) {
-            // 冲突恢复读取快照失败时清除待强写标记，避免调用方回退全量保存误带 force:true。
+            // Clear pending force-overwrite marker when conflict snapshot recovery fails
+            // so caller full-save fallbacks never carry a stale force:true.
             invalidateChatWriteSnapshot(resolvedTarget);
             consumePendingForceOverwrite(resolvedTarget);
         }
@@ -15165,7 +15251,14 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             console.debug('[ChatWrite] Save dropped: no active chat target.');
             return;
         }
-        const guardTarget = arguments?.[0]?._context?.target ?? resolveChatStateTarget();
+        const explicitChatName = typeof arguments?.[0] === 'string'
+            ? arguments[0].trim()
+            : String(arguments?.[0]?.chatName || '').trim();
+        const activeTarget = resolveChatStateTarget();
+        const guardTarget = arguments?.[0]?._context?.target
+            ?? (explicitChatName && activeTarget && !activeTarget.is_group
+                ? { ...activeTarget, file_name: explicitChatName }
+                : activeTarget);
         if (guardTarget) {
             consumePendingForceOverwrite(guardTarget);
         }
@@ -15293,12 +15386,12 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                         rememberChatMetadataSnapshot(writeTarget, metadata);
                         return;
                     }
-                    // 与群聊 saveGroupChatInternal 对称：200 响应截断或缺少 integrity 视为未确认写入，交由 catch 失效快照并提示用户。
-                    throw new Error('Invalid chat write acknowledgement');
-                }
-
-                if (!effectiveForce) {
-                    const conflictSnapshot = { attempted: false, snapshot: null, error: null };
+                    // Unverified patch acknowledgement (truncated 200 body or legacy no-op
+                    // patch with empty integrity): drop the optimistic snapshot and fall
+                    // through to full /api/chats/save instead of trusting the write.
+                    invalidateChatWriteSnapshot(writeTarget);
+                } else if (!effectiveForce) {
+                    const conflictSnapshot = { attempted: false, snapshot: null, error: null, corrupted: false };
                     const conflictResolution = await resolveChatWriteConflictForTarget(patchResult, writeTarget, metadata, _retryAttempt, {
                         endpoint: 'chats/patch (save-internal)',
                         opSummary: summarizeJsonPatchOperations(operations),
@@ -15307,14 +15400,21 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                             conflictSnapshot.attempted = true;
                             conflictSnapshot.snapshot = result?.snapshot ?? null;
                             conflictSnapshot.error = result?.error ?? null;
+                            conflictSnapshot.corrupted = Boolean(result?.corrupted);
                         },
                     });
                     if (conflictResolution !== 'none') {
                         if (conflictResolution === 'integrity') {
-                            await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata);
-                        } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted && conflictSnapshot.snapshot) {
-                            // snapshot 409 已标记下一次重试走 force:true 全量保存，绝不发起额外全量拉取；若诊断已拿到快照则零开销复用。
-                            applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                            await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata, { allowNonForcedReadFailure: true });
+                        } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
+                            if (conflictSnapshot.error) {
+                                throw conflictSnapshot.error;
+                            }
+                            if (conflictSnapshot.snapshot) {
+                                // Snapshot 409 already armed force:true for the retry full save;
+                                // reuse the diagnostic snapshot with zero extra fetches.
+                                applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                            }
                         }
                         await saveChatInternal({ chatName, withMetadata, mesId, force, _retryAttempt: _retryAttempt + 1, _context: { ...(saveContext ?? {}), metadataSnapshot: cloneAsJsonWire(metadata) ?? metadata, messagesSnapshot: cloneAsJsonWire(trimmedChat) ?? trimmedChat } });
                         return;
@@ -15353,12 +15453,15 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                 rememberChatMetadataSnapshot(writeTarget, metadata);
                 return;
             }
-            // 与群聊 saveGroupChatInternal 对称：200 响应截断或缺少 integrity 视为未确认写入，交由 catch 失效快照并提示用户。
-            throw new Error('Invalid chat write acknowledgement');
+            // Symmetric with saveGroupChatInternal: a truncated or integrity-less 200
+            // body is an unverified write; throw to invalidate snapshots and alert the user.
+            const ackError = new Error('Invalid chat write acknowledgement');
+            ackError.useGenericSaveToast = true;
+            throw ackError;
         }
 
         if (!effectiveForce) {
-            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null, corrupted: false };
             const conflictResolution = await resolveChatWriteConflictForTarget(result, writeTarget, metadata, _retryAttempt, {
                 endpoint: 'chats/save (full)',
                 opSummary: `full ${Array.isArray(trimmedChat) ? trimmedChat.length : 0} msgs`,
@@ -15367,13 +15470,19 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                     conflictSnapshot.attempted = true;
                     conflictSnapshot.snapshot = snapshotResult?.snapshot ?? null;
                     conflictSnapshot.error = snapshotResult?.error ?? null;
+                    conflictSnapshot.corrupted = Boolean(snapshotResult?.corrupted);
                 },
             });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity') {
-                    await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata);
-                } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted && conflictSnapshot.snapshot) {
-                    applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                    await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata, { allowNonForcedReadFailure: true });
+                } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
+                    if (conflictSnapshot.error) {
+                        throw conflictSnapshot.error;
+                    }
+                    if (conflictSnapshot.snapshot) {
+                        applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                    }
                 }
                 await saveChatInternal({ chatName, withMetadata, mesId, force, _retryAttempt: _retryAttempt + 1, _context: { ...(saveContext ?? {}), metadataSnapshot: cloneAsJsonWire(metadata) ?? metadata, messagesSnapshot: cloneAsJsonWire(trimmedChat) ?? trimmedChat } });
                 return;
@@ -15395,7 +15504,9 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         throw new Error(serverError || result.statusText);
     } catch (error) {
         console.error(error);
-        const detail = error?.message ? String(error.message).trim() : '';
+        const detail = error?.corrupted
+            ? t`Chat data is corrupted. Reload the page to retry.`
+            : (!error?.useGenericSaveToast && error?.message ? String(error.message).trim() : '');
         toastr.error(detail || t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
         // Fetch threw after the optimistic snapshot commit — drop the snapshot
         // so the next save re-syncs from BE. See appendChatMessagesInternal
@@ -15627,7 +15738,7 @@ export async function getChat() {
             chat.splice(0, chat.length);
             chat_metadata = {};
         } else {
-            // 非预期的 200 响应结构不能误当空聊天覆盖服务端数据。
+            // Do not treat an unexpected 200 payload as an empty chat and overwrite server data.
             throw new Error('Unexpected chat payload');
         }
         chat.forEach(ensureMessageMediaIsArray);

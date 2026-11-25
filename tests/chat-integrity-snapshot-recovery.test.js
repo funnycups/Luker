@@ -25,7 +25,8 @@ const scriptRuntimeSlices = [
     between(scriptSource, 'function getChatMetadataSnapshotKey(', '\nlet objectPatchWorker = null;'),
     between(scriptSource, 'function normalizeChatMetadataForPatch(', '\n/**\n * Builds lightweight mutation metadata'),
     between(scriptSource, 'export function invalidateChatWriteSnapshot(', '\n/**\n * Processes the avatar image'),
-    between(scriptSource, 'let chatTransitionInProgress = false;', '\nasync function getChatResult()'),
+    'let chatTransitionInProgress = false;',
+    between(scriptSource, 'function endChatTransition()', '\nasync function getChatResult()'),
 ].map(stripExport).join('\n\n');
 
 const groupRuntimeSlices = [
@@ -234,7 +235,7 @@ describe('聊天快照完整性与 409 冲突恢复防护', () => {
                     });
                 }
                 if (url === '/api/chats/get') {
-                    // 模拟 11.14MB 响应在 6MB 处断开导致 JSON 截断解析失败
+                    // 模拟响应流中途断开导致 JSON 截断解析失败
                     return makeResponse({
                         status: 200,
                         jsonError: new SyntaxError('Unexpected end of JSON input'),
@@ -805,5 +806,195 @@ describe('聊天快照完整性与 409 冲突恢复防护', () => {
         await hostGroupGood.context.getGroupChat('grp-1');
         expect(hostGroupGood.helpers.getChatMetadata().integrity).toBe('gtok-fresh');
         expect(hostGroupGood.helpers.getPendingForce(groupTarget)).toBeUndefined();
+    });
+
+    test('单聊 409 冲突恢复遇到 corrupted 或 snapshot 读失败时绝不 force 覆盖，并清理 pendingForceOverwriteTargets', async () => {
+        const initialMsg = { name: 'Alice', is_user: false, mes: '原消息' };
+        const editedMsg = { name: 'Alice', is_user: false, mes: '已编辑消息' };
+
+        // 1) 单聊 patch snapshot 409 + /api/chats/get 返回 { corrupted: true }：中止重试、绝不发 /api/chats/save、不残留 force
+        const hostCorrupted = createHost({
+            chat: [editedMsg],
+            chatMetadata: { integrity: 'tok-1' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/patch') {
+                    return makeResponse({ status: 409, json: { error: 'Chat patch conflict.' } });
+                }
+                if (url === '/api/chats/get') {
+                    return makeResponse({ status: 200, json: { corrupted: true } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostCorrupted.context.seedChatMessageSnapshot(soloTarget, [initialMsg]);
+        await hostCorrupted.context.saveChatInternal({});
+        expect(hostCorrupted.requests.map(r => r.url)).toEqual(['/api/chats/patch', '/api/chats/get']);
+        expect(hostCorrupted.helpers.getPendingForce(soloTarget)).toBeUndefined();
+        expect(hostCorrupted.helpers.getChatMetadata().integrity).toBe('tok-1');
+        expect(hostCorrupted.toasts.error.some(t => t.msg.includes('Chat data is corrupted'))).toBe(true);
+
+        // 2) 单聊 save integrity 409（空 current_integrity）+ /api/chats/get 截断：绝不盲目 force:true 强写
+        const hostEmptyCurrent = createHost({
+            chat: [editedMsg],
+            chatMetadata: { integrity: 'tok-1' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/save') {
+                    return makeResponse({ status: 409, json: { error: 'integrity', current_integrity: '' } });
+                }
+                if (url === '/api/chats/get') {
+                    return makeResponse({ status: 200, jsonError: new SyntaxError('Unexpected end of JSON input') });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        await hostEmptyCurrent.context.saveChatInternal({});
+        expect(hostEmptyCurrent.requests.map(r => r.url)).toEqual(['/api/chats/save', '/api/chats/get']);
+        expect(hostEmptyCurrent.helpers.getPendingForce(soloTarget)).toBeUndefined();
+        expect(hostEmptyCurrent.helpers.getChatMetadata().integrity).toBe('tok-1');
+        expect(hostEmptyCurrent.toasts.error.some(t => t.msg.includes('Check the server connection'))).toBe(true);
+
+        // 3) 单聊 meta/patch snapshot 409 + /api/chats/get 500：清理 force 并返回 false，绝不携带 force:true 重试
+        const hostSoloMetaFail = createHost({
+            chat: [initialMsg],
+            chatMetadata: { integrity: 'tok-1', note: 'v2' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/meta/patch') {
+                    return makeResponse({ status: 409, json: { error: 'Chat metadata patch conflict.' } });
+                }
+                if (url === '/api/chats/get') {
+                    return makeResponse({ status: 500, json: { corrupted: true } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostSoloMetaFail.context.seedChatMessageSnapshot(soloTarget, [initialMsg]);
+        hostSoloMetaFail.context.seedChatMetadataSnapshot(soloTarget, { integrity: 'tok-1', note: 'v1' });
+        expect(await hostSoloMetaFail.context.saveChatMetadataInternal()).toBe(false);
+        expect(hostSoloMetaFail.requests.map(r => r.url)).toEqual(['/api/chats/meta/patch', '/api/chats/get']);
+        expect(hostSoloMetaFail.helpers.getPendingForce(soloTarget)).toBeUndefined();
+    });
+
+    test('saveChatMetadataInternal 在 409 后发现服务端尚未建档（existsOnServer=false）时返回 false 回退全量保存，不递归建空聊天', async () => {
+        const msg0 = { name: 'Alice', is_user: false, mes: '本地消息' };
+
+        // 1) 单聊：meta/patch 409 → /api/chats/get 返回 { new_chat: true } → 不二次发 meta/patch，返回 false
+        const hostSoloNew = createHost({
+            chat: [msg0],
+            chatMetadata: { integrity: 'tok-1', note: 'v2' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/meta/patch') {
+                    return makeResponse({ status: 409, json: { error: 'integrity', current_integrity: 'tok-2' } });
+                }
+                if (url === '/api/chats/get') {
+                    return makeResponse({ status: 200, json: { new_chat: true } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostSoloNew.context.seedChatMessageSnapshot(soloTarget, [msg0]);
+        hostSoloNew.context.seedChatMetadataSnapshot(soloTarget, { integrity: 'tok-1', note: 'v1' });
+        expect(await hostSoloNew.context.saveChatMetadataInternal()).toBe(false);
+        expect(hostSoloNew.requests.map(r => r.url)).toEqual(['/api/chats/meta/patch', '/api/chats/get']);
+        expect(hostSoloNew.helpers.getPendingForce(soloTarget)).toBeUndefined();
+
+        // 2) 群聊：group/meta/patch 409 → /api/chats/group/get 返回 [] → 不二次发 group/meta/patch，回退全量 saveGroupChat
+        const groupSaveBodies = [];
+        const hostGroupNew = createHost({
+            selectedGroup: 'grp-1',
+            chat: [msg0],
+            chatMetadata: { integrity: 'gtok-1', note: 'v2' },
+            fetchImpl: async (url, body) => {
+                if (url === '/api/chats/group/meta/patch') {
+                    return makeResponse({ status: 409, json: { error: 'snapshot' } });
+                }
+                if (url === '/api/chats/group/get') {
+                    return makeResponse({ status: 200, json: [] });
+                }
+                if (url === '/api/chats/group/save') {
+                    groupSaveBodies.push(body);
+                    return makeResponse({ status: 200, json: { ok: true, integrity: 'gtok-2' } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostGroupNew.context.seedChatMessageSnapshot(groupTarget, [msg0]);
+        hostGroupNew.context.seedChatMetadataSnapshot(groupTarget, { integrity: 'gtok-1', note: 'v1' });
+        expect(await hostGroupNew.context.saveChatMetadata({ note: 'v2' })).toBe(true);
+        expect(hostGroupNew.requests.map(r => r.url)).toEqual([
+            '/api/chats/group/meta/patch',
+            '/api/chats/group/get',
+            '/api/chats/group/save',
+        ]);
+        expect(groupSaveBodies).toHaveLength(1);
+        expect(groupSaveBodies[0].force).toBe(false);
+        expect(groupSaveBodies[0].chat.slice(1)).toEqual([msg0]);
+    });
+
+    test('saveChatInternal patch 200 缺 integrity 降级全量保存、save 200 异常不暴露未翻译内部文案、各早退路径精准清理 force 标记', async () => {
+        const msg0 = { name: 'Alice', is_user: false, mes: '原消息' };
+        const msgEdited = { name: 'Alice', is_user: false, mes: '已改' };
+
+        // 1) /api/chats/patch 返回 200 但 integrity 为空（例如无 integrity 旧聊天的 no-op patch）→ 降级 /api/chats/save 成功
+        const hostPatchFallback = createHost({
+            chat: [msgEdited],
+            chatMetadata: { integrity: 'tok-1' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/patch') {
+                    return makeResponse({ status: 200, json: { ok: true, applied: 0, total_messages: 0, integrity: '' } });
+                }
+                if (url === '/api/chats/save') {
+                    return makeResponse({ status: 200, json: { ok: true, integrity: 'tok-2' } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostPatchFallback.context.seedChatMessageSnapshot(soloTarget, [msg0]);
+        await hostPatchFallback.context.saveChatInternal({});
+        expect(hostPatchFallback.requests.map(r => r.url)).toEqual(['/api/chats/patch', '/api/chats/save']);
+        expect(hostPatchFallback.helpers.getChatMetadata().integrity).toBe('tok-2');
+        expect(hostPatchFallback.toasts.error).toEqual([]);
+
+        // 2) /api/chats/save 返回 200 缺 integrity → 使用本地化通用提示，不把英文内部异常文案直接弹给用户
+        const hostSaveAck = createHost({
+            chat: [msgEdited],
+            chatMetadata: { integrity: 'tok-1' },
+            fetchImpl: async (url) => {
+                if (url === '/api/chats/save') {
+                    return makeResponse({ status: 200, json: { ok: true } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        await hostSaveAck.context.saveChatInternal({});
+        expect(hostSaveAck.toasts.error.some(t => t.msg.includes('Check the server connection'))).toBe(true);
+        expect(hostSaveAck.toasts.error.some(t => t.msg.includes('Invalid chat write acknowledgement'))).toBe(false);
+
+        // 3) saveChatInternal({ chatName: 'branch-2' }) 在无 integrity 早退时只清 branch-2，不误清当前活动聊天 chat-1
+        const branchTarget = { ...soloTarget, file_name: 'branch-2' };
+        const hostBranchGuard = createHost({
+            chat: [msg0],
+            chatMetadata: {},
+            fetchImpl: async () => {
+                throw new Error('Should not fetch when integrity is missing');
+            },
+        });
+        hostBranchGuard.context.markTargetForForceOverwriteOnNextSave(soloTarget, 'active-force');
+        hostBranchGuard.context.markTargetForForceOverwriteOnNextSave(branchTarget, 'branch-force');
+        await hostBranchGuard.context.saveChatInternal({ chatName: 'branch-2' });
+        expect(hostBranchGuard.helpers.getPendingForce(branchTarget)).toBeUndefined();
+        expect(hostBranchGuard.helpers.getPendingForce(soloTarget)).toBe('active-force');
+
+        // 4) saveGroupChatInternal 在无 integrity 早退时同样清理 pendingForceOverwriteTargets
+        const hostGroupGuard = createHost({
+            selectedGroup: 'grp-1',
+            chat: [msg0],
+            chatMetadata: {},
+            fetchImpl: async () => {
+                throw new Error('Should not fetch when group integrity is missing');
+            },
+        });
+        hostGroupGuard.context.markTargetForForceOverwriteOnNextSave(groupTarget, 'stale-group-force');
+        expect(await hostGroupGuard.context.saveGroupChat('grp-1', false)).toBe(false);
+        expect(hostGroupGuard.helpers.getPendingForce(groupTarget)).toBeUndefined();
     });
 });
