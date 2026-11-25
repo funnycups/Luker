@@ -10,7 +10,6 @@
 
 import { describe, expect, test } from '@jest/globals';
 import { isReplayableIterationMessage } from '../../public/scripts/iteration-library/iter-message-filter.js';
-import { normalizeLegacyMessage } from '../../public/scripts/workbench/model/legacy-import.js';
 
 describe('CEA iteration message filter — read-first legacy filler filter', () => {
     test('legacy untagged auto:true user filler is dropped on replay', () => {
@@ -26,7 +25,6 @@ describe('CEA iteration message filter — read-first legacy filler filter', () 
         expect(filtered[1].role).toBe('assistant');
         expect(filtered[2].role).toBe('assistant');
         expect(filtered.some(m => String(m?.content || '').includes('Legacy filler'))).toBe(false);
-        expect(normalizeLegacyMessage(messages[2])).toBeNull();
     });
 
     test('legacy drain-summary-tagged auto:true user message is also DROPPED', () => {
@@ -37,7 +35,6 @@ describe('CEA iteration message filter — read-first legacy filler filter', () 
             kind: 'drain_summary',
         };
         expect(isReplayableIterationMessage(drainSummary)).toBe(false);
-        expect(normalizeLegacyMessage(drainSummary)).toBeNull();
     });
 
     test('non-auto user messages always survive (regular human turns)', () => {

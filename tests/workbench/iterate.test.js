@@ -14,7 +14,6 @@ import {
     trimMessages,
 } from '../../public/scripts/workbench/model/iterate.js';
 import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
-import { createSessionStore, SESSIONS_NAMESPACE, SESSIONS_INDEX_VERSION } from '../../public/scripts/workbench/model/sessions.js';
 import { mountWorkbench } from '../../public/scripts/workbench/app.js';
 import { createWorkbenchRegistry } from '../../public/scripts/workbench/registry.js';
 import { aiRequest } from '../../public/scripts/workbench/source-luker.js';
@@ -1772,106 +1771,6 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         expect(page.el.querySelectorAll('.wb-sess-row')).toHaveLength(0);
         expect(await sessions.get(cardB.id, { scope: 'character', avatar: 'alice.png' })).toBeNull();
         expect(await sessions.get(otherTarget.id, { scope: 'character', avatar: 'alice.png' })).not.toBeNull();
-    });
-
-    test('imports and prunes character-scoped LEGACY_SETTINGS buckets even when meta.legacyImported[targetId] is already set', async () => {
-        const charStore = new Map();
-        charStore.set(`alice.png::${SESSIONS_NAMESPACE}`, {
-            version: SESSIONS_INDEX_VERSION,
-            sessions: [],
-            legacyImported: { card: 1700000000000, orch: 1700000000000 },
-        });
-        const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
-        const mockCtx = {
-            characters: [{ avatar: 'alice.png', name: 'Alice' }],
-            characterId: 0,
-            groupId: null,
-            extensionSettings: {
-                character_editor_assistant: {
-                    unified_cea_editor_sessions: {
-                        'char_alice.png': {
-                            c_old: { id: 'c_old', title: 'Alice legacy card', messages: [{ role: 'user', content: 'tighten card' }] },
-                        },
-                        'char_bob.png': {
-                            b_old: { id: 'b_old', title: 'Bob untouched', messages: [{ role: 'user', content: 'keep bob' }] },
-                        },
-                    },
-                },
-                orchestrator: {
-                    iterStudioV2: {
-                        spec: {
-                            'character_alice.png': {
-                                o_old: { id: 'o_old', title: 'Alice legacy orch', messages: [{ role: 'user', content: 'tune spec' }] },
-                            },
-                        },
-                    },
-                },
-            },
-            saveSettings: jest.fn(async (_delay, opts) => { opts?.onSaved?.(); }),
-            saveSettingsDebounced: jest.fn(),
-            getCharacterState: jest.fn(async (avatar, ns) => ({ ok: true, state: clone(charStore.get(`${avatar}::${ns}`) ?? null) })),
-            updateCharacterState: jest.fn(async (avatar, ns, updater) => {
-                const key = `${avatar}::${ns}`;
-                const cur = charStore.get(key) ?? {};
-                const next = await updater(clone(cur));
-                if (next == null) return { ok: true, state: clone(cur), updated: false };
-                charStore.set(key, clone(next));
-                return { ok: true, state: clone(next), updated: true };
-            }),
-            deleteCharacterState: jest.fn(async (avatar, ns) => {
-                charStore.delete(`${avatar}::${ns}`);
-                return { ok: true };
-            }),
-        };
-        const savedLuker = globalThis.Luker;
-        globalThis.Luker = { getContext: () => mockCtx };
-        try {
-            const sessions = createSessionStore(() => mockCtx);
-            const makeTarget = (id) => ({
-                id,
-                label: id,
-                tone: id,
-                scopes: async () => ({ character: true }),
-                load: async () => ({ live: {}, target: { scope: 'character', avatar: 'alice.png' }, title: `Alice ${id}` }),
-                prompt: async () => 'sys',
-                tools: async () => [{ type: 'function', function: { name: 'noop' } }],
-                isRead: () => true,
-                runRead: async () => ({}),
-                runEdit: async (_c, l) => l,
-                units: () => new Map(),
-                rebuild: (_b, a) => a,
-                commit: async () => ({ applied: [], skipped: [], failure: '' }),
-            });
-            const app = {
-                sessions,
-                layer: document.body,
-                iterateTargets: () => [makeTarget('card'), makeTarget('orch')],
-                snapshot: () => ({ chat: { character: { avatar: 'alice.png', name: 'Alice' } }, card: { name: 'Alice', avatar: 'alice.png' } }),
-                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
-                history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
-                toast: jest.fn(),
-                reload: jest.fn(),
-                refreshBadges: jest.fn(),
-                source: { aiRequest: jest.fn() },
-            };
-            const page = createIteratePage(app);
-            document.body.appendChild(page.el);
-
-            await page.show({ ws: 'card', scope: 'character' });
-            await flushMicrotasks();
-            expect(page.el.textContent).toContain('Alice legacy card');
-            expect(mockCtx.extensionSettings.character_editor_assistant.unified_cea_editor_sessions['char_alice.png']).toBeUndefined();
-            expect(mockCtx.extensionSettings.character_editor_assistant.unified_cea_editor_sessions['char_bob.png']).toBeDefined();
-
-            await page.show({ ws: 'orch', scope: 'character' });
-            await flushMicrotasks();
-            expect(page.el.textContent).toContain('Alice legacy orch');
-            expect(mockCtx.extensionSettings.orchestrator.iterStudioV2).toBeUndefined();
-            page.destroy();
-        } finally {
-            if (savedLuker === undefined) delete globalThis.Luker;
-            else globalThis.Luker = savedLuker;
-        }
     });
 
     test('discard() rebases later pending turn onto current saved state (preserving intervening applied turn) instead of stale draft.base', async () => {

@@ -157,7 +157,7 @@ function getCurrentAvatar() {
 }
 
 /**
- * Load all sessions from sidecar, migrate old format if needed.
+ * Load all sessions from character state.
  * @returns {Promise<Array>} Array of session objects
  */
 async function loadAllSessions() {
@@ -171,31 +171,6 @@ async function loadAllSessions() {
     const data = result.state;
     if (!data) return [];
 
-    // Migrate old single-session format to new multi-session format
-    if (Array.isArray(data.messages)) {
-        // Old format: { messages, updatedAt }
-        const migrated = {
-            version: SESSION_VERSION,
-            sessions: [
-                {
-                    id: generateSessionId(),
-                    messages: data.messages,
-                    updatedAt: data.updatedAt || Date.now(),
-                    summary: 'Migrated session',
-                },
-            ],
-        };
-        const migrateResult = await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
-        if (!migrateResult?.ok) {
-            // Migration write failure is non-fatal — return the in-memory
-            // migrated payload so the user sees their old session this
-            // run, and let the next save retry persistence.
-            console.warn(`[${MODULE_NAME}] loadAllSessions migrate-write failed: ${migrateResult?.reason} ${migrateResult?.hint || ''}`);
-        }
-        return migrated.sessions;
-    }
-
-    // New format: { version, sessions }
     if (data.version === SESSION_VERSION && Array.isArray(data.sessions)) {
         return data.sessions;
     }
@@ -840,44 +815,6 @@ async function handleNewFile() {
 
 // ==================== Studio Lifecycle ====================
 
-// One-shot wipe of the legacy v2 session bucket (`cardapp_studio_sessions_v2`).
-// Clearing it once frees the unused character-state slot without touching
-// CardApp files on disk.
-const LEGACY_V2_WIPE_FLAG_KEY = 'cardapp_studio_sp2_wiped_v1';
-
-async function wipeLegacyV2SessionsIfNeeded(avatar) {
-    try {
-        if (typeof localStorage === 'undefined') return;
-        if (localStorage.getItem(LEGACY_V2_WIPE_FLAG_KEY)) return;
-        const context = getContext();
-        if (!avatar || !context?.deleteCharacterState) {
-            localStorage.setItem(LEGACY_V2_WIPE_FLAG_KEY, '1');
-            return;
-        }
-        let hadLegacyData = false;
-        const readResult = await context.getCharacterState?.(avatar, 'cardapp_studio_sessions_v2');
-        if (readResult && !readResult.ok) {
-            console.warn(`[${MODULE_NAME}] legacy v2 session wipe read failed: ${readResult.reason} ${readResult.hint || ''}`);
-            return;
-        }
-        const legacyState = readResult?.ok ? readResult.state : null;
-        hadLegacyData = legacyState != null && Object.keys(legacyState).length > 0;
-        if (hadLegacyData) {
-            const deleteResult = await context.deleteCharacterState(avatar, 'cardapp_studio_sessions_v2');
-            if (!deleteResult?.ok) {
-                console.warn(`[${MODULE_NAME}] legacy v2 session wipe delete failed: ${deleteResult?.reason} ${deleteResult?.hint || ''}`);
-                return;
-            }
-            if (typeof toastr !== 'undefined') {
-                toastr.info(t('CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.'));
-            }
-        }
-        localStorage.setItem(LEGACY_V2_WIPE_FLAG_KEY, '1');
-    } catch (e) {
-        console.error(`[${MODULE_NAME}] legacy v2 session wipe failed`, e);
-    }
-}
-
 export async function openCardAppStudio(charId) {
     if (isStudioOpen) {
         toastr.warning(t('CardApp Studio is already open.'));
@@ -890,9 +827,6 @@ export async function openCardAppStudio(charId) {
     currentCharacter = resolveStudioCharacter(context, charId);
     currentAvatar = String(currentCharacter?.avatar || '').trim();
     isStudioOpen = true;
-
-    // One-shot wipe of legacy v2 session bucket.
-    await wipeLegacyV2SessionsIfNeeded(currentAvatar);
 
     // Ensure skeleton files exist
     await ensureSkeletonFiles(charId);

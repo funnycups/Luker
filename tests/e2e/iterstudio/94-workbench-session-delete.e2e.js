@@ -60,7 +60,6 @@ function plantV1InlineWorkbenchSessions(dataRoot) {
                 ],
             },
         ],
-        legacyImported: { preset: 1700000000000 },
     };
     writeFileSync(sidecarPath(dataRoot, 'workbench_sessions'), JSON.stringify(doc, null, 4));
 }

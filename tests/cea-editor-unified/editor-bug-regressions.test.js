@@ -2,43 +2,16 @@
 // Copyright (C) 2026 FunnyCups
 
 // Regression tests for CEA editor iteration fixes:
-//   - CEA-2: Prior turn toolCalls + toolResults replay cleanly (both in
-//            legacy-import normalization and in multi-round runIterateTurn).
+//   - CEA-2: Prior turn toolCalls + toolResults replay cleanly in multi-round runIterateTurn.
 //   - CEA-4: Multi-round edits commit together cleanly via cardTarget.commit
 //            without losing earlier-round deltas.
 //   - CEA-7: Transient empty sessions are skipped by the session store gate.
 
 import { describe, expect, jest, test } from '@jest/globals';
-import { normalizeLegacyMessage } from '../../public/scripts/workbench/model/legacy-import.js';
 import { runIterateTurn } from '../../public/scripts/workbench/model/iterate.js';
 import { createCardTarget } from '../../public/scripts/workbench/targets/card.js';
 
 describe('CEA-2: prior turn tool history replay', () => {
-    test('normalizeLegacyMessage preserves toolCalls + merged toolResults and strips auto-continue fillers', () => {
-        const userMsg = normalizeLegacyMessage({ role: 'user', content: 'list the books' });
-        expect(userMsg).toMatchObject({ role: 'user', content: 'list the books' });
-
-        const filler = normalizeLegacyMessage({ role: 'user', content: 'AUTO', auto: true });
-        expect(filler).toBeNull();
-
-        const assistant = normalizeLegacyMessage({
-            role: 'assistant',
-            content: 'reading…',
-            toolCalls: [
-                { id: 'r1', name: 'world_book_list', args: {} },
-                { id: 'r2', name: 'lorebook_query', args: { book_name: 'A', text: 'x' } },
-            ],
-            toolResults: [
-                { tool_call_id: 'r1', content: { books: ['A', 'B'] } },
-                { tool_call_id: 'r2', content: { matches: [1, 2] } },
-            ],
-        });
-        expect(assistant.role).toBe('assistant');
-        expect(assistant.toolCalls).toHaveLength(2);
-        expect(assistant.toolCalls[0].result).toEqual({ books: ['A', 'B'] });
-        expect(assistant.toolCalls[1].result).toEqual({ matches: [1, 2] });
-    });
-
     test('runIterateTurn threads tool_calls + tool_results into subsequent rounds', async () => {
         const ctx = {
             characterId: 0,

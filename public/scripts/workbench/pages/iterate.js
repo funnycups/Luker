@@ -31,7 +31,6 @@ import {
     trimMessages,
 } from '../model/iterate.js';
 import { groupSessions, titleFrom, computePendingCount, toSessionSummary } from '../model/sessions.js';
-import { importLegacySessionsOnce, hasLegacySettingsSessions } from '../model/legacy-import.js';
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
 import { attachZoomOverlay } from '../../iteration-library/zoom-overlay.js';
 import { withActivityLease } from '../../activity-guard.js';
@@ -254,8 +253,6 @@ export function createIteratePage(app) {
     const applying = new Set();
     const deleting = new Set();
     let clearing = false;
-    const importedScopeTargets = new Set();
-    const importingScopeTargets = new Map();
     let previewDeps = null;
 
     // Saved copies per target+scope key: { base, target, title }
@@ -480,66 +477,14 @@ export function createIteratePage(app) {
             return;
         }
 
-        const importKey = currentScopeKey(t.id, scope);
-        const ctx = getCtx();
-        const runImportOnce = async (prefetchedState = undefined) => {
-            if (!ctx || importedScopeTargets.has(importKey)) return null;
-            let importing = importingScopeTargets.get(importKey);
-            if (!importing) {
-                importing = importLegacySessionsOnce({
-                    ctx,
-                    targetId: t.id,
-                    scope,
-                    scopeOpts: sOpts,
-                    scopeName: scopeDisplayName(scope),
-                    ...(prefetchedState !== undefined ? { prefetchedState } : {}),
-                }).then((res) => {
-                    importedScopeTargets.add(importKey);
-                    return res;
-                }).finally(() => importingScopeTargets.delete(importKey));
-                importingScopeTargets.set(importKey, importing);
-            }
-            return await importing;
-        };
-
+        const scopeKey = currentScopeKey(t.id, scope);
         try {
-            let list;
-            if (typeof store.listWithMeta === 'function') {
-                let meta = await store.listWithMeta('iterate', sOpts);
-                if (ver !== refreshVersion) return;
-                const needsImport = !importedScopeTargets.has(importKey)
-                    && ctx
-                    && (!meta.legacyImported?.[t.id] || hasLegacySettingsSessions(ctx, t.id, scope, sOpts.avatar || ''));
-                if (needsImport) {
-                    try {
-                        const imp = await runImportOnce(meta.state);
-                        if (ver !== refreshVersion) return;
-                        if (imp?.imported?.length) {
-                            meta = await store.listWithMeta('iterate', sOpts);
-                            if (ver !== refreshVersion) return;
-                        }
-                    } catch (err) {
-                        app.toast(String(err?.message || err), { error: true });
-                    }
-                } else if (ctx) {
-                    importedScopeTargets.add(importKey);
-                }
-                list = meta.sessions;
-            } else {
-                if (!importedScopeTargets.has(importKey) && ctx) {
-                    try {
-                        await runImportOnce();
-                    } catch (err) {
-                        app.toast(String(err?.message || err), { error: true });
-                    }
-                }
-                list = await store.list('iterate', sOpts);
-                if (ver !== refreshVersion) return;
-            }
+            const list = await store.list('iterate', sOpts);
+            if (ver !== refreshVersion) return;
 
             for (const s of list) sessionScopes.set(s.id, clone(sOpts));
             recentSessions = list;
-            loadedSessionsScopeKey = importKey;
+            loadedSessionsScopeKey = scopeKey;
             paintSessions();
             app.refreshBadges?.();
         } catch (err) {
