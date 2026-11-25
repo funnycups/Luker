@@ -50,6 +50,7 @@ context.generateTask({
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
     substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};编辑器类流程需关闭
+    activity?: boolean | object = true,           // 默认附带全局隐式活动租约;传 false 退出或传对象覆盖配置
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -309,6 +310,16 @@ type StreamChunk =
 
 直接 `await result` 也是合法的。在任何消费方挂接之前到达的增量会被丢弃（不为延迟消费缓存），但内部累加器仍会构造出完整的终态 `result`。当你只想拿响应形态、不需要逐 token 渲染时使用这种模式。
 
+### 后台活动保护
+
+`generateTask` 与 `generateTaskStream` 均接受 `activity` 选项，默认为 `true`：
+
+- **`true`（默认）** —— 自动申请一条全局隐式活动租约，字段为 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在请求进行期间维持浏览器离开页面提醒与移动端后台保活，但不触发应用内切换聊天确认。
+- **`false`** —— 本次调用不自动申请活动租约。
+- **纯对象** —— 覆盖默认租约选项中的任意字段：`source`、`label`、`scope`、`guardUnload`、`guardChatSwitch`、`keepAlive`、`ambient`、`onCancel`。若传入 `scope: 'chat'`，同时会纳入应用内切换聊天确认保护。
+
+对于 `generateTaskStream`，租约从调用开始持续持有，直至终态 `result` 解决或拒绝为止。详见[插件集成 → 后台活动保护](/zh-CN/development/extension-api/plugin-integration#后台活动保护)。
+
 ## 消息接管
 
 对于希望由插件直接产出助理消息、而非引导主 LLM 的场景，参见 **[消息接管 API](./message-takeover.md)**。该 API 允许插件接管消息体的完整产出过程，跳过主 LLM 调用。
@@ -537,14 +548,15 @@ generateRaw(params: {
     llmPresetName?: string,
     apiPresetName?: string,
     apiSettingsOverride?: object | null,
+    activity?: boolean | object,
 }): Promise<string>
 ```
 
-把字面量 `prompt` 直接发给当前后端，不涉及聊天历史、世界书、角色卡或扩展 prompt。返回经过后处理的响应文本。适合工具类调用——拟标题、分类、改写——这种你想完全控制输入的场景。
+把字面量 `prompt` 直接发给当前后端，不涉及聊天历史、世界书、角色卡或扩展 prompt。返回经过后处理的响应文本。适合工具类调用——拟标题、分类、改写——这种你想完全控制输入的场景。`activity` 默认为 `true`，即 `source: 'core:generate-raw'` 的全局隐式租约；传 `false` 可退出，或传入租约选项对象覆盖配置。
 
 ### generateRawData
 
-参数与 `generateRaw` 相同，但返回原始 API 响应对象而非后处理后的字符串。当你需要 `generateRaw` 折叠掉的 `reasoning` 之类字段时用。
+参数与 `generateRaw` 相同且同样支持 `activity`，但返回原始 API 响应对象而非后处理后的字符串。当你需要 `generateRaw` 折叠掉的 `reasoning` 之类字段时使用。
 
 ### generateQuietPrompt
 
@@ -627,24 +639,36 @@ context.streamingProcessor: StreamingProcessor | null
 
 ```ts
 ChatCompletionService.createRequestData(custom: object): object
-ChatCompletionService.sendRequest(data: object, extractData?: boolean, signal?: AbortSignal): Promise<{ content, reasoning } | object | AsyncGenerator>
-ChatCompletionService.processRequest(requestData: object, options: object, extractData?: boolean, signal?: AbortSignal): Promise<...>
+ChatCompletionService.sendRequest(
+    data: object,
+    extractData?: boolean,
+    signal?: AbortSignal,
+    requestOptions?: { activity?: boolean | object },
+): Promise<{ content, reasoning } | object | (() => AsyncGenerator)>
+ChatCompletionService.processRequest(
+    requestData: object,
+    options: { presetName?: string, activity?: boolean | object },
+    extractData?: boolean,
+    signal?: AbortSignal,
+): Promise<...>
 ```
 
 封装 `/api/backends/chat-completions/generate` 端点。`processRequest` 通过 `getPresetManager('openai')` 增加了具名预设的应用。
 
 非流式返回 `{ content, reasoning }`（`extractData: false` 时返回原始 JSON）。流式返回一个产出 `{ text, swipes, state }` 的异步 generator 工厂。
 
+`sendRequest` 通过第 4 个参数 `requestOptions`、`processRequest` 通过 `options.activity` 均默认附带 `source: 'core:custom-request'` 的全局隐式租约，且该参数绝不会序列化进请求体；传入 `false` 可退出，传入对象可覆盖租约字段。流式请求采用两阶段租约：第一阶段在 `sendRequest` 建立 SSE 连接期间持有租约；第二阶段仅在调用并迭代返回的异步 generator 工厂时才申请租约并在 `finally` 中释放，未调用的流式工厂不会泄漏租约。
+
 ### TextCompletionService
 
 ```ts
 TextCompletionService.createRequestData({ stream, prompt, ... }): object
-TextCompletionService.sendRequest(data, extractData?, signal?): Promise<...>
+TextCompletionService.sendRequest(data, extractData?, signal?, requestOptions?): Promise<...>
 TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, instructSettings): string
 TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
 ```
 
-`ChatCompletionService` 的 text-completion 后端版本。`constructPrompt` 把消息数组格式化成单一的 instruct 格式字符串。
+`ChatCompletionService` 的 text-completion 后端版本，具备相同的第 4 参数 `requestOptions.activity`（不进入请求体）、`processRequest` 的 `options.activity` 以及两阶段流式租约行为。`constructPrompt` 把消息数组格式化成单一的 instruct 格式字符串。
 
 ### ConnectionManagerRequestService
 

@@ -241,6 +241,59 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
+    test('MAKERSUITE HTTP 200 with top-level error object: forwards error payload instead of normalizing to empty choices', async () => {
+        const rawError = {
+            error: { code: 502, message: 'upstream stream closed', status: 'UNAVAILABLE' },
+            extra: { detail: 'preserved' },
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawError), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(200);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed).toEqual(rawError);
+        expect(parsed.choices).toBeUndefined();
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawError, rawError);
+    });
+
+    test('MAKERSUITE HTTP 200 with array-wrapped error object: unwraps error envelope instead of normalizing to empty choices', async () => {
+        const rawArrayError = [{
+            error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' },
+        }];
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawArrayError), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed).toEqual(rawArrayError[0]);
+        expect(parsed.choices).toBeUndefined();
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawArrayError[0], rawArrayError);
+    });
+
     test('MAKERSUITE 200 with empty candidates array + promptFeedback.blockReason: emits head 200 + `{error:{message}}` chunk (blocked, terminal)', async () => {
         // Blocked-prompt branch is TERMINAL — retrying against the same
         // safety filter burns quota. Delivered as HTTP 200 + `{error:{message}}`

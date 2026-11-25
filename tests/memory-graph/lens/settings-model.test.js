@@ -5,7 +5,6 @@ import {
     CADENCE_PRESETS,
     matchCadencePreset,
     detectVisibilityGap,
-    formatCadenceSummary,
     buildCadenceDemoFrames,
     getDirtyAdvancedKeys,
 } from '../../../public/scripts/extensions/memory-graph/lens/settings/settings-model.js';
@@ -155,30 +154,5 @@ describe('getDirtyAdvancedKeys', () => {
         expect(getDirtyAdvancedKeys({ ...saved, llmVisibleRecentMessages: '5' }, saved)).toEqual([]);
         expect(getDirtyAdvancedKeys({ ...saved, llmVisibleRecentMessages: 3 }, saved)).toEqual(['llmVisibleRecentMessages']);
         expect(getDirtyAdvancedKeys({ ...saved, llmVisibleRecentMessages: 5 }, saved)).toEqual([]);
-    });
-});
-
-describe('formatCadenceSummary', () => {
-    test('describes both extraction cadence and floor hiding for odd window, disabled hiding, and trailing exclusions', () => {
-        const balanced = formatCadenceSummary({
-            updateEvery: 2,
-            extractBatchTurns: 2,
-            extractContextTurns: 2,
-            extractExcludeRecentTurns: 0,
-            llmVisibleRecentMessages: 5,
-        });
-        expect(balanced).toContain('2');
-        expect(balanced).toContain('5');
-        expect(balanced).not.toContain('跳过最新 0');
-
-        const noHide = formatCadenceSummary({
-            updateEvery: 2,
-            extractBatchTurns: 2,
-            extractContextTurns: 2,
-            extractExcludeRecentTurns: 1,
-            llmVisibleRecentMessages: 0,
-        });
-        expect(noHide).toContain('全部');
-        expect(noHide).toContain('1');
     });
 });

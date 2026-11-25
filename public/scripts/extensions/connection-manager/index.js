@@ -13,7 +13,7 @@ import { SlashCommandClosure } from '../../slash-commands/SlashCommandClosure.js
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommandScope } from '../../slash-commands/SlashCommandScope.js';
 import { collapseSpaces, getUniqueName, isFalseBoolean, isTrueBoolean, uuidv4, waitUntilCondition } from '../../utils.js';
-import { t } from '../../i18n.js';
+import { t, translate } from '../../i18n.js';
 import { getSecretLabelById, SECRET_KEYS, writeSecret } from '../../secrets.js';
 import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, proxies, updateReverseProxyConflictWarning, whenChatCompletionModelListReady } from '../../openai.js';
 import { initActionableSingleSelect } from '../../select2-actionable-single.js';
@@ -36,6 +36,53 @@ import {
     mountInlineProfileEditor,
     renderProfileSelect,
 } from './embed-rerank.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { prefersReducedMotion } from '../../lens-shared/util.js';
+import {
+    buildConnPlainTextFcSummary,
+    buildConnReliabilitySummary,
+    buildConnClaudeCacheSummary,
+    buildConnGeminiCacheSummary,
+} from './behavior-summary-models.js';
+
+const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
+
+function isElementHidden(el) {
+    if (!el) return false;
+    if (el.hidden || el.style?.display === 'none') return true;
+    return globalThis.getComputedStyle?.(el)?.display === 'none';
+}
+
+function expandAncestorContainers(targetEl) {
+    const ancestors = [];
+    for (let node = targetEl?.parentElement || null; node; node = node.parentElement) {
+        ancestors.push(node);
+    }
+    ancestors.reverse();
+    for (const node of ancestors) {
+        if (node.tagName === 'DETAILS' && !node.open) {
+            node.open = true;
+        }
+        if (node.classList?.contains('inline-drawer')) {
+            const content = node.querySelector(':scope > .inline-drawer-content');
+            if (content && content.contains(targetEl) && isElementHidden(content)) {
+                const toggle = node.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
+                toggle?.click();
+            }
+        }
+        if (node.classList?.contains('drawer')) {
+            const content = node.querySelector(':scope > .drawer-content');
+            if (content && content.contains(targetEl) && content.classList.contains('closedDrawer')) {
+                const toggle = node.querySelector(':scope > .drawer-toggle');
+                toggle?.click();
+                if (content.classList.contains('closedDrawer')) {
+                    content.classList.remove('closedDrawer');
+                    content.classList.add('openDrawer');
+                }
+            }
+        }
+    }
+}
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -1344,9 +1391,8 @@ export async function init() {
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
     const claudeExtendedTtlToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_extended_ttl'));
     const claudeCachingAtDepthInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_caching_at_depth'));
-    const claudeCacheWarningSingle = document.getElementById('connection_profile_claude_cache_warning_single');
-    const claudeCacheWarningStrict = document.getElementById('connection_profile_claude_cache_warning_strict');
     const geminiEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_system_prompt_cache'));
+    let refreshBehaviorSummaries = () => {};
     const geminiEnableHistoryCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_history_cache'));
     const geminiCacheKeepRecentTurnsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_cache_keep_recent_turns'));
     renderConnectionProfiles(profiles);
@@ -1539,19 +1585,7 @@ export async function init() {
                     ?? oai_settings.gemini_cache_keep_recent_turns ?? 2);
             }
         }
-        if (claudeCacheWarningSingle && claudeCacheWarningStrict) {
-            const isClaudeSource = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
-            const depthValue = parseCachingAtDepth(oai_settings.claude_caching_at_depth) ?? -1;
-            const cacheActive = isClaudeSource && (
-                Boolean(oai_settings.claude_enable_system_prompt_cache)
-                || depthValue >= 0
-            );
-            const effectivePost = String(oai_settings.custom_prompt_post_processing || '');
-            const showSingle = cacheActive && effectivePost === 'single';
-            const showStrict = cacheActive && (effectivePost === 'strict' || effectivePost === 'semi');
-            claudeCacheWarningSingle.classList.toggle('displayNone', !showSingle);
-            claudeCacheWarningStrict.classList.toggle('displayNone', !showStrict);
-        }
+        refreshBehaviorSummaries();
     }
 
     async function applySelectedProfileMutation(mutator) {
@@ -1585,6 +1619,179 @@ export async function init() {
         syncProfileEditorControls();
     }
     toggleProfileSpecificButtons();
+
+    let externalPulseTarget = null;
+    let externalPulseTimer = null;
+    const clearExternalPulse = () => {
+        if (externalPulseTimer !== null) {
+            clearTimeout(externalPulseTimer);
+            externalPulseTimer = null;
+        }
+        if (externalPulseTarget) {
+            externalPulseTarget.classList.remove('luker-bsum-field-pulse');
+            externalPulseTarget = null;
+        }
+    };
+    const focusPostProcessingSelect = () => {
+        const target = document.getElementById('custom_prompt_post_processing');
+        if (!target) {
+            return false;
+        }
+        expandAncestorContainers(target);
+        if (typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({
+                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+                block: 'nearest',
+            });
+        }
+        if (typeof target.focus === 'function') {
+            target.focus({ preventScroll: true });
+        }
+        clearExternalPulse();
+        void target.offsetWidth;
+        target.classList.add('luker-bsum-field-pulse');
+        externalPulseTarget = target;
+        externalPulseTimer = setTimeout(() => {
+            clearExternalPulse();
+        }, PULSE_DURATION_MS);
+        return true;
+    };
+
+    const advancedDrawerContent = container.querySelector('.connection_profile_tab_panel[data-mode="chat"] .inline-drawer-content');
+    const summaryHandles = [];
+    if (advancedDrawerContent) {
+        const getProfileModeState = () => {
+            const profile = getSelectedProfile();
+            return {
+                hasProfile: Boolean(profile),
+                profileMode: profile ? resolveProfileMode(profile) : '',
+            };
+        };
+
+        const plainTextAnchor = plainTextFunctionCallingToggle?.closest('.checkbox_label') || advancedDrawerContent;
+        summaryHandles.push(mountBehaviorSummary({
+            id: 'conn-plain-text-fc',
+            root: advancedDrawerContent,
+            anchor: plainTextAnchor,
+            position: plainTextAnchor === advancedDrawerContent ? 'prepend' : 'before',
+            ariaLabel: translate('Plain-text function calling behavior summary'),
+            fields: {
+                plainText: { selector: '#connection_profile_function_calling_plain_text', highlight: '.checkbox_label' },
+                errorRetry: { selector: '#connection_profile_function_calling_plain_text_error_retry', highlight: '.checkbox_label' },
+                maxAttempts: { selector: '#connection_profile_function_calling_plain_text_error_retry_max_attempts', highlight: '#connection_profile_function_calling_plain_text_retry_attempts_block' },
+            },
+            readState: (rootEl) => ({
+                ...getProfileModeState(),
+                plainText: Boolean(rootEl.querySelector('#connection_profile_function_calling_plain_text')?.checked),
+                errorRetry: Boolean(rootEl.querySelector('#connection_profile_function_calling_plain_text_error_retry')?.checked),
+                maxAttempts: clampPlainTextRetryAttempts(rootEl.querySelector('#connection_profile_function_calling_plain_text_error_retry_max_attempts')?.value),
+                translate,
+            }),
+            build: buildConnPlainTextFcSummary,
+        }));
+
+        const reliabilityAnchor = advancedDrawerContent.querySelector('#connection_profile_rpm_limit_block') || advancedDrawerContent;
+        summaryHandles.push(mountBehaviorSummary({
+            id: 'conn-reliability',
+            root: advancedDrawerContent,
+            anchor: reliabilityAnchor,
+            position: reliabilityAnchor === advancedDrawerContent ? 'append' : 'before',
+            ariaLabel: translate('Reliability, throttling, network and auto-continue behavior summary'),
+            fields: {
+                rpmLimit: { selector: '#connection_profile_rpm_limit', highlight: '#connection_profile_rpm_limit_block' },
+                maxRequestRetries: { selector: '#connection_profile_max_request_retries', highlight: '#connection_profile_max_request_retries_block' },
+                retryStatusWhitelist: { selector: '#connection_profile_retry_status_whitelist', highlight: '#connection_profile_retry_status_whitelist_block' },
+                requestTimeout: { selector: '#connection_profile_request_timeout', highlight: '#connection_profile_request_timeout_block' },
+                networkProxy: { selector: '#connection_profile_network_proxy', highlight: '#connection_profile_network_proxy_block' },
+                autoContinueOnTruncated: { selector: '#connection_profile_auto_continue_on_truncated', highlight: '.checkbox_label' },
+                autoContinueMaxAttempts: { selector: '#connection_profile_auto_continue_on_truncated_max_attempts', highlight: '#connection_profile_auto_continue_truncated_max_attempts_block' },
+            },
+            readState: (rootEl) => ({
+                ...getProfileModeState(),
+                rpmLimit: clampRpmLimit(rootEl.querySelector('#connection_profile_rpm_limit')?.value),
+                maxRequestRetries: clampMaxRetries(rootEl.querySelector('#connection_profile_max_request_retries')?.value),
+                retryStatusWhitelist: formatRetryStatusWhitelist(parseRetryStatusWhitelist(rootEl.querySelector('#connection_profile_retry_status_whitelist')?.value)),
+                requestTimeout: clampRequestTimeout(rootEl.querySelector('#connection_profile_request_timeout')?.value),
+                networkProxy: String(rootEl.querySelector('#connection_profile_network_proxy')?.value ?? '').trim(),
+                autoContinueOnTruncated: Boolean(rootEl.querySelector('#connection_profile_auto_continue_on_truncated')?.checked),
+                autoContinueMaxAttempts: clampAutoContinueMaxAttempts(rootEl.querySelector('#connection_profile_auto_continue_on_truncated_max_attempts')?.value) || 3,
+                translate,
+            }),
+            build: buildConnReliabilitySummary,
+        }));
+
+        const claudeBlock = advancedDrawerContent.querySelector('#connection_profile_claude_cache_block');
+        if (claudeBlock) {
+            const claudeHeading = claudeBlock.querySelector('h4');
+            summaryHandles.push(mountBehaviorSummary({
+                id: 'conn-claude-cache',
+                root: advancedDrawerContent,
+                anchor: claudeHeading || claudeBlock,
+                position: claudeHeading ? 'after' : 'prepend',
+                ariaLabel: translate('Claude prompt caching behavior summary'),
+                fields: {
+                    enableSystemPromptCache: { selector: '#connection_profile_claude_enable_system_prompt_cache', highlight: '.checkbox_label' },
+                    extendedTtl: { selector: '#connection_profile_claude_extended_ttl', highlight: '.checkbox_label' },
+                    cachingAtDepth: { selector: '#connection_profile_claude_caching_at_depth', highlight: '.flex-container' },
+                },
+                readState: (rootEl) => {
+                    const sourceEl = /** @type {HTMLSelectElement|null} */ (document.getElementById('chat_completion_source'));
+                    const postEl = /** @type {HTMLSelectElement|null} */ (document.getElementById('custom_prompt_post_processing'));
+                    return {
+                        ...getProfileModeState(),
+                        source: String(sourceEl?.value || oai_settings.chat_completion_source || ''),
+                        enableSystemPromptCache: Boolean(rootEl.querySelector('#connection_profile_claude_enable_system_prompt_cache')?.checked),
+                        extendedTtl: Boolean(rootEl.querySelector('#connection_profile_claude_extended_ttl')?.checked),
+                        cachingAtDepth: parseCachingAtDepth(rootEl.querySelector('#connection_profile_claude_caching_at_depth')?.value) ?? -1,
+                        postProcessing: postEl ? String(postEl.value ?? '') : String(oai_settings.custom_prompt_post_processing ?? ''),
+                        canActivatePostProcessing: Boolean(postEl),
+                        translate,
+                    };
+                },
+                build: buildConnClaudeCacheSummary,
+                onTokenActivate: (fields) => {
+                    if (fields.includes('postProcessing')) {
+                        return focusPostProcessingSelect();
+                    }
+                    return false;
+                },
+            }));
+        }
+
+        const geminiBlock = advancedDrawerContent.querySelector('#connection_profile_gemini_cache_block');
+        if (geminiBlock) {
+            const geminiHeading = geminiBlock.querySelector('h4');
+            summaryHandles.push(mountBehaviorSummary({
+                id: 'conn-gemini-cache',
+                root: advancedDrawerContent,
+                anchor: geminiHeading || geminiBlock,
+                position: geminiHeading ? 'after' : 'prepend',
+                ariaLabel: translate('OpenRouter Gemini prompt caching behavior summary'),
+                fields: {
+                    enableSystemPromptCache: { selector: '#connection_profile_gemini_enable_system_prompt_cache', highlight: '.checkbox_label' },
+                    enableHistoryCache: { selector: '#connection_profile_gemini_enable_history_cache', highlight: '.checkbox_label' },
+                    keepRecentTurns: { selector: '#connection_profile_gemini_cache_keep_recent_turns', highlight: '.flex-container' },
+                },
+                readState: (rootEl) => {
+                    const rawTurns = Number(rootEl.querySelector('#connection_profile_gemini_cache_keep_recent_turns')?.value);
+                    return {
+                        ...getProfileModeState(),
+                        enableSystemPromptCache: Boolean(rootEl.querySelector('#connection_profile_gemini_enable_system_prompt_cache')?.checked),
+                        enableHistoryCache: Boolean(rootEl.querySelector('#connection_profile_gemini_enable_history_cache')?.checked),
+                        keepRecentTurns: Number.isFinite(rawTurns) && rawTurns >= 1 ? Math.floor(rawTurns) : 2,
+                        translate,
+                    };
+                },
+                build: buildConnGeminiCacheSummary,
+            }));
+        }
+
+        refreshBehaviorSummaries = () => {
+            for (const handle of summaryHandles) {
+                handle.refresh();
+            }
+        };
+    }
 
     if (plainTextFunctionCallingToggle && plainTextFunctionCallingErrorRetryToggle && plainTextFunctionCallingRetryAttemptsInput) {
         plainTextFunctionCallingToggle.addEventListener('input', async () => {
@@ -1947,7 +2154,19 @@ export async function init() {
     applyCacheBlockVisibility();
     $('#chat_completion_source').on('change', applyCacheBlockVisibility);
     $('#chat_completion_source').on('change', syncProfileEditorControls);
-    $('#custom_prompt_post_processing').on('change', syncProfileEditorControls);
+    $('#custom_prompt_post_processing').on('input change', syncProfileEditorControls);
+
+    [
+        event_types.OAI_PRESET_CHANGED_AFTER,
+        event_types.SETTINGS_UPDATED,
+        event_types.CONNECTION_PROFILE_LOADED,
+    ].forEach((evt) => {
+        if (!evt) return;
+        eventSource.on(evt, () => {
+            applyCacheBlockVisibility();
+            syncProfileEditorControls();
+        });
+    });
 
     $(profiles).on('change', async function () {
         const profileId = String(profiles.value || '');
@@ -1971,6 +2190,8 @@ export async function init() {
         }
 
         await applyConnectionProfile(profile);
+        applyCacheBlockVisibility();
+        syncProfileEditorControls();
         await eventSource.emit(event_types.CONNECTION_PROFILE_LOADED, profile.name);
     });
 
@@ -1983,6 +2204,8 @@ export async function init() {
             return;
         }
         await applyConnectionProfile(profile);
+        applyCacheBlockVisibility();
+        syncProfileEditorControls();
         await renderDetailsContent(detailsContent);
         await eventSource.emit(event_types.CONNECTION_PROFILE_LOADED, profile.name);
         toastr.success('Connection profile reloaded', '', { timeOut: 1500 });

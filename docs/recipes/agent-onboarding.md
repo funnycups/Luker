@@ -51,7 +51,7 @@ Any RP preset you normally use is suitable. This step only confirms that you hav
 
 ## Step 2 — Configure the Preset Assistant and derive the presets Director needs
 
-LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers **Workbench AI iteration** (**Preset**, **Memory graph**, **Memory structure**, **Orchestration**, **Character card**, **World book**) and **CardApp Studio** — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
+LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers **Workbench AI iteration** (**Preset**, **Memory graph config**, **Memory graph content**, **Orchestration**, **Character card**, **World book**) and **CardApp Studio** — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
 
 Director's flow touches these categories at once:
 
@@ -80,7 +80,7 @@ The Preset editor inside Workbench is itself an LLM-driven tool, so configure Wo
 
 ![Workbench shared AI connection and generation preset](/images/recipes/agent-onboarding/step-02a-workbench-settings.png)
 
-Every AI iteration target in Workbench, including **Memory graph**, **Memory structure**, **Orchestration**, **Preset**, **Character card**, and **World book**, follows the shared connection and preset unless set individually. The **Current source** column shows which level supplies each value.
+Every AI iteration target in Workbench, including **Memory graph config**, **Memory graph content**, **Orchestration**, **Preset**, **Character card**, and **World book**, follows the shared connection and preset unless set individually. The **Current source** column shows which level supplies each value.
 
 ### 2b — Derive the **agent** preset
 
@@ -176,7 +176,7 @@ Review the diffs in the **Change list** and apply them. If the result does not m
 
 ## Optional step — Let AI configure Memory Graph
 
-Memory Graph structure can also be changed by AI. Open **Workbench → AI iteration → Memory structure** (or **Memory graph** to edit nodes in the current chat).
+Memory Graph structure can also be changed by AI. Open **Workbench → AI iteration → Memory graph config**, or choose **Memory graph content** to edit nodes in the current chat.
 
 ![Memory Graph Configuration](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 

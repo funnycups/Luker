@@ -1,5 +1,6 @@
 import {
     characters,
+    confirmChatSwitchGuard,
     saveChat,
     system_message_types,
     syncSwipeToMes,
@@ -402,12 +403,10 @@ async function backToMainChat() {
     const allChats = await getExistingChatNames();
 
     if (allChats.includes(mainChatName)) {
-        if (selected_group) {
-            await openGroupChat(selected_group, mainChatName);
-        } else {
-            await openCharacterChat(mainChatName);
-        }
-        return mainChatName;
+        const opened = selected_group
+            ? await openGroupChat(selected_group, mainChatName)
+            : await openCharacterChat(mainChatName);
+        return opened ? mainChatName : null;
     }
 
     return null;
@@ -426,6 +425,10 @@ export async function convertSoloToGroupChat() {
 
     const confirm = await Popup.show.confirm(t`Convert to group chat`, t`Are you sure you want to convert this chat to a group chat?` + '<br />' + t`This cannot be reverted.`);
     if (!confirm) {
+        return;
+    }
+
+    if (!await confirmChatSwitchGuard()) {
         return;
     }
 
@@ -523,7 +526,7 @@ export async function convertSoloToGroupChat() {
 
     // Click on the freshly selected group to open it
     setActiveGroup(group.id);
-    await openGroupById(group.id);
+    await openGroupById(group.id, { skipSwitchGuard: true });
 
     toastr.success(t`The chat has been successfully converted!`);
 }
@@ -540,6 +543,10 @@ export async function branchChat(mesId, { swipeId = null } = {}) {
         return null;
     }
 
+    if (!await confirmChatSwitchGuard()) {
+        return null;
+    }
+
     const fileName = await createBranch(mesId, { swipeId });
     if (!fileName) {
         return null;
@@ -548,9 +555,9 @@ export async function branchChat(mesId, { swipeId = null } = {}) {
     await saveItemizedPrompts(fileName);
 
     if (selected_group) {
-        await openGroupChat(selected_group, fileName);
+        await openGroupChat(selected_group, fileName, { skipSwitchGuard: true });
     } else {
-        await openCharacterChat(fileName);
+        await openCharacterChat(fileName, { skipSwitchGuard: true });
     }
 
     return fileName;
@@ -671,13 +678,11 @@ function registerBookmarksSlashCommands() {
                 return '';
             }
 
-            if (selected_group) {
-                await openGroupChat(selected_group, checkPointName);
-            } else {
-                await openCharacterChat(checkPointName);
-            }
+            const opened = selected_group
+                ? await openGroupChat(selected_group, checkPointName)
+                : await openCharacterChat(checkPointName);
 
-            return checkPointName;
+            return opened ? checkPointName : '';
         },
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
@@ -787,6 +792,10 @@ export function initBookmarks() {
             return;
         }
 
+        if (!await confirmChatSwitchGuard()) {
+            return;
+        }
+
         const loaderHandle = loader.show({
             slug: 'chat-load',
             title: t`Chat History`,
@@ -794,17 +803,20 @@ export function initBookmarks() {
             toastMode: loader.ToastMode.STATIC,
         });
 
+        let switched = false;
         try {
             if (selected_group) {
-                await openGroupChat(selected_group, fileName);
+                switched = await openGroupChat(selected_group, fileName, { skipSwitchGuard: true });
             } else {
-                await openCharacterChat(fileName);
+                switched = await openCharacterChat(fileName, { skipSwitchGuard: true });
             }
         } finally {
             await loaderHandle.hide();
         }
 
-        $('#shadow_select_chat_popup').css('display', 'none');
+        if (switched) {
+            $('#shadow_select_chat_popup').css('display', 'none');
+        }
     });
 
     $(document).on('click', '.mes_create_bookmark', async function () {

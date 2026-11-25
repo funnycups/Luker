@@ -216,6 +216,20 @@ async function routeUnreadAfterFetch() {
 }
 
 let initialized = false;
+/** @type {(() => void) | null} */
+let resolveCriticalDone = null;
+const criticalDonePromise = new Promise((resolve) => {
+    resolveCriticalDone = resolve;
+});
+
+/**
+ * Resolves once startup announcement routing has finished and any blocking
+ * critical announcement modal has been dismissed (or failed/skipped).
+ * @returns {Promise<void>}
+ */
+export function whenCriticalAnnouncementsDone() {
+    return criticalDonePromise;
+}
 
 export async function initAnnouncements() {
     if (initialized) return;
@@ -231,6 +245,8 @@ export async function initAnnouncements() {
             if (window.toastr) {
                 window.toastr.error(String(error?.message || error), t`Announcements`);
             }
+        } finally {
+            resolveCriticalDone?.();
         }
     })();
 }

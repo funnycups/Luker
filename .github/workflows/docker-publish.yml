@@ -75,6 +75,9 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64
+          build-args: |
+            LUKER_GIT_REVISION=${{ github.sha }}
+            LUKER_GIT_BRANCH=${{ github.ref_name }}
           labels: ${{ needs.prepare.outputs.labels }}
           outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
 
@@ -105,6 +108,9 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/arm64
+          build-args: |
+            LUKER_GIT_REVISION=${{ github.sha }}
+            LUKER_GIT_BRANCH=${{ github.ref_name }}
           labels: ${{ needs.prepare.outputs.labels }}
           outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
 

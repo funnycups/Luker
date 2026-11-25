@@ -17,7 +17,7 @@ function between(start, end) {
 // Run the host's state initialization, continuation timer and WI signal payload
 // without assembling a browser prompt or dispatching a model request. Keep the
 // takeover finalizer, placeholder acquisition and saveReply bodies intact.
-const initializationSource = between('async function generateInternal(', '\n    // OpenAI doesn\'t need instruct mode.')
+const initializationSource = between('async function generateInternal(', '\n    if (!(dryRun || depth || type == \'regenerate\'')
     + '\nconst lastMessage = chat[chat.length - 1];\n'
     + between('    const isContinue = type == \'continue\';', '\n    if (!dryRun) {\n        deactivateSendButtons();')
     + between('    const wiScanPayload = {', '\n    await eventSource.emit(event_types.GENERATION_BEFORE_WORLD_INFO_SCAN, wiScanPayload);')
@@ -62,6 +62,9 @@ function createHost() {
         forceUnblockGenerationUi() { effects.push('forceUnblock'); },
         getLastLukerGenerationIdForApi: () => '',
         streamingProcessor: null,
+        chatTransitionEpoch: 0,
+        getChatTransitionEpoch: () => context.chatTransitionEpoch,
+        bumpChatTransitionEpoch: () => (++context.chatTransitionEpoch),
     });
     vm.runInContext(initializationSource + '\n' + saveReplySource + '\n' + acquireSource + '\n' + stopSource, context);
 
@@ -74,6 +77,8 @@ function createHost() {
         context.dispatchEvent = { takeoverHandle: handle };
         context.takeoverType = type;
         const complete = vm.runInContext(`(async (type) => {
+            const genEpoch = getChatTransitionEpoch();
+            const isStaleEpoch = () => getChatTransitionEpoch() !== genEpoch;
             const isContinue = type === 'continue', isImpersonate = false;
             ${takeoverSource}
         })(takeoverType)`, context);
@@ -193,6 +198,47 @@ describe('dry-run generation ownership', () => {
         expect(host.context.chat.at(-1).swipes[0]).toBe('partial answer');
         expect(host.saved).toHaveLength(0);
         expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
+    });
+
+    test('chat transition epoch bump fences late takeover updates and commit without leaking into new chat', async () => {
+        const host = createHost();
+        await host.initialize();
+        const { handle, complete } = await host.startTakeover();
+        host.context.bumpChatTransitionEpoch();
+        // Simulate new chat replacing chat[]
+        host.context.chat = [{ is_user: false, mes: 'New chat greeting', extra: {} }];
+        handle.setText('stale chunk');
+        await handle.commit();
+        const result = await complete;
+
+        expect(host.context.chat).toEqual([{ is_user: false, mes: 'New chat greeting', extra: {} }]);
+        expect(host.saved).toHaveLength(0);
+        expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
+        expect(host.effects).not.toContain('unblock');
+        expect(String(result)).toBe('');
+    });
+
+    test('epoch bump inside MESSAGE_RECEIVED blocks stale CHARACTER_MESSAGE_RENDERED and triggerAutoContinue on takeover commit', async () => {
+        const host = createHost();
+        await host.initialize();
+        const { handle, complete } = await host.startTakeover();
+
+        const origEmit = host.context.eventSource.emit;
+        host.context.eventSource.emit = async (event, ...args) => {
+            await origEmit(event, ...args);
+            if (event === event_types.MESSAGE_RECEIVED) {
+                host.context.bumpChatTransitionEpoch();
+            }
+        };
+
+        handle.setText('committed before switch');
+        await handle.commit();
+        const result = await complete;
+
+        expect(host.effects.filter(effect => effect === event_types.MESSAGE_RECEIVED)).toHaveLength(1);
+        expect(host.effects).not.toContain(event_types.CHARACTER_MESSAGE_RENDERED);
+        expect(host.effects).not.toContain('autoContinue');
+        expect(String(result)).toBe('');
     });
 });
 

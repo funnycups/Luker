@@ -32,6 +32,7 @@ import {
     StorageInspectorError,
 } from '../storage/inspector.js';
 import { DEFAULT_USER, PUBLIC_DIRECTORIES } from '../constants.js';
+import { getInitialSeenVersionFields } from '../whats-new.js';
 import { clearCapturedLogs, getCapturedLogs } from '../log-capture.js';
 import {
     fetchLatestApkReleaseInfo,
@@ -963,6 +964,7 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
         const password = request.body.password ? getPasswordHash(request.body.password, salt) : '';
         const adminSettings = await getAdminSettings();
         const defaultQuotaBytes = Number(adminSettings?.storage?.defaultUserQuotaBytes);
+        const initialSeen = await getInitialSeenVersionFields();
 
         const newUser = {
             handle: handle,
@@ -973,6 +975,7 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
             admin: !!request.body.admin,
             enabled: true,
             storageQuotaBytes: Number.isFinite(defaultQuotaBytes) && defaultQuotaBytes >= 0 ? Math.floor(defaultQuotaBytes) : undefined,
+            ...initialSeen,
         };
 
         await storage.setItem(toKey(handle), newUser);

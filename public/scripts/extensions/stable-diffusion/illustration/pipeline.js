@@ -281,147 +281,162 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
         };
         jobs.set(key, job);
 
-        try {
-            const lockedIds = new Set(
-                (Array.isArray(message.extra?.illustrations) ? message.extra.illustrations : [])
-                    .filter(r => r?.locked)
-                    .map(r => r.id),
-            );
-            const input = await captureIllustrationInput({
-                context,
-                preset,
-                chat,
-                messageIndex: messageId,
-                contextMessageCount: settings.contextMessageCount,
-                imageService,
-                lockedIds,
-                capturePromptContext: false,
-                onMemoryRecallWarning: error => {
-                    toast(`${t`Memory recall is unavailable`}: ${error?.message || error}`, 'warning');
-                },
-            });
-            if (!contextMatches(job)) {
-                throw abortError();
-            }
-
-            const hasGlobalArchive = typeof context?.getGlobalState === 'function'
-                && typeof context?.updateGlobalState === 'function';
-            const profileStore = hasGlobalArchive ? createCharacterProfileStore(context) : null;
-
-            const activityJob = typeof hooks.beginActivityJob === 'function'
-                ? hooks.beginActivityJob({
-                    kind: 'illustration',
+        const runJob = async () => {
+            try {
+                const lockedIds = new Set(
+                    (Array.isArray(message.extra?.illustrations) ? message.extra.illustrations : [])
+                        .filter(r => r?.locked)
+                        .map(r => r.id),
+                );
+                const input = await captureIllustrationInput({
+                    context,
+                    preset,
+                    chat,
                     messageIndex: messageId,
-                    abort: () => cancelJob(job),
-                })
-                : null;
-            job.activityJob = activityJob;
-            job.state = 'generating';
+                    contextMessageCount: settings.contextMessageCount,
+                    imageService,
+                    lockedIds,
+                    capturePromptContext: false,
+                    onMemoryRecallWarning: error => {
+                        toast(`${t`Memory recall is unavailable`}: ${error?.message || error}`, 'warning');
+                    },
+                });
+                if (job.abortController.signal.aborted || !contextMatches(job)) {
+                    throw abortError();
+                }
 
-            let imageFailures = 0;
-            const observe = event => {
-                if (!event) return;
-                if (event.type === 'tool_start') {
-                    if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
-                        activityJob?.addSection(`read-profiles-${event.callId}`, {
-                            kind: 'tool',
-                            title: `read_character_profiles (${(event.ids || []).join(', ')})`,
-                            body: JSON.stringify(event.args ?? {}),
+                const hasGlobalArchive = typeof context?.getGlobalState === 'function'
+                    && typeof context?.updateGlobalState === 'function';
+                const profileStore = hasGlobalArchive ? createCharacterProfileStore(context) : null;
+
+                const activityJob = typeof hooks.beginActivityJob === 'function'
+                    ? hooks.beginActivityJob({
+                        kind: 'illustration',
+                        messageIndex: messageId,
+                        abort: () => cancelJob(job),
+                    })
+                    : null;
+                job.activityJob = activityJob;
+                job.state = 'generating';
+
+                let imageFailures = 0;
+                const observe = event => {
+                    if (!event) return;
+                    if (event.type === 'tool_start') {
+                        if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
+                            activityJob?.addSection(`read-profiles-${event.callId}`, {
+                                kind: 'tool',
+                                title: `read_character_profiles (${(event.ids || []).join(', ')})`,
+                                body: JSON.stringify(event.args ?? {}),
+                            });
+                        } else if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
+                            const targetLabel = (event.targets || [])
+                                .map(item => String(item?.name || '').trim())
+                                .filter(Boolean)
+                                .join(', ');
+                            activityJob?.addSection(`explore-characters-${event.callId}`, {
+                                kind: 'tool',
+                                title: targetLabel ? `explore_characters (${targetLabel})` : 'explore_characters',
+                                body: JSON.stringify(event.args ?? {}),
+                            });
+                        }
+                        return;
+                    }
+                    if (event.type === 'tool_done') {
+                        if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
+                            activityJob?.updateSection(`read-profiles-${event.callId}`, {
+                                status: 'done',
+                                meta: { matched: event.matched },
+                            });
+                        } else if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
+                            activityJob?.updateSection(`explore-characters-${event.callId}`, {
+                                status: 'done',
+                                meta: { savedIds: event.savedIds || [] },
+                            });
+                        }
+                        return;
+                    }
+                    if (event.type === 'skipped_prompts') {
+                        const reasons = (event.rejected || []).map(entry => rejectionLabel(entry.reason, t)).join(', ');
+                        toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
+                        return;
+                    }
+                    if (event.type === 'prompts_accepted') {
+                        (event.acceptedPrompts || []).forEach((value, index) => {
+                            activityJob?.addSection(`prompt-${index}`, { kind: 'prompt', title: `${t`Prompt`} ${index + 1}`, body: value.prompt });
+                            activityJob?.updateSection(`prompt-${index}`, { status: 'done' });
+                            activityJob?.addSection(`image-${index}`, { kind: 'image', title: `${t`Image`} ${index + 1}` });
                         });
-                    } else if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
-                        const targetLabel = (event.targets || [])
-                            .map(item => String(item?.name || '').trim())
-                            .filter(Boolean)
-                            .join(', ');
-                        activityJob?.addSection(`explore-characters-${event.callId}`, {
-                            kind: 'tool',
-                            title: targetLabel ? `explore_characters (${targetLabel})` : 'explore_characters',
-                            body: JSON.stringify(event.args ?? {}),
+                        return;
+                    }
+                    if (event.type === 'image_done') {
+                        activityJob?.updateSection(`image-${event.index}`, { status: 'done', meta: { imageUrl: event.imageUrl } });
+                        return;
+                    }
+                    if (event.type === 'image_aborted') {
+                        activityJob?.updateSection(`image-${event.index}`, { status: 'aborted' });
+                        return;
+                    }
+                    if (event.type === 'image_failed') {
+                        imageFailures += 1;
+                        activityJob?.updateSection(`image-${event.index}`, { status: 'failed' });
+                        const errorKey = `error-${event.index}`;
+                        activityJob?.addSection(errorKey, { kind: 'error', title: `${t`Error`} ${event.index + 1}`, body: event.error });
+                        activityJob?.updateSection(errorKey, { status: 'failed' });
+                    }
+                };
+
+                const agentResult = await runIllustrationAgent({
+                    context,
+                    preset,
+                    input,
+                    profileStore,
+                    media: {
+                        generate: (prompt, options) => imageService.generate(prompt, options),
+                    },
+                    observe,
+                    abortSignal: job.abortController.signal,
+                    allowExploration: true,
+                    checkAlive: () => {
+                        if (!contextMatches(job)) {
+                            throw abortError();
+                        }
+                    },
+                });
+
+                if (agentResult.trace?.failure) {
+                    const failure = buildPromptFailure({
+                        toolCalls: agentResult.trace.failure.toolCalls,
+                        selection: { accepted: [], rejected: agentResult.trace.failure.rejected },
+                        assistantText: agentResult.trace.failure.assistantText,
+                        finishReason: agentResult.trace.failure.finishReason,
+                    }, t);
+                    job.state = 'failed';
+                    activityJob?.setError(failure.report);
+                    activityJob?.finish('failed');
+                    releaseJob(job);
+                    console.error('Illustration prompt request produced no usable prompts.', failure.reason);
+                    notifyError(`${t`Illustration failed`}: ${failure.reason}`);
+                    return;
+                }
+
+                const records = agentResult.results.map(item => {
+                    const value = item.prompt;
+                    if (item.status === 'ready') {
+                        return createIllustrationRecord({
+                            id: makeIllustrationId(),
+                            prompt: value.prompt,
+                            negativePrompt: value.negativePrompt || '',
+                            aspectRatio: value.aspectRatio || '',
+                            references: value.references || [],
+                            characterPrompts: value.characterPrompts || [],
+                            imageUrl: item.imageUrl,
+                            status: 'ready',
+                            anchorAfter: value.insertAfter,
+                            anchorBefore: value.insertBefore,
+                            loras: value.loras,
                         });
                     }
-                    return;
-                }
-                if (event.type === 'tool_done') {
-                    if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
-                        activityJob?.updateSection(`read-profiles-${event.callId}`, {
-                            status: 'done',
-                            meta: { matched: event.matched },
-                        });
-                    } else if (event.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
-                        activityJob?.updateSection(`explore-characters-${event.callId}`, {
-                            status: 'done',
-                            meta: { savedIds: event.savedIds || [] },
-                        });
-                    }
-                    return;
-                }
-                if (event.type === 'skipped_prompts') {
-                    const reasons = (event.rejected || []).map(entry => rejectionLabel(entry.reason, t)).join(', ');
-                    toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
-                    return;
-                }
-                if (event.type === 'prompts_accepted') {
-                    (event.acceptedPrompts || []).forEach((value, index) => {
-                        activityJob?.addSection(`prompt-${index}`, { kind: 'prompt', title: `${t`Prompt`} ${index + 1}`, body: value.prompt });
-                        activityJob?.updateSection(`prompt-${index}`, { status: 'done' });
-                        activityJob?.addSection(`image-${index}`, { kind: 'image', title: `${t`Image`} ${index + 1}` });
-                    });
-                    return;
-                }
-                if (event.type === 'image_done') {
-                    activityJob?.updateSection(`image-${event.index}`, { status: 'done', meta: { imageUrl: event.imageUrl } });
-                    return;
-                }
-                if (event.type === 'image_aborted') {
-                    activityJob?.updateSection(`image-${event.index}`, { status: 'aborted' });
-                    return;
-                }
-                if (event.type === 'image_failed') {
-                    imageFailures += 1;
-                    activityJob?.updateSection(`image-${event.index}`, { status: 'failed' });
-                    const errorKey = `error-${event.index}`;
-                    activityJob?.addSection(errorKey, { kind: 'error', title: `${t`Error`} ${event.index + 1}`, body: event.error });
-                    activityJob?.updateSection(errorKey, { status: 'failed' });
-                }
-            };
-
-            const agentResult = await runIllustrationAgent({
-                context,
-                preset,
-                input,
-                profileStore,
-                media: {
-                    generate: (prompt, options) => imageService.generate(prompt, options),
-                },
-                observe,
-                abortSignal: job.abortController.signal,
-                allowExploration: true,
-                checkAlive: () => {
-                    if (!contextMatches(job)) {
-                        throw abortError();
-                    }
-                },
-            });
-
-            if (agentResult.trace?.failure) {
-                const failure = buildPromptFailure({
-                    toolCalls: agentResult.trace.failure.toolCalls,
-                    selection: { accepted: [], rejected: agentResult.trace.failure.rejected },
-                    assistantText: agentResult.trace.failure.assistantText,
-                    finishReason: agentResult.trace.failure.finishReason,
-                }, t);
-                job.state = 'failed';
-                activityJob?.setError(failure.report);
-                activityJob?.finish('failed');
-                releaseJob(job);
-                console.error('Illustration prompt request produced no usable prompts.', failure.reason);
-                notifyError(`${t`Illustration failed`}: ${failure.reason}`);
-                return;
-            }
-
-            const records = agentResult.results.map(item => {
-                const value = item.prompt;
-                if (item.status === 'ready') {
                     return createIllustrationRecord({
                         id: makeIllustrationId(),
                         prompt: value.prompt,
@@ -429,71 +444,72 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                         aspectRatio: value.aspectRatio || '',
                         references: value.references || [],
                         characterPrompts: value.characterPrompts || [],
-                        imageUrl: item.imageUrl,
-                        status: 'ready',
+                        status: 'failed',
+                        error: item.error,
                         anchorAfter: value.insertAfter,
                         anchorBefore: value.insertBefore,
                         loras: value.loras,
                     });
-                }
-                return createIllustrationRecord({
-                    id: makeIllustrationId(),
-                    prompt: value.prompt,
-                    negativePrompt: value.negativePrompt || '',
-                    aspectRatio: value.aspectRatio || '',
-                    references: value.references || [],
-                    characterPrompts: value.characterPrompts || [],
-                    status: 'failed',
-                    error: item.error,
-                    anchorAfter: value.insertAfter,
-                    anchorBefore: value.insertBefore,
-                    loras: value.loras,
                 });
-            });
 
-            job.state = 'inserting';
-            const latestMessage = hooks.getChat()?.[messageId];
-            if (!latestMessage) {
-                throw abortError();
-            }
-            const applied = applyIllustrationResult({
-                message: latestMessage,
-                records,
-                imageDisplayWidth: settings.imageDisplayWidth,
-                ensureSwipes: hooks.ensureSwipes,
-            });
-            hooks.updateMessageBlock?.(messageId, latestMessage);
-            await hooks.notifyMessageChanged?.(messageId);
-            await hooks.saveChat();
+                job.state = 'inserting';
+                if (job.abortController.signal.aborted || !contextMatches(job)) {
+                    throw abortError();
+                }
+                const latestMessage = hooks.getChat()?.[messageId];
+                if (!latestMessage) {
+                    throw abortError();
+                }
+                const applied = applyIllustrationResult({
+                    message: latestMessage,
+                    records,
+                    imageDisplayWidth: settings.imageDisplayWidth,
+                    ensureSwipes: hooks.ensureSwipes,
+                });
+                hooks.updateMessageBlock?.(messageId, latestMessage);
+                await hooks.notifyMessageChanged?.(messageId);
+                await hooks.saveChat();
 
-            if (applied.missing.length > 0) {
-                toast(t`Some illustrations were appended because their anchors were not found.`, 'warning');
-            }
-            const failures = records.filter(record => record.status === 'failed').length;
-            if (failures > 0) {
-                const firstError = records.find(record => record.status === 'failed')?.error;
-                const errorMessage = firstError
-                    ? `${t`Image generation failed for ${failures} prompt(s).`} ${firstError}`
-                    : t`Image generation failed for ${failures} prompt(s).`;
-                notifyError(errorMessage);
-            }
+                if (applied.missing.length > 0) {
+                    toast(t`Some illustrations were appended because their anchors were not found.`, 'warning');
+                }
+                const failures = records.filter(record => record.status === 'failed').length;
+                if (failures > 0) {
+                    const firstError = records.find(record => record.status === 'failed')?.error;
+                    const errorMessage = firstError
+                        ? `${t`Image generation failed for ${failures} prompt(s).`} ${firstError}`
+                        : t`Image generation failed for ${failures} prompt(s).`;
+                    notifyError(errorMessage);
+                }
 
-            job.state = 'done';
-            activityJob?.finish(imageFailures > 0 ? 'failed' : 'done');
-            releaseJob(job);
-        } catch (error) {
-            const aborted = error?.name === 'AbortError' || job.abortController.signal.aborted;
-            releaseJob(job);
-            if (aborted) {
-                job.state = 'cancelled';
-                job.activityJob?.finish('aborted');
-                return;
+                job.state = 'done';
+                activityJob?.finish(imageFailures > 0 ? 'failed' : 'done');
+                releaseJob(job);
+            } catch (error) {
+                const aborted = error?.name === 'AbortError' || job.abortController.signal.aborted;
+                releaseJob(job);
+                if (aborted) {
+                    job.state = 'cancelled';
+                    job.activityJob?.finish('aborted');
+                    return;
+                }
+                job.state = 'failed';
+                job.activityJob?.setError(String(error?.message || error));
+                job.activityJob?.finish('failed');
+                console.error('Illustration task failed.', error);
+                notifyError(`${t`Illustration failed`}: ${error?.message || error}`);
             }
-            job.state = 'failed';
-            job.activityJob?.setError(String(error?.message || error));
-            job.activityJob?.finish('failed');
-            console.error('Illustration task failed.', error);
-            notifyError(`${t`Illustration failed`}: ${error?.message || error}`);
+        };
+
+        if (typeof context?.activityGuard?.run === 'function') {
+            await context.activityGuard.run({
+                source: 'sd:illustration',
+                label: t`Illustration generation`,
+                scope: 'chat',
+                onCancel: () => cancelJob(job),
+            }, runJob);
+        } else {
+            await runJob();
         }
     }
 

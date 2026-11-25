@@ -13,7 +13,7 @@ import {
     event_types,
     getCurrentChatId,
     printCharactersDebounced,
-    setCharacterId,
+    selectCharacterById,
     setEditedMessageId,
     chat,
     getFirstDisplayedMessageId,
@@ -32,12 +32,11 @@ import {
     extension_prompt_roles,
     deleteMessage,
     settingsReady,
-    isGenerationInFlight,
-    setGenerationInFlightListener,
     name2,
     this_chid,
     getThumbnailUrl,
 } from '../script.js';
+import { hasActiveSource, hasKeepAliveHold, subscribeActivityGuard } from './activity-guard.js';
 import { getPipViewStatus, updatePipView } from './luker-pip-view.js';
 import { isMobile, initMovingUI, favsToHotswap, shouldSendOnEnter } from './RossAscends-mods.js';
 import {
@@ -57,7 +56,6 @@ import {
 import { initAppEndpointControls } from './app-endpoint-controls.js';
 import {
     groups,
-    resetSelectedGroup,
 } from './group-chats.js';
 import {
     instruct_presets,
@@ -146,20 +144,6 @@ const messageNotificationDetailModes = {
     CONTENT: 'content',
 };
 
-const beforeUnloadGuardModes = {
-    OFF: 'off',
-    SMART: 'smart',
-    ALWAYS: 'always',
-};
-
-function normalizeBeforeUnloadGuardMode(value) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    if (normalized === beforeUnloadGuardModes.OFF || normalized === beforeUnloadGuardModes.ALWAYS) {
-        return normalized;
-    }
-    return beforeUnloadGuardModes.SMART;
-}
-
 export const power_user = {
     charListGrid: false,
     counting_tokenizer: tokenizers.BEST_MATCH,
@@ -197,7 +181,6 @@ export const power_user = {
     play_sound_unfocused: true,
     message_complete_notification: false,
     message_complete_notification_detail_mode: messageNotificationDetailModes.CONTENT,
-    before_unload_guard_mode: beforeUnloadGuardModes.SMART,
     auto_save_msg_edits: false,
     confirm_message_delete: true,
 
@@ -682,28 +665,17 @@ function syncMobileKeepAliveCheckbox() {
     $('#luker_mobile_keep_alive').prop('checked', checked);
 }
 
-// Web audio and HarmonyOS keep-alive are generation-scoped: while the setting
-// is enabled, a generation in flight enters the mode (web audio builds the
-// oscillator + <audio> + MediaSession; HarmonyOS marks the generation active so
-// the shell holds a continuous task once the app is in the background) and the
-// last one to finish schedules exiting it after a grace window. The grace
-// covers chained generations (orchestrator multi-node runs, agent tool loops)
-// so the mode doesn't tear down between one round and the next.
-//
-// "In flight" comes from the core's exact Generate() count (see
-// isGenerationInFlight) rather than the GENERATION_STARTED / GENERATION_ENDED
-// pair, because that pair is not balanced: recursive tool-call and
-// auto-continue-on-truncated rounds, early returns before the stop button is
-// shown, and a quiet generation overlapping a main one all leave STARTED
-// without a matching ENDED, which pinned the keep-alive on after the last
-// generation ended.
+// Web audio, HarmonyOS, and iOS keep-alive are activity-scoped: while the setting
+// is enabled, any active keepAlive lease in activity-guard enters the mode (web
+// audio builds the oscillator + <audio> + MediaSession; HarmonyOS/iOS mark the
+// generation active so the shell holds a continuous task in the background) and
+// when the last keep-alive lease releases, exiting is scheduled after a grace
+// window so chained rounds do not tear down between steps.
 const SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS = 10000;
 let scopedKeepAliveDeactivateTimer = null;
-// Image generations are not Generate() calls, so they are counted separately.
-let scopedKeepAliveImageGenerationCount = 0;
 
 /**
- * @returns {'audio'|'harmony'|null} the generation-scoped mode enabled on this device
+ * @returns {'audio'|'harmony'|'ios'|null} the generation-scoped mode enabled on this device
  */
 function getScopedKeepAliveMode() {
     const platform = getKeepAlivePlatform();
@@ -713,8 +685,8 @@ function getScopedKeepAliveMode() {
     return null;
 }
 
-function scopedKeepAliveShouldHold() {
-    return isGenerationInFlight() || scopedKeepAliveImageGenerationCount > 0;
+export function scopedKeepAliveShouldHold() {
+    return hasKeepAliveHold();
 }
 
 function scopedKeepAliveActivationSync() {
@@ -749,21 +721,6 @@ function scopedKeepAliveActivationSync() {
             }
         }, SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS);
     }
-}
-
-// Image generation is covered so keep-alive holds any image request in flight
-// even when no LLM generation is active (e.g. wand button image generation
-// while reading a long reply).
-function onScopedKeepAliveImageGenerationStarted() {
-    scopedKeepAliveImageGenerationCount += 1;
-    scopedKeepAliveActivationSync();
-    syncPipReopenBanner();
-}
-
-function onScopedKeepAliveImageGenerationEnded() {
-    scopedKeepAliveImageGenerationCount = Math.max(0, scopedKeepAliveImageGenerationCount - 1);
-    scopedKeepAliveActivationSync();
-    syncPipReopenBanner();
 }
 
 function cancelScopedKeepAliveDeactivateTimer() {
@@ -884,10 +841,15 @@ function ensurePipReopenBanner() {
     return pipReopenBanner;
 }
 
-function syncPipReopenBanner() {
-    // Quiet generations run for internal requests and never surface in the
-    // PiP window, so they do not prompt the user to restore it.
-    const visibleGeneration = getPipViewStatus() === 'generating' || scopedKeepAliveImageGenerationCount > 0;
+export function syncPipReopenBanner() {
+    // Quiet generations and ambient request-baseline calls run silently and
+    // never surface in the PiP window, while explicit non-core long tasks
+    // still prompt the user to restore it.
+    const visibleGeneration = getPipViewStatus() === 'generating'
+        || hasKeepAliveHold({
+            excludeAmbient: true,
+            excludeSources: ['core:generation', 'core:generation-quiet', 'core:group-generation'],
+        });
     const shouldShow = getKeepAlivePlatform() === 'web'
         && !!power_user.luker_mobile_keep_alive_web_pip_enabled
         && visibleGeneration
@@ -911,12 +873,12 @@ function syncPipViewCharacter() {
 
 let pipGenerationStopped = false;
 
-// The single in-flight listener owned by keep-alive: the generation-scoped
-// modes follow the exact Generate() count, the PiP window closes out its last
-// status here, and the restore button follows both.
-function onGenerationInFlightChanged() {
+// The single listener owned by keep-alive: the generation-scoped modes follow
+// activity-guard leases, the PiP window closes out its reply status when core
+// generation finishes, and the restore button tracks both.
+function onActivityGuardChanged() {
     scopedKeepAliveActivationSync();
-    if (!isGenerationInFlight() && !pipGenerationStopped && getPipViewStatus() === 'generating') {
+    if (!hasActiveSource('core:generation') && !hasActiveSource('core:group-generation') && !pipGenerationStopped && getPipViewStatus() === 'generating') {
         updatePipView({ status: 'done' });
     }
     syncPipReopenBanner();
@@ -931,7 +893,7 @@ function initPipViewFeed() {
         updatePipView({ status: 'idle', text: '' });
         syncPipReopenBanner();
     });
-    eventSource.on(event_types.GENERATION_STARTED, (type, _params, dryRun) => {
+    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, (type, _params, dryRun) => {
         if (dryRun || type === 'quiet') return;
         pipGenerationStopped = false;
         syncPipViewCharacter();
@@ -963,7 +925,7 @@ function initPipViewFeed() {
     });
 }
 
-function syncMobileKeepAliveUi() {
+export function syncMobileKeepAliveUi() {
     // isMobile() gates the entire subsystem, not just UI visibility. The
     // audio-mode setting persists in settings.json across devices; if a user
     // enables it on their phone and then loads the same account on a desktop
@@ -981,9 +943,7 @@ function syncMobileKeepAliveUi() {
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
         setPipPrimingEnabled(!!power_user.luker_mobile_keep_alive_web_pip_enabled);
-        setGenerationInFlightListener(onGenerationInFlightChanged);
-        eventSource.on(event_types.IMAGE_GENERATION_STARTED, onScopedKeepAliveImageGenerationStarted);
-        eventSource.on(event_types.IMAGE_GENERATION_ENDED, onScopedKeepAliveImageGenerationEnded);
+        subscribeActivityGuard(onActivityGuardChanged);
         document.addEventListener('click', reopenPipOnGenerationTap, true);
         document.addEventListener('keydown', reopenPipOnGenerationKey, true);
         document.addEventListener('visibilitychange', () => {
@@ -2663,7 +2623,6 @@ export async function loadPowerUserSettings(settings, data) {
         Object.assign(power_user, settings.power_user);
     }
     power_user.message_complete_notification_detail_mode = normalizeMessageNotificationDetailMode(power_user.message_complete_notification_detail_mode);
-    power_user.before_unload_guard_mode = normalizeBeforeUnloadGuardMode(power_user.before_unload_guard_mode);
 
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
@@ -2793,7 +2752,6 @@ export async function loadPowerUserSettings(settings, data) {
     $(`#encoding_tokenizer option[value="${power_user.encoding_tokenizer}"]`).prop('selected', true);
     $(`#send_on_enter option[value=${power_user.send_on_enter}]`).prop('selected', true);
     $('#confirm_message_delete').prop('checked', power_user.confirm_message_delete !== undefined ? !!power_user.confirm_message_delete : true);
-    $('#before_unload_guard_mode').val(power_user.before_unload_guard_mode);
     $('#spoiler_free_mode').prop('checked', power_user.spoiler_free_mode);
     $('#collapse-newlines-checkbox').prop('checked', power_user.collapse_newlines);
     $('#always-force-name2-checkbox').prop('checked', power_user.always_force_name2);
@@ -3885,7 +3843,7 @@ function findTagIdByName(name) {
     }
 }
 
-async function doRandomChat(_, tagName) {
+export async function doRandomChat(_, tagName) {
     /**
      * Gets the ID of a random character.
      * @returns {string} The order index of the randomly selected character.
@@ -3908,17 +3866,16 @@ async function doRandomChat(_, tagName) {
         return randomIndex.toString();
     }
 
-    resetSelectedGroup();
     const characterId = getRandomCharacterId();
-    if (!characterId) {
+    if (!characterId || characters[characterId] === undefined) {
         toastr.error('No characters found');
         return;
     }
-    setCharacterId(characterId);
+    if (!await selectCharacterById(characterId)) {
+        return '';
+    }
     setActiveCharacter(characters[characterId]?.avatar);
     setActiveGroup(null);
-    await delay(1);
-    await reloadCurrentChat();
     return characters[characterId]?.name;
 }
 
@@ -4887,12 +4844,6 @@ jQuery(() => {
 
     $('#confirm_message_delete').on('input', function () {
         power_user.confirm_message_delete = !!$(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
-    $('#before_unload_guard_mode').on('input', function () {
-        power_user.before_unload_guard_mode = normalizeBeforeUnloadGuardMode(String($(this).val()));
-        $(this).val(power_user.before_unload_guard_mode);
         saveSettingsDebounced();
     });
 

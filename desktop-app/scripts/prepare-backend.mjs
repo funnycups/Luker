@@ -44,6 +44,11 @@ const BACKEND_ENTRIES = [
 // reports as shippable: the tracked files plus the checkout's
 // new-but-not-ignored ones.
 const GIT_DERIVED_ENTRIES = ['public', 'default', 'plugins'];
+const SHIPPED_CHANGELOG_FILES = [
+    'docs/changelog.md',
+    'docs/zh-CN/changelog.md',
+    'docs/zh-TW/changelog.md',
+];
 
 const BUNDLE_FILES = ['lib.core.bundle.js', 'lib.optional.bundle.js', 'codemirror.bundle.js'];
 
@@ -120,6 +125,16 @@ export function copyBackendTree({ repoRoot = REPO_ROOT, staging = STAGING_BACKEN
             fs.mkdirSync(path.dirname(destination), { recursive: true });
             fs.copyFileSync(path.join(repoRoot, relative), destination);
         }
+    }
+
+    for (const relative of SHIPPED_CHANGELOG_FILES) {
+        const source = path.join(repoRoot, relative);
+        if (!fs.existsSync(source)) {
+            throw new Error(`shipped changelog missing from the checkout: ${relative}`);
+        }
+        const destination = path.join(staging, relative);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.copyFileSync(source, destination);
     }
 }
 

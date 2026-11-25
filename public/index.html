@@ -32,13 +32,13 @@
     <link href="css/jquery-ui.min.css" rel="stylesheet">
     <link href="css/bright.min.css" rel="stylesheet">
     <link href="css/cropper.min.css" rel="stylesheet">
-    <link href="css/toastr.min.css" rel="stylesheet">
     <link href="css/select2.min.css" rel="stylesheet">
     <link rel="apple-touch-icon" sizes="57x57" href="img/apple-icon-57x57.png" />
     <link rel="apple-touch-icon" sizes="72x72" href="img/apple-icon-72x72.png" />
     <link rel="apple-touch-icon" sizes="114x114" href="img/apple-icon-114x114.png" />
     <link rel="apple-touch-icon" sizes="144x144" href="img/apple-icon-144x144.png" />
     <link rel="stylesheet" type="text/css" href="style.css">
+    <link rel="stylesheet" type="text/css" href="css/luker-toast.css">
     <link rel="stylesheet" type="text/css" href="css/st-tailwind.css">
     <link rel="stylesheet" type="text/css" href="css/rm-groups.css">
     <link rel="stylesheet" type="text/css" href="css/group-avatars.css">
@@ -5761,16 +5761,6 @@
                                     <input id="confirm_message_delete" type="checkbox" />
                                     <small data-i18n="Confirm message deletion">Confirm message deletion</small>
                                 </label>
-                                <div class="flex-container alignitemscenter" title="Warn before closing/reloading this page." data-i18n="[title]Warn before closing/reloading this page.">
-                                    <small data-i18n="Leave-page confirmation">
-                                        Leave-page confirmation:
-                                    </small>
-                                    <select id="before_unload_guard_mode" class="widthNatural flex1 margin0">
-                                        <option value="off" data-i18n="Never">Never</option>
-                                        <option value="smart" data-i18n="Only when risky">Only when risky</option>
-                                        <option value="always" data-i18n="Always">Always</option>
-                                    </select>
-                                </div>
                                 <label class="checkbox_label" for="auto_fix_generated_markdown">
                                     <input id="auto_fix_generated_markdown" type="checkbox" />
                                     <small data-i18n="Auto-fix Markdown">Auto-fix Markdown</small>
@@ -8721,7 +8711,6 @@
     <script src="lib/jquery.ui.touch-punch.min.js"></script>
     <script src="lib/cropper.min.js"></script>
     <script src="lib/jquery-cropper.min.js"></script>
-    <script src="lib/toastr.min.js"></script>
     <script src="lib/select2.min.js"></script>
     <script src="lib/select2-search-placeholder.js"></script>
     <script src="lib/pagination.js"></script>
@@ -8730,6 +8719,7 @@
     <script type="module" src="lib/structured-clone/monkey-patch.js"></script>
     <script type="module" src="lib/swiped-events.js"></script>
     <script type="module" src="lib/eventemitter.js"></script>
+    <script type="module" src="scripts/luker-toast.js"></script>
     <script type="module" src="scripts/i18n.js"></script>
     <script type="module" src="scripts/request-inspector.js"></script>
     <script type="module" src="init.js"></script>

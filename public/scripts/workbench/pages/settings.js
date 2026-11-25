@@ -6,16 +6,24 @@
 
 import { i18n, i18nFormat } from '../i18n.js';
 import { h, put, clear } from '../../lens-shared/util.js';
+import { createBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import { button, link, dot, checkRow, select, sectionTitle, loading } from '../ui/components.js';
 import { listRules } from '../model/suggest.js';
 import { resolveAiRow } from '../model/ai-source.js';
+import { buildWorkbenchAiSummary, buildWorkbenchQaSummary } from '../model/behavior-summary-models.js';
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
 import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDockPrefs } from '../../run-panel/index.js';
+
+function fieldKey(key, node) {
+    if (node instanceof Element) node.dataset.fieldKey = key;
+    return node;
+}
 
 export function knownRoles() {
     return [
         { key: 'ask', label: i18n('Q&A'), tone: 'other' },
-        { key: 'memory', label: i18n('Memory graph'), tone: 'memory' },
+        { key: 'memory', label: i18n('Memory graph config'), tone: 'memory' },
+        { key: 'memory_graph', label: i18n('Memory graph content'), tone: 'memory' },
         { key: 'orch', label: i18n('Orchestration'), tone: 'orch' },
         { key: 'preset', label: i18n('Preset'), tone: 'preset' },
         { key: 'card', label: i18n('Character card'), tone: 'card' },
@@ -26,7 +34,8 @@ export function knownRoles() {
 
 const AI_ROLE_LABELS = {
     ask: 'Q&A',
-    memory: 'Edit memory graph settings',
+    memory: 'Edit memory graph config',
+    memory_graph: 'Edit memory graph content',
     orch: 'Edit orchestration settings',
     preset: 'Edit preset',
     card: 'Edit character card',
@@ -36,6 +45,7 @@ const AI_ROLE_LABELS = {
 
 const PLUGIN_LABELS = {
     memory: 'Memory graph settings',
+    memory_graph: 'Memory graph settings',
     orch: 'Orchestration settings',
     preset: 'Preset Assistant settings',
     card: 'Character Assistant settings',
@@ -61,6 +71,8 @@ export function createSettingsPage(app) {
     let prompts = null;
     let promptsVersion = 0;
     let targetsOpen = false;
+    let liveSettings = null;
+    const currentSettings = () => liveSettings ?? app.settings() ?? {};
     const unsubDockPrefs = subscribeRunDockPrefs(() => {
         if (el.isConnected) paint();
     });
@@ -77,6 +89,59 @@ export function createSettingsPage(app) {
         }
         return rows;
     }
+
+    const aiSummary = createBehaviorSummary({
+        id: 'wb-ai-settings',
+        ariaLabel: i18n('AI & editing behavior summary'),
+        onTokenActivate: (fields) => {
+            if (fields.includes('targetOverrides')) {
+                const details = el.querySelector('.wb-ai-targets');
+                if (details) {
+                    details.open = true;
+                    targetsOpen = true;
+                }
+            }
+            return false;
+        },
+        build: () => {
+            const s = currentSettings();
+            const shared = s.ai?.default || {};
+            const rows = activeRows();
+            let targetOverrideCount = 0;
+            for (const row of rows) {
+                const own = s.ai?.[row.key];
+                if (String(own?.connection || '').trim() || String(own?.preset || '').trim()) {
+                    targetOverrideCount += 1;
+                }
+            }
+            const sharedPreset = String(shared.preset || '').trim()
+                || (choices?.hasPluginOnly ? PRESET_EXAMPLES.pluginOnly : '');
+            return buildWorkbenchAiSummary({
+                sharedConnection: shared.connection || '',
+                sharedPreset,
+                reviewChanges: s.reviewChanges !== false,
+                targetOverrideCount,
+            });
+        },
+    });
+
+    const qaSummary = createBehaviorSummary({
+        id: 'wb-qa-settings',
+        ariaLabel: i18n('Q&A context & privacy summary'),
+        build: () => {
+            const s = currentSettings();
+            const askCfg = s.ask || {};
+            const askSources = askCfg.sources || {};
+            const defs = sourceDefs();
+            return buildWorkbenchQaSummary({
+                enabledSources: defs.filter(src => askSources[src.key] !== false).map(src => src.name),
+                allSources: defs.map(src => src.name),
+                floors: askCfg.floors ?? 2,
+                previewBeforeSend: Boolean(askCfg.previewBeforeSend),
+                redact: askCfg.redact !== false,
+            });
+        },
+    });
 
     async function ensureChoices() {
         if (choices) return;
@@ -98,10 +163,12 @@ export function createSettingsPage(app) {
         paint();
     }
 
-    function edit(mutate) {
-        const next = JSON.parse(JSON.stringify(app.settings()));
+    function edit(mutate, summary = null) {
+        const next = JSON.parse(JSON.stringify(currentSettings()));
         mutate(next);
+        liveSettings = next;
         app.saveSettings(next);
+        summary?.update();
     }
 
     async function importSharedExample() {
@@ -112,7 +179,7 @@ export function createSettingsPage(app) {
                 n.ai = n.ai || {};
                 n.ai.default = n.ai.default || {};
                 n.ai.default.preset = PRESET_EXAMPLES.pluginOnly;
-            });
+            }, aiSummary);
             choices = null;
             await ensureChoices();
         } catch (err) {
@@ -169,7 +236,7 @@ export function createSettingsPage(app) {
     }
 
     function aiSelect(key, field, isShared, ariaLabel) {
-        const cur = app.settings().ai?.[key] || {};
+        const cur = currentSettings().ai?.[key] || {};
         const list = field === 'connection' ? (choices.connections || []) : (choices.presets || []);
         return select(
             [{ value: '', label: firstOption(key, field, isShared) }, ...list.map(name => ({ value: name, label: name }))],
@@ -178,7 +245,7 @@ export function createSettingsPage(app) {
                 n.ai = n.ai || {};
                 n.ai[key] = n.ai[key] || {};
                 n.ai[key][field] = v;
-            }),
+            }, aiSummary),
             { ariaLabel, follow: true },
         );
     }
@@ -195,17 +262,17 @@ export function createSettingsPage(app) {
         return h('div', { class: 'wb-ai-shared' },
             h('div', { class: 'wb-ai-block-title', text: i18n('Shared') }),
             h('div', { class: 'wb-ai-shared-grid' },
-                h('label', { class: 'wb-ai-field' },
+                fieldKey('sharedConnection', h('label', { class: 'wb-ai-field' },
                     h('span', { class: 'wb-ai-field-label', text: i18n('Connection profile') }),
-                    aiSelect('default', 'connection', true, i18n('Shared connection profile'))),
-                h('label', { class: 'wb-ai-field' },
+                    aiSelect('default', 'connection', true, i18n('Shared connection profile')))),
+                fieldKey('sharedPreset', h('label', { class: 'wb-ai-field' },
                     h('span', { class: 'wb-ai-field-label', text: i18n('Generation preset') }),
-                    aiSelect('default', 'preset', true, i18n('Shared generation preset')))),
+                    aiSelect('default', 'preset', true, i18n('Shared generation preset'))))),
             aiActions());
     }
 
     function aiRow(row) {
-        const s = app.settings();
+        const s = currentSettings();
         const own = s.ai?.[row.key] || {};
         const shared = s.ai?.default || {};
         const native = choices.native?.[row.key] || {};
@@ -232,7 +299,7 @@ export function createSettingsPage(app) {
     function targetsBlock() {
         const rows = activeRows();
         if (!rows.length) return null;
-        return h('details', {
+        return fieldKey('targetOverrides', h('details', {
             class: 'wb-ai-targets',
             open: targetsOpen || null,
             onToggle: (event) => { targetsOpen = event.target.open; },
@@ -245,20 +312,20 @@ export function createSettingsPage(app) {
                 h('th', { text: i18n('Connection profile') }),
                 h('th', { text: i18n('Generation preset') }),
                 h('th', { text: i18n('Current source') }))),
-            h('tbody', null, rows.map(aiRow))));
+            h('tbody', null, rows.map(aiRow)))));
     }
 
     function aiSection() {
         const errs = Object.values(choices?.errors || {}).filter(Boolean);
         return h('section', null,
             sectionTitle(i18n('AI used inside Workbench'), testing ? h('span', { class: 'wb-note', text: i18n('Testing…') }) : link(i18n('Test default'), () => test())),
-            h('p', { class: 'wb-sub', text: i18n('Workbench uses these connections and presets to read data, edit settings and draft changes. Chat replies and the plugin\'s automatic tasks use the AI configured in each plugin\'s settings and are not affected by this section.') }),
+            aiSummary.el,
             errs.length ? h('p', { class: 'wb-msg-error', text: errs.join(' · ') }) : null,
             !choices
                 ? loading(i18n('Reading connection profiles…'))
                 : h('div', null, sharedBlock(), targetsBlock()),
             h('div', { class: 'wb-checks' },
-                checkRow({ checked: app.settings().reviewChanges !== false, label: i18n('Show me the changes first — do not apply them directly'), onChange: (v) => edit(n => { n.reviewChanges = v; }) })));
+                fieldKey('reviewChanges', checkRow({ checked: currentSettings().reviewChanges !== false, label: i18n('Show me the changes first — do not apply them directly'), onChange: (v) => edit(n => { n.reviewChanges = v; }, aiSummary) }))));
     }
 
     async function test() {
@@ -274,29 +341,38 @@ export function createSettingsPage(app) {
         paint();
     }
 
-    function paint() {
-        clear(el);
-        const s = app.settings();
+    function qaSection() {
+        const s = currentSettings();
         const askCfg = s.ask || {};
         const askSources = askCfg.sources || {};
+        return h('section', null,
+            sectionTitle(i18n('Q&A')),
+            qaSummary.el,
+            h('div', { class: 'wb-list' },
+                sourceDefs().map(src => fieldKey('qaSources', setRow(src.name, src.note, checkRow({ checked: askSources[src.key] !== false, label: i18n('Read'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.sources = n.ask.sources || {}; n.ask.sources[src.key] = v; }, qaSummary) })))),
+                fieldKey('qaFloors', setRow(i18n('Chat text floors to include'), i18n('When asking about a reply, also send the floors around it to the AI'),
+                    select([
+                        { value: '2', label: i18n('2 floors each side') },
+                        { value: '0', label: i18n('That floor only') },
+                        { value: '5', label: i18n('5 floors each side') },
+                        { value: 'all', label: i18n('No limit') },
+                    ], String(askCfg.floors ?? 2), (v) => edit(n => { n.ask = n.ask || {}; n.ask.floors = v === 'all' ? 'all' : Number(v); }, qaSummary), { ariaLabel: i18n('Chat text floors') })))),
+            h('div', { class: 'wb-checks' },
+                fieldKey('qaPreviewBeforeSend', checkRow({ checked: Boolean(askCfg.previewBeforeSend), label: i18n('Show me before sending to the AI'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.previewBeforeSend = v; }, qaSummary) })),
+                fieldKey('qaRedact', checkRow({ checked: askCfg.redact !== false, label: i18n('Remove API keys and addresses before sending'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.redact = v; }, qaSummary) }))));
+    }
+
+    function paint() {
+        clear(el);
+        liveSettings = JSON.parse(JSON.stringify(app.settings() || {}));
+        const s = currentSettings();
+        const aiSec = aiSection();
+        const qaSec = qaSection();
         put(el,
             h('div', null, h('h2', { class: 'wb-h2', text: i18n('Settings') })),
-            aiSection(),
+            aiSec,
             promptSection(),
-            h('section', null,
-                sectionTitle(i18n('Q&A')),
-                h('div', { class: 'wb-list' },
-                    sourceDefs().map(src => setRow(src.name, src.note, checkRow({ checked: askSources[src.key] !== false, label: i18n('Read'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.sources = n.ask.sources || {}; n.ask.sources[src.key] = v; }) }))),
-                    setRow(i18n('Chat text floors to include'), i18n('When asking about a reply, also send the floors around it to the AI'),
-                        select([
-                            { value: '2', label: i18n('2 floors each side') },
-                            { value: '0', label: i18n('That floor only') },
-                            { value: '5', label: i18n('5 floors each side') },
-                            { value: 'all', label: i18n('No limit') },
-                        ], String(askCfg.floors ?? 2), (v) => edit(n => { n.ask = n.ask || {}; n.ask.floors = v === 'all' ? 'all' : Number(v); }), { ariaLabel: i18n('Chat text floors') }))),
-                h('div', { class: 'wb-checks' },
-                    checkRow({ checked: Boolean(askCfg.previewBeforeSend), label: i18n('Show me before sending to the AI'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.previewBeforeSend = v; }) }),
-                    checkRow({ checked: askCfg.redact !== false, label: i18n('Remove API keys and addresses before sending'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.redact = v; }) }))),
+            qaSec,
             h('section', null,
                 sectionTitle(i18n('Window')),
                 h('div', { class: 'wb-list' },
@@ -307,6 +383,10 @@ export function createSettingsPage(app) {
                     setRow(i18n('Shortcut'), i18n('Can also be opened from the wand menu'), select([{ value: 'alt+w', label: 'Alt + W' }, { value: '', label: i18n('No shortcut') }], s.hotkey ?? 'alt+w', (v) => edit(n => { n.hotkey = v; }), { ariaLabel: i18n('Shortcut') })),
                     setRow(i18n('Window and entry position'), i18n('Drag the title bar to move, the bottom-right corner to resize, double-click the title bar to maximize'), button(i18n('Reset position'), () => { app.resetWindowPosition?.(); resetRunDockPosition(); app.toast(i18n('Window position restored')); }, { className: 'is-sm' })))),
             rulesSection());
+        aiSummary.bindScope(aiSec);
+        aiSummary.update();
+        qaSummary.bindScope(qaSec);
+        qaSummary.update();
     }
 
     function rulesSection() {
@@ -385,6 +465,8 @@ export function createSettingsPage(app) {
         },
         destroy() {
             unsubDockPrefs?.();
+            aiSummary.destroy();
+            qaSummary.destroy();
         },
     };
 }

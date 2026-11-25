@@ -2,6 +2,7 @@
 // Provides the top-layer dialog, draggable title bar, side navigation, per-tab page stack,
 // sticky footer, toast, confirm, help popover, colour schemes and Escape handling.
 import { t } from './i18n.js';
+import { syncToastContainerForDialogs } from './luker-toast.js';
 
 export const ICONS = {
     sync: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
@@ -503,6 +504,11 @@ export function mountLukerWindow({ label, create, onClosed }) {
         closedOnce = true;
         ui.destroy();
         document.removeEventListener('keydown', onKey, true);
+        layer.setAttribute('closing', '');
+        if (layer.hasAttribute('open')) {
+            layer.close();
+        }
+        syncToastContainerForDialogs();
         layer.remove();
         onClosed?.();
         resolveClosed();
@@ -519,6 +525,7 @@ export function mountLukerWindow({ label, create, onClosed }) {
     makeDraggable(win, root);
     document.body.append(layer);
     layer.showModal();
+    syncToastContainerForDialogs();
     ui.render();
     win.focus();
     return { ui, win, closed, close };

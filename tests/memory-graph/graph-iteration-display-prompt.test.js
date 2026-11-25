@@ -43,6 +43,12 @@ describe('graph-iteration tool display map', () => {
         const summarize = MG_GRAPH_TOOL_DISPLAY.mg_graph_create_node.summarize;
         expect(summarize({ type: 'event', title: 'Lantern guard shift' })).toBe('event: Lantern guard shift');
     });
+
+    test('compact_nodes summarize keeps the type and child count', () => {
+        const summarize = MG_GRAPH_TOOL_DISPLAY.mg_graph_compact_nodes.summarize;
+        expect(summarize({ type: 'event', child_ids: ['n_1', 'n_2', 'n_3'] })).toBe('event ×3');
+        expect(summarize({ type: 'moment' })).toBe('moment');
+    });
 });
 
 describe('graph-iteration system prompt builder', () => {

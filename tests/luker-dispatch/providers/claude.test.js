@@ -222,6 +222,35 @@ describe('dispatchClaude', () => {
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
+    test('non-streaming HTTP 200 with error payload: forwards error object verbatim instead of normalizing to empty choices', async () => {
+        const rawError = {
+            type: 'error',
+            error: { type: 'overloaded_error', message: 'Overloaded' },
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawError), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchClaude(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(200);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed).toEqual(rawError);
+        expect(parsed.choices).toBeUndefined();
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawError, rawError);
+    });
+
     test('ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {
         const ac = new AbortController();
         const ctx = fakeCtx({

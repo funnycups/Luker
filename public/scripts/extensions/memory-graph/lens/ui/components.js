@@ -99,14 +99,19 @@ export function contextBadge(ctx) {
 }
 
 /** Clickable reference to another node. */
-export function nodeLink(node, onSelect, { meta = '', compact = false } = {}) {
+export function nodeLink(node, onSelect, { meta = '', tags = [], compact = false } = {}) {
+    const tagList = Array.isArray(tags) ? tags.filter(Boolean) : [];
     return h('button', {
         type: 'button',
         class: `ml-nodelink ${compact ? 'is-compact' : ''}`.trim(),
         dataset: { tone: typeVisual(node.type).tone },
         title: node.title,
         onClick: (event) => { event.stopPropagation(); onSelect(node.id); },
-    }, typeDot(node.type, { size: 8 }), h('span', { class: 'ml-nodelink-title', text: node.title }), meta ? h('span', { class: 'ml-nodelink-meta', text: meta }) : null);
+    },
+    typeDot(node.type, { size: 8 }),
+    h('span', { class: 'ml-nodelink-title', text: node.title }),
+    tagList.length ? h('span', { class: 'ml-nodelink-tags' }, tagList.map(tag => h('span', { class: 'ml-tag-muted', text: tag }))) : null,
+    meta ? h('span', { class: 'ml-nodelink-meta', text: meta }) : null);
 }
 
 export function emptyState(iconName, title, hint = '', action = null) {

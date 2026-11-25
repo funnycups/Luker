@@ -159,6 +159,10 @@ describe('workbench Ask model & source readers', () => {
 
     test('request attribution, grouping, clip, and tools filtering', () => {
         expect(askTools({ inspector: false }).map(t => t.function.name)).not.toContain('wb_list_requests');
+        const answerTool = askTools().find(t => t.function.name === 'wb_answer');
+        expect(answerTool.function.parameters.properties.suggest.enum).toEqual(
+            expect.arrayContaining(['memory', 'memory_graph']),
+        );
 
         // Real Ask first-round & multi-round searchText must attribute to workbench, not orch/search/image/memory
         const askRound1Search = [
@@ -188,6 +192,8 @@ describe('workbench Ask model & source readers', () => {
 
         // Normal domain and AI-iteration requests remain unaffected
         expect(attribute({ searchText: 'You are a memory recall planner' }).kind).toBe('memory');
+        expect(attribute({ searchText: 'call mg_config_set_fields to tune extraction' }).label).toBe('AI 迭代 · 记忆图配置');
+        expect(attribute({ searchText: 'call mg_graph_edit_node to fix character state' }).label).toBe('AI 迭代 · 记忆图内容');
         expect(attribute({ searchText: 'You are the agenda_planner for luker_orch' }).kind).toBe('orch');
         expect(attribute({ searchText: 'luker_search_agent using search_tools' }).kind).toBe('search');
         expect(attribute({ searchText: 'Call sd_read_run to inspect illustration_prompt' }).kind).toBe('image');
@@ -1442,8 +1448,8 @@ describe('workbench Ask model & source readers', () => {
 
             const jumpBtns = [...page.el.querySelectorAll('.wb-ans-acts button')];
             expect(jumpBtns).toHaveLength(2);
-            expect(jumpBtns[0].textContent).toContain('Memory graph');
-            expect(jumpBtns[1].textContent).toContain('Memory structure');
+            expect(jumpBtns[0].textContent).toContain('Memory graph content');
+            expect(jumpBtns[1].textContent).toContain('Memory graph config');
             jumpBtns[0].click();
             expect(goSpy).toHaveBeenCalledWith('ai', expect.objectContaining({ ws: 'memory_graph', draft: 'Add clocktower promise node' }));
             jumpBtns[1].click();
@@ -1490,7 +1496,7 @@ describe('workbench Ask model & source readers', () => {
 
             const noChatJumpBtns = [...noChatPage.el.querySelectorAll('.wb-ans-acts button')];
             expect(noChatJumpBtns).toHaveLength(1);
-            expect(noChatJumpBtns[0].textContent).toContain('Memory structure');
+            expect(noChatJumpBtns[0].textContent).toContain('Memory graph config');
 
             const sideRegexItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
                 .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');

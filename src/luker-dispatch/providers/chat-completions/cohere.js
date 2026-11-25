@@ -161,6 +161,20 @@ export async function dispatchCohere(ctx) {
             // to the client, not the raw upstream body. Preserve that shape here.
             const rawJson = await resp.json();
             console.debug('Cohere response:', rawJson);
+            const errorPayload = (rawJson && typeof rawJson === 'object' && !Array.isArray(rawJson))
+                ? (rawJson.error
+                    ? rawJson
+                    : (typeof rawJson.message === 'string' && rawJson.message
+                        ? { ...rawJson, error: { message: rawJson.message } }
+                        : null))
+                : null;
+            if (errorPayload) {
+                console.warn('Cohere API returned HTTP 200 with error payload', rawJson);
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(errorPayload)));
+                ctx.emit.end();
+                try { ctx.inspection.complete(errorPayload, rawJson); } catch { /* inspection best-effort */ }
+                return;
+            }
             const normalized = normalizeCohereResponseToOAI(rawJson);
             const bytes = new TextEncoder().encode(JSON.stringify(normalized));
             ctx.emit.chunk(bytes);

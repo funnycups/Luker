@@ -2,6 +2,49 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Workbench
+
+- Renamed the Memory Graph AI iteration targets to Memory graph config and Memory graph content across Workbench, and added settings source resolution and Change history filtering for Memory graph content.
+
+### Update Notice
+
+- Added a post-update modal displaying localized changelog summaries for all versions and dev builds since the previous login.
+
+### Memory Graph
+
+- Added rollup node compaction to Memory graph content AI iteration in Workbench.
+- Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.
+- Fixed the Memory Graph inspector listing the same event multiple times across different relation edges, merging them into one row with relation tags.
+- Fixed flattened CJK event summaries with arrow-separated or parenthesized locations failing to split the place header from the prose body.
+- Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
+- Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
+
+### Multi-Agent Orchestrator
+
+- Fixed agenda and director orchestration profiles ignoring configured worker concurrency, run count, and abort-discard limits.
+
+### Background Keep-Alive
+
+- Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with cancellation of active chat-scoped tasks across message generation, group chats, Memory Graph, image generation, CardApp Studio, Workbench, vectorization, translation, image captioning, and data sync.
+- Replaced the Leave-page confirmation setting with automatic page-leave warnings whenever active tasks, pending saves, open message edits, or unsent input are present.
+
+### Plugin Settings
+
+- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in plugin settings panels.
+
+### Extension API
+
+- Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
+- Added a unified background activity guard API for extensions and lifecycle-scoped CardApps, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
+
+### Fixes
+
+- Fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.
+- Fixed login sessions expiring after updating a Docker image.
+- Fixed iOS background action menu buttons closing without triggering when tapped.
+
 ## v2.9.0-rc.4 (2026-11-23)
 
 ### Workbench

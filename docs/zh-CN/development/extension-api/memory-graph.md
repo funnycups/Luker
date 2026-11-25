@@ -1027,7 +1027,7 @@ const { removed } = await writeApi.deleteLinks({
 
 ### compactNodes(options)
 
-**签名：** `compactNodes(options: { type: string, childIds: string[], summary: string, fields?: Record<string, unknown> }): { rollupNodeId: string }`
+**签名：** `compactNodes(options: { type: string, childIds: string[], summary: string }): { rollupNodeId: string }`
 
 **契约：**
 

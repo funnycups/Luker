@@ -352,7 +352,7 @@ export async function promptInfo(role, registry = defaultRegistry) {
  * One model call with tools.
  * @returns {Promise<{ text: string, calls: { id: string, name: string, args: object }[], reasoning?: string, reasoningBlocks?: any[], reasoningDetails?: any[] }>}
  */
-export async function aiRequest(role, { messages, tools = [], signal = null }) {
+export async function aiRequest(role, { messages, tools = [], signal = null, activity = undefined }) {
     const ctx = getContext();
     if (!ctx) throw new SourceError('unavailable', 'Luker context is unavailable');
     if (!tools.length) throw new SourceError('bad-call', i18n('An AI call needs at least one tool'));
@@ -370,6 +370,7 @@ export async function aiRequest(role, { messages, tools = [], signal = null }) {
         allowNoToolCalls: true,
         // 「问问」属于纯诊断问答，不塞入角色卡与角色扮演预设外壳，避免指令冲突与 token 浪费。
         ...(isAsk ? { includeCharacterCard: false, bypassPresetEnvelope: true } : {}),
+        ...(activity !== undefined ? { activity } : {}),
     });
     const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((c, i) => {
         const sig = c?.raw?.signature || c?.raw?.thoughtSignature;
@@ -401,7 +402,11 @@ export async function aiRequest(role, { messages, tools = [], signal = null }) {
 export async function aiTest(role) {
     const started = Date.now();
     const tools = [{ type: 'function', function: { name: 'wb_ok', description: 'Call this once to confirm the connection works.', parameters: { type: 'object', properties: {}, additionalProperties: false } } }];
-    await aiRequest(role, { messages: [{ role: 'system', content: '这是连接测试。调用 wb_ok 工具一次，不要输出别的。' }, { role: 'user', content: '测试连接' }], tools });
+    await aiRequest(role, {
+        messages: [{ role: 'system', content: '这是连接测试。调用 wb_ok 工具一次，不要输出别的。' }, { role: 'user', content: '测试连接' }],
+        tools,
+        activity: false,
+    });
     return Date.now() - started;
 }
 

@@ -857,7 +857,7 @@ export function createSyncSource(state, emit) {
         async openNotice(id) {
             const notice = notices.get(id);
             if (!notice) throw fail(t`The chat could not be found.`, 'CHAT_MISSING');
-            await openSyncNoticeTarget(notice);
+            return await openSyncNoticeTarget(notice);
         },
     };
 }

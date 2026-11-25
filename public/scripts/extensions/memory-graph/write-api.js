@@ -259,7 +259,7 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null,
     // compactNodes creates a rollup parent over the given children and adds the
     // semantic_contains edges. Shares `createRollupWithChildren` with the internal
     // compression loop so both paths produce identical rollup shapes.
-    async function compactNodes({ type, childIds, summary, fields } = {}) {
+    async function compactNodes({ type, childIds, summary } = {}) {
         if (!type || !Array.isArray(childIds) || childIds.length === 0) {
             throw new Error('compactNodes: type and non-empty childIds required.');
         }
@@ -267,7 +267,7 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null,
             throw new Error('compactNodes: summary is required.');
         }
         const resolved = requireStore('compactNodes');
-        const rollup = createRollupWithChildren(resolved, { type, childIds, summary, fields });
+        const rollup = createRollupWithChildren(resolved, { type, childIds, summary });
         await flushCommit();
         return { rollupNodeId: String(rollup.id) };
     }

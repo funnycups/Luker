@@ -111,6 +111,9 @@ export async function initIllustration(bridge) {
         settings,
         saveSettings: () => saveSettingsDebounced(),
         context,
+        getCapabilitiesSnapshot: typeof bridge?.getCapabilitiesSnapshot === 'function'
+            ? () => bridge.getCapabilitiesSnapshot()
+            : null,
         onEnabledChange: enabled => {
             setIllustrationEnabled(enabled);
             regexRegistration?.refresh?.();
@@ -128,6 +131,7 @@ export async function initIllustration(bridge) {
             maxConcurrent: settings.maxConcurrentGenerations,
             minInterval: settings.minGenerationInterval,
         }),
+        context,
     });
 
     initSdLens({

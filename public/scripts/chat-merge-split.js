@@ -1,10 +1,9 @@
-import { getRequestHeaders } from '../script.js';
+import { confirmChatSwitchGuard, getRequestHeaders, openCharacterChat } from '../script.js';
 import { eventSource, event_types } from './events.js';
 import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE, POPUP_RESULT } from './popup.js';
 import { getContext } from './st-context.js';
 import { openGroupChat } from './group-chats.js';
-import { openCharacterChat } from '../script.js';
 
 async function postJson(url, payload) {
     const res = await fetch(url, {
@@ -376,6 +375,7 @@ export async function openMergeDialog({ isGroup, avatarUrl, groupId, characterNa
     });
     if (result !== POPUP_RESULT.AFFIRMATIVE) return { openedNewChat: false };
     if (!capturedTargetName || capturedSegments.length === 0) return { openedNewChat: false };
+    if (!await confirmChatSwitchGuard()) return { openedNewChat: false };
 
     try {
         const created = await postMergeChats({ isGroup, avatarUrl, groupId, segments: capturedSegments, targetName: capturedTargetName });
@@ -387,9 +387,9 @@ export async function openMergeDialog({ isGroup, avatarUrl, groupId, characterNa
             target: created.file_name,
         });
         if (isGroup) {
-            await openGroupChat(groupId, created.file_name);
+            await openGroupChat(groupId, created.file_name, { skipSwitchGuard: true });
         } else {
-            await openCharacterChat(created.file_name);
+            await openCharacterChat(created.file_name, { skipSwitchGuard: true });
         }
         globalThis.toastr?.success(t`Created ${created.file_name}`);
         return { openedNewChat: true };

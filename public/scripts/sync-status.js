@@ -6,7 +6,7 @@
  * not shown yet. Also holds the helpers that page uses to preview, resolve
  * and dismiss those items.
  */
-import { characters, getCharacters, getRequestHeaders, openCharacterChat, selectCharacterById } from '../script.js';
+import { characters, confirmChatSwitchGuard, getCharacters, getRequestHeaders, openCharacterChat, selectCharacterById } from '../script.js';
 import { eventSource, event_types } from './events.js';
 import { getGroups, groups, openGroupById, openGroupChat, selected_group } from './group-chats.js';
 import { t } from './i18n.js';
@@ -132,6 +132,7 @@ async function findCharacterIndex(avatar) {
  * Open the chat a notice points at.
  *
  * @param {object} notice Pending notice of the status
+ * @returns {Promise<boolean>} True when opened, false when cancelled
  * @throws {Error & { code: string }} With a user-facing message when the chat or its group could not be found or opened
  */
 export async function openSyncNoticeTarget(notice) {
@@ -145,17 +146,24 @@ export async function openSyncNoticeTarget(notice) {
         await getGroups();
         const group = groups.find(g => g.id === target.groupId);
         if (!group || !group.chats.includes(target.name)) throw missing();
+        if (!await confirmChatSwitchGuard()) {
+            return false;
+        }
         // `openGroupChat` switches chats within the selected group only.
-        if (selected_group !== target.groupId && !await openGroupById(target.groupId)) {
+        if (selected_group !== target.groupId && !await openGroupById(target.groupId, { skipSwitchGuard: true })) {
             throw failure(t`The group of this chat could not be opened.`, 'GROUP_OPEN_FAILED');
         }
-        await openGroupChat(target.groupId, target.name);
-        return;
+        return await openGroupChat(target.groupId, target.name, { skipSwitchGuard: true });
     }
     const index = await findCharacterIndex(target.avatar);
     if (index < 0) throw missing();
-    await selectCharacterById(index);
-    await openCharacterChat(target.name);
+    if (!await confirmChatSwitchGuard()) {
+        return false;
+    }
+    if (!await selectCharacterById(index, { skipSwitchGuard: true })) {
+        return false;
+    }
+    return await openCharacterChat(target.name, { skipSwitchGuard: true });
 }
 
 /** @returns {Promise<boolean>} true when the chat was opened */

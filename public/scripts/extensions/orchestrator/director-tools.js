@@ -42,7 +42,7 @@ import {
     EditorOpsError,
 } from './editor-ops.js';
 import { gatherGrepMatches } from './grep-tool.js';
-import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import { createAbortError, isAbortError, isAbortSignalLike, raceAbortSignal, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
@@ -446,6 +446,78 @@ const SUB_AGENT_MAX_ROUNDS = 40;
 export { SUB_AGENT_MAX_ROUNDS };
 
 /**
+ * Lightweight FIFO async semaphore that wakes and rejects queued waiters
+ * immediately when any associated abort signal fires.
+ *
+ * @param {number} maxConcurrent
+ * @returns {{ acquire: (...signals: Array<AbortSignal|null|undefined>) => Promise<void>, release: () => void }}
+ */
+function createAbortAwareSemaphore(maxConcurrent) {
+    const limit = Math.max(1, Math.floor(Number(maxConcurrent) || 1));
+    let active = 0;
+    const waiters = [];
+
+    async function acquire(...signals) {
+        const validSignals = signals.filter(isAbortSignalLike);
+        for (const sig of validSignals) {
+            if (sig.aborted) {
+                throw createAbortError('Sub-agent aborted while waiting for concurrency slot.');
+            }
+        }
+        if (active < limit) {
+            active += 1;
+            return;
+        }
+        await new Promise((resolve, reject) => {
+            let settled = false;
+            const cleanup = () => {
+                for (const sig of validSignals) {
+                    if (typeof sig.removeEventListener === 'function') {
+                        sig.removeEventListener('abort', onAbort);
+                    }
+                }
+            };
+            const onAbort = () => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                const idx = waiters.indexOf(entry);
+                if (idx >= 0) waiters.splice(idx, 1);
+                reject(createAbortError('Sub-agent aborted while waiting for concurrency slot.'));
+            };
+            const entry = {
+                grant() {
+                    if (settled) return false;
+                    settled = true;
+                    cleanup();
+                    active += 1;
+                    resolve();
+                    return true;
+                },
+            };
+            for (const sig of validSignals) {
+                if (typeof sig.addEventListener === 'function') {
+                    sig.addEventListener('abort', onAbort, { once: true });
+                }
+            }
+            waiters.push(entry);
+        });
+    }
+
+    function release() {
+        active = Math.max(0, active - 1);
+        while (active < limit && waiters.length > 0) {
+            const next = waiters.shift();
+            if (next.grant()) {
+                break;
+            }
+        }
+    }
+
+    return { acquire, release };
+}
+
+/**
  * Creates the per-turn sub-agent dispatcher used by director-runtime.
  *
  * Each sub-agent runs its own tool-call mini-loop (NOT a single-shot
@@ -471,7 +543,7 @@ export { SUB_AGENT_MAX_ROUNDS };
  *
  * Deps:
  *   - subAgents: profile.subAgents — id → spec lookup.
- *   - limits: { maxTotalSubagentRuns } — budget for the entire turn.
+ *   - limits: { maxConcurrentSubagents, maxTotalSubagentRuns } — concurrency cap and budget for the turn.
  *   - generateTask: non-streaming fallback (takes opts, returns terminal
  *     result). Always required (used when no stream provider is given,
  *     or as a last resort).
@@ -555,6 +627,9 @@ export function createSubagentDispatcher({
     // See dispatch-barrier.js for the full contract (fail-open on
     // release, follower.release is no-op, etc.).
     const firstChunkBarrier = createFirstChunkBarrier();
+
+    const maxConcurrentSubagents = Math.max(1, Math.floor(Number(limits?.maxConcurrentSubagents) || 4));
+    const subagentSemaphore = createAbortAwareSemaphore(maxConcurrentSubagents);
 
     const maxTotalSubagentRuns = Number.isFinite(limits?.maxTotalSubagentRuns)
         ? Number(limits.maxTotalSubagentRuns)
@@ -1031,23 +1106,27 @@ export function createSubagentDispatcher({
             // stream into the right slot even though the dispatch may be
             // pumping rounds in a loop.
             const panelCtx = { roundId, textSectionId, reasoningSectionId };
-            // Cache-warmup barrier acquisition — skipped when the
-            // preset isn't streaming (there's no first-chunk signal to
-            // wait on, so followers would just block until the whole
-            // response completes — worse than the pre-barrier baseline)
-            // OR when there's no resolved apiPresetName (nothing to
-            // group by; falsy keys are opt-out in the barrier by design).
-            //
-            // Only round 0 gates on the barrier: subsequent rounds are
-            // this sub-agent's own iteration and can't cache-race
-            // siblings — the sibling's cache slot was warmed on round 0
-            // already, or the sibling has moved past it.
-            const streamEnabledForBarrier = typeof isStreamingPresetEnabled === 'function'
-                && typeof generateTaskStream === 'function'
-                && isStreamingPresetEnabled(baseOpts.llmPresetName || '');
-            const barrierKey = streamEnabledForBarrier ? String(apiPresetName || '').trim() : '';
-            const barrierSlot = firstChunkBarrier.acquire(barrierKey);
+            let slotAcquired = false;
+            let barrierSlot = null;
             try {
+                await subagentSemaphore.acquire(abortSignal, childSignal);
+                slotAcquired = true;
+                // Cache-warmup barrier acquisition — skipped when the
+                // preset isn't streaming (there's no first-chunk signal to
+                // wait on, so followers would just block until the whole
+                // response completes — worse than the pre-barrier baseline)
+                // OR when there's no resolved apiPresetName (nothing to
+                // group by; falsy keys are opt-out in the barrier by design).
+                //
+                // Only round 0 gates on the barrier: subsequent rounds are
+                // this sub-agent's own iteration and can't cache-race
+                // siblings — the sibling's cache slot was warmed on round 0
+                // already, or the sibling has moved past it.
+                const streamEnabledForBarrier = typeof isStreamingPresetEnabled === 'function'
+                    && typeof generateTaskStream === 'function'
+                    && isStreamingPresetEnabled(baseOpts.llmPresetName || '');
+                const barrierKey = streamEnabledForBarrier ? String(apiPresetName || '').trim() : '';
+                barrierSlot = firstChunkBarrier.acquire(barrierKey);
                 let finalText = '';
                 let converged = false;
                 for (let r = 0; r < effectiveMaxRounds; r++) {
@@ -1302,7 +1381,12 @@ export function createSubagentDispatcher({
                 // followers (fail-open) — safe to call after every
                 // exit path (success, converge failure, abort, throw).
                 // Follower release is a no-op by contract.
-                try { barrierSlot.release(); } catch { /* barrier release must never throw */ }
+                if (barrierSlot) {
+                    try { barrierSlot.release(); } catch { /* barrier release must never throw */ }
+                }
+                if (slotAcquired) {
+                    subagentSemaphore.release();
+                }
             }
         })();
         inflight.set(handleId, promise);

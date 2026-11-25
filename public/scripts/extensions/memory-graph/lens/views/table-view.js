@@ -93,8 +93,9 @@ export function createTableView(app) {
             put(scroller, emptyState('filter', i18n('No nodes match the current filters.')));
             return;
         }
-        const cols = columnsFor(model, activeType);
+        let cols = columnsFor(model, activeType);
         const isEvent = activeType === 'event';
+        if (!isEvent && cols.length === 0 && nodes.some(n => n.isRollup)) cols = ['summary'];
         const thead = h('thead', null, h('tr', null,
             headerCell(i18n('Name'), 'title'),
             cols.map(col => headerCell(fieldLabel(col, activeType), col)),
@@ -103,6 +104,7 @@ export function createTableView(app) {
         const tbody = h('tbody');
         for (const node of nodes.slice(0, limit)) {
             const ctx = contextState(model, node.id);
+            const rollupSummary = String(node.summaryText || '').trim();
             const row = h('tr', {
                 tabIndex: 0,
                 class: node.archived ? 'is-archived' : null,
@@ -118,17 +120,24 @@ export function createTableView(app) {
             },
             h('td', { class: 'ml-td-title', 'data-label': i18n('Name') },
                 h('span', { class: 'ml-td-title-inner' }, typeDot(node.type, { size: 8 }),
-                    isEvent ? h('span', { text: node.title }) : editable(h('span', { text: node.title }), node.fields.title !== undefined
+                    isEvent ? h('span', { text: node.title }) : editable(h('span', { text: node.title }), !node.isRollup && node.fields.title !== undefined
                         ? { app, node, key: 'title', value: node.fields.title, label: i18n('Name') }
                         : { app, node, key: '', value: node.rawTitle || node.title, label: i18n('Name') }),
                     node.isRollup ? h('span', { class: 'ml-tl-tag', text: depthLabel(node.depth) }) : null)),
-            cols.map(col => {
-                const value = isEvent && col === 'summary'
-                    ? (node.parsed?.prose[0] || node.summaryText)
-                    : fieldText(node.fields[col]);
-                return editable(h('td', { 'data-label': fieldLabel(col, activeType), class: value ? null : 'is-empty', text: value ? truncate(value, isEvent ? 160 : 90) : '—' }),
-                    { app, node, key: col, value: node.fields[col], label: fieldLabel(col, activeType) });
-            }),
+            !isEvent && node.isRollup
+                ? editable(h('td', {
+                    colSpan: cols.length,
+                    'data-label': fieldLabel('summary', activeType),
+                    class: rollupSummary ? null : 'is-empty',
+                    text: rollupSummary ? truncate(rollupSummary, 160) : '—',
+                }), { app, node, key: 'summary', value: node.fields.summary ?? node.summaryText, label: fieldLabel('summary', activeType) })
+                : cols.map(col => {
+                    const value = isEvent && col === 'summary'
+                        ? (node.parsed?.prose[0] || node.summaryText)
+                        : fieldText(node.fields[col]);
+                    return editable(h('td', { 'data-label': fieldLabel(col, activeType), class: value ? null : 'is-empty', text: value ? truncate(value, isEvent ? 160 : 90) : '—' }),
+                        { app, node, key: col, value: node.fields[col], label: fieldLabel(col, activeType) });
+                }),
             h('td', { class: 'ml-td-num', 'data-label': isEvent ? i18n('Floor') : i18n('Link count'), text: isEvent ? (formatFloor(node) || '—') : String(node.degree) }),
             h('td', { class: 'ml-td-ctx' }, contextBadge(ctx)));
             rows.set(node.id, row);

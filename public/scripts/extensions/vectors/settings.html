@@ -76,14 +76,6 @@
                         <input id="vectors_enabled_for_all" type="checkbox" />
                         <span data-i18n="Enabled for all entries">Enabled for all entries</span>
                     </label>
-                    <ul class="margin0">
-                        <li>
-                            <small data-i18n="Checked: all entries except ❌ status can be activated.">Checked: all entries except ❌ status can be activated.</small>
-                        </li>
-                        <li>
-                            <small data-i18n="Unchecked: only entries with ❌ status can be activated.">Unchecked: only entries with 🔗 status can be activated.</small>
-                        </li>
-                    </ul>
                 </div>
                 <div class="flex-container">
                     <div class="flex1">
@@ -290,13 +282,11 @@
                             <input id="vectors_summarize" type="checkbox" class="checkbox">
                             <span data-i18n="Summarize chat messages for vector generation">Summarize chat messages for vector generation</span>
                         </label>
-                        <i class="failure" data-i18n="Warning: This will slow down vector generation drastically, as all messages have to be summarized first.">Warning: This will slow down vector generation drastically, as all messages have to be summarized first.</i>
 
                         <label class="checkbox_label expander" for="vectors_summarize_user" title="Summarize sent chat messages before generating embeddings.">
                             <input id="vectors_summarize_user" type="checkbox" class="checkbox">
                             <span data-i18n="Summarize chat messages when sending">Summarize chat messages when sending</span>
                         </label>
-                        <i class="failure" data-i18n="Warning: This might cause your sent messages to take a bit to process and slow down response time.">Warning: This might cause your sent messages to take a bit to process and slow down response time.</i>
 
                         <label for="vectors_summary_source" title="Summarize with:">Summarize with:</label>
                         <select id="vectors_summary_source" class="text_pole">
@@ -308,7 +298,6 @@
                             <label for="vectors_summary_prompt" data-i18n="Summary Prompt">Summary Prompt</label>
                             <button type="button" id="vectors_summary_prompt_restore" class="menu_button" data-i18n="Reset to default">Reset to default</button>
                         </div>
-                        <small data-i18n="Only used when Main API or WebLLM Extension is selected.">Only used when Main API or WebLLM Extension is selected.</small>
                         <textarea id="vectors_summary_prompt" class="text_pole textarea_compact" rows="6" placeholder="This prompt will be sent to AI to request the summary generation."></textarea>
 
                         <label for="vectors_summary_retries" title="Number of attempts per message before aborting vectorization.">
@@ -322,10 +311,6 @@
                         <input id="vectors_summary_threshold" type="number" class="text_pole widthUnset" min="0" step="1" />
                     </div>
                 </div>
-                <small data-i18n="Old messages are vectorized gradually as you chat. To process all previous messages, click the button below.">
-                    Old messages are vectorized gradually as you chat.
-                    To process all previous messages, click the button below.
-                </small>
                 <div class="flex-container">
                     <div id="vectors_vectorize_all" class="menu_button menu_button_icon" data-i18n="Vectorize All">
                         Vectorize All

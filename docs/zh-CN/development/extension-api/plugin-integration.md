@@ -1,6 +1,6 @@
 # 插件集成
 
-把插件接入 Luker 流水线、以及插件之间互通的 API：正则处理、搜索工具、跨插件 API 注册表、事件系统。
+把插件接入 Luker 流水线、以及插件之间互通的 API：正则处理、搜索工具、跨插件 API 注册表、事件系统与后台活动保护。
 
 ## 正则运行时 API
 
@@ -197,6 +197,85 @@ context.eventSource.on(eventName, handler, {
 | 应用级 | `APP_READY`、`SETTINGS_LOADED_AFTER`、`EXTENSIONS_FIRST_LOAD` |
 
 完整的事件 payload 结构参见 [前端插件开发 → 事件系统](/zh-CN/development/frontend-plugin#事件系统)。
+
+## 后台活动保护
+
+`context.activityGuard` 与 `lukerContext.activityGuard` 提供基于租约的统一登记机制，将浏览器离开页面提醒、移动端后台保活与应用内切换聊天确认收敛到同一处状态。插件应通过租约登记长时间运行的任务，而不要自行绑定 `beforeunload` 监听器或直接操作保活内部状态。
+
+### `context.activityGuard`
+
+```ts
+interface ActivityLeaseOptions {
+    source: string;                      // 必填的非空标识，例如 'my-plugin:sync'
+    label?: string;                      // 在切换聊天确认弹窗中展示的任务名称
+    scope?: 'global' | 'chat';           // 默认: 'global'
+    guardUnload?: boolean;               // 默认: true
+    guardChatSwitch?: boolean;           // 默认: scope === 'chat'
+    keepAlive?: boolean;                 // 默认: true
+    ambient?: boolean;                   // 默认: false
+    onCancel?: (() => void) | null;      // 仅在确认应用内切换聊天时调用
+}
+
+interface ActivitySnapshot {
+    readonly source: string;
+    readonly label: string;
+    readonly scope: 'global' | 'chat';
+    readonly guardUnload: boolean;
+    readonly guardChatSwitch: boolean;
+    readonly keepAlive: boolean;
+    readonly ambient: boolean;
+    readonly startedAt: number;
+}
+
+context.activityGuard: {
+    acquire(options: ActivityLeaseOptions): () => void;
+    run<T>(options: ActivityLeaseOptions, fn: () => T | Promise<T>): Promise<T>;
+    hasUnloadGuard(): boolean;
+    hasChatSwitchGuard(): boolean;
+    hasKeepAliveHold(options?: {
+        excludeAmbient?: boolean;
+        excludeSources?: Iterable<string>;
+    }): boolean;
+    list(): Array<Readonly<ActivitySnapshot>>;
+    subscribe(listener: () => void): () => void;
+}
+```
+
+### 租约选项与方法
+
+| 字段 / 方法 | 默认值 / 返回值 | 行为说明 |
+|---|---|---|
+| `source` | 必填字符串 | 去除首尾空白后非空的标识符；缺失或为空时抛出 `TypeError`。 |
+| `label` | `''` | 经过本地化的任务描述；当 `guardChatSwitch` 为 `true` 且内容非空时显示在切换聊天确认弹窗中。 |
+| `scope` | `'global'` | 绑定当前会话的任务传 `'chat'`；跨聊天保留的工作区、文件或账户级任务传 `'global'`。 |
+| `guardUnload` | `true` | 计入 `hasUnloadGuard()`，并在活跃期间触发浏览器 `beforeunload` 离开提醒。 |
+| `guardChatSwitch` | `scope === 'chat'` | 计入 `hasChatSwitchGuard()`，并在打开、新建、关闭、创建分支或删除聊天时触发应用内切换确认。 |
+| `keepAlive` | `true` | 计入 `hasKeepAliveHold()`，在活跃期间维持移动端后台保活。 |
+| `ambient` | `false` | 标记隐式请求级租约。`hasKeepAliveHold({ excludeAmbient: true })` 会跳过该类租约；当存在任意非 `ambient` 的聊天切换保护租约时，确认弹窗也会抑制 `ambient` 标签。 |
+| `onCancel` | `null` | 仅在用户确认应用内切换聊天时调用，绝不在 `beforeunload` 时触发，可用于中止 `AbortController` 或取消当前聊天任务。 |
+| `acquire(options)` | `() => void` | 注册租约并返回幂等的 `release()` 释放回调。 |
+| `run(options, fn)` | `Promise<T>` | 申请租约、等待 `fn()` 执行完成，并在 `finally` 中释放租约。 |
+| `list()` | `Readonly<ActivitySnapshot>[]` | 返回当前活跃租约的浅冻结快照数组，不包含内部 token 与 `onCancel` 钩子。 |
+| `subscribe(listener)` | `() => void` | 在租约申请或释放时调用 `listener()`，并返回幂等的 `unsubscribe()` 取消订阅回调。 |
+
+```js
+const ctx = Luker.getContext();
+const controller = new AbortController();
+
+const summary = await ctx.activityGuard.run({
+    source: 'my-plugin:summarize',
+    label: ctx.translate('Chat summary'),
+    scope: 'chat',
+    onCancel: () => controller.abort(),
+}, async () => {
+    return await ctx.generateTask({
+        taskMessages: [{ role: 'user', content: '总结最近一段剧情。' }],
+        abortSignal: controller.signal,
+    });
+});
+```
+
+核心 LLM 请求接口 `generateTask`、`generateTaskStream`、`generateRaw`、`generateRawData`、`ChatCompletionService` 与 `TextCompletionService` 默认自动附带全局隐式租约，可通过传入 `activity: false` 退出或传入对象覆盖配置。详见[生成请求 → 后台活动保护](/zh-CN/development/extension-api/generation#后台活动保护)。
 
 ## 国际化（i18n）
 

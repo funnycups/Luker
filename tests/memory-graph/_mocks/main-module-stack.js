@@ -120,10 +120,6 @@ jest.unstable_mockModule(
         getEmbeddingProfileById: () => null, getRerankProfileById: () => null,
     }),
 );
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/function-call-runtime.js',
-    () => ({ TOOL_PROTOCOL_STYLE: {}, validateParsedToolCalls: () => true }),
-);
 jest.unstable_mockModule('../../public/scripts/embedding-service.js', () => ({
     EmbeddingService: class {},
 }));

@@ -70,6 +70,9 @@ function makeCheckout() {
     fs.mkdirSync(path.join(repo, 'public'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'default', 'scaffold'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', 'zh-CN'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', 'zh-TW'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', 'guide'), { recursive: true });
     for (const entry of ['server.js', 'webpack.config.js', 'package.json', 'package-lock.json', 'plugins.js']) {
         fs.writeFileSync(path.join(repo, entry), '');
     }
@@ -82,6 +85,10 @@ function makeCheckout() {
     fs.writeFileSync(path.join(repo, 'default', 'scaffold', 'local.md'), '# local\n');
     fs.writeFileSync(path.join(repo, 'plugins', 'package.json'), '{}');
     fs.writeFileSync(path.join(repo, 'plugins', 'local.js'), 'export default {};\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'changelog.md'), '# Changelog\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
     fs.writeFileSync(path.join(repo, '.gitignore'), [
         'public/settings.json',
         '/plugins/*',
@@ -105,7 +112,22 @@ test('staging ships the tracked trees and none of the gitignored state in them',
     expect(fs.existsSync(path.join(staging, 'default', 'scaffold', 'local.md'))).toBe(false);
     expect(fs.existsSync(path.join(staging, 'plugins', 'package.json'))).toBe(true);
     expect(fs.existsSync(path.join(staging, 'plugins', 'local.js'))).toBe(false);
+    expect(fs.existsSync(path.join(staging, 'docs', 'changelog.md'))).toBe(true);
+    expect(fs.existsSync(path.join(staging, 'docs', 'zh-CN', 'changelog.md'))).toBe(true);
+    expect(fs.existsSync(path.join(staging, 'docs', 'zh-TW', 'changelog.md'))).toBe(true);
+    expect(fs.existsSync(path.join(staging, 'docs', 'guide', 'getting-started.md'))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('.dockerignore whitelists the three changelog markdown files after *.md', () => {
+    const lines = fs.readFileSync(path.join(REPO_ROOT, '.dockerignore'), 'utf8')
+        .split(/\r?\n/)
+        .map(line => line.trim());
+    const wildcardIdx = lines.indexOf('*.md');
+    expect(wildcardIdx).toBeGreaterThan(-1);
+    for (const entry of ['!/docs/changelog.md', '!/docs/zh-CN/changelog.md', '!/docs/zh-TW/changelog.md']) {
+        expect(lines.indexOf(entry)).toBeGreaterThan(wildcardIdx);
+    }
 });
 
 test('staging keeps a nested directory whose name is excluded at the top level', () => {

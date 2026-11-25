@@ -21,7 +21,8 @@ const RULES = [
     { kind: 'search', label: '联网搜索', test: /search_tools|luker_web_search|luker_search_agent|web_search|search agent/i },
     { kind: 'image', label: 'AI 插图 / 画室', test: /sd_read_run|sd_propose_|illustration_prompt|character_exploration|visualInspection/i },
     // iteration studios
-    { kind: 'iterate', label: 'AI 迭代 · 记忆结构', test: /mg_schema_|schema iteration/i },
+    { kind: 'iterate', label: 'AI 迭代 · 记忆图配置', test: /mg_schema_|mg_config_|schema iteration|configuration-editor ai/i },
+    { kind: 'iterate', label: 'AI 迭代 · 记忆图内容', test: /mg_graph_|graph-editor ai|graph revision/i },
     { kind: 'iterate', label: 'AI 迭代 · 预设', test: /cpa_|completion preset assistant/i },
     { kind: 'iterate', label: 'AI 迭代 · 角色卡', test: /cea_|character editor assistant/i },
     { kind: 'iterate', label: 'AI 迭代 · 世界书', test: /lorebook_write|wb_world_|worldbook assistant/i },

@@ -14,17 +14,7 @@
     pointer-events: none;
 }
 
-/* Keep transient toasts below the activity pill instead of covering it. */
-body.activity-pill-visible #toast-container.toast-top-center,
-body.activity-pill-visible #toast-container.toast-top-full-width {
-    margin-top: calc(var(--activity-pill-top, var(--topBarBlockSize, 30px)) + var(--activity-pill-host-height, 32px) + 12px);
-}
-
-body.activity-pill-visible #toast-container.toast-top-left,
-body.activity-pill-visible #toast-container.toast-top-right {
-    top: calc(var(--activity-pill-top, var(--topBarBlockSize, 30px)) + var(--activity-pill-host-height, 32px) + 12px);
-    margin-top: 0;
-}
+/* Transient toast clearance below the activity pill is owned by luker-toast.css. */
 
 .activity-pill {
     --activity-accent: #3fd0b4;

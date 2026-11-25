@@ -60,10 +60,6 @@ const CUSTOM_MODAL_KEYS = new Set([
     'extractContextTurns',
     'extractExcludeRecentTurns',
     'llmVisibleRecentMessages',
-    'extractMode',
-    'extractCrawlMaxRounds',
-    'extractCrawlCandidateLimit',
-    'extractCrawlMaxReads',
 ]);
 
 const TECHNICAL_KEYS = new Set([
@@ -156,8 +152,8 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
         if (CUSTOM_MODAL_KEYS.has(key)) modalEntries.push([key, value]);
         else inlineEntries.push([key, value]);
     }
-    // Apply extractMode before crawl-only numeric inputs so crawl inputs are rendered inside the modal.
-    modalEntries.sort(([a], [b]) => (a === 'extractMode' ? -1 : b === 'extractMode' ? 1 : 0));
+    // Apply extractMode before crawl-only numeric inputs so crawl inputs are rendered in the section.
+    inlineEntries.sort(([a], [b]) => (a === 'extractMode' ? -1 : b === 'extractMode' ? 1 : 0));
 
     let touchedAdvanced = false;
 
@@ -167,7 +163,7 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
         await customCard.waitFor({ state: 'visible', timeout: timeoutMs });
         await customCard.click();
 
-        const modal = lens.locator('.ml-dialog-backdrop').last();
+        const modal = lens.locator('.ml-dialog-backdrop:has(.ml-schema-modal)').last();
         await modal.waitFor({ state: 'visible', timeout: timeoutMs });
         for (const [key, value] of modalEntries) {
             await applyFieldControl(modal, key, value, timeoutMs);
@@ -305,7 +301,7 @@ export async function rebuildMgIndex(page, { closeAfter = false, timeoutMs = 60_
     await rebuildBtn.waitFor({ state: 'visible', timeout: 15_000 });
     await rebuildBtn.click();
 
-    const modal = lens.locator('.ml-dialog-backdrop').last();
+    const modal = lens.locator('.ml-dialog-backdrop:has(.ml-schema-modal)').last();
     await modal.waitFor({ state: 'visible', timeout: 5000 });
     await modal.locator('.ml-schema-modal-foot button').filter({ hasText: /^(Rebuild Graph|重建图谱|重建圖譜)$/ }).first().click();
     await modal.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});

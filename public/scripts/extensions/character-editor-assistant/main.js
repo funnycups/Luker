@@ -464,7 +464,9 @@ function registerLocaleData() {
         'Import example': '导入示例',
         'Re-import example': '重新导入示例',
         'Derive from an existing preset': '从现有预设派生',
-        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改这些配置所用的 AI 在工作台 → 设置中选择。',
+        'Character Editor Assistant behavior summary': '角色卡编辑助手行为摘要',
+        'Fallback AI': '回退 AI',
+        'Fallback AI uses ${requestApiPresetName} + ${requestLlmPresetName} with up to ${toolCallRetryMax} tool-call retries — Workbench → Settings overrides connection and preset inside Workbench.': '回退 AI 使用 ${requestApiPresetName} + ${requestLlmPresetName}，工具调用最多重试 ${toolCallRetryMax} 次 —— 在工作台内以工作台 → 设置中的连接与预设为准。',
     });
     addLocaleData('zh-tw', {
         'Character Editor Assistant': '角色卡編輯助手',
@@ -781,7 +783,9 @@ function registerLocaleData() {
         'Import example': '匯入示例',
         'Re-import example': '重新匯入示例',
         'Derive from an existing preset': '從現有預設派生',
-        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改這些設定所用的 AI 在工作台 → 設定中選擇。',
+        'Character Editor Assistant behavior summary': '角色卡編輯助手行為摘要',
+        'Fallback AI': '回退 AI',
+        'Fallback AI uses ${requestApiPresetName} + ${requestLlmPresetName} with up to ${toolCallRetryMax} tool-call retries — Workbench → Settings overrides connection and preset inside Workbench.': '回退 AI 使用 ${requestApiPresetName} + ${requestLlmPresetName}，工具呼叫最多重試 ${toolCallRetryMax} 次 —— 在工作台內以工作台 → 設定中的連線與預設為準。',
     });
 }
 

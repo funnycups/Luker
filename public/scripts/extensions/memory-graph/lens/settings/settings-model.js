@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Settings metadata, quick cadence presets, gap detection, live animated demo
-// frame generator, dirty-key diffing, and cadence summary for the Memory Graph
-// settings view (pure: no DOM).
+// frame generator, and dirty-key diffing for the Memory Graph settings view
+// (pure: no DOM).
 
 import { i18n, i18nFormat } from '../i18n.js';
 
@@ -175,56 +175,6 @@ export function withMissingProfiles(profiles, selected, emptyLabel, missingSuffi
         out.push({ value, label: `${value} ${missingSuffix}` });
     }
     return out;
-}
-
-/** Factual deterministic runtime summary of extraction cadence and floor hiding. */
-export function formatCadenceSummary({
-    updateEvery = 2,
-    extractBatchTurns = 2,
-    extractContextTurns = 2,
-    extractExcludeRecentTurns = 0,
-    llmVisibleRecentMessages = 5,
-} = {}) {
-    const { every, batch, ctx, exclude, visible } = normalizeCadenceParams({
-        updateEvery,
-        extractBatchTurns,
-        extractContextTurns,
-        extractExcludeRecentTurns,
-        llmVisibleRecentMessages,
-    });
-    const cadencePart = exclude > 0
-        ? i18nFormat(
-            'Extracts every ${0} assistant replies (${1} per batch, ${2} preceding replies as context, skipping the latest ${3}).',
-            every,
-            batch,
-            ctx,
-            exclude,
-        )
-        : i18nFormat(
-            'Extracts every ${0} assistant replies (${1} per batch, ${2} preceding replies as context).',
-            every,
-            batch,
-            ctx,
-        );
-
-    let hidingPart;
-    if (visible <= 0) {
-        hidingPart = i18n('Keeps full raw chat history visible to the generation model.');
-    } else if (visible >= 3 && visible % 2 === 1) {
-        const pairs = (visible - 1) / 2;
-        hidingPart = i18nFormat(
-            'Hides messages past the latest ${0} floors (keeps the latest ${1} dialogue turns plus the newest user prompt).',
-            visible,
-            pairs,
-        );
-    } else {
-        hidingPart = i18nFormat(
-            'Hides messages past the latest ${0} floors.',
-            visible,
-        );
-    }
-
-    return `${cadencePart} ${hidingPart}`;
 }
 
 function buildSendMessages(completedTurns, coveredSeq, visible) {

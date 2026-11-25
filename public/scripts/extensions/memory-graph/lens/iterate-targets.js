@@ -488,7 +488,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
 
     return {
         id: 'memory',
-        get label() { return i18n('Memory graph'); },
+        get label() { return i18n('Memory graph config'); },
         tone: 'memory',
         order: 10,
         chips: () => [
@@ -498,8 +498,8 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             i18n('Make the field descriptions clearer'),
         ],
         scopeNotes: {
-            global: () => i18n('Edit the memory structure shared by all characters'),
-            character: () => i18n('Edit only this character\'s own memory structure (created on save if there is none)'),
+            global: () => i18n('Edit the memory structure and settings shared by all characters'),
+            character: () => i18n('Edit only this character\'s own memory structure and settings (created on save if there is none)'),
         },
         async scopes(ctx) {
             const c = resolveCtx(ctx);
@@ -602,7 +602,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                     live,
                     target,
                     title: i18nFormat(
-                        'Memory structure for "${0}" only${1}',
+                        'Memory graph config for "${0}" only${1}',
                         characterName,
                         info?.hasOverride ? '' : i18n(' (none yet, created on save)'),
                     ),
@@ -617,7 +617,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             return {
                 live,
                 target,
-                title: i18n('Memory structure shared by all characters'),
+                title: i18n('Memory graph config shared by all characters'),
             };
         },
         async prompt(live, scope, ctx, extra = {}) {
@@ -873,7 +873,14 @@ function formatGraphRecordsText(doc, nodeIds, linkKeys) {
         const n = doc?.nodes?.[id];
         if (!n) continue;
         const fields = n.fields && typeof n.fields === 'object' ? JSON.stringify(n.fields) : '{}';
-        lines.push(`[node ${id}] ${n.type || ''} · ${n.title || ''}${n.archived ? ' (archived)' : ''} ${fields}`);
+        const depth = Number(n.semanticDepth ?? 0);
+        const tags = [];
+        if (n.semanticRollup || depth > 0) tags.push(`L${depth || 1} rollup`);
+        if (n.parentId) tags.push(`parent=${n.parentId}`);
+        if (Array.isArray(n.childrenIds) && n.childrenIds.length) tags.push(`children=${n.childrenIds.join(',')}`);
+        if (n.archived) tags.push('archived');
+        const tagText = tags.length ? ` (${tags.join(', ')})` : '';
+        lines.push(`[node ${id}] ${n.type || ''} · ${n.title || ''}${tagText} ${fields}`);
     }
     for (const k of linkKeys) {
         const e = doc?.links?.[k];
@@ -950,7 +957,7 @@ function renderMemoryGraphPreview({ base, ai }) {
     const totalLinks = Object.keys(stagedLinks).length;
     put(container,
         h('div', { class: 'wb-sec-title' },
-            h('span', { text: i18n('Graph') }),
+            h('span', { text: i18n('Memory graph content') }),
             h('span', { class: 'wb-note', text: i18nFormat('${0} node(s), ${1} link(s)', totalNodes, totalLinks) })));
 
     if (totalNodes === 0 && removedNodes.size === 0) {
@@ -969,10 +976,15 @@ function renderMemoryGraphPreview({ base, ai }) {
                     ? 'is-del'
                     : (addedNodes.has(id) ? 'is-add' : (modifiedNodes.has(id) ? 'is-change' : ''));
                 const marker = state === 'is-add' ? '+' : state === 'is-del' ? '-' : state === 'is-change' ? '~' : '';
+                const depth = Number(node?.semanticDepth ?? 0);
+                const isRollup = Boolean(node?.semanticRollup) || depth > 0;
+                const metaParts = [id];
+                if (isRollup) metaParts.push(`L${depth || 1}`);
+                if (node?.archived) metaParts.push(i18n('Archived'));
                 return h('div', { class: `wb-mg-preview-row ${state}`.trim(), dataset: { mgGraphNodeId: id } },
                     marker ? h('span', { class: 'wb-chg-tag', text: marker }) : null,
                     h('span', { class: 'wb-mg-preview-label', text: node?.title || id }),
-                    h('span', { class: 'wb-note', text: node?.archived ? `${id} · ${i18n('Archived')}` : id }));
+                    h('span', { class: 'wb-note', text: metaParts.join(' · ') }));
             })));
     }
 
@@ -1102,7 +1114,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
                 return 'change';
             },
             label: summarizeGraphEntry,
-            group: () => i18n('Memory graph'),
+            group: () => i18n('Memory graph content'),
             beforeText: (entry) => {
                 const before = entry?.meta?.before;
                 const after = entry?.meta?.after;
@@ -1122,7 +1134,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
 
     return {
         id: 'memory_graph',
-        get label() { return i18n('Graph'); },
+        get label() { return i18n('Memory graph content'); },
         tone: 'memory',
         order: 15,
         proposalKinds,
@@ -1133,7 +1145,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             i18n('Check the graph against recent chat messages'),
         ],
         scopeNotes: {
-            chat: () => i18n('Edit the memory graph stored in this chat'),
+            chat: () => i18n('Edit the memory nodes and relationships stored in this chat'),
         },
         async scopes(ctx) {
             const c = resolveCtx(ctx);
@@ -1175,7 +1187,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             return {
                 live: canonicalFromStore(liveStore),
                 target: { scope: 'chat', chatKey, ...(chatTarget ? { target: clone(chatTarget) } : {}) },
-                title: label ? i18nFormat('Memory graph of "${0}"', label) : i18n('Memory graph'),
+                title: label ? i18nFormat('Memory graph content of "${0}"', label) : i18n('Memory graph content'),
             };
         },
         async prompt(_live, _scope, ctx) {

@@ -19,6 +19,11 @@ const TOP_LEVEL_ITEMS = [
 ];
 
 const GIT_DERIVED_SHIPPABLE_ROOTS = ['public', 'default', 'plugins'];
+const SHIPPED_CHANGELOG_FILES = [
+    'docs/changelog.md',
+    'docs/zh-CN/changelog.md',
+    'docs/zh-TW/changelog.md',
+];
 
 const PREBUILT_BUNDLES = [
     'lib.core.bundle.js',
@@ -530,6 +535,14 @@ export function stageMobileRuntime({
             }
             copyFileCounted(srcFile, path.join(outputDir, relFile));
         }
+    }
+
+    for (const relFile of SHIPPED_CHANGELOG_FILES) {
+        const srcFile = path.join(repoRoot, relFile);
+        if (!fs.existsSync(srcFile)) {
+            throw new Error(`Missing required changelog file: ${srcFile}`);
+        }
+        copyFileCounted(srcFile, path.join(outputDir, relFile));
     }
 
     const defaultConfigPath = path.join(repoRoot, 'default', 'config.yaml');

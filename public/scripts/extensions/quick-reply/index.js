@@ -223,6 +223,7 @@ const finalizeInit = async () => {
     }
     debug('/executing queue');
     isReady = true;
+    manager?.refreshBehaviorSummaries();
     debug('READY');
 };
 

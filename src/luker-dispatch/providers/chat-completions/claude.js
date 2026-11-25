@@ -388,6 +388,13 @@ export async function dispatchClaude(ctx) {
             // and consumers saw `undefined` / `no choices` errors.
             const anthropicJson = await resp.json();
             console.debug('Claude response:', anthropicJson);
+            if (anthropicJson && typeof anthropicJson === 'object' && !Array.isArray(anthropicJson) && anthropicJson.error) {
+                console.warn('Claude API returned HTTP 200 with error payload', anthropicJson);
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(anthropicJson)));
+                ctx.emit.end();
+                try { ctx.inspection.complete(anthropicJson, anthropicJson); } catch { /* inspection best-effort */ }
+                return;
+            }
             const oai = normalizeClaudeResponseToOAI(anthropicJson);
             const oaiBytes = new TextEncoder().encode(JSON.stringify(oai));
             ctx.emit.chunk(oaiBytes);

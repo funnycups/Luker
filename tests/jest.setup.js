@@ -175,6 +175,7 @@ if (typeof globalThis.Luker === 'undefined') {
             addLocaleData: () => {},
             // capability detection sentinels
             createMessageEditorHandle: null,
+            activityGuard: null,
             registerExtensionApi: () => {},
             stateErrors,
             decodeCardBoundOptionValue: presetRefCodecMod.decodeCardBoundOptionValue,

@@ -2,7 +2,7 @@ import './_mocks/luker-zh.js';
 import { test, expect } from '@jest/globals';
 import {
     buildModel, parseEventSummary, isPlaceholderTitle, searchNodes, visibleSubgraph, buildChapters,
-    defaultFilters, neighborsOf, entitiesOfEvent, contextState, formatFloor, isDefaultFilters,
+    defaultFilters, nodePassesFilters, neighborsOf, entitiesOfEvent, eventsOfEntity, contextState, formatFloor, isDefaultFilters,
 } from '../../../public/scripts/extensions/memory-graph/lens/model.js';
 import { forceLayout, chronoLayout, nodeRadius } from '../../../public/scripts/extensions/memory-graph/lens/graph/layout.js';
 import { createMockSnapshot, createLargeSnapshot } from './_mocks/mock-data.js';
@@ -148,6 +148,42 @@ test('flattened summaries (whitespace-collapsed by memory-graph) still parse', (
     expect(plain.prose.length).toBe(1);
 });
 
+test('flattened CJK summaries keep arrow-separated and parenthesized places intact', () => {
+    const moved = parseEventSummary('时间: 9月16日 地点: 北岭·石洞 → 白崖堡·主殿 晨间启程后，旅人沿着山道前行。');
+    expect(moved.place).toBe('北岭·石洞 → 白崖堡·主殿');
+    expect(moved.prose).toEqual(['晨间启程后，旅人沿着山道前行。']);
+
+    const movedWithSub = parseEventSummary('时间: 9月18日 地点: 北岭·石洞 → 白崖堡·望海楼（西厢、后院、回廊） 两人在廊下争执不休。');
+    expect(movedWithSub.place).toBe('北岭·石洞 → 白崖堡·望海楼（西厢、后院、回廊）');
+    expect(movedWithSub.prose).toEqual(['两人在廊下争执不休。']);
+
+    const longParen = parseEventSummary('时间: 9月19日 地点: 白崖堡·望海楼（观星台、西厢、地下石室、正厅主殿） 夜色降临后，海面雾气散去。');
+    expect(longParen.place).toBe('白崖堡·望海楼（观星台、西厢、地下石室、正厅主殿）');
+    expect(longParen.prose).toEqual(['夜色降临后，海面雾气散去。']);
+
+    const spacedParen = parseEventSummary('时间: 9月19日 地点: 望海楼 （西厢、回廊） 众人返回驻地。');
+    expect(spacedParen.place).toBe('望海楼 （西厢、回廊）');
+    expect(spacedParen.prose).toEqual(['众人返回驻地。']);
+
+    const placeOnly = parseEventSummary('时间: 9月19日 地点: 北岭石洞 → 望海楼');
+    expect(placeOnly.place).toBe('北岭石洞 → 望海楼');
+    expect(placeOnly.prose).toEqual([]);
+});
+
+test('related edges are treated as undirected symmetric edges in buildModel', () => {
+    const model = buildModel({
+        nodes: [
+            { id: 'c1', type: 'character_sheet', title: '甲' },
+            { id: 'c2', type: 'character_sheet', title: '乙' },
+        ],
+        edges: [
+            { from: 'c1', to: 'c2', type: 'related' },
+        ],
+    });
+    expect(model.edges.length).toBe(1);
+    expect(model.edges[0].directed).toBe(false);
+});
+
 test('neighbors and event entities', () => {
     const model = buildModel(createMockSnapshot());
     const { characters, locations } = entitiesOfEvent(model, 'e14');
@@ -157,6 +193,35 @@ test('neighbors and event entities', () => {
     expect(linNeighbors.some(n => n.node.id === 'c_wen' && n.direction === 'both')).toBeTruthy();
     expect(linNeighbors.some(n => n.node.id === 'c_gu' && n.edge.type === 'deceiving' && n.direction === 'in')).toBeTruthy();
     expect(!neighborsOf(model, 'r1_a').some(n => n.edge.internal)).toBeTruthy();
+});
+
+test('eventsOfEntity deduplicates multi-relation events and aggregates unique relations', () => {
+    const model = buildModel({
+        nodes: [
+            { id: 't1', type: 'thread', title: '夺宝', seq_to: 30, fields: { status: 'active', note: '进行中' } },
+            { id: 'e1', type: 'event', title: '初遇', seq_to: 10, fields: { summary: '初遇。' } },
+            { id: 'e2', type: 'event', title: '再战', seq_to: 20, fields: { summary: '再战。' } },
+            { id: 'e3', type: 'event', title: '收尾', seq_to: 30, fields: { summary: '收尾。' } },
+            { id: 'c1', type: 'character_sheet', title: '甲', seq_to: 30, fields: {} },
+        ],
+        edges: [
+            { from: 'e1', to: 't1', type: 'advances' },
+            { from: 'e2', to: 't1', type: 'updates' },
+            { from: 'e2', to: 't1', type: 'advances' },
+            { from: 'e3', to: 't1', type: 'advances' },
+            { from: 't1', to: 'e3', type: 'advances' },
+            { from: 'e3', to: 't1', type: 'updates' },
+            { from: 't1', to: 'e3', type: 'updates' },
+            { from: 'c1', to: 't1', type: 'related' },
+        ],
+    });
+    const list = eventsOfEntity(model, 't1');
+    expect(list.map(entry => entry.node.id)).toEqual(['e1', 'e2', 'e3']);
+    expect(list.map(entry => entry.relations)).toEqual([
+        ['advances'],
+        ['advances', 'updates'],
+        ['advances', 'updates'],
+    ]);
 });
 
 test('filters: types, depth, archived, context, hierarchy', () => {
@@ -303,4 +368,51 @@ test('buildChapters handles cyclic parentId/childrenIds without infinite recursi
     expect(chapters[0].node.id).toBe('r0');
     expect(chapters[0].leafCount).toBe(1);
     expect(loose).toEqual([]);
+});
+
+test('non-event rollups are indexed, placeholder titles resolved, filtered by depth, and excluded from buildChapters', () => {
+    expect(isPlaceholderTitle('难忘瞬间 Summary L1 #1')).toBe(true);
+    expect(isPlaceholderTitle('Summary of the battle')).toBe(false);
+    expect(isPlaceholderTitle('第一卷总结')).toBe(false);
+
+    const model = buildModel({
+        nodes: [
+            { id: 'm1', type: 'moment', title: '海边初约', fields: { summary: '初约。' }, seq_to: 1 },
+            {
+                id: 'mr1',
+                type: 'moment',
+                semantic_rollup: true,
+                semantic_depth: 1,
+                title: '难忘瞬间 Summary L1 #1',
+                fields: { summary: '从海边初约到天台告白。两人确立关系。' },
+                seq_to: 2,
+                children_ids: ['m1'],
+            },
+            { id: 'c1', type: 'character_sheet', title: '林栖', fields: { note: '主角' }, seq_to: 1 },
+            { id: 'e1', type: 'event', title: '灯塔夜巡', fields: { summary: '灯塔夜巡。' }, seq_to: 3 },
+        ],
+        edges: [],
+    });
+
+    const rollup = model.nodes.get('mr1');
+    expect(rollup.isRollup).toBe(true);
+    expect(rollup.depth).toBe(1);
+    expect(rollup.title).toBe('从海边初约到天台告白。');
+    expect(rollup.autoTitle).toBe('难忘瞬间 Summary L1 #1');
+    expect(model.rollupTypes.has('moment')).toBe(true);
+
+    const base = defaultFilters();
+    const rollupFilter = { ...base, depth: 'rollup' };
+    expect(nodePassesFilters(model, rollup, rollupFilter)).toBe(true);
+    expect(nodePassesFilters(model, model.nodes.get('m1'), rollupFilter)).toBe(false);
+    expect(nodePassesFilters(model, model.nodes.get('c1'), rollupFilter)).toBe(true);
+
+    const leafFilter = { ...base, depth: 'leaf' };
+    expect(nodePassesFilters(model, rollup, leafFilter)).toBe(false);
+    expect(nodePassesFilters(model, model.nodes.get('m1'), leafFilter)).toBe(true);
+    expect(nodePassesFilters(model, model.nodes.get('c1'), leafFilter)).toBe(true);
+
+    const { chapters, loose } = buildChapters(model, base);
+    expect(chapters).toEqual([]);
+    expect(loose.map(entry => entry.node.id)).toEqual(['e1']);
 });

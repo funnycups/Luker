@@ -420,10 +420,32 @@ export function upsertAgendaTodo(state, nextTodo) {
     });
 }
 
-export function buildAgendaSharedContextText(context, payload, messages) {
+/**
+ * Resolve effective Agenda runtime limits from `profile.limits` with legacy
+ * global settings fallback when omitted or invalid.
+ *
+ * @param {object|null} profile
+ * @param {object|null} settings
+ * @returns {{ plannerMaxRounds: number, maxConcurrentAgents: number, maxTotalRuns: number }}
+ */
+export function resolveAgendaLimits(profile = null, settings = extension_settings[MODULE_NAME]) {
+    const limits = profile?.limits && typeof profile.limits === 'object' ? profile.limits : {};
+    const pickPositiveInt = (candidate, fallback) => {
+        const n = Math.floor(Number(candidate));
+        return Number.isFinite(n) && n >= 1 ? n : fallback;
+    };
+    return {
+        plannerMaxRounds: pickPositiveInt(limits.plannerMaxRounds, getAgendaPlannerMaxRounds(settings)),
+        maxConcurrentAgents: pickPositiveInt(limits.maxConcurrentAgents, getAgendaMaxConcurrentAgents(settings)),
+        maxTotalRuns: pickPositiveInt(limits.maxTotalRuns, getAgendaMaxTotalRuns(settings)),
+    };
+}
+
+export function buildAgendaSharedContextText(context, payload, messages, profile = null) {
     const settings = extension_settings[MODULE_NAME];
     const recent = buildAgendaRecentChatText(messages, settings);
     const lastUserText = buildAgendaLastUserText(messages);
+    const limits = resolveAgendaLimits(profile, settings);
     return [
         '## shared_context',
         '### recent_chat',
@@ -437,9 +459,9 @@ export function buildAgendaSharedContextText(context, payload, messages) {
         '### runtime_limits',
         '```yaml',
         toReadableYamlText({
-            planner_max_rounds: getAgendaPlannerMaxRounds(settings),
-            max_concurrent_agents: getAgendaMaxConcurrentAgents(settings),
-            max_total_runs: getAgendaMaxTotalRuns(settings),
+            planner_max_rounds: limits.plannerMaxRounds,
+            max_concurrent_agents: limits.maxConcurrentAgents,
+            max_total_runs: limits.maxTotalRuns,
             node_iteration_max_rounds: getNodeIterationMaxRounds(settings),
             review_rerun_max_rounds: getReviewRerunMaxRounds(settings),
         }, '{}'),
@@ -564,9 +586,9 @@ export function normalizeAgendaDispatches(state, plannerStep = {}, profile = {},
             inputRunIds,
         });
     }
-    const maxConcurrent = getAgendaMaxConcurrentAgents(settings);
-    const remainingRunBudget = Math.max(0, getAgendaMaxTotalRuns(settings) - Number(state?.runs?.length || 0));
-    return dispatches.slice(0, Math.min(maxConcurrent, remainingRunBudget));
+    const { maxConcurrentAgents, maxTotalRuns } = resolveAgendaLimits(profile, settings);
+    const remainingRunBudget = Math.max(0, maxTotalRuns - Number(state?.runs?.length || 0));
+    return dispatches.slice(0, Math.min(maxConcurrentAgents, remainingRunBudget));
 }
 
 export async function runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal = null) {
@@ -583,7 +605,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
             previousOrchestration,
             approvedReviewFeedbackEntries: [],
         }),
-        buildAgendaSharedContextText(context, payload, messages),
+        buildAgendaSharedContextText(context, payload, messages, profile),
         buildAgendaAvailableAgentsText(profile),
         buildAgendaTodosText(state?.todos),
         buildAgendaRunsText(state?.runs),
@@ -749,7 +771,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         String(dispatch?.taskBrief || ''),
         '```',
         finalReason ? ['## finalize_reason', '```text', String(finalReason || ''), '```'].join('\n') : '',
-        buildAgendaSharedContextText(context, payload, messages),
+        buildAgendaSharedContextText(context, payload, messages, profile),
         buildAgendaRunsText(state?.runs, selectedRunIds),
         [
             '## agenda_mode_output_override',
@@ -1136,7 +1158,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     // the registry holds).
     const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordRuntimeEvent);
     syncAgendaTrace(trace, state);
-    const plannerMaxRounds = Math.max(1, Math.floor(Number(profile?.limits?.plannerMaxRounds) || getAgendaPlannerMaxRounds(settings)));
+    const { plannerMaxRounds, maxTotalRuns } = resolveAgendaLimits(profile, settings);
     let finalizeReason = '';
 
     try {
@@ -1270,7 +1292,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             }));
             state.runs.push(...newRuns);
             syncAgendaTrace(trace, state);
-            if (state.runs.length >= getAgendaMaxTotalRuns(settings)) {
+            if (state.runs.length >= maxTotalRuns) {
                 finalizeReason = 'Reached maxTotalRuns limit. Finalizing with collected work.';
                 break;
             }

@@ -72,6 +72,7 @@ export function showUndoToast({ message, title = '', timeoutMs = DEFAULT_UNDO_TO
         extendedTimeOut: 0,
         tapToDismiss: false,
         closeButton: false,
+        minimizable: false,
         progressBar: false,
     });
 

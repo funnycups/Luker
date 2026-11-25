@@ -1,7 +1,15 @@
 import { renderExtensionTemplateAsync } from '../../../extensions.js';
-import { t } from '../../../i18n.js';
+import { t, translate } from '../../../i18n.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { clamp } from '../../../utils.js';
+import { mountBehaviorSummary } from '../../../lens-shared/behavior-summary.js';
+import { prefersReducedMotion } from '../../../lens-shared/util.js';
+import { computeImageCapabilities } from '../capabilities.js';
+import {
+    buildIllustrationMainSummary,
+    buildIllustrationProfileAgentSummary,
+} from '../behavior-summary-models.js';
+import { findCharacterImageConflict } from './task.js';
 import {
     ILLUSTRATION_NUMBER_RULES,
     addPresetFromCurrent,
@@ -15,6 +23,51 @@ import { openLegacyCharacterDesignMigrationDialog } from './legacy-migration-dia
 import { DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';
 
 const CONTAINER_ID = 'sd_illustration_container';
+const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
+
+const ILLUSTRATION_MAIN_SUMMARY_FIELDS = Object.freeze({
+    enabled: { selector: '#sd_illustration_enabled', highlight: '.checkbox_label' },
+    autoGenerate: { selector: '#sd_illustration_auto_generate', highlight: '.checkbox_label' },
+    preset: { selector: '#sd_illustration_preset', highlight: '.sd_illustration_row' },
+    apiPresetName: { selector: '#sd_illustration_api_preset', highlight: '.sd_illustration_row' },
+    llmPresetName: { selector: '#sd_illustration_llm_preset', highlight: '.sd_illustration_row' },
+    contextMessageCount: { selector: '#sd_illustration_context_count', highlight: '.sd_illustration_row' },
+    maxConcurrentGenerations: { selector: '#sd_illustration_max_concurrent', highlight: '.sd_illustration_row' },
+    minGenerationInterval: { selector: '#sd_illustration_min_interval', highlight: '.sd_illustration_row' },
+    imageDisplayWidth: { selector: '#sd_illustration_display_width', highlight: '.sd_illustration_row' },
+});
+
+const ILLUSTRATION_PROFILE_AGENT_SUMMARY_FIELDS = Object.freeze({
+    visualInspection: { selector: '#sd_illustration_visual_inspection', highlight: '.checkbox_label' },
+    explorationApiPreset: { selector: '#sd_illustration_exploration_api_preset', highlight: '.sd_illustration_row' },
+    explorationLlmPreset: { selector: '#sd_illustration_exploration_llm_preset', highlight: '.sd_illustration_row' },
+});
+
+function isElementHidden(el) {
+    if (!el) return false;
+    if (el.hidden || el.style?.display === 'none') return true;
+    return globalThis.getComputedStyle?.(el)?.display === 'none';
+}
+
+function expandDrawerChain(targetEl) {
+    const ancestors = [];
+    for (let node = targetEl?.parentElement || null; node; node = node.parentElement) {
+        ancestors.push(node);
+    }
+    ancestors.reverse();
+    for (const node of ancestors) {
+        if (node.tagName === 'DETAILS' && !node.open) {
+            node.open = true;
+        }
+        if (node.classList?.contains('inline-drawer')) {
+            const content = node.querySelector(':scope > .inline-drawer-content');
+            if (content && content.contains(targetEl) && isElementHidden(content)) {
+                const toggle = node.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
+                toggle?.click();
+            }
+        }
+    }
+}
 
 function currentPreset(settings) {
     return getPresetById(settings, settings.currentPresetId);
@@ -24,7 +77,13 @@ function escapeOption(value) {
     return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export async function initSettingsUi({ settings, saveSettings, context, onEnabledChange }) {
+export async function initSettingsUi({
+    settings,
+    saveSettings,
+    context,
+    onEnabledChange,
+    getCapabilitiesSnapshot = null,
+}) {
     if (document.getElementById(CONTAINER_ID)) {
         return;
     }
@@ -32,6 +91,7 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     const html = await renderExtensionTemplateAsync('stable-diffusion', 'illustration-settings');
     $('#sd_container').append(html);
 
+    const containerEl = document.getElementById(CONTAINER_ID);
     const presetSelect = $('#sd_illustration_preset');
     const styleSelect = $('#sd_illustration_prompt_style');
     const legacyDesignNotice = $('#sd_illustration_legacy_design_notice');
@@ -52,6 +112,116 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     ];
     let presetSavePending = false;
     let emptyPresetStyle = '';
+    let mainSummary = null;
+    let profileAgentSummary = null;
+    let externalPulseTarget = null;
+    let externalPulseTimer = null;
+
+    const clearExternalPulse = () => {
+        if (externalPulseTimer !== null) {
+            clearTimeout(externalPulseTimer);
+            externalPulseTimer = null;
+        }
+        if (externalPulseTarget) {
+            externalPulseTarget.classList.remove('luker-bsum-field-pulse');
+            externalPulseTarget = null;
+        }
+    };
+
+    const focusSdCharacterReferenceCheckbox = () => {
+        const target = document.getElementById('sd_character_reference_enabled');
+        if (!target) {
+            return false;
+        }
+        expandDrawerChain(target);
+        const wrapper = target.closest('.checkbox_label') || target;
+        if (typeof wrapper.scrollIntoView === 'function') {
+            wrapper.scrollIntoView({
+                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+                block: 'nearest',
+            });
+        }
+        if (typeof target.focus === 'function') {
+            target.focus({ preventScroll: true });
+        }
+        clearExternalPulse();
+        void wrapper.offsetWidth;
+        wrapper.classList.add('luker-bsum-field-pulse');
+        externalPulseTarget = wrapper;
+        externalPulseTimer = setTimeout(() => {
+            clearExternalPulse();
+        }, PULSE_DURATION_MS);
+        return true;
+    };
+
+    const resolveCapabilities = () => {
+        if (typeof getCapabilitiesSnapshot === 'function') {
+            return getCapabilitiesSnapshot() || null;
+        }
+        const sdSettings = context?.extensionSettings?.sd;
+        return sdSettings && typeof sdSettings === 'object'
+            ? computeImageCapabilities(sdSettings)
+            : null;
+    };
+
+    const refreshSummaries = () => {
+        mainSummary?.refresh();
+        profileAgentSummary?.refresh();
+    };
+
+    const readMainSummaryState = (rootEl) => {
+        const preset = currentPreset(settings);
+        const capabilities = resolveCapabilities();
+        const readCheckbox = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? Boolean(el.checked) : Boolean(fallback);
+        };
+        const readValue = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? String(el.value ?? '') : String(fallback ?? '');
+        };
+        return {
+            enabled: readCheckbox('#sd_illustration_enabled', settings.enabled),
+            autoGenerate: readCheckbox('#sd_illustration_auto_generate', settings.autoGenerate),
+            hasPreset: Boolean(preset),
+            presetName: preset ? String(preset.name || '') : '',
+            apiPresetName: preset ? readValue('#sd_illustration_api_preset', preset.llm?.apiPresetName || '') : '',
+            llmPresetName: preset ? readValue('#sd_illustration_llm_preset', preset.llm?.llmPresetName || '') : '',
+            contextMessageCount: readValue('#sd_illustration_context_count', settings.contextMessageCount),
+            maxConcurrentGenerations: readValue('#sd_illustration_max_concurrent', settings.maxConcurrentGenerations),
+            minGenerationInterval: readValue('#sd_illustration_min_interval', settings.minGenerationInterval),
+            imageDisplayWidth: readValue('#sd_illustration_display_width', settings.imageDisplayWidth),
+            characterImageConflict: findCharacterImageConflict(capabilities),
+            translate,
+        };
+    };
+
+    const readProfileAgentSummaryState = (rootEl) => {
+        const preset = currentPreset(settings);
+        const capabilities = resolveCapabilities();
+        const charRefEl = document.getElementById('sd_character_reference_enabled');
+        const characterReferenceEnabled = charRefEl
+            ? Boolean(charRefEl.checked)
+            : Boolean(capabilities?.characterReferenceEnabled ?? context?.extensionSettings?.sd?.character_reference_enabled);
+        const readCheckbox = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? Boolean(el.checked) : Boolean(fallback);
+        };
+        const readValue = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? String(el.value ?? '') : String(fallback ?? '');
+        };
+        return {
+            characterReferenceEnabled,
+            canActivateCharacterReference: Boolean(charRefEl),
+            visualInspection: preset ? readCheckbox('#sd_illustration_visual_inspection', preset.visualInspection) : false,
+            explorationApiPreset: preset ? readValue('#sd_illustration_exploration_api_preset', preset.explorationLlm?.apiPresetName || '') : '',
+            explorationLlmPreset: preset ? readValue('#sd_illustration_exploration_llm_preset', preset.explorationLlm?.llmPresetName || '') : '',
+            illustrationApiPreset: preset ? readValue('#sd_illustration_api_preset', preset.llm?.apiPresetName || '') : '',
+            illustrationLlmPreset: preset ? readValue('#sd_illustration_llm_preset', preset.llm?.llmPresetName || '') : '',
+            translate,
+        };
+    };
 
     const refreshFields = () => {
         const preset = currentPreset(settings);
@@ -82,6 +252,7 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         llmPresetSelect.val(preset?.llm?.llmPresetName || '');
         expApiPresetSelect.val(preset?.explorationLlm?.apiPresetName || '');
         expLlmPresetSelect.val(preset?.explorationLlm?.llmPresetName || '');
+        refreshSummaries();
     };
 
     const reportSaveError = error => toastr.error(String(error?.message || error), t`Image Generation`);
@@ -134,6 +305,7 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         };
         apiPresetSelect.html(buildOpts(selected, t`(Current API config)`)).val(selected);
         expApiPresetSelect.html(buildOpts(expSelected, t`(Inherit illustration connection)`)).val(expSelected);
+        refreshSummaries();
     };
 
     const refreshLlmPresetOptions = () => {
@@ -154,6 +326,7 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         };
         llmPresetSelect.html(buildOpts(selected, t`(Current preset)`)).val(selected);
         expLlmPresetSelect.html(buildOpts(expSelected, t`(Inherit illustration preset)`)).val(expSelected);
+        refreshSummaries();
     };
 
     $('#sd_illustration_enabled').prop('checked', settings.enabled).on('input', function () {
@@ -391,15 +564,94 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     refreshLlmPresetOptions();
     refreshFields();
 
-    $(document).on('click', `#${CONTAINER_ID} .inline-drawer-toggle`, () => {
-        refreshConnectionOptions();
-        refreshLlmPresetOptions();
-    });
+    const summaryAbort = new AbortController();
+    const mainDrawerContent = containerEl?.querySelector('.inline-drawer-content');
+    if (containerEl && mainDrawerContent) {
+        mainSummary = mountBehaviorSummary({
+            id: 'sd-illustration-main',
+            root: containerEl,
+            anchor: mainDrawerContent,
+            position: 'prepend',
+            fields: ILLUSTRATION_MAIN_SUMMARY_FIELDS,
+            ariaLabel: translate('AI illustration behavior summary'),
+            readState: readMainSummaryState,
+            build: buildIllustrationMainSummary,
+        });
+    }
+
+    const profileDrawerContent = containerEl?.querySelector('#sd_illustration_profile_agent_drawer > .inline-drawer-content')
+        || containerEl?.querySelector('#sd_illustration_visual_inspection')?.closest('.inline-drawer-content');
+    if (containerEl && profileDrawerContent) {
+        profileAgentSummary = mountBehaviorSummary({
+            id: 'sd-illustration-profile-agent',
+            root: containerEl,
+            anchor: profileDrawerContent,
+            position: 'prepend',
+            fields: ILLUSTRATION_PROFILE_AGENT_SUMMARY_FIELDS,
+            ariaLabel: translate('Character profile agent behavior summary'),
+            readState: readProfileAgentSummaryState,
+            build: buildIllustrationProfileAgentSummary,
+            onTokenActivate: (fields) => {
+                if (fields.includes('characterReferenceEnabled')) {
+                    return focusSdCharacterReferenceCheckbox();
+                }
+                return false;
+            },
+        });
+    }
+
+    const sdContainerEl = document.getElementById('sd_container');
+    if (sdContainerEl) {
+        sdContainerEl.addEventListener('sd:capabilities-updated', () => {
+            refreshSummaries();
+        }, { signal: summaryAbort.signal });
+        for (const evtName of ['input', 'change']) {
+            sdContainerEl.addEventListener(evtName, (event) => {
+                const target = event.target;
+                if (!(target instanceof Element) || (containerEl && containerEl.contains(target))) {
+                    return;
+                }
+                if (
+                    target.id === 'sd_character_reference_enabled'
+                    || target.id === 'sd_character_reference_mode'
+                    || target.id === 'sd_source'
+                    || target.id === 'sd_model'
+                    || target.id === 'sd_comfy_type'
+                    || target.id === 'sd_comfy_workflow'
+                    || target.id === 'sd_style_references_enabled'
+                    || target.id === 'sd_generation_preset'
+                ) {
+                    refreshSummaries();
+                }
+            }, { signal: summaryAbort.signal });
+        }
+    }
+
+    if (containerEl) {
+        containerEl.addEventListener('click', (event) => {
+            if (event.target instanceof Element && event.target.closest('.inline-drawer-toggle')) {
+                refreshConnectionOptions();
+                refreshLlmPresetOptions();
+                refreshSummaries();
+            }
+        }, { signal: summaryAbort.signal });
+    }
+
+    const destroy = () => {
+        summaryAbort.abort();
+        clearExternalPulse();
+        mainSummary?.destroy();
+        profileAgentSummary?.destroy();
+        mainSummary = null;
+        profileAgentSummary = null;
+    };
 
     return {
         refreshPresetOptions,
         refreshConnectionOptions,
         refreshLlmPresetOptions,
         refreshFields,
+        refreshSummaries,
+        destroy,
     };
 }

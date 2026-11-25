@@ -7,7 +7,7 @@
 import { i18nFormat, listSeparator } from './i18n.js';
 
 export const INTERNAL_EDGE_TYPES = new Set(['contains', 'semantic_contains']);
-export const SYMMETRIC_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'hostile_to']);
+export const SYMMETRIC_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'hostile_to', 'related']);
 export const BOND_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'mentor_of', 'sworn_to', 'debt_owed_to']);
 export const CONFLICT_RELATIONS = new Set(['hostile_to', 'deceiving']);
 export const KNOWN_TYPE_ORDER = ['event', 'character_sheet', 'location_state', 'thread', 'rule_constraint'];
@@ -119,10 +119,21 @@ export function restoreSummaryLayout(text) {
 
 const SENTENCE_END = /[。！？!?；;，,.]/;
 const CJK = /[\u3000-\u9fff]/;
+const ANCHOR_CONNECTOR = /^(?:→|->|—>|=>|⇒|\/|至)$/;
+const LEADING_ARROW = /^(?:→|->|—>|=>|⇒)/;
+const TRAILING_ARROW = /(?:→|->|—>|=>|⇒)$/;
+const PAREN_TOKEN = /^[（(][^。！？!?；;]+[)）]$/;
+
+function isCjkAnchorToken(token) {
+    if (!token) return false;
+    const bare = token.replace(/[（(][^）)]*[)）]/g, '');
+    return !SENTENCE_END.test(bare);
+}
 
 /**
  * Split "<anchor value> <prose…>" that were flattened onto one line.
- * Heuristic: CJK anchor values are a single short token; Latin values are
+ * Heuristic: CJK anchor values are unpunctuated place/time tokens (optionally
+ * joined by arrows/connectors or parenthetical sub-locations); Latin values are
  * a run of Capitalized words, ending before a "Subject verb" pair.
  * Returns null when no confident split exists (the line is kept whole).
  */
@@ -130,8 +141,23 @@ function splitAnchorValue(rest) {
     const words = rest.split(/\s+/).filter(Boolean);
     if (words.length < 2) return null;
     if (CJK.test(words[0])) {
-        if (SENTENCE_END.test(words[0]) || words[0].length > 16) return null;
-        return [words[0], words.slice(1).join(' ')];
+        if (!isCjkAnchorToken(words[0])) return null;
+        let end = 1;
+        while (end < words.length) {
+            const cur = words[end];
+            if (ANCHOR_CONNECTOR.test(cur)) {
+                if (end + 1 >= words.length || !isCjkAnchorToken(words[end + 1])) break;
+                end += 2;
+                continue;
+            }
+            if (PAREN_TOKEN.test(cur) || ((LEADING_ARROW.test(cur) || TRAILING_ARROW.test(words[end - 1])) && isCjkAnchorToken(cur))) {
+                end += 1;
+                continue;
+            }
+            break;
+        }
+        if (end >= words.length) return null;
+        return [words.slice(0, end).join(' '), words.slice(end).join(' ')];
     }
     let end = 0;
     // cap-ok: header anchor phrase token span for flattened single-line summary recovery
@@ -197,7 +223,7 @@ export function parseEventSummary(raw) {
     return result;
 }
 
-const PLACEHOLDER_TITLE = /^(?:[\w\s-]*\s)?(?:summary|摘要)(?:\s+L\d+)?\s*#?\s*\d+$/i;
+const PLACEHOLDER_TITLE = /^(?:[^\n]*\s)?(?:summary|摘要)(?:\s+L\d+)?\s*#?\s*\d+$/i;
 
 export function isPlaceholderTitle(title) {
     return PLACEHOLDER_TITLE.test(str(title).trim());
@@ -220,12 +246,14 @@ function firstSentence(text, max = 42) {
  */
 export function buildModel(snapshot = {}) {
     const nodes = new Map();
+    const rollupTypes = new Set();
     for (const raw of toArray(snapshot.nodes)) {
         if (!raw || !raw.id) continue;
         const type = str(raw.type).trim() || 'unknown';
         if (type === 'recall' || type.startsWith('recall_')) continue;
         const fields = raw.fields && typeof raw.fields === 'object' ? { ...raw.fields } : {};
         const depth = Number.isFinite(Number(raw.semantic_depth)) ? Math.max(0, Math.floor(Number(raw.semantic_depth))) : 0;
+        const isRollup = Boolean(raw.semantic_rollup) || depth > 0;
         const floorRange = raw.floor_range && Number.isFinite(raw.floor_range.start) && Number.isFinite(raw.floor_range.end)
             ? { start: raw.floor_range.start, end: raw.floor_range.end }
             : null;
@@ -242,7 +270,7 @@ export function buildModel(snapshot = {}) {
             childrenIds: toArray(raw.children_ids).map(str).filter(Boolean),
             archived: Boolean(raw.archived),
             depth,
-            isRollup: type === 'event' && (Boolean(raw.semantic_rollup) || depth > 0),
+            isRollup,
             parsed: null,
             title: '',
             summaryText: '',
@@ -251,9 +279,9 @@ export function buildModel(snapshot = {}) {
         };
         node.summaryText = fieldText(fields.summary ?? fields.note ?? fields.state ?? '');
         if (type === 'event') node.parsed = parseEventSummary(node.summaryText);
-        // memory-graph auto-names events "Summary 3" / "Event Summary L1 #2";
-        // those carry no meaning, so prefer the prose's first sentence.
-        const placeholder = type === 'event' && isPlaceholderTitle(node.rawTitle);
+        // memory-graph auto-names rollups/events "Summary 3" / "Event Summary L1 #2";
+        // those carry no meaning, so prefer the summary prose's first sentence.
+        const placeholder = (type === 'event' || isRollup) && isPlaceholderTitle(node.rawTitle);
         node.title = (placeholder ? '' : node.rawTitle)
             || fieldText(fields.title)
             || (node.parsed ? firstSentence(node.parsed.prose[0] || node.summaryText) : '')
@@ -262,6 +290,7 @@ export function buildModel(snapshot = {}) {
             || node.id;
         node.autoTitle = placeholder ? node.rawTitle : '';
         node.searchText = [node.title, node.id, ...Object.values(fields).map(fieldText)].join('\n').toLowerCase();
+        if (node.isRollup) rollupTypes.add(node.type);
         nodes.set(node.id, node);
     }
 
@@ -370,6 +399,7 @@ export function buildModel(snapshot = {}) {
         adjacency,
         typeCounts: types,
         typeList,
+        rollupTypes,
         relationCounts: relations,
         injection,
         schemaColumns,
@@ -435,6 +465,34 @@ export function entitiesOfEvent(model, id) {
     return { characters, locations, threads };
 }
 
+const EVENT_RELATION_ORDER = ['advances', 'updates', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'related'];
+
+function compareEventRelations(a, b) {
+    const ai = EVENT_RELATION_ORDER.indexOf(a);
+    const bi = EVENT_RELATION_ORDER.indexOf(b);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.localeCompare(b);
+}
+
+/** Unique event neighbours of an entity with their aggregated relation types, chronologically ordered. */
+export function eventsOfEntity(model, id) {
+    const byId = new Map();
+    for (const item of neighborsOf(model, id)) {
+        if (item.node.type !== 'event') continue;
+        let entry = byId.get(item.node.id);
+        if (!entry) {
+            entry = { node: item.node, relations: [] };
+            byId.set(item.node.id, entry);
+        }
+        if (!entry.relations.includes(item.edge.type)) {
+            entry.relations.push(item.edge.type);
+        }
+    }
+    const out = [...byId.values()];
+    for (const entry of out) entry.relations.sort(compareEventRelations);
+    out.sort((a, b) => compareTimeline(a.node, b.node));
+    return out;
+}
+
 export function defaultFilters() {
     return {
         hiddenTypes: new Set(),
@@ -461,7 +519,7 @@ export function nodePassesFilters(model, node, filters) {
     if (!node) return false;
     if (filters.hiddenTypes.has(node.type)) return false;
     if (node.archived && !filters.showArchived) return false;
-    if (node.type === 'event') {
+    if (node.type === 'event' || model.rollupTypes?.has(node.type)) {
         if (filters.depth === 'leaf' && node.isRollup) return false;
         if (filters.depth === 'rollup' && !node.isRollup) return false;
     }

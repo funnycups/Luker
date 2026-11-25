@@ -4164,71 +4164,7 @@ grammarly-extension {
 }
 
 
-/* Override toastr default styles */
-body #toast-container {
-    margin-top: var(--topBarBlockSize);
-}
-
-body #toast-container>div {
-    opacity: 1;
-    filter: unset;
-    -ms-filter: unset;
-    padding: 10px 10px 10px 50px;
-    font-size: calc(var(--mainFontSize) * 0.95);
-    width: 300px;
-}
-
-body #toast-container>div.luker-persistent-toast {
-    cursor: pointer;
-}
-
-body #toast-container .toast.toast-non-interactable {
-    cursor: default;
-}
-
-body #toast-container .toast-success {
-    background-color: #5d9e5d;
-}
-
-body #toast-container .toast-error {
-    background-color: #a83c36;
-}
-
-body #toast-container .toast-info {
-    background-color: #4092aa;
-}
-
-body #toast-container .toast-warning {
-    background-color: #e29325;
-}
-
-/* Global `small { color: var(--SmartThemeBodyColor); opacity: 0.7 }` renders
-   as low-contrast grey on the colored toast backgrounds. Override inside
-   toasts so detail lines stay readable across themes. */
-body #toast-container > div small {
-    color: #fff;
-    opacity: 0.92;
-}
-
-button.toast-close-button {
-    padding-right: 5px;
-    padding-top: 3px;
-}
-
-.menu_button.prompt-manager-toggle-undo-button,
-.menu_button.luker-toast-stop-button {
-    width: auto;
-    min-width: max-content;
-    max-width: 100%;
-    white-space: nowrap;
-    display: inline-flex;
-    writing-mode: horizontal-tb;
-    text-orientation: mixed;
-}
-
-.menu_button.luker-toast-stop-button {
-    margin-top: 8px;
-}
+/* Toast presentation lives in public/css/luker-toast.css. */
 
 #debug-export-btn {
     width: auto;

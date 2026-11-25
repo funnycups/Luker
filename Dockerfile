@@ -14,6 +14,12 @@ RUN chown node:node ${APP_HOME}
 # Set NODE_ENV to production
 ENV NODE_ENV=production
 
+# Optional git metadata injected at container build time (since .git is excluded)
+ARG LUKER_GIT_REVISION=""
+ARG LUKER_GIT_BRANCH=""
+ENV LUKER_GIT_REVISION=${LUKER_GIT_REVISION} \
+    LUKER_GIT_BRANCH=${LUKER_GIT_BRANCH}
+
 # Bundle app source and set ownership
 COPY --chown=node:node . ./
 

@@ -627,7 +627,8 @@ describe('Layer B: topology navigation (spec §4.3)', () => {
 
     test('projectEdges({visibleNodeIds}) returns EdgeViews with weight, excludeInternal default true', () => {
         // visibleNodeIds = [evt_rollup1, char_alice, loc_castle].
-        // Raw 'related' edge evt_leaf_a -> char_alice projects to evt_rollup1 -> char_alice.
+        // Raw 'related' edge evt_leaf_a -> char_alice projects to evt_rollup1 <-> char_alice
+        // and canonicalizes endpoint order ('char_alice' < 'evt_rollup1') because 'related' is symmetric.
         // Raw 'related' edge evt_leaf_c -> char_alice: evt_leaf_c has no parent → walks to itself (not in
         // visible) → drops because no visible ancestor.
         // Raw 'mentions' edge char_alice -> loc_castle → char_alice -> loc_castle (both visible).
@@ -635,7 +636,7 @@ describe('Layer B: topology navigation (spec §4.3)', () => {
         const result = api.projectEdges({ visibleNodeIds: ['evt_rollup1', 'char_alice', 'loc_castle'] });
         const triples = result.map(e => ({ from: e.from, to: e.to, type: e.type }));
         expect(triples).toEqual(expect.arrayContaining([
-            { from: 'evt_rollup1', to: 'char_alice', type: 'related' },
+            { from: 'char_alice', to: 'evt_rollup1', type: 'related' },
             { from: 'char_alice', to: 'loc_castle', type: 'mentions' },
         ]));
         // Internal edge types excluded by default.

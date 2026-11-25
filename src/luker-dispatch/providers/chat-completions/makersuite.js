@@ -441,6 +441,23 @@ export async function dispatchMakerSuite(ctx) {
             /** @type {any} */
             const generateResponseJson = await generateResponse.json();
 
+            // Some proxies and upstream gateways return HTTP 200 with a JSON
+            // error payload (e.g. after flushing headers for non-streaming
+            // keep-alive). Forward the error body intact instead of falling
+            // through to candidate normalization and fabricating an empty reply.
+            const errorPayload = (generateResponseJson && typeof generateResponseJson === 'object' && !Array.isArray(generateResponseJson) && generateResponseJson.error)
+                ? generateResponseJson
+                : (Array.isArray(generateResponseJson) && generateResponseJson[0] && typeof generateResponseJson[0] === 'object' && generateResponseJson[0].error
+                    ? generateResponseJson[0]
+                    : null);
+            if (errorPayload) {
+                console.warn(`${apiName} API returned HTTP 200 with error payload`, generateResponseJson);
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(errorPayload)));
+                ctx.emit.end();
+                try { ctx.inspection.complete(errorPayload, generateResponseJson); } catch { /* inspection best-effort */ }
+                return;
+            }
+
             const candidates = generateResponseJson?.candidates;
             const hasBlockedFinishReason = (() => {
                 const raw = String(candidates?.[0]?.finishReason || '').toUpperCase();

@@ -3,7 +3,7 @@
  */
 import './_mocks/luker-zh.js';
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { withMissing, withMissingProfiles, formatCadenceSummary } from '../../../public/scripts/extensions/memory-graph/lens/settings/settings-model.js';
+import { withMissing, withMissingProfiles } from '../../../public/scripts/extensions/memory-graph/lens/settings/settings-model.js';
 import { createSettingsView } from '../../../public/scripts/extensions/memory-graph/lens/settings/settings-view.js';
 import { createMemoryAskProvider, createMemorySuggestRuleProvider } from '../../../public/scripts/extensions/memory-graph/lens/providers.js';
 
@@ -119,19 +119,6 @@ describe('settings-model helpers', () => {
             { value: 'B', label: 'B (missing)' },
         ]);
     });
-
-    test('formatCadenceSummary produces a deterministic factual summary', () => {
-        const text = formatCadenceSummary({
-            updateEvery: 2,
-            extractBatchTurns: 3,
-            extractContextTurns: 5,
-            extractExcludeRecentTurns: 1,
-        });
-        expect(text).toContain('2');
-        expect(text).toContain('3');
-        expect(text).toContain('5');
-        expect(text).toContain('1');
-    });
 });
 
 describe('settings-view UX reorganization & bug fixes', () => {
@@ -174,11 +161,13 @@ describe('settings-view UX reorganization & bug fixes', () => {
                 status: () => 'Idle',
                 onStatus: () => () => {},
                 stats: () => ({ nodeCount: 10, edgeCount: 4, messageCount: 8, sourceMessageCount: 8, levelCount: { semantic: 10 } }),
-                latestSeq: () => 5,
+                latestSeq: () => 3,
+                rebuildRange: overrides.rebuildRange || (() => ({ latestSeq: 3, minFloor: 0, maxFloor: 4, assistantFloors: [0, 2, 4] })),
                 stop: jest.fn(),
                 fill: overrides.fill || jest.fn(async () => {}),
                 rebuild: jest.fn(async () => {}),
-                rebuildRecent: jest.fn(async () => {}),
+                rebuildRecent: overrides.rebuildRecent || jest.fn(async () => {}),
+                rebuildFromFloor: overrides.rebuildFromFloor || jest.fn(async () => {}),
                 compress: jest.fn(async () => {}),
                 reset: jest.fn(async () => {}),
                 vectors: jest.fn(async () => {}),
@@ -201,10 +190,10 @@ describe('settings-view UX reorganization & bug fixes', () => {
         return { app, source, view, snap, listeners, onDirtyChange };
     }
 
-    test('groups settings into 4 lifecycle sections with collapsed technical tuning', () => {
+    test('groups settings into 5 lifecycle sections with standalone extraction-mode and collapsed technical tuning', () => {
         const { view } = mountSettingsView();
         const sections = [...view.el.querySelectorAll('[data-settings-section]')].map(el => el.dataset.settingsSection);
-        expect(sections).toEqual(['extraction', 'recall', 'operations', 'technical']);
+        expect(sections).toEqual(['extraction', 'extraction-mode', 'recall', 'operations', 'technical']);
 
         const techDetails = view.el.querySelector('[data-settings-section="technical"]');
         expect(techDetails.tagName).toBe('DETAILS');
@@ -226,7 +215,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(llmView.el.querySelector('[data-field-key="includeWorldInfoWithPreset"]')).toBeNull();
     });
 
-    test('renders 2x3 preset grid, live animated visualizer, and unified summary with no inline cadence inputs', () => {
+    test('renders 2x3 preset grid, live animated visualizer, and live Style A behavioral summary with no inline cadence inputs', () => {
         const { view } = mountSettingsView();
         const presetCards = [...view.el.querySelectorAll('[data-cadence-preset]')];
         expect(presetCards.map(el => el.dataset.cadencePreset)).toEqual(['every_1', 'balanced', 'saver', 'long_window', 'no_hide']);
@@ -234,12 +223,21 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(view.el.querySelector('[data-cadence-custom]')).toBeTruthy();
         expect(view.el.querySelector('.ml-cadence-demo')).toBeTruthy();
 
-        const summary = view.el.querySelector('.ml-settings-cadence-summary');
+        const summary = view.el.querySelector('[data-settings-section="extraction"] .luker-bsum');
         expect(summary).toBeTruthy();
         expect(summary.textContent).toContain('2');
         expect(summary.textContent).toContain('5');
+        expect(view.el.querySelector('.ml-settings-cadence-summary')).toBeNull();
+        expect(view.el.querySelector('.ml-settings-gap-warning')).toBeNull();
         expect(view.el.querySelector('[data-settings-section="extraction"] [data-field-key="updateEvery"]')).toBeNull();
         expect(view.el.querySelector('[data-settings-section="extraction"] [data-field-key="extractBatchTurns"]')).toBeNull();
+
+        // Replaced static notes in Sections 2 and 3 are removed cleanly
+        expect(view.el.querySelector('[data-settings-section="extraction-mode"] .ml-settings-note')).toBeNull();
+        expect(view.el.querySelector('[data-settings-section="recall"] .ml-settings-note')).toBeNull();
+        expect(view.el.querySelector('[data-settings-section="extraction-mode"] .luker-bsum')).toBeTruthy();
+        expect(view.el.querySelector('[data-settings-section="recall"] .luker-bsum')).toBeTruthy();
+        expect(view.el.querySelector('[data-settings-section="technical"] .luker-bsum')).toBeTruthy();
     });
 
     test('clicking a preset card marks sticky bar dirty with count and Discard reverts to clean', () => {
@@ -263,7 +261,44 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(view.el.querySelector('[data-cadence-preset="balanced"]').getAttribute('aria-pressed')).toBe('true');
     });
 
-    test('Custom card opens modal with all cadence/visibility/crawl inputs, live gap warning, and Cancel/Apply behavior', async () => {
+    test('renders extraction mode and crawl inputs in standalone section independent of cadence presets', () => {
+        const { view } = mountSettingsView();
+        const modeSection = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        expect(modeSection).toBeTruthy();
+        expect(modeSection.querySelector('[data-field-key="extractMode"] select').value).toBe('oneshot');
+        expect(modeSection.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeNull();
+        expect(modeSection.querySelector('[data-field-key="extractCrawlCandidateLimit"]')).toBeNull();
+        expect(modeSection.querySelector('[data-field-key="extractCrawlMaxReads"]')).toBeNull();
+
+        // Switching to crawl reveals all 3 crawl inputs and marks sticky bar dirty
+        const modeSelect = modeSection.querySelector('[data-field-key="extractMode"] select');
+        modeSelect.value = 'crawl';
+        modeSelect.dispatchEvent(new Event('change'));
+
+        const updatedSection = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        const roundsInput = updatedSection.querySelector('[data-field-key="extractCrawlMaxRounds"] input');
+        const candInput = updatedSection.querySelector('[data-field-key="extractCrawlCandidateLimit"] input');
+        const readsInput = updatedSection.querySelector('[data-field-key="extractCrawlMaxReads"] input');
+        expect(roundsInput).toBeTruthy();
+        expect(candInput).toBeTruthy();
+        expect(readsInput).toBeTruthy();
+        expect(view.dirtyCount()).toBe(1);
+
+        // Editing a crawl input keeps focus and updates dirty count in place
+        readsInput.focus();
+        readsInput.value = '18';
+        readsInput.dispatchEvent(new Event('input'));
+        expect(document.activeElement).toBe(readsInput);
+        expect(view.dirtyCount()).toBe(2);
+
+        // Clicking a cadence preset leaves extractMode and crawl parameters untouched
+        view.el.querySelector('[data-cadence-preset="saver"]').click();
+        const afterPreset = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        expect(afterPreset.querySelector('[data-field-key="extractMode"] select').value).toBe('crawl');
+        expect(afterPreset.querySelector('[data-field-key="extractCrawlMaxReads"] input').value).toBe('18');
+    });
+
+    test('Custom card opens modal with only cadence/visibility inputs, live gap warning, and Cancel/Apply behavior', async () => {
         const { app, view } = mountSettingsView();
         view.el.querySelector('[data-cadence-custom]').click();
 
@@ -276,12 +311,9 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(modal.querySelector('[data-field-key="extractExcludeRecentTurns"] input')).toBeTruthy();
         expect(modal.querySelector('.ml-cadence-demo')).toBeTruthy();
 
-        // Crawl inputs hidden until extractMode === 'crawl'
+        // Extraction mode & crawl inputs live in their own section, not inside the cadence modal
+        expect(modal.querySelector('[data-field-key="extractMode"]')).toBeNull();
         expect(modal.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeNull();
-        const modeSelect = modal.querySelector('[data-field-key="extractMode"] select');
-        modeSelect.value = 'crawl';
-        modeSelect.dispatchEvent(new Event('change'));
-        expect(modal.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeTruthy();
 
         // Enter gapped combo (updateEvery = 3, llmVisibleRecentMessages = 3)
         const everyInput = modal.querySelector('[data-field-key="updateEvery"] input');
@@ -290,7 +322,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
         everyInput.dispatchEvent(new Event('input'));
         visInput.value = '3';
         visInput.dispatchEvent(new Event('input'));
-        expect(modal.querySelector('.ml-settings-gap-warning').hidden).toBe(false);
+        expect(modal.querySelector('.luker-bsum .luker-bsum-warn.is-warn')).toBeTruthy();
 
         // Apply writes to draft, highlights Custom card, shows gap warning in Section 1, and marks dirty
         const applyBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary') || b.classList.contains('ml-btn-primary'));
@@ -298,7 +330,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
         await flushMicrotasks();
         expect(app.root.querySelector('.ml-dialog')).toBeNull();
         expect(view.el.querySelector('[data-cadence-custom]').getAttribute('aria-pressed')).toBe('true');
-        expect(view.el.querySelector('.ml-settings-gap-warning').hidden).toBe(false);
+        expect(view.el.querySelector('[data-settings-section="extraction"] .luker-bsum .luker-bsum-warn.is-warn')).toBeTruthy();
         expect(view.dirtyCount()).toBeGreaterThan(0);
 
         // Reopen modal, tweak, then Cancel leaves draft unchanged
@@ -313,6 +345,85 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(view.dirtyCount()).toBe(countBefore);
         expect(view.el.querySelector('[data-cadence-custom]').textContent).toContain('3');
         view.destroy();
+    });
+
+    test('clicking cadence/hiding tokens in Section 1 opens Custom modal focused on that field and hovering highlights active preset card', () => {
+        const { app, view } = mountSettingsView();
+        const section1 = view.el.querySelector('[data-settings-section="extraction"]');
+        const activePreset = section1.querySelector('[data-cadence-preset="balanced"]');
+        const visibleTok = section1.querySelector('[data-bsum-fields="llmVisibleRecentMessages"]');
+        expect(visibleTok).toBeTruthy();
+
+        // Hovering cross-scope token highlights active preset card
+        visibleTok.dispatchEvent(new Event('pointerenter'));
+        expect(activePreset.classList.contains('luker-bsum-field-linked')).toBe(true);
+        visibleTok.dispatchEvent(new Event('pointerleave'));
+        expect(activePreset.classList.contains('luker-bsum-field-linked')).toBe(false);
+
+        // Clicking token opens Custom modal with summary card at top and focuses + pulses that input
+        visibleTok.click();
+        const modal = app.root.querySelector('.ml-dialog');
+        expect(modal).toBeTruthy();
+        expect(modal.querySelector('.ml-custom-cadence-modal .luker-bsum')).toBeTruthy();
+        const visWrap = modal.querySelector('[data-field-key="llmVisibleRecentMessages"]');
+        const visInput = visWrap.querySelector('input');
+        expect(document.activeElement).toBe(visInput);
+        expect(visWrap.classList.contains('luker-bsum-field-pulse')).toBe(true);
+
+        // Typing inside modal updates the modal summary live without stealing focus
+        visInput.value = '9';
+        visInput.dispatchEvent(new Event('input'));
+        expect(document.activeElement).toBe(visInput);
+        expect(modal.querySelector('.ml-custom-cadence-modal .luker-bsum').textContent).toContain('9');
+        view.destroy();
+    });
+
+    test('master enabled: false shows dormant notice in Enabled group while keeping Sections 1-5 live; enabled: true omits master notice from DOM; !recallEnabled keeps placement active', () => {
+        const { view: enabledView } = mountSettingsView({
+            snap: {
+                values: {
+                    enabled: true,
+                },
+            },
+        });
+        expect(enabledView.el.querySelector('[data-bsum-id="mg-master-notice"]')).toBeNull();
+
+        // Toggling Memory Graph off mounts mg-master-notice; toggling back on omits it again
+        const enabledSwitch = enabledView.el.querySelector('[data-field-key="enabled"][role="switch"]');
+        expect(enabledSwitch).toBeTruthy();
+        enabledSwitch.click();
+        const mountedNotice = enabledView.el.querySelector('[data-bsum-id="mg-master-notice"]');
+        expect(mountedNotice).toBeTruthy();
+        expect(mountedNotice.hidden).toBe(false);
+        expect(mountedNotice.classList.contains('is-dormant')).toBe(true);
+
+        enabledView.el.querySelector('[data-field-key="enabled"][role="switch"]').click();
+        expect(enabledView.el.querySelector('[data-bsum-id="mg-master-notice"]')).toBeNull();
+
+        const { view } = mountSettingsView({
+            snap: {
+                values: {
+                    enabled: false,
+                    recallEnabled: false,
+                    recallInjectPosition: 6,
+                },
+            },
+        });
+        const masterNotice = view.el.querySelector('[data-bsum-id="mg-master-notice"]');
+        expect(masterNotice).toBeTruthy();
+        expect(masterNotice.hidden).toBe(false);
+        expect(masterNotice.classList.contains('is-dormant')).toBe(true);
+
+        // Sections 1-3 remain live active cards
+        expect(view.el.querySelector('[data-settings-section="extraction"] .luker-bsum.is-active')).toBeTruthy();
+        expect(view.el.querySelector('[data-settings-section="extraction-mode"] .luker-bsum.is-active')).toBeTruthy();
+
+        // Recall section dims RAG controls when !recallEnabled but keeps placement controls un-dimmed
+        const recallSec = view.el.querySelector('[data-settings-section="recall"]');
+        expect(recallSec.querySelector('[data-field-key="recallMethod"]').classList.contains('luker-bsum-field-dormant')).toBe(true);
+        expect(recallSec.querySelector('[data-field-key="recallInjectPosition"]').classList.contains('luker-bsum-field-dormant')).toBe(false);
+        expect(recallSec.querySelector('[data-field-key="recallInjectDepth"]').classList.contains('luker-bsum-field-dormant')).toBe(false);
+        expect(recallSec.querySelector('[data-field-key="recallInjectRole"]').classList.contains('luker-bsum-field-dormant')).toBe(false);
     });
 
     test('editing a Technical input updates dirty bar in place without losing focus and clears when reverted', () => {
@@ -390,7 +501,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
 
         visInput.value = '';
         visInput.dispatchEvent(new Event('input'));
-        expect(modal.querySelector('.ml-settings-cadence-summary').textContent).toContain('7');
+        expect(modal.querySelector('.ml-custom-cadence-modal .luker-bsum').textContent).toContain('7');
 
         const applyBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary') || b.classList.contains('ml-btn-primary'));
         applyBtn.click();
@@ -447,6 +558,93 @@ describe('settings-view UX reorganization & bug fixes', () => {
         listeners[0]();
         const connSelect = view.el.querySelector('[data-field-key="extractApiPresetName"] select');
         expect([...connSelect.options].some(o => o.value === 'BrandNewProfile')).toBe(true);
+    });
+
+    test('partial rebuild modal supports both recent N turns and starting from floor N', async () => {
+        const rebuildRecent = jest.fn(async () => {});
+        const rebuildFromFloor = jest.fn(async () => {});
+        const { app, view } = mountSettingsView({ rebuildRecent, rebuildFromFloor });
+
+        const opsBtn = [...view.el.querySelectorAll('[data-settings-section="operations"] button')]
+            .find(b => b.dataset.rebuildRange === 'true');
+        expect(opsBtn).toBeTruthy();
+
+        // 1) Recent mode submits rebuildRecent(2)
+        opsBtn.click();
+        let modal = app.root.querySelector('.ml-dialog');
+        expect(modal).toBeTruthy();
+        const modeBtns = [...modal.querySelectorAll('.lw-seg-btn')];
+        expect(modeBtns).toHaveLength(2);
+        expect(modeBtns[0].getAttribute('aria-pressed')).toBe('true');
+
+        let input = modal.querySelector('input[type="number"]');
+        input.value = '2';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('2-4');
+
+        let okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildRecent).toHaveBeenCalledWith(2);
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+
+        // 2) Switch to from-floor mode, verify validation (blank & out-of-range), then submit floor 0 and user floor 1
+        opsBtn.click();
+        modal = app.root.querySelector('.ml-dialog');
+        modal.querySelectorAll('.lw-seg-btn')[1].click();
+        expect(modal.querySelectorAll('.lw-seg-btn')).toHaveLength(2);
+        expect(modal.querySelectorAll('.lw-seg-btn')[1].getAttribute('aria-pressed')).toBe('true');
+
+        input = modal.querySelector('input[type="number"]');
+        expect(input.min).toBe('0');
+        expect(input.max).toBe('4');
+        expect(input.value).toBe('4');
+
+        // Blank input must NOT coerce to 0
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+        okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).not.toHaveBeenCalled();
+        expect(app.notify).toHaveBeenCalled();
+        expect(app.root.querySelector('.ml-dialog')).toBeTruthy();
+
+        // Floor 0 is valid and invokes rebuildFromFloor(0)
+        app.notify.mockClear();
+        input.value = '0';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('0-4');
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).toHaveBeenCalledWith(0);
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+
+        // User floor 1 is valid and maps to 2 assistant turns (floors 1-4)
+        opsBtn.click();
+        modal = app.root.querySelector('.ml-dialog');
+        modal.querySelectorAll('.lw-seg-btn')[1].click();
+        input = modal.querySelector('input[type="number"]');
+        input.value = '1';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('1-4');
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('2');
+        okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).toHaveBeenCalledWith(1);
+    });
+
+    test('partial rebuild surfaces error when no assistant turns are rebuildable', () => {
+        const { app, view } = mountSettingsView({
+            rebuildRange: () => ({ latestSeq: 0, minFloor: 0, maxFloor: -1, assistantFloors: [] }),
+        });
+        const opsBtn = [...view.el.querySelectorAll('[data-settings-section="operations"] button')]
+            .find(b => b.dataset.rebuildRange === 'true');
+        expect(opsBtn).toBeTruthy();
+        opsBtn.click();
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+        expect(app.showToast).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: true }));
     });
 });
 

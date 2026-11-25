@@ -79,7 +79,7 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
 
         const lens = await openTechnicalSettings(page);
         const aiConfigBtn = lens.locator('[data-settings-section="operations"] button')
-            .filter({ hasText: /^(AI Configure Memory Graph|AI 配置记忆图|AI 配置記憶圖)$/ })
+            .filter({ hasText: /^(AI Edit Memory Graph Config|AI 编辑记忆图配置|AI 編輯記憶圖配置)$/ })
             .first();
         await expect(aiConfigBtn).toBeVisible();
 
@@ -100,7 +100,7 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         // Open Workbench AI iteration via the Memory Lens Operations button.
         await aiConfigBtn.click();
         const win = workbenchWindow(page);
-        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Memory graph|记忆图|記憶圖)$/);
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Memory graph config|记忆图配置|記憶圖配置)$/);
 
         // Batch 1: discovery → read → set recallMaxIterations = 5.
         mock.scriptToolCall({ name: 'mg_config_list_fields', arguments: {} });

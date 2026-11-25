@@ -71,12 +71,19 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         return popup.complete(POPUP_RESULT.AFFIRMATIVE).catch(() => {});
     }
 
+    function createActionAbortError(reason = 'Illustration action cancelled') {
+        const error = new Error(reason);
+        error.name = 'AbortError';
+        return error;
+    }
+
     async function generateChildRecord({
         messageId,
         parent,
         replaceRecord = parent,
         prompt,
         overrideReferences = undefined,
+        controller = new AbortController(),
     }) {
         const chatId = context.chatId;
         const message = context.chat?.[messageId];
@@ -94,7 +101,6 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         const beforeFingerprint = messageFingerprint(message);
         pipeline.cancelForMessage?.(messageId, swipeId);
         cancelForMessage(messageId, swipeId);
-        const controller = new AbortController();
         const controllerKey = `${messageId}:${swipeId}`;
         actionControllers.set(controllerKey, controller);
 
@@ -102,8 +108,14 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         let savedReferences = rawSavedReferences;
         let imageUrl;
         try {
+            if (controller.signal.aborted) {
+                throw createActionAbortError();
+            }
             if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilities === 'function') {
                 const caps = await imageService.getCapabilities();
+                if (controller.signal.aborted) {
+                    throw createActionAbortError();
+                }
                 const filtered = filterReplayReferences(rawSavedReferences, caps);
                 savedReferences = filtered.references;
                 if (filtered.skipped.length > 0) {
@@ -112,6 +124,9 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             }
             if (savedLoras.length > 0) {
                 const loraState = await imageService.getAvailableLoras();
+                if (controller.signal.aborted) {
+                    throw createActionAbortError();
+                }
                 loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {
                     toast(t`Some LoRAs are unavailable and were skipped: ${dropped.join(', ')}`, 'warning');
                 }).loras;
@@ -125,6 +140,9 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                 signal: controller.signal,
                 loras,
             });
+            if (controller.signal.aborted) {
+                throw createActionAbortError();
+            }
         } finally {
             if (actionControllers.get(controllerKey) === controller) {
                 actionControllers.delete(controllerKey);
@@ -201,15 +219,34 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
     }
 
     async function runGeneration(action, { messageId, record, replaceRecord, prompt, overrideReferences }) {
-        try {
-            await generateChildRecord({ messageId, parent: record, replaceRecord, prompt, overrideReferences });
-        } catch (error) {
-            if (error?.name === 'AbortError') {
-                return;
+        const controller = new AbortController();
+        const run = async () => {
+            try {
+                await generateChildRecord({ messageId, parent: record, replaceRecord, prompt, overrideReferences, controller });
+            } catch (error) {
+                if (error?.name === 'AbortError' || controller.signal.aborted) {
+                    return;
+                }
+                console.error('Illustration action failed.', error);
+                reportError(`${t`Illustration failed`}: ${error?.message || error}`);
             }
-            console.error('Illustration action failed.', error);
-            reportError(`${t`Illustration failed`}: ${error?.message || error}`);
+        };
+
+        if (typeof context?.activityGuard?.run === 'function') {
+            const label = typeof t === 'function' ? t`Illustration generation` : 'Illustration generation';
+            await context.activityGuard.run({
+                source: 'sd:illustration',
+                label,
+                scope: 'chat',
+                onCancel: () => {
+                    if (!controller.signal.aborted) {
+                        controller.abort('Illustration action cancelled');
+                    }
+                },
+            }, run);
+            return;
         }
+        await run();
     }
 
     async function showActions(target) {

@@ -40,6 +40,12 @@ import { VolcengineTtsProvider } from './volcengine.js';
 import { applyLocale, t, translate } from '/scripts/i18n.js';
 import { renderTtsAttributionSelectors, loadAttributionMap, readAttributionFor, parseAndCacheAttribution, decorateMessageWithPlayButtons, ensureNpcVoiceMapEntries } from './npc-attribution.js';
 import { extractQuoteSegments, attachQuoteIndices } from './quote-segments.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { prefersReducedMotion } from '../../lens-shared/util.js';
+import {
+    buildTtsNarrationSummary,
+    buildTtsNpcAttributionSummary,
+} from './behavior-summary-models.js';
 
 const UPDATE_INTERVAL = 1000;
 const wrapper = new ModuleWorkerWrapper(moduleWorker);
@@ -945,6 +951,198 @@ function loadSettings() {
     renderTtsAttributionSelectors(getContext());
 
     $('body').toggleClass('tts', extension_settings.tts.enabled);
+    refreshTtsBehaviorSummaries();
+}
+
+const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
+
+let narrationSummaryHandle = null;
+let npcAttributionSummaryHandle = null;
+let ttsSummaryAbort = null;
+let externalPulseTarget = null;
+let externalPulseTimer = null;
+
+function clearExternalSummaryPulse() {
+    if (externalPulseTimer !== null) {
+        clearTimeout(externalPulseTimer);
+        externalPulseTimer = null;
+    }
+    if (externalPulseTarget) {
+        externalPulseTarget.classList.remove('luker-bsum-field-pulse');
+        externalPulseTarget = null;
+    }
+}
+
+function destroyTtsBehaviorSummaries() {
+    ttsSummaryAbort?.abort();
+    ttsSummaryAbort = null;
+    clearExternalSummaryPulse();
+    narrationSummaryHandle?.destroy();
+    npcAttributionSummaryHandle?.destroy();
+    narrationSummaryHandle = null;
+    npcAttributionSummaryHandle = null;
+}
+
+export function refreshTtsBehaviorSummaries() {
+    narrationSummaryHandle?.refresh();
+    npcAttributionSummaryHandle?.refresh();
+}
+
+function readSelectDisplayLabel(selectEl) {
+    if (!(selectEl instanceof HTMLSelectElement) || !selectEl.value) {
+        return '';
+    }
+    const selected = selectEl.selectedOptions?.[0]
+        || (selectEl.selectedIndex >= 0 ? selectEl.options?.[selectEl.selectedIndex] : null);
+    return String(selected?.textContent || selectEl.value || '').trim();
+}
+
+function focusTtsDrawerControl(selector) {
+    const root = document.getElementById('tts_settings') || document;
+    const target = root.querySelector(selector);
+    if (!(target instanceof Element)) {
+        return false;
+    }
+    const drawer = target.closest('.inline-drawer');
+    const content = drawer?.querySelector(':scope > .inline-drawer-content');
+    if (content && (content.hidden || content.style?.display === 'none' || globalThis.getComputedStyle?.(content)?.display === 'none')) {
+        const toggle = drawer.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
+        toggle?.click();
+    }
+    const wrapper = target.closest('.checkbox_label') || target;
+    if (typeof wrapper.scrollIntoView === 'function') {
+        wrapper.scrollIntoView({
+            behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+            block: 'nearest',
+        });
+    }
+    if (typeof target.focus === 'function') {
+        target.focus({ preventScroll: true });
+    }
+    clearExternalSummaryPulse();
+    void wrapper.offsetWidth;
+    wrapper.classList.add('luker-bsum-field-pulse');
+    externalPulseTarget = wrapper;
+    externalPulseTimer = setTimeout(() => {
+        clearExternalSummaryPulse();
+    }, PULSE_DURATION_MS);
+    return true;
+}
+
+export function mountTtsBehaviorSummaries() {
+    destroyTtsBehaviorSummaries();
+
+    const ttsSettingsEl = document.getElementById('tts_settings');
+    const drawerContent = ttsSettingsEl?.querySelector('.inline-drawer-content');
+    if (!drawerContent) {
+        return;
+    }
+
+    const enabledEl = drawerContent.querySelector('#tts_enabled');
+    const enabledAnchor = enabledEl?.closest('.checkbox_label') || enabledEl;
+    if (enabledAnchor) {
+        narrationSummaryHandle = mountBehaviorSummary({
+            id: 'tts-narration',
+            root: drawerContent,
+            anchor: enabledAnchor,
+            position: 'before',
+            ariaLabel: translate('TTS narration behavior summary'),
+            fields: {
+                enabled: { selector: '#tts_enabled', highlight: '.checkbox_label' },
+                provider: '#tts_provider',
+                narrateUser: { selector: '#tts_narrate_user', highlight: '.checkbox_label' },
+                autoGeneration: { selector: '#tts_auto_generation', highlight: '.checkbox_label' },
+                periodicAutoGeneration: { selector: '#tts_periodic_auto_generation', highlight: '.checkbox_label' },
+                narrateByParagraphs: { selector: '#tts_narrate_by_paragraphs', highlight: '.checkbox_label' },
+                narrateQuoted: { selector: '#tts_narrate_quoted', highlight: '.checkbox_label' },
+                narrateDialogues: { selector: '#tts_narrate_dialogues', highlight: '.checkbox_label' },
+                narrateTranslatedOnly: { selector: '#tts_narrate_translated_only', highlight: '.checkbox_label' },
+                skipCodeblocks: { selector: '#tts_skip_codeblocks', highlight: '.checkbox_label' },
+                skipTags: { selector: '#tts_skip_tags', highlight: '.checkbox_label' },
+                passAsterisks: { selector: '#tts_pass_asterisks', highlight: '.checkbox_label' },
+                multiVoiceEnabled: { selector: '#tts_multi_voice_enabled', highlight: '.checkbox_label' },
+                applyRegex: { selector: '#tts_apply_regex', highlight: '.checkbox_label' },
+                regexPattern: { selector: '#tts_regex_pattern', highlight: '#tts_regex_block' },
+                playbackRate: { selector: ['#playback_rate', '#playback_rate_counter'], highlight: '#playback_rate_block' },
+            },
+            readState: (rootEl) => ({
+                enabled: Boolean(rootEl.querySelector('#tts_enabled')?.checked),
+                provider: String(rootEl.querySelector('#tts_provider')?.value || extension_settings.tts?.currentProvider || '').trim(),
+                autoGeneration: Boolean(rootEl.querySelector('#tts_auto_generation')?.checked),
+                narrateUser: Boolean(rootEl.querySelector('#tts_narrate_user')?.checked),
+                periodicAutoGeneration: Boolean(rootEl.querySelector('#tts_periodic_auto_generation')?.checked),
+                narrateByParagraphs: Boolean(rootEl.querySelector('#tts_narrate_by_paragraphs')?.checked),
+                narrateQuoted: Boolean(rootEl.querySelector('#tts_narrate_quoted')?.checked),
+                narrateDialogues: Boolean(rootEl.querySelector('#tts_narrate_dialogues')?.checked),
+                narrateTranslatedOnly: Boolean(rootEl.querySelector('#tts_narrate_translated_only')?.checked),
+                skipCodeblocks: Boolean(rootEl.querySelector('#tts_skip_codeblocks')?.checked),
+                skipTags: Boolean(rootEl.querySelector('#tts_skip_tags')?.checked),
+                passAsterisks: Boolean(rootEl.querySelector('#tts_pass_asterisks')?.checked),
+                multiVoiceEnabled: Boolean(rootEl.querySelector('#tts_multi_voice_enabled')?.checked),
+                applyRegex: Boolean(rootEl.querySelector('#tts_apply_regex')?.checked),
+                playbackRate: rootEl.querySelector('#playback_rate')?.value,
+                translate,
+            }),
+            build: buildTtsNarrationSummary,
+        });
+    }
+
+    const npcBlock = drawerContent.querySelector('#tts_npc_attribution_block');
+    if (npcBlock) {
+        npcAttributionSummaryHandle = mountBehaviorSummary({
+            id: 'tts-npc-attribution',
+            root: npcBlock,
+            anchor: npcBlock,
+            position: 'prepend',
+            ariaLabel: translate('TTS NPC dialogue attribution behavior summary'),
+            fields: {
+                npcAttributionEnabled: { selector: '#tts_npc_attribution_enabled', highlight: '.checkbox_label' },
+                apiPreset: { selector: '#tts_npc_attribution_api_preset', highlight: '.tts_custom_voices' },
+                preset: { selector: '#tts_npc_attribution_preset', highlight: '.tts_custom_voices' },
+                retryMax: { selector: '#tts_npc_attribution_retry_max', highlight: '.tts_custom_voices' },
+            },
+            readState: (rootEl) => {
+                const apiSelect = rootEl.querySelector('#tts_npc_attribution_api_preset');
+                const presetSelect = rootEl.querySelector('#tts_npc_attribution_preset');
+                const multiVoiceEl = drawerContent.querySelector('#tts_multi_voice_enabled');
+                const masterEnabledEl = drawerContent.querySelector('#tts_enabled');
+                return {
+                    enabled: masterEnabledEl ? Boolean(masterEnabledEl.checked) : Boolean(extension_settings.tts?.enabled),
+                    npcAttributionEnabled: Boolean(rootEl.querySelector('#tts_npc_attribution_enabled')?.checked),
+                    apiPreset: readSelectDisplayLabel(apiSelect),
+                    preset: readSelectDisplayLabel(presetSelect),
+                    retryMax: rootEl.querySelector('#tts_npc_attribution_retry_max')?.value,
+                    multiVoiceEnabled: multiVoiceEl ? Boolean(multiVoiceEl.checked) : Boolean(extension_settings.tts?.multi_voice_enabled),
+                    canActivateMultiVoice: Boolean(multiVoiceEl),
+                    canActivateEnabled: Boolean(masterEnabledEl),
+                    translate,
+                };
+            },
+            build: buildTtsNpcAttributionSummary,
+            onTokenActivate: (fields) => {
+                if (fields.includes('multiVoiceEnabled')) {
+                    return focusTtsDrawerControl('#tts_multi_voice_enabled');
+                }
+                if (fields.includes('enabled')) {
+                    return focusTtsDrawerControl('#tts_enabled');
+                }
+                return false;
+            },
+        });
+    }
+
+    ttsSummaryAbort = new AbortController();
+    for (const evtName of ['input', 'change']) {
+        drawerContent.addEventListener(evtName, (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+            if (target.id === 'tts_multi_voice_enabled' || target.id === 'tts_enabled') {
+                npcAttributionSummaryHandle?.refresh();
+            }
+        }, { signal: ttsSummaryAbort.signal });
+    }
 }
 
 const defaultSettings = {
@@ -983,6 +1181,7 @@ function onRefreshClick() {
         console.info(`Saved settings ${ttsProviderName} ${JSON.stringify(ttsProvider.settings)}`);
         initVoiceMap();
         updateVoiceMap();
+        refreshTtsBehaviorSummaries();
     }).catch(error => {
         toastr.error(error.toString());
         console.error(error);
@@ -997,61 +1196,72 @@ function onEnableClick() {
     updateUiAudioPlayState();
     saveSettingsDebounced();
     $('body').toggleClass('tts', extension_settings.tts.enabled);
+    refreshTtsBehaviorSummaries();
 }
 
 
 function onAutoGenerationClick() {
     extension_settings.tts.auto_generation = !!$('#tts_auto_generation').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 
 function onPeriodicAutoGenerationClick() {
     extension_settings.tts.periodic_auto_generation = !!$('#tts_periodic_auto_generation').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNarrateByParagraphsClick() {
     extension_settings.tts.narrate_by_paragraphs = !!$('#tts_narrate_by_paragraphs').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 
 function onNarrateDialoguesClick() {
     extension_settings.tts.narrate_dialogues_only = !!$('#tts_narrate_dialogues').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNarrateUserClick() {
     extension_settings.tts.narrate_user = !!$('#tts_narrate_user').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNarrateQuotedClick() {
     extension_settings.tts.narrate_quoted_only = !!$('#tts_narrate_quoted').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 
 function onNarrateTranslatedOnlyClick() {
     extension_settings.tts.narrate_translated_only = !!$('#tts_narrate_translated_only').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onSkipCodeblocksClick() {
     extension_settings.tts.skip_codeblocks = !!$('#tts_skip_codeblocks').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onSkipTagsClick() {
     extension_settings.tts.skip_tags = !!$('#tts_skip_tags').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onPassAsterisksClick() {
     extension_settings.tts.pass_asterisks = !!$('#tts_pass_asterisks').prop('checked');
     saveSettingsDebounced();
     console.log('setting pass asterisks', extension_settings.tts.pass_asterisks);
+    refreshTtsBehaviorSummaries();
 }
 
 function onMultiVoiceClick() {
@@ -1059,6 +1269,7 @@ function onMultiVoiceClick() {
     saveSettingsDebounced();
     // Reinitialize voice map to show/hide voices
     initVoiceMap();
+    refreshTtsBehaviorSummaries();
 }
 
 function onApplyRegexChange() {
@@ -1066,27 +1277,32 @@ function onApplyRegexChange() {
     saveSettingsDebounced();
     $('#tts_regex_block').toggle(extension_settings.tts.apply_regex);
     updateRegexPatternWarning();
+    refreshTtsBehaviorSummaries();
 }
 
 function onRegexPatternChange() {
     extension_settings.tts.regex_pattern = $('#tts_regex_pattern').val().toString();
     saveSettingsDebounced();
     updateRegexPatternWarning();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNpcAttributionEnabledClick() {
     extension_settings.tts.npcAttributionEnabled = !!$('#tts_npc_attribution_enabled').prop('checked');
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNpcAttributionApiPresetChange() {
     extension_settings.tts.npcAttributionApiPresetName = String($('#tts_npc_attribution_api_preset').val() || '').trim();
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNpcAttributionPresetChange() {
     extension_settings.tts.npcAttributionPresetName = String($('#tts_npc_attribution_preset').val() || '').trim();
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 function onNpcAttributionRetryMaxChange() {
@@ -1094,6 +1310,7 @@ function onNpcAttributionRetryMaxChange() {
     extension_settings.tts.npcAttributionRetryMax = clamped;
     $('#tts_npc_attribution_retry_max').val(clamped);
     saveSettingsDebounced();
+    refreshTtsBehaviorSummaries();
 }
 
 /**
@@ -1296,6 +1513,11 @@ async function loadTtsProvider(provider) {
     extension_settings.tts.currentProvider = provider;
     ttsProviderName = provider;
     ttsProvider = new ttsProviders[provider];
+    if ($('#tts_provider').val() !== provider) {
+        $('#tts_provider').val(provider);
+    }
+    $('#playback_rate_block').toggle(provider !== 'System');
+    refreshTtsBehaviorSummaries();
 
     // Init provider settings
     $('#tts_provider_settings').append(ttsProvider.settingsHtml);
@@ -1305,6 +1527,7 @@ async function loadTtsProvider(provider) {
     }
     await ttsProvider.loadSettings(extension_settings.tts[ttsProviderName]);
     await initVoiceMap();
+    refreshTtsBehaviorSummaries();
 }
 
 function onTtsProviderChange() {
@@ -1315,6 +1538,7 @@ function onTtsProviderChange() {
     extension_settings.tts.currentProvider = ttsProviderSelection;
     $('#playback_rate_block').toggle(extension_settings.tts.currentProvider !== 'System');
     loadTtsProvider(ttsProviderSelection);
+    refreshTtsBehaviorSummaries();
 }
 
 // Ensure that TTS provider settings are saved to extension settings.
@@ -1872,6 +2096,7 @@ export async function init() {
             extension_settings.tts.playback_rate = value;
             $('#playback_rate_counter').val(formattedValue);
             saveSettingsDebounced();
+            refreshTtsBehaviorSummaries();
         });
 
         $('#tts_voices').on('click', onTtsVoicesClick);
@@ -1883,9 +2108,13 @@ export async function init() {
     }
     await addExtensionControls(); // No init dependencies
     loadSettings(); // Depends on Extension Controls and loadTtsProvider
+    mountTtsBehaviorSummaries();
     loadTtsProvider(extension_settings.tts.currentProvider); // No dependencies
     addAudioControl(); // Depends on Extension Controls
     setInterval(wrapper.update.bind(wrapper), UPDATE_INTERVAL); // Init depends on all the things
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshTtsBehaviorSummaries);
+    }
     eventSource.on(event_types.MESSAGE_SWIPED, resetTtsPlayback);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.MESSAGE_DELETED, onMessageDeleted);

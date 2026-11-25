@@ -23,6 +23,7 @@ import {
     getMemoryStatus,
     getRawGraphJson,
     getRebuildableLatestSeq,
+    getRebuildableRange,
     getSettings,
     importMemoryGraphFile,
     invalidateLatestRecallSnapshot,
@@ -32,6 +33,7 @@ import {
     resetMemoryGraphForChat,
     runFillGraph,
     runManualCompression,
+    runRebuildFromFloor,
     runRebuildGraph,
     runRebuildRecent,
     runRecallDebug,
@@ -354,10 +356,12 @@ function createOperationsAccess() {
         onStatus: addMemoryStatusListener,
         stats: () => getMemoryGraphStats(ctx()),
         latestSeq: () => getRebuildableLatestSeq(ctx()),
+        rebuildRange: () => getRebuildableRange(ctx()),
         stop: stopMemoryExtraction,
         fill: () => runFillGraph(ctx()),
         rebuild: () => runRebuildGraph(ctx()),
         rebuildRecent: (turns) => runRebuildRecent(ctx(), turns),
+        rebuildFromFloor: (floor) => runRebuildFromFloor(ctx(), floor),
         compress: (values) => runManualCompression(ctx(), getEffectiveSettings(ctx(), getSettings()), values),
         reset: () => resetMemoryGraphForChat(ctx()),
         vectors: (mode) => runVectorRecomputeForChat(ctx(), mode),
@@ -399,6 +403,7 @@ function createSchemaAccess(resolveApi) {
         async read() {
             const { ctx, api: mg } = resolveApi();
             const settings = getSettings();
+            const effective = getEffectiveSettings(ctx, settings) || settings;
             const info = mg.getSchemaScopeInfo(ctx, settings);
             return {
                 scope: info.hasOverride ? 'character' : 'global',
@@ -408,6 +413,12 @@ function createSchemaAccess(resolveApi) {
                 types: structuredClone(normalizeNodeTypeSchema(info.schema)),
                 defaults: structuredClone(normalizeNodeTypeSchema(getDefaultNodeTypeSchema() || null)),
                 labels: sanitizeMemoryLensLabels(labelStore(ctx)),
+                globalSettings: {
+                    autoCompressionEnabled: Boolean(settings.autoCompressionEnabled),
+                    persistentInjectionMaxSeqDistance: Math.max(0, Math.floor(Number(effective?.persistentInjectionMaxSeqDistance) || 0)),
+                    recallMethod: String(settings.recallMethod || 'llm'),
+                    ragDefaultPerTypeK: Math.max(0, Math.floor(Number(settings.ragDefaultPerTypeK) || 0)),
+                },
             };
         },
 

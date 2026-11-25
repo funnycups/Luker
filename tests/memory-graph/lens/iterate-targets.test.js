@@ -779,6 +779,31 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
                     working.edges = working.edges.filter(e => !(e.from === source.id && e.to === target.id && e.type === relation));
                     return { removed: before - working.edges.length };
                 },
+                compactNodes: async ({ type, childIds, summary }) => {
+                    const id = `n_${Object.keys(working.nodes).length + 1}`;
+                    const children = childIds.map(cid => working.nodes[cid]);
+                    const depth = Math.max(...children.map(c => Number(c?.semanticDepth || 0))) + 1;
+                    const seqTo = Math.max(...children.map(c => Number(c?.seqTo || 0)));
+                    working.nodes[id] = {
+                        id,
+                        type,
+                        level: 'semantic',
+                        title: `${type} Summary L${depth} #1`,
+                        seqTo,
+                        fields: { summary: String(summary).trim() },
+                        semanticRollup: true,
+                        semanticDepth: depth,
+                        childrenIds: [...childIds],
+                        parentId: '',
+                        archived: false,
+                    };
+                    for (const cid of childIds) {
+                        working.nodes[cid].parentId = id;
+                        working.edges.push({ from: id, to: cid, type: 'contains' });
+                        working.edges.push({ from: id, to: cid, type: 'semantic_contains' });
+                    }
+                    return { rollupNodeId: id };
+                },
             }),
         };
 
@@ -796,6 +821,8 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
 
     test('graph preview keeps custom type identifiers distinct', () => {
         const target = createMemoryGraphTarget();
+        expect(target.label).toBe('记忆图内容');
+        expect(createMemoryConfigTarget().label).toBe('记忆图配置');
         const preview = target.renderPreview({
             base: { nodes: {}, links: {} },
             ai: {
@@ -901,6 +928,97 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
         await handle.undo();
         expect(h.getDiskStore().nodes.n_1.fields.traits).toBe('curious');
         expect(h.getDiskStore().edges).toEqual([]);
+    });
+
+    test('compacts nodes into a single-summary rollup via ProposalBus, renders rollup diff/preview, commits, and supports undo', async () => {
+        const h = makeGraphHarness({
+            initialNodes: {
+                e_1: { id: 'e_1', type: 'event', level: 'semantic', title: 'Summary 1', seqTo: 1, fields: { summary: 'Signal lit at headland.' }, archived: false },
+                e_2: { id: 'e_2', type: 'event', level: 'semantic', title: 'Summary 2', seqTo: 2, fields: { summary: 'Drifters passed north.' }, archived: false },
+            },
+        });
+        const target = createMemoryGraphTarget(() => h.ctx, { ...h.deps, onError: h.onError });
+        const loaded = await target.load('chat', h.ctx);
+        const bus = createIterateBus({ proposalKinds: target.proposalKinds });
+
+        let round = 0;
+        const turnRes = await runIterateTurn({
+            messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'compact the two events into a chapter rollup' }],
+            live: clone(loaded.live),
+            tools: await target.tools(loaded.live, 'chat', h.ctx),
+            bus,
+            proposalKinds: target.proposalKinds,
+            isRead: (n) => target.isRead(n),
+            runRead: (call, live, helpers) => target.runRead(call, live, helpers),
+            runEdit: (call, live, helpers) => target.runEdit(call, live, helpers),
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        calls: [{
+                            id: 'c1',
+                            name: 'mg_graph_compact_nodes',
+                            args: {
+                                type: 'event',
+                                child_ids: ['e_1', 'e_2'],
+                                title: 'Night Watch Arc',
+                                summary: 'Signal lit at headland; drifters passed north.',
+                            },
+                        }],
+                    };
+                }
+                return { text: 'Compacted into a rollup node.', calls: [] };
+            },
+        });
+
+        expect(turnRes.proposalIds).toHaveLength(1);
+        const changes = buildTurnChanges({
+            base: loaded.live,
+            ai: turnRes.live,
+            units: target.units,
+            bus,
+            proposalIds: turnRes.proposalIds,
+            kindAdapters: target.proposalKinds,
+        });
+        expect(changes).toHaveLength(1);
+        expect(changes[0].after).toContain('L1 rollup');
+        expect(changes[0].after).toContain('parent=n_3');
+
+        const previewEl = target.renderPreview({ base: loaded.live, ai: turnRes.live, target: loaded.target });
+        expect(previewEl.textContent).toContain('Night Watch Arc');
+        expect(previewEl.textContent).toContain('L1');
+
+        const handle = await commitTurnBatch({
+            target,
+            targetRef: loaded.target,
+            base: loaded.live,
+            ai: turnRes.live,
+            keys: changes.map(c => c.key),
+            bus,
+            proposalIds: turnRes.proposalIds,
+            kindAdapters: target.proposalKinds,
+        });
+
+        const committed = h.getDiskStore();
+        expect(committed.nodes.n_3).toMatchObject({
+            type: 'event',
+            title: 'Night Watch Arc',
+            semanticRollup: true,
+            semanticDepth: 1,
+            fields: { summary: 'Signal lit at headland; drifters passed north.' },
+            childrenIds: ['e_1', 'e_2'],
+        });
+        expect(committed.nodes.e_1.parentId).toBe('n_3');
+        expect(committed.nodes.e_2.parentId).toBe('n_3');
+        expect(committed.edges.filter(e => e.type === 'semantic_contains')).toHaveLength(2);
+
+        await handle.undo();
+        const undone = h.getDiskStore();
+        expect(undone.nodes.n_3).toBeUndefined();
+        expect(undone.nodes.e_1.parentId).toBe('');
+        expect(undone.nodes.e_2.parentId).toBe('');
+        expect(undone.edges).toEqual([]);
     });
 
     test('surfaces syncGraphVectorsAfterMutation errors cleanly via onError without failing graph persistence', async () => {

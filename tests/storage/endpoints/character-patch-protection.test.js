@@ -86,12 +86,13 @@ async function exerciseProtection({ repoRoot, dataRoot, configPath, scenario }) 
     const dirty = [];
     setDirtyListener(info => dirty.push(info));
     const app = express();
+    const cookieSecret = getCookieSecret(dataRoot);
     app.use(cookieSession({
-        name: getCookieSessionName(),
+        name: getCookieSessionName(cookieSecret),
         sameSite: 'lax',
         httpOnly: true,
         maxAge: getSessionCookieAge(),
-        secret: getCookieSecret(dataRoot),
+        secret: cookieSecret,
     }));
     app.use(setUserDataMiddleware);
     app.use('/api/users', usersPublicRouter);

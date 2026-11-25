@@ -47,8 +47,8 @@ const TARGET_ALIASES = {
 };
 
 const TARGET_LABELS = {
-    memory: /^(Memory graph|记忆图|記憶圖)$/i,
-    memory_graph: /^(Graph|图谱|圖譜)$/i,
+    memory: /^(Memory graph config|记忆图配置|記憶圖配置)$/i,
+    memory_graph: /^(Memory graph content|记忆图内容|記憶圖內容)$/i,
     orch: /^(Orchestration|编排|編排)$/i,
     preset: /^(Preset|预设|預設)$/i,
     card: /^(Character card|角色卡)$/i,

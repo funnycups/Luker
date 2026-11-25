@@ -1,4 +1,29 @@
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildSearchToolsLorebookSummary, buildSearchToolsMainSummary } from './behavior-summary-models.js';
+
+const MAIN_SUMMARY_FIELDS = Object.freeze({
+    enabled: { selector: '#search_tools_enabled', highlight: '.checkbox_label' },
+    preRequestEnabled: { selector: '#search_tools_pre_request_enabled', highlight: '.checkbox_label' },
+    provider: '#search_tools_provider',
+    searxngBaseUrl: '#search_tools_field_baseUrl',
+    defaultMaxResults: '#search_tools_default_max_results',
+    defaultVisitMaxChars: '#search_tools_default_visit_max_chars',
+    agentApiPresetName: '#search_tools_agent_api_preset_name',
+    agentPresetName: '#search_tools_agent_preset_name',
+    includeWorldInfoWithPreset: { selector: '#search_tools_include_world_info_with_preset', highlight: '.checkbox_label' },
+    toolCallRetryMax: '#search_tools_tool_call_retry_max',
+    agentSystemPrompt: '#search_tools_agent_system_prompt',
+});
+
+const LOREBOOK_SUMMARY_FIELDS = Object.freeze({
+    enabled: { selector: '#search_tools_enabled', highlight: '.checkbox_label' },
+    preRequestEnabled: { selector: '#search_tools_pre_request_enabled', highlight: '.checkbox_label' },
+    lorebookPosition: '#search_tools_lorebook_position',
+    lorebookDepth: { selector: '#search_tools_lorebook_depth', highlight: '#search_tools_lorebook_depth_block' },
+    lorebookRole: { selector: '#search_tools_lorebook_role', highlight: '#search_tools_lorebook_role_block' },
+    lorebookEntryOrder: '#search_tools_lorebook_entry_order',
+});
 
 export function createSearchToolsSettingsUi(deps) {
     const {
@@ -517,11 +542,105 @@ export function createSearchToolsSettingsUi(deps) {
     }
 
     let unsubscribeDockPrefs = null;
+    let mountedSummaries = [];
 
     function teardownDockPrefsSubscription() {
         if (unsubscribeDockPrefs) {
             unsubscribeDockPrefs();
             unsubscribeDockPrefs = null;
+        }
+    }
+
+    function teardownSummaries() {
+        for (const handle of mountedSummaries) {
+            handle?.destroy?.();
+        }
+        mountedSummaries = [];
+    }
+
+    function refreshSummaries() {
+        for (const handle of mountedSummaries) {
+            handle?.refresh?.();
+        }
+    }
+
+    function readSummaryState(rootEl) {
+        const settings = getSettings();
+        const readCheckbox = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? Boolean(el.checked) : Boolean(fallback);
+        };
+        const readValue = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? String(el.value ?? '') : String(fallback ?? '');
+        };
+        const providerId = normalizeProvider(readValue('#search_tools_provider', settings.provider));
+        const definition = getProviderDefinition(providerId);
+        const hasApiKey = definition?.secretKey ? hasConfiguredSecret(definition.secretKey) : true;
+        const baseUrlEl = rootEl.querySelector('#search_tools_field_baseUrl');
+        const baseUrl = baseUrlEl
+            ? String(baseUrlEl.value ?? '')
+            : String(getProviderSettings(settings, 'searxng')?.baseUrl ?? '');
+
+        return {
+            enabled: readCheckbox('#search_tools_enabled', settings.enabled),
+            preRequestEnabled: readCheckbox('#search_tools_pre_request_enabled', settings.preRequestEnabled),
+            provider: providerId,
+            hasApiKey,
+            baseUrl,
+            defaultMaxResults: readValue('#search_tools_default_max_results', settings.defaultMaxResults),
+            defaultVisitMaxChars: readValue('#search_tools_default_visit_max_chars', settings.defaultVisitMaxChars),
+            agentApiPresetName: readValue('#search_tools_agent_api_preset_name', settings.agentApiPresetName),
+            agentPresetName: readValue('#search_tools_agent_preset_name', settings.agentPresetName),
+            includeWorldInfoWithPreset: readCheckbox('#search_tools_include_world_info_with_preset', settings.includeWorldInfoWithPreset),
+            toolCallRetryMax: readValue('#search_tools_tool_call_retry_max', settings.toolCallRetryMax),
+            agentSystemPrompt: readValue('#search_tools_agent_system_prompt', settings.agentSystemPrompt),
+            lorebookPosition: normalizeLorebookPosition(readValue('#search_tools_lorebook_position', settings.lorebookPosition)),
+            lorebookDepth: readValue('#search_tools_lorebook_depth', settings.lorebookDepth),
+            lorebookRole: normalizeLorebookRole(readValue('#search_tools_lorebook_role', settings.lorebookRole)),
+            lorebookEntryOrder: readValue('#search_tools_lorebook_entry_order', settings.lorebookEntryOrder),
+            positions: world_info_position,
+            roles: extension_prompt_roles,
+            i18n,
+        };
+    }
+
+    function mountSummaries(root) {
+        const rootEl = root?.[0];
+        if (typeof Element === 'undefined' || !(rootEl instanceof Element)) {
+            teardownSummaries();
+            return;
+        }
+        if (mountedSummaries.length === 2 && mountedSummaries.every((h) => h?.el && rootEl.contains(h.el))) {
+            refreshSummaries();
+            return;
+        }
+        teardownSummaries();
+        const drawerContent = rootEl.querySelector('.inline-drawer-content');
+        if (drawerContent) {
+            mountedSummaries.push(mountBehaviorSummary({
+                id: 'search-tools-main',
+                root: rootEl,
+                anchor: drawerContent,
+                position: 'prepend',
+                fields: MAIN_SUMMARY_FIELDS,
+                ariaLabel: i18n('Search Tools main behavior summary'),
+                readState: readSummaryState,
+                build: buildSearchToolsMainSummary,
+            }));
+        }
+        const lorebookLabel = rootEl.querySelector('label[for="search_tools_lorebook_position"]');
+        if (lorebookLabel) {
+            mountedSummaries.push(mountBehaviorSummary({
+                id: 'search-tools-lorebook',
+                root: rootEl,
+                anchor: lorebookLabel,
+                position: 'before',
+                fields: LOREBOOK_SUMMARY_FIELDS,
+                ariaLabel: i18n('Search Tools lorebook injection summary'),
+                readState: readSummaryState,
+                build: buildSearchToolsLorebookSummary,
+            }));
         }
     }
 
@@ -588,16 +707,19 @@ export function createSearchToolsSettingsUi(deps) {
             settings.provider = normalizeProvider(jQuery(this).val());
             refreshProviderSettingsUi(root, settings);
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_default_max_results', function () {
             settings.defaultMaxResults = clampInteger(jQuery(this).val(), 1, 20, DEFAULT_SETTINGS.defaultMaxResults);
             jQuery(this).val(String(settings.defaultMaxResults));
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_default_visit_max_chars', function () {
             settings.defaultVisitMaxChars = clampInteger(jQuery(this).val(), 0, 50000, DEFAULT_SETTINGS.defaultVisitMaxChars);
             jQuery(this).val(String(settings.defaultVisitMaxChars));
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools input.searchTools', '#search_tools_provider_settings [data-provider-field]', function () {
             const element = jQuery(this);
@@ -626,6 +748,7 @@ export function createSearchToolsSettingsUi(deps) {
                 element.val(String(normalized));
             }
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('click.searchTools', '#search_tools_import_preset_example', async () => {
             try {
@@ -636,6 +759,7 @@ export function createSearchToolsSettingsUi(deps) {
                 presetSelect.html(getOpenAIPresetOptions(context, settings.agentPresetName));
                 presetSelect.val(settings.agentPresetName);
                 root.find('#search_tools_import_preset_example').text(i18n('Re-import example'));
+                refreshSummaries();
             } catch (err) {
                 if (typeof toastr !== 'undefined') toastr.error(String(err?.message || err));
             }
@@ -651,11 +775,13 @@ export function createSearchToolsSettingsUi(deps) {
             settings.agentApiPresetName = normalizeWhitespace(jQuery(this).val());
             jQuery(this).val(settings.agentApiPresetName);
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_agent_preset_name', function () {
             settings.agentPresetName = normalizeWhitespace(jQuery(this).val());
             jQuery(this).val(settings.agentPresetName);
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('input.searchTools', '#search_tools_include_world_info_with_preset', function () {
             settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
@@ -665,6 +791,7 @@ export function createSearchToolsSettingsUi(deps) {
             settings.toolCallRetryMax = clampInteger(jQuery(this).val(), 0, 5, DEFAULT_SETTINGS.toolCallRetryMax);
             jQuery(this).val(String(settings.toolCallRetryMax));
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_lorebook_position', function () {
             settings.lorebookPosition = normalizeLorebookPosition(jQuery(this).val());
@@ -672,24 +799,28 @@ export function createSearchToolsSettingsUi(deps) {
             updateLorebookPositionVisibility(root);
             void syncSharedLorebookForLoadedChat(getContext());
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_lorebook_depth', function () {
             settings.lorebookDepth = clampInteger(jQuery(this).val(), 0, 9999, DEFAULT_SETTINGS.lorebookDepth);
             jQuery(this).val(String(settings.lorebookDepth));
             void syncSharedLorebookForLoadedChat(getContext());
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_lorebook_role', function () {
             settings.lorebookRole = normalizeLorebookRole(jQuery(this).val());
             jQuery(this).val(String(settings.lorebookRole));
             void syncSharedLorebookForLoadedChat(getContext());
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools', '#search_tools_lorebook_entry_order', function () {
             settings.lorebookEntryOrder = clampInteger(jQuery(this).val(), 0, 20000, DEFAULT_SETTINGS.lorebookEntryOrder);
             jQuery(this).val(String(settings.lorebookEntryOrder));
             void syncSharedLorebookForLoadedChat(getContext());
             saveSettingsDebounced();
+            refreshSummaries();
         });
         root.on('change.searchTools input.searchTools', '#search_tools_agent_system_prompt', function () {
             settings.agentSystemPrompt = String(jQuery(this).val() ?? '');
@@ -702,6 +833,7 @@ export function createSearchToolsSettingsUi(deps) {
             settings.agentSystemPrompt = DEFAULT_SETTINGS.agentSystemPrompt;
             root.find('#search_tools_agent_system_prompt').val(settings.agentSystemPrompt);
             saveSettingsDebounced();
+            refreshSummaries();
             if (typeof toastr !== 'undefined') {
                 toastr.success(i18n('Reset agent prompt'));
             }
@@ -719,6 +851,8 @@ export function createSearchToolsSettingsUi(deps) {
         root.on('click.searchTools', '#search_tools_show_run_panel', function () {
             showRunPanel();
         });
+
+        mountSummaries(root);
     }
 
     function ensureUi() {
@@ -737,6 +871,7 @@ export function createSearchToolsSettingsUi(deps) {
     }
 
     function destroy() {
+        teardownSummaries();
         teardownDockPrefsSubscription();
         const root = jQuery(`#${UI_BLOCK_ID}`);
         if (root.length) {

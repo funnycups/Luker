@@ -65,24 +65,13 @@
                     <label for="connection_profile_retry_status_whitelist" data-i18n="Retry status whitelist">Retry status whitelist</label>
                     <input id="connection_profile_retry_status_whitelist" class="text_pole flex1" type="text" placeholder="429, 500-599" />
                 </div>
-                <div id="connection_profile_max_request_retries_hint_block" class="marginTop5">
-                    <small class="opacity50p" data-i18n="Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.">Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.</small>
-                    <br>
-                    <small class="opacity50p" data-i18n="Whitelist accepts comma-separated HTTP status codes and ranges (100–599). Examples: 429, 500-599, or 429, 500-504. Leave empty to retry the default set (429 and any 5xx). When non-empty, only listed codes are retried.">Whitelist accepts comma-separated HTTP status codes and ranges (100–599). Examples: 429, 500-599, or 429, 500-504. Leave empty to retry the default set (429 and any 5xx). When non-empty, only listed codes are retried.</small>
-                </div>
                 <div id="connection_profile_request_timeout_block" class="flex-container alignItemsCenter gap10 marginTop10">
                     <label for="connection_profile_request_timeout" data-i18n="Request timeout (seconds, 0 = disabled)">Request timeout (seconds, 0 = disabled)</label>
                     <input id="connection_profile_request_timeout" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
                 </div>
-                <div id="connection_profile_request_timeout_hint_block" class="marginTop5">
-                    <small class="opacity50p" data-i18n="Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.">Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.</small>
-                </div>
                 <div id="connection_profile_network_proxy_block" class="flex-container alignItemsCenter gap10 marginTop10">
                     <label for="connection_profile_network_proxy" data-i18n="Network Proxy">Network Proxy</label>
                     <input id="connection_profile_network_proxy" class="text_pole flex1" type="text" placeholder="http://127.0.0.1:7890" />
-                </div>
-                <div id="connection_profile_network_proxy_hint_block" class="marginTop5">
-                    <small class="opacity50p" data-i18n="Applied to chat completion requests for this profile. Leave empty to use the global proxy from config.yaml.">Applied to chat completion requests for this profile. Leave empty to use the global proxy from config.yaml.</small>
                 </div>
                 <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
                     <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">
@@ -93,13 +82,9 @@
                         <label for="connection_profile_auto_continue_on_truncated_max_attempts" data-i18n="Max auto-continue attempts">Max auto-continue attempts</label>
                         <input id="connection_profile_auto_continue_on_truncated_max_attempts" class="text_pole widthUnset" type="number" min="1" step="1" value="3" />
                     </div>
-                    <div class="marginTop5">
-                        <small class="opacity50p" data-i18n="Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.">Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.</small>
-                    </div>
                 </div>
                 <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude,openrouter">
                     <h4 class="margin0" data-i18n="Claude Prompt Caching">Claude Prompt Caching</h4>
-                    <small class="opacity50p" data-i18n="Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h)\; reads cost 0.1×.">Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.</small>
                     <label class="checkbox_label marginTop5">
                         <input id="connection_profile_claude_enable_system_prompt_cache" type="checkbox" />
                         <span data-i18n="Cache system prompt">Cache system prompt</span>
@@ -112,12 +97,9 @@
                         <label for="connection_profile_claude_caching_at_depth" data-i18n="Cache message history at depth (-1 to disable)">Cache message history at depth (-1 to disable)</label>
                         <input id="connection_profile_claude_caching_at_depth" class="text_pole widthUnset" type="number" min="-1" step="1" value="-1" />
                     </div>
-                    <small id="connection_profile_claude_cache_warning_single" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.">Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.</small>
-                    <small id="connection_profile_claude_cache_warning_strict" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.">Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.</small>
                 </div>
                 <div id="connection_profile_gemini_cache_block" class="marginTop10" data-source="openrouter">
                     <h4 class="margin0" data-i18n="OpenRouter Gemini Prompt Caching">OpenRouter Gemini Prompt Caching</h4>
-                    <small class="opacity50p" data-i18n="Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.">Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.</small>
                     <label class="checkbox_label marginTop5">
                         <input id="connection_profile_gemini_enable_system_prompt_cache" type="checkbox" />
                         <span data-i18n="Cache system prompt">Cache system prompt</span>
@@ -130,7 +112,6 @@
                         <label for="connection_profile_gemini_cache_keep_recent_turns" data-i18n="Keep recent turns uncached">Keep recent turns uncached</label>
                         <input id="connection_profile_gemini_cache_keep_recent_turns" class="text_pole widthUnset" type="number" min="1" step="1" value="2" required />
                     </div>
-                    <small class="opacity50p" data-i18n="The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.">The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.</small>
                 </div>
             </div>
         </div>

@@ -1383,8 +1383,10 @@ export class DataPages extends LukerWindow {
         this.noticeBusy.add(id);
         this.rerender();
         try {
-            await this.p.openNotice(id);
-            this.close?.();
+            const opened = await this.p.openNotice(id);
+            if (opened !== false) {
+                this.close?.();
+            }
         } catch (err) {
             this.toast(err.message, true);
         } finally {

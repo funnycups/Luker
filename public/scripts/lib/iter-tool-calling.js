@@ -87,6 +87,7 @@ export async function requestToolCallWithRetry(context, settings, {
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
+    activity = undefined,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -134,6 +135,7 @@ export async function requestToolCallWithRetry(context, settings, {
                 ...(promptContext !== null && promptContext !== undefined ? { promptContext } : {}),
                 ...(transientSessionId !== undefined ? { transientSessionId } : {}),
                 ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
+                ...(activity !== undefined ? { activity } : {}),
             };
             const result = await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
@@ -198,6 +200,7 @@ export async function requestToolCallsWithRetry(context, settings, {
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
+    activity = undefined,
     // Fires once per attempt on the FIRST upstream stream chunk (text or
     // reasoning). Streaming path only — a non-streaming preset never
     // produces incremental chunks so the callback stays silent. Barrier
@@ -255,6 +258,7 @@ export async function requestToolCallsWithRetry(context, settings, {
                 ...(promptContext !== null && promptContext !== undefined ? { promptContext } : {}),
                 ...(transientSessionId !== undefined ? { transientSessionId } : {}),
                 ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
+                ...(activity !== undefined ? { activity } : {}),
             };
             // Streaming path (when the caller's preset has stream_openai
             // enabled AND the context exposes generateTaskStream): drain

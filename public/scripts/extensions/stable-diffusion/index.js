@@ -58,6 +58,8 @@ import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnum
 import { ToolManager } from '../../tool-calling.js';
 import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { t, translate } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildSdModeSummary } from './behavior-summary-models.js';
 import { withProfileRetry } from '../connection-manager/profile-retry.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
@@ -110,6 +112,8 @@ let activeGenerations = 0;
 /** @type {AbortController[]} */
 const generationAbortControllers = [];
 const trackedGenerationControllers = new Set();
+const controllerActivityLeases = new Map();
+const untrackedActivityLeases = [];
 
 const sources = {
     horde: 'horde',
@@ -662,9 +666,14 @@ function syncStyleReferenceListDisabledState() {
     $('#sd_style_ref_list').toggleClass('is-disabled', !extension_settings.sd.style_references_enabled);
 }
 
+function notifySdCapabilitiesUpdated() {
+    document.getElementById('sd_container')?.dispatchEvent(new CustomEvent('sd:capabilities-updated'));
+}
+
 function renderReferenceConfigWarnings() {
     const container = $('#sd_reference_warnings');
     if (container.length === 0) {
+        notifySdCapabilitiesUpdated();
         return;
     }
     const warnings = computeReferenceConfigWarnings(extension_settings.sd, {
@@ -674,6 +683,7 @@ function renderReferenceConfigWarnings() {
     container.empty();
     if (warnings.length === 0) {
         container.prop('hidden', true).hide();
+        notifySdCapabilitiesUpdated();
         return;
     }
     for (const warning of warnings) {
@@ -692,6 +702,7 @@ function renderReferenceConfigWarnings() {
         container.append(item);
     }
     container.prop('hidden', false).show();
+    notifySdCapabilitiesUpdated();
 }
 
 function renderStyleReferencesList() {
@@ -1104,6 +1115,62 @@ function applySettingsToUiInner() {
 
     const resolutionId = getClosestKnownResolution();
     $('#sd_resolution').val(resolutionId);
+    sdModeSummary?.refresh();
+}
+
+const SD_MODE_SUMMARY_FIELDS = Object.freeze({
+    refineMode: { selector: '#sd_refine_mode', highlight: '.checkbox_label' },
+    functionTool: { selector: '#sd_function_tool', highlight: '.checkbox_label' },
+    interactiveMode: { selector: '#sd_interactive_mode', highlight: '.checkbox_label' },
+    multimodalCaptioning: { selector: '#sd_multimodal_captioning', highlight: '.checkbox_label' },
+    freeExtend: { selector: '#sd_free_extend', highlight: '.checkbox_label' },
+    snap: { selector: '#sd_snap', highlight: '.checkbox_label' },
+    minimalPromptProcessing: { selector: '#sd_minimal_prompt_processing', highlight: '.checkbox_label' },
+});
+
+let sdModeSummary = null;
+
+function readSdModeSummaryState(rootEl) {
+    const sd = extension_settings.sd || {};
+    const readCheckbox = (selector, fallback) => {
+        const el = rootEl?.querySelector?.(selector);
+        return el ? Boolean(el.checked) : Boolean(fallback);
+    };
+    return {
+        functionTool: readCheckbox('#sd_function_tool', sd.function_tool),
+        interactiveMode: readCheckbox('#sd_interactive_mode', sd.interactive_mode),
+        toolCallingSupported: Boolean(ToolManager.isToolCallingSupported?.()),
+        refineMode: readCheckbox('#sd_refine_mode', sd.refine_mode),
+        freeExtend: readCheckbox('#sd_free_extend', sd.free_extend),
+        minimalPromptProcessing: readCheckbox('#sd_minimal_prompt_processing', sd.minimal_prompt_processing),
+        multimodalCaptioning: readCheckbox('#sd_multimodal_captioning', sd.multimodal_captioning),
+        snap: readCheckbox('#sd_snap', sd.snap),
+        translate,
+    };
+}
+
+export function mountSdModeSummary(containerEl = document.getElementById('sd_container')) {
+    const sdSettingsEl = containerEl?.querySelector?.('.sd_settings');
+    if (!sdSettingsEl) {
+        return null;
+    }
+    const presetHr = sdSettingsEl.querySelector('.sd_generation_preset_block + hr');
+    const drawerContent = sdSettingsEl.querySelector('.inline-drawer-content');
+    const anchor = presetHr || drawerContent;
+    if (!anchor) {
+        return null;
+    }
+    sdModeSummary = mountBehaviorSummary({
+        id: 'sd-mode-summary',
+        root: sdSettingsEl,
+        anchor,
+        position: presetHr ? 'after' : 'prepend',
+        fields: SD_MODE_SUMMARY_FIELDS,
+        ariaLabel: translate('Image generation mode summary'),
+        readState: readSdModeSummaryState,
+        build: buildSdModeSummary,
+    });
+    return sdModeSummary;
 }
 
 /**
@@ -1127,6 +1194,14 @@ export function createIllustrationBridge() {
             registerFunctionTool();
             return { names: state.names, includeWeight: state.includeWeight };
         },
+        getCapabilitiesSnapshot() {
+            const availableLoras = loraCatalog.getCached();
+            return computeImageCapabilities(extension_settings.sd, {
+                comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+                comfyWorkflowError: currentComfyWorkflowError,
+                availableLoras,
+            });
+        },
         async getCapabilities() {
             await refreshComfyReferenceSlots();
             const availableLoras = loraCatalog.getCached();
@@ -1149,6 +1224,7 @@ export function createIllustrationBridge() {
             subdir = undefined,
             transientSessionId = undefined,
             skipActivityTracking = false,
+            skipActivityLease = false,
             signal = undefined,
             loras = [],
         } = {}) {
@@ -1170,8 +1246,9 @@ export function createIllustrationBridge() {
             const trackActivity = !skipActivityTracking && transientSessionId === undefined;
             let capturedError = null;
             if (trackActivity) {
+                const scope = attribution === 'none' ? 'global' : 'chat';
                 registerAbortController(controller);
-                startGenerationTracking(controller);
+                startGenerationTracking(controller, { scope, skipActivityLease: Boolean(skipActivityLease) });
             }
             try {
                 const preparedPrompt = await getPrompt(generationMode.FREE, prompt, prompt, '', null);
@@ -1304,8 +1381,9 @@ export function createImageGenerationService() {
             let capturedMeta = { format: 'png', prefixedPrompt: prompt };
             const trackActivity = !req.skipActivityTracking && req.transientSessionId === undefined;
             if (trackActivity) {
+                const scope = req.attribution === 'none' ? 'global' : 'chat';
                 registerAbortController(controller);
-                startGenerationTracking(controller);
+                startGenerationTracking(controller, { scope, skipActivityLease: Boolean(req.skipActivityLease) });
             }
             try {
                 const preparedPrompt = req.skipPromptPrefix
@@ -3851,7 +3929,59 @@ function syncGenerationTrackingState() {
     console.debug(`SD: syncGenerationTrackingState, controllers=${generationAbortControllers.length}, activeGenerations: ${prevActive} → ${activeGenerations}`);
 }
 
-function startGenerationTracking(controller = null) {
+function acquireGenerationActivityLease(controller, { scope = 'chat', label = t`Image generation`, skipActivityLease = false } = {}) {
+    if (skipActivityLease) {
+        return;
+    }
+    const acquire = getContext()?.activityGuard?.acquire;
+    if (typeof acquire !== 'function') {
+        return;
+    }
+    const leaseOptions = {
+        source: 'sd:image',
+        label,
+        scope,
+    };
+    if (scope === 'chat' && controller instanceof AbortController) {
+        leaseOptions.onCancel = () => {
+            if (!controller.signal.aborted) {
+                controller.abort('Aborted by user');
+            }
+        };
+    }
+    const release = acquire(leaseOptions);
+    if (typeof release !== 'function') {
+        return;
+    }
+    if (controller instanceof AbortController) {
+        const previous = controllerActivityLeases.get(controller);
+        if (typeof previous === 'function') {
+            previous();
+        }
+        controllerActivityLeases.set(controller, release);
+    } else {
+        untrackedActivityLeases.push(release);
+    }
+}
+
+function releaseGenerationActivityLease(controller) {
+    if (controller instanceof AbortController) {
+        const release = controllerActivityLeases.get(controller);
+        if (release) {
+            controllerActivityLeases.delete(controller);
+            release();
+        }
+        return;
+    }
+    if (controller === null || controller === undefined) {
+        const release = untrackedActivityLeases.pop();
+        if (typeof release === 'function') {
+            release();
+        }
+    }
+}
+
+function startGenerationTracking(controller = null, { scope = 'chat', label = t`Image generation`, skipActivityLease = false } = {}) {
     let added = false;
     if (controller instanceof AbortController) {
         const before = trackedGenerationControllers.size;
@@ -3861,6 +3991,9 @@ function startGenerationTracking(controller = null) {
         // Untracked invocation (no controller) — still counts as one job for
         // lifecycle bookkeeping so STARTED/ENDED stay paired.
         added = true;
+    }
+    if (added) {
+        acquireGenerationActivityLease(controller, { scope, label, skipActivityLease });
     }
     syncGenerationTrackingState();
     if (added) eventSource.emit(event_types.IMAGE_GENERATION_STARTED);
@@ -3873,6 +4006,7 @@ function endGenerationTracking(controller = null) {
     } else {
         removed = true;
     }
+    releaseGenerationActivityLease(controller);
     syncGenerationTrackingState();
     if (removed) eventSource.emit(event_types.IMAGE_GENERATION_ENDED);
 }
@@ -3883,8 +4017,16 @@ function endGenerationTrackingEarly(controller) {
         return;
     }
     console.debug('SD: endGenerationTrackingEarly called (abort event listener)');
+    releaseGenerationActivityLease(controller);
     syncGenerationTrackingState();
 }
+
+export {
+    startGenerationTracking as _startGenerationTrackingForTest,
+    endGenerationTracking as _endGenerationTrackingForTest,
+    endGenerationTrackingEarly as _endGenerationTrackingEarlyForTest,
+    generateMediaSwipe as _generateMediaSwipeForTest,
+};
 
 function registerAbortController(controller) {
     if (!(controller instanceof AbortController)) {
@@ -6498,6 +6640,7 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
 
     try {
         registerAbortController(abortController);
+        startGenerationTracking(abortController);
         $(stopButton).show();
         const callback = (_a, _b, _c, _d, _e, _f, format) => { result.type = isVideo(format) ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE; };
         const savedPrompt = mediaAttachment.title ?? message.extra.title ?? '';
@@ -6531,6 +6674,7 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
     } finally {
         onComplete();
         $(stopButton).hide();
+        endGenerationTracking(abortController);
         unregisterAbortController(abortController);
         restoreOriginalDimensions(dimensions);
         extension_settings.sd.seed = extension_settings.sd.original_seed;
@@ -7431,6 +7575,29 @@ export async function init() {
     generationPresetState.bucket = initializeGenerationPresets();
     refreshGenerationPresetOptions();
     bindGenerationPresetControls();
+    mountSdModeSummary();
+    [
+        event_types.MAIN_API_CHANGED,
+        event_types.CHATCOMPLETION_SOURCE_CHANGED,
+        event_types.CHATCOMPLETION_MODEL_CHANGED,
+        event_types.CHATCOMPLETION_MODEL_LIST_LOADED,
+        event_types.OAI_PRESET_CHANGED_AFTER,
+        event_types.CONNECTION_PROFILE_LOADED,
+        event_types.SETTINGS_UPDATED,
+    ].forEach(event => {
+        eventSource.on(event, () => {
+            sdModeSummary?.refresh();
+        });
+    });
+    $('.sd_settings .inline-drawer-toggle').on('click', () => {
+        sdModeSummary?.refresh();
+    });
+    $('#openai_function_calling').on('input', () => {
+        sdModeSummary?.refresh();
+    });
+    $('#custom_prompt_post_processing').on('change', () => {
+        sdModeSummary?.refresh();
+    });
     const imageGenerationService = createImageGenerationService();
     setImageGenerationProvider(imageGenerationService);
     getContext().registerExtensionApi('sd', imageGenerationService);

@@ -174,6 +174,23 @@ export function isUpdateCheckDisabled() {
 }
 
 /**
+ * Reads optional git metadata injected at container build time via environment
+ * variables when `.git` is unavailable. Full 40-char SHAs are normalized to
+ * the 9-char short revision length used by git in this repository.
+ * @param {NodeJS.ProcessEnv} [env=process.env]
+ * @returns {{ gitRevision: string | null, gitBranch: string | null }}
+ */
+export function resolveEnvGitMetadata(env = process.env) {
+    const rawRev = String(env?.LUKER_GIT_REVISION || '').trim();
+    const rawBranch = String(env?.LUKER_GIT_BRANCH || '').trim();
+    const gitRevision = rawRev
+        ? (/^[0-9a-f]{40}$/i.test(rawRev) ? rawRev.slice(0, 9) : rawRev)
+        : null;
+    const gitBranch = rawBranch || null;
+    return { gitRevision, gitBranch };
+}
+
+/**
  * Returns the version of the running instance. Get the version from package.json and git metadata.
  * Also returns the agent string for the Horde API.
  * `pkgVersion` keeps the SillyTavern contract third-party code reads from /version: it is the
@@ -204,6 +221,12 @@ export async function getVersion() {
         }
     } catch {
         // suppress exception
+    }
+
+    if (!gitRevision || !gitBranch) {
+        const envMeta = resolveEnvGitMetadata();
+        if (!gitRevision) gitRevision = envMeta.gitRevision;
+        if (!gitBranch) gitBranch = envMeta.gitBranch;
     }
 
     const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.19.0').trim() || '1.19.0';

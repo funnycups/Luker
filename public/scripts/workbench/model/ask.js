@@ -125,8 +125,8 @@ export function askTools(sources = {}, extraPluginTools = []) {
         text: { type: 'string', description: 'The answer in Simplified Chinese, plain and concrete. Markdown tables allowed.' },
         suggest: {
             type: 'string',
-            enum: ['', 'memory_graph', 'memory', 'orch', 'sd', 'preset', 'card', 'world'],
-            description: 'If fixing this needs editing one workbench target, name it so the user gets a jump button: memory_graph = edit current chat memory nodes/relations (requires an open chat); memory = edit memory structure/schema and extraction/injection settings; orch = orchestration; sd = image generation; preset = preset; card = character card; world = world book.',
+            enum: ['', 'memory', 'memory_graph', 'orch', 'sd', 'preset', 'card', 'world'],
+            description: 'If fixing this needs editing one workbench target, name it so the user gets a jump button: memory = memory graph config (schema, extraction and injection settings); memory_graph = memory graph content (current chat memory nodes and relations, requires an open chat); orch = orchestration; sd = image generation; preset = preset; card = character card; world = world book.',
         },
         fix_prompt: { type: 'string', description: 'If suggest is set: a concrete Chinese instruction for that workbench\'s AI.' },
         request_ids: { type: 'array', items: { type: 'string' }, description: 'Request IDs your answer references (rendered as clickable inspector links).' },

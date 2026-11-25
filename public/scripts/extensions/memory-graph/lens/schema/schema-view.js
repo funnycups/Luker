@@ -6,6 +6,7 @@
 // Saving shows a change summary first and offers undo afterwards.
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
+import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
 import { icon } from '../icons.js';
 import { i18n, i18nFormat } from '../i18n.js';
 import { typeVisual } from '../model.js';
@@ -14,6 +15,7 @@ import {
     toDrafts, fromDraft, newColumn, newTypeDraft, labelsFromDrafts, validateDrafts,
     describeChanges, draftsEqual, cloneDrafts,
 } from './schema-model.js';
+import { buildMgSchemaTypeModel } from '../settings/behavior-summary-models.js';
 import { TEMPLATES, buildTemplate, templateTypeNames } from './templates.js';
 import { openFilterDialog } from '../filter/filter-panel.js';
 
@@ -67,6 +69,38 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
     const scopeChanged = () => Boolean(info?.hasCharacter) && scopeCharacter !== (info.scope === 'character');
     const isDirty = () => status === 'ready' && (!draftsEqual(base, drafts) || scopeChanged());
 
+    const typeSummary = createBehaviorSummary({
+        id: 'mg-schema-type',
+        ariaLabel: i18n('Memory type behavior summary'),
+        build: () => {
+            const draft = selected();
+            return draft
+                ? buildMgSchemaTypeModel({ draft, globalSettings: info?.globalSettings || {} })
+                : { tone: 'dormant', rows: [] };
+        },
+    });
+
+    function syncGlobalSettingsFromSource() {
+        if (!info || typeof source.settings?.read !== 'function') return;
+        try {
+            const latest = source.settings.read();
+            info.globalSettings = {
+                autoCompressionEnabled: Boolean(latest?.values?.autoCompressionEnabled),
+                persistentInjectionMaxSeqDistance: Math.max(0, Math.floor(Number(latest?.advanced?.values?.persistentInjectionMaxSeqDistance) || 0)),
+                recallMethod: String(latest?.values?.recallMethod || 'llm'),
+                ragDefaultPerTypeK: Math.max(0, Math.floor(Number(latest?.values?.ragDefaultPerTypeK) || 0)),
+            };
+        } catch {
+            // Keep existing globalSettings if settings read is unavailable.
+        }
+    }
+
+    const unsubscribeSettings = source.settings?.subscribe?.(() => {
+        if (status !== 'ready') return;
+        syncGlobalSettingsFromSource();
+        typeSummary.update();
+    }) || (() => {});
+
     const workbenchOpen = (extra = {}) => {
         const wb = globalThis.Luker?.getContext?.()?.workbench;
         if (typeof wb?.open !== 'function') return;
@@ -111,10 +145,12 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
         clear(list);
         clear(editor);
         if (status === 'loading' || status === 'idle') {
+            typeSummary.bindScope(null);
             put(editor, h('div', { class: 'ml-loading' }, h('div', { class: 'ml-spinner', 'aria-hidden': 'true' }), h('span', { text: i18n('Reading memory…') })));
             return;
         }
         if (status === 'error') {
+            typeSummary.bindScope(null);
             put(editor, emptyState('alert', i18n('Failed to read'), errorText, button(i18n('Refresh'), () => load(), { iconName: 'refresh' })));
             return;
         }
@@ -268,7 +304,7 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
             }), { iconName: 'sparkle', className: 'ml-btn-sm ml-schema-suggest', title: i18n('Let the AI add record items, write the prompts and choose how it is recorded') })
             : null;
         const items = h('ol', { class: 'ml-schema-items' }, draft.columns.map(column => itemRow(draft, column)));
-        put(editor, h('div', { class: 'ml-schema-editor-inner' },
+        const editorInner = h('div', { class: 'ml-schema-editor-inner' },
             h('button', { type: 'button', class: 'ml-schema-back', onClick: () => { pane = 'list'; paint(); } },
                 icon('chevronLeft', { size: 16 }), h('span', { text: i18n('Memory types') })),
             h('div', { class: 'ml-schema-typehead', dataset: { tone: typeVisual(draft.id).tone } },
@@ -277,6 +313,7 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
                 h('span', { class: 'ml-schema-usage', text: count ? i18nFormat('${0} in the current chat', count) : i18n('None in the current chat yet') }),
                 suggestBtn,
                 draft.deletable ? iconButton('trash', i18n('Delete this type'), () => deleteType(draft), { className: 'ml-schema-danger' }) : null),
+            typeSummary.el,
             intro,
             h('section', { class: 'ml-schema-section' },
                 sectionTitle(`${i18n('Record items')} · ${draft.columns.length}`),
@@ -289,7 +326,10 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
                     flag(draft, 'latestOnly', i18n('Keep only the latest per name'), i18n('Only one entry stays for the same character or place, new content replaces the old.')),
                     flag(draft, 'compression', i18n('Merge into summaries automatically'), i18n('Once there are many entries, several are merged into one summary to save space.')))),
             advancedSection(draft),
-        ));
+        );
+        put(editor, editorInner);
+        typeSummary.bindScope(editorInner);
+        typeSummary.update();
         editor.scrollTop = scroll;
         if (draft.isNew && !draft.name) requestAnimationFrame(() => nameInput.focus());
     }
@@ -297,34 +337,38 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
     function advancedSection(draft) {
         const raw = draft.raw;
         const compression = (raw.compression ||= {});
-        const text = (target, key, label, rows = 0) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+        const text = (target, key, label, rows = 0, fieldKey = '') => h('label', { class: 'ml-aiset-field', dataset: fieldKey ? { fieldKey } : null }, h('span', { class: 'ml-aiset-label', text: label }),
             h(rows ? 'textarea' : 'input', { class: 'ml-schema-input', rows: rows || null, type: rows ? null : 'text', ...(rows ? { text: String(target[key] ?? '') } : { value: String(target[key] ?? '') }), onInput: (event) => { target[key] = event.target.value; touched(); } }));
         const listField = (key, label) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
             h('input', { class: 'ml-schema-input', type: 'text', value: (raw[key] || []).join(', '), onInput: (event) => { raw[key] = event.target.value.split(',').map(s => s.trim()).filter(Boolean); touched(); } }));
-        const number = (target, key, label, min, extra = {}) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+        const number = (target, key, label, min, extra = {}) => h('label', { class: 'ml-aiset-field', dataset: { fieldKey: key } }, h('span', { class: 'ml-aiset-label', text: label }),
             h('input', { class: 'ml-schema-input', type: 'number', min, step: 1, value: String(target[key] ?? ''), ...extra, onInput: (event) => { target[key] = event.target.value === '' ? undefined : Number(event.target.value); touched(); } }));
-        const check = (key, label, onAfter = null) => checkRow({
-            checked: raw[key],
-            label,
-            onChange: (value) => {
-                raw[key] = value;
-                onAfter?.(value);
-                touched();
-            },
-        });
+        const check = (key, label, onAfter = null) => {
+            const node = checkRow({
+                checked: raw[key],
+                label,
+                onChange: (value) => {
+                    raw[key] = value;
+                    onAfter?.(value);
+                    touched();
+                },
+            });
+            if (node instanceof Element) node.dataset.fieldKey = key;
+            return node;
+        };
         const searchable = () => (Array.isArray(raw.embeddingColumns) ? raw.embeddingColumns : draft.columns.map(c => c.key));
         const primaryKeys = () => resolvePrimaryKeys(draft);
         return h('section', { class: 'ml-schema-section' },
             sectionTitle(i18n('Advanced Settings')),
             h('div', { class: 'ml-aiset' },
                 h('div', { class: 'ml-aiset-fields' },
-                    text(raw, 'tableName', i18n('Table Name')),
+                    text(raw, 'tableName', i18n('Table Name'), 0, 'tableName'),
                     listField('keywords', i18n('Keywords (comma separated)')),
                     number(raw, 'extractEveryN', i18n('Extract Every N Floors'), 1, { disabled: Boolean(raw.forceUpdate) }),
                     number(raw, 'ragPerTypeK', i18n('RAG per-type quota override'), 0)),
                 check('forceUpdate', i18n('Force Update (must appear each extraction batch)'), () => paintEditor()),
                 check('editable', i18n('Editable (enable edit/delete tools and graph edit context)')),
-                h('div', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: i18n('Primary Key Columns') }),
+                h('div', { class: 'ml-aiset-field', dataset: { fieldKey: 'primaryKeyColumns' } }, h('span', { class: 'ml-aiset-label', text: i18n('Primary Key Columns') }),
                     draft.columns.map(column => checkRow({
                         checked: primaryKeys().includes(column.key),
                         label: column.label || column.key,
@@ -352,8 +396,8 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
                     number(compression, 'fanIn', i18n('Fan-In'), 2),
                     number(compression, 'maxDepth', i18n('Max Depth'), 1),
                     number(compression, 'keepRecentLeaves', i18n('Keep Recent Leaves'), 0)),
-                text(compression, 'rule', i18n('Compression Rule (optional)'), 2),
-                text(compression, 'summarizeInstruction', i18n('Summarize Instruction'), 4)));
+                text(compression, 'rule', i18n('Compression Rule (optional)'), 2, 'rule'),
+                text(compression, 'summarizeInstruction', i18n('Summarize Instruction'), 4, 'summarizeInstruction')));
     }
 
     function flag(draft, key, title, hint) {
@@ -361,6 +405,7 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
             type: 'button',
             role: 'switch',
             class: 'ml-schema-flag',
+            dataset: { fieldKey: key },
             'aria-checked': String(Boolean(draft[key])),
             onClick: () => {
                 draft[key] = !draft[key];
@@ -484,6 +529,7 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
     // ----- Edits ----------------------------------------------------------
     let touchedFrame = 0;
     function touched() {
+        typeSummary.update();
         if (errors.length) {
             errors = validateDrafts(drafts).filter(e => errors.some(prev => prev.uid === e.uid));
         }
@@ -878,7 +924,14 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
             if (status === 'ready') touched();
         },
         onShow() {
-            if (status === 'idle' || (needsReload && !isDirty())) load();
+            if (status === 'idle' || (needsReload && !isDirty())) {
+                load();
+                return;
+            }
+            if (status === 'ready') {
+                syncGlobalSettingsFromSource();
+                typeSummary.update();
+            }
         },
         invalidate() {
             needsReload = true;
@@ -900,8 +953,11 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
         },
         isDirty,
         destroy() {
+            cancelAnimationFrame(touchedFrame);
             clearTimeout(undoTimer);
             closeModal();
+            typeSummary.destroy();
+            unsubscribeSettings();
         },
     };
 }

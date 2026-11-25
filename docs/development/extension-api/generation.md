@@ -50,6 +50,7 @@ context.generateTask({
     functionCallOptions?: object | null = null,   // e.g. { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
     substituteMacros?: boolean = true,            // resolve {{...}} in taskMessages.content; opt out for authoring flows
+    activity?: boolean | object = true,           // ambient global activity lease; pass false to opt out or an object to override
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -309,6 +310,16 @@ Breaking out of `for await (const chunk of stream)` does **not** cancel the unde
 
 `await result` works on its own. Increments arriving before any consumer attaches are dropped (not buffered for late delivery); the internal accumulator still builds the complete terminal `result`. Use this when you want the response shape without per-token rendering.
 
+### Background Activity Guard
+
+Both `generateTask` and `generateTaskStream` accept `activity` (default `true`):
+
+- **`true` (default)** — acquires an ambient global activity lease (`source: 'core:generate-task'`, `scope: 'global'`, `ambient: true`, `guardUnload: true`, `keepAlive: true`) so `beforeunload` warnings and mobile background keep-alive protect the request without prompting on in-app chat switches.
+- **`false`** — opts out of creating an automatic lease for this call.
+- **Plain object** — merges over the default lease options (`source`, `label`, `scope`, `guardUnload`, `guardChatSwitch`, `keepAlive`, `ambient`, `onCancel`). Passing `scope: 'chat'` also enables in-app chat-switch confirmation.
+
+For `generateTaskStream`, the lease remains held from invocation until the terminal `result` promise settles. See [Plugin Integration → Background Activity Guard](/development/extension-api/plugin-integration#background-activity-guard).
+
 ## Message Takeover
 
 For flows that want to produce the assistant message directly instead of guiding the main LLM, see **[Message Takeover](./message-takeover.md)**. That API lets a plugin own message production end to end while the main LLM call is skipped.
@@ -537,14 +548,15 @@ generateRaw(params: {
     llmPresetName?: string,
     apiPresetName?: string,
     apiSettingsOverride?: object | null,
+    activity?: boolean | object,
 }): Promise<string>
 ```
 
-Sends a literal `prompt` to the active backend without involving chat history, world info, character card, or extension prompts. Returns the post-processed response text. Use this for utility calls — titling, classification, rewrites — where you want full control over the input.
+Sends a literal `prompt` to the active backend without involving chat history, world info, character card, or extension prompts. Returns the post-processed response text. Use this for utility calls — titling, classification, rewrites — where you want full control over the input. Defaults `activity` to `true` (an ambient global lease with `source: 'core:generate-raw'`); pass `false` to opt out or a lease options object to override.
 
 ### generateRawData
 
-Same parameters as `generateRaw` but returns the raw API response object instead of a post-processed string. Use when you need fields like `reasoning` that `generateRaw` collapses away.
+Same parameters as `generateRaw` (including `activity`) but returns the raw API response object instead of a post-processed string. Use when you need fields like `reasoning` that `generateRaw` collapses away.
 
 ### generateQuietPrompt
 
@@ -627,24 +639,36 @@ Class-as-namespace helpers expose request lifecycles without going through `Gene
 
 ```ts
 ChatCompletionService.createRequestData(custom: object): object
-ChatCompletionService.sendRequest(data: object, extractData?: boolean, signal?: AbortSignal): Promise<{ content, reasoning } | object | AsyncGenerator>
-ChatCompletionService.processRequest(requestData: object, options: object, extractData?: boolean, signal?: AbortSignal): Promise<...>
+ChatCompletionService.sendRequest(
+    data: object,
+    extractData?: boolean,
+    signal?: AbortSignal,
+    requestOptions?: { activity?: boolean | object },
+): Promise<{ content, reasoning } | object | (() => AsyncGenerator)>
+ChatCompletionService.processRequest(
+    requestData: object,
+    options: { presetName?: string, activity?: boolean | object },
+    extractData?: boolean,
+    signal?: AbortSignal,
+): Promise<...>
 ```
 
 Wraps the `/api/backends/chat-completions/generate` endpoint. `processRequest` adds named-preset application via `getPresetManager('openai')`.
 
 Non-stream returns `{ content, reasoning }` (or raw JSON when `extractData: false`). Stream returns an async-generator factory yielding `{ text, swipes, state }`.
 
+Both `sendRequest` (via the 4th `requestOptions` parameter, never serialized into the request body) and `processRequest` (via `options.activity`) default to an ambient global activity lease (`source: 'core:custom-request'`). Pass `false` to opt out or a lease options object to override. Streaming requests use a two-stage lease: the first stage guards opening the SSE connection inside `sendRequest`, and the second stage acquires a lease only when the returned generator factory is invoked and iterated and releases it in `finally`, so an un-invoked stream factory cannot leak a lease.
+
 ### TextCompletionService
 
 ```ts
 TextCompletionService.createRequestData({ stream, prompt, ... }): object
-TextCompletionService.sendRequest(data, extractData?, signal?): Promise<...>
+TextCompletionService.sendRequest(data, extractData?, signal?, requestOptions?): Promise<...>
 TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, instructSettings): string
 TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
 ```
 
-Mirror of `ChatCompletionService` for text-completion backends. `constructPrompt` formats a chat-message array into a single instruct-formatted string.
+Mirror of `ChatCompletionService` for text-completion backends, with the same `requestOptions.activity` (4th argument to `sendRequest`, never serialized in the request body), `options.activity` on `processRequest`, and two-stage streaming lease semantics. `constructPrompt` formats a chat-message array into a single instruct-formatted string.
 
 ### ConnectionManagerRequestService
 

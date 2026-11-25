@@ -1,4 +1,4 @@
-export function createImageService({ bridge, queue, getQueueConfig }) {
+export function createImageService({ bridge, queue, getQueueConfig, context = null }) {
     return {
         configure(options) {
             queue.configure?.(options);
@@ -45,7 +45,12 @@ export function createImageService({ bridge, queue, getQueueConfig }) {
             if (typeof getQueueConfig === 'function') {
                 queue.configure?.(getQueueConfig());
             }
-            return queue.schedule(() => bridge.generateImage(prompt, options));
+            const hasIllustrationLease = typeof context?.activityGuard?.list === 'function'
+                && context.activityGuard.list().some(entry => entry?.source === 'sd:illustration');
+            const bridgeOptions = hasIllustrationLease && options?.skipActivityLease === undefined
+                ? { ...options, skipActivityLease: true }
+                : options;
+            return queue.schedule(() => bridge.generateImage(prompt, bridgeOptions));
         },
     };
 }

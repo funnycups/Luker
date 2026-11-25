@@ -20,7 +20,11 @@ const SETTINGS = {
     nodeTypeSchema: [
         { id: 'character_sheet', tableColumns: ['title', 'aliases', 'identity'], primaryKeyColumns: ['title', 'aliases'], latestOnly: true },
         { id: 'location_state', tableColumns: ['title', 'state'], primaryKeyColumns: ['title'], latestOnly: true },
-        { id: 'event', tableColumns: ['summary'] },
+        {
+            id: 'event',
+            tableColumns: ['summary'],
+            compression: { mode: 'hierarchical', summarizeInstruction: 'Keep enduring facts in one concise summary.' },
+        },
     ],
 };
 
@@ -94,11 +98,15 @@ describe('reads', () => {
         expect(ids).toContain('n_3');
     });
 
-    test('schema returns the effective type specs', async () => {
+    test('schema returns the effective type specs including compression metadata', async () => {
         const e = env();
         const res = await tools.executeGraphReadTool({ name: 'mg_graph_schema', args: {} }, e);
         expect(res.types.map((t) => t.id)).toEqual(['character_sheet', 'location_state', 'event']);
         expect(res.types[0].primaryKeyColumns).toEqual(['title', 'aliases']);
+        expect(res.types[2].compression).toEqual({
+            mode: 'hierarchical',
+            summarizeInstruction: 'Keep enduring facts in one concise summary.',
+        });
     });
 
     test('read_chat delegates to the injected range reader', async () => {
@@ -226,6 +234,153 @@ describe('merge_nodes', () => {
             .rejects.toThrow(/^mg_graph_merge_nodes: not_allowed — .*not a semantic node/);
         expect(e.working.nodes.n_2.fields.state).toBe('lit');
         expect(e.working.nodes.n_1.archived).toBe(false);
+    });
+});
+
+describe('compact_nodes and rollup guards', () => {
+    test('compacts un-parented leaves into a single-summary rollup and surfaces rollup metadata on reads', async () => {
+        const e = env();
+        e.working.nodes.n_5 = { id: 'n_5', type: 'event', level: 'semantic', title: 'Summary 2', fields: { summary: 'drifters passed north' }, childrenIds: [], parentId: '', archived: false, seqTo: 2 };
+        e.working.nodeSeq = 5;
+
+        const res = await tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: {
+                type: 'event',
+                child_ids: ['n_3', 'n_5', 'n_3'],
+                summary: 'Headland signal lit; drifters passed north.',
+            },
+        }, e);
+
+        expect(res).toMatchObject({
+            ok: true,
+            changed: true,
+            type: 'event',
+            semantic_depth: 1,
+            child_ids: ['n_3', 'n_5'],
+        });
+        const rollup = e.working.nodes[res.id];
+        expect(rollup.semanticRollup).toBe(true);
+        expect(rollup.semanticDepth).toBe(1);
+        expect(rollup.fields).toEqual({ summary: 'Headland signal lit; drifters passed north.' });
+        expect(rollup.childrenIds).toEqual(['n_3', 'n_5']);
+        expect(rollup.seqTo).toBe(2);
+        expect(e.working.nodes.n_3.parentId).toBe(res.id);
+        expect(e.working.nodes.n_5.parentId).toBe(res.id);
+        expect(e.working.edges.filter(edge => edge.from === res.id && edge.type === 'contains')).toHaveLength(2);
+        expect(e.working.edges.filter(edge => edge.from === res.id && edge.type === 'semantic_contains')).toHaveLength(2);
+
+        const listed = await tools.executeGraphReadTool({ name: 'mg_graph_list_nodes', args: { types: ['event'] } }, e);
+        const listedRollup = listed.nodes.find(n => n.id === res.id);
+        const listedChild = listed.nodes.find(n => n.id === 'n_3');
+        expect(listedRollup).toMatchObject({ semanticRollup: true, semanticDepth: 1 });
+        expect(listedChild.parentId).toBe(res.id);
+
+        const detail = await tools.executeGraphReadTool({ name: 'mg_graph_node_detail', args: { node_id: res.id } }, e);
+        expect(detail.node).toMatchObject({ semanticRollup: true, semanticDepth: 1, childrenIds: ['n_3', 'n_5'] });
+    });
+
+    test('supports custom title without bumping seqTo and supports non-event types and L2 rollups', async () => {
+        const e = env();
+        e.working.seqCounter = 9;
+        e.working.nodes.n_5 = { id: 'n_5', type: 'location_state', level: 'semantic', title: 'Salt reef', fields: { title: 'Salt reef', state: 'foggy' }, childrenIds: [], parentId: '', archived: false, seqTo: 3 };
+        e.working.nodes.n_6 = { id: 'n_6', type: 'location_state', level: 'semantic', title: 'North pier', fields: { title: 'North pier', state: 'quiet' }, childrenIds: [], parentId: '', archived: false, seqTo: 4 };
+        e.working.nodeSeq = 6;
+
+        const r1 = await tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: {
+                type: 'location_state',
+                child_ids: ['n_2', 'n_5'],
+                title: 'Coastline Watch',
+                summary: 'Headland lit; reef foggy.',
+            },
+        }, e);
+        expect(r1).toMatchObject({ ok: true, title: 'Coastline Watch', semantic_depth: 1 });
+        expect(e.working.nodes[r1.id].seqTo).toBe(3);
+        expect(e.working.nodes[r1.id].fields).toEqual({ summary: 'Headland lit; reef foggy.' });
+
+        const r2 = await tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: {
+                type: 'location_state',
+                child_ids: [r1.id, 'n_6'],
+                summary: 'Entire northern coast quiet under fog.',
+            },
+        }, e);
+        expect(r2).toMatchObject({ ok: true, semantic_depth: 2 });
+        expect(e.working.nodes[r2.id].semanticDepth).toBe(2);
+        expect(e.working.nodes[r1.id].parentId).toBe(r2.id);
+    });
+
+    test('validates schema type, child existence, archival, type match, and existing parent', async () => {
+        const e = env();
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'ghost_type', child_ids: ['n_3'], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: invalid_args — .*ghost_type/);
+
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: [], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: invalid_args/);
+
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: ['n_3'], summary: '   ' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: invalid_args/);
+
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: ['ghost'], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: not_found — .*ghost/);
+
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: ['n_4'], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: not_allowed — .*archived/);
+
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: ['n_3', 'n_1'], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: invalid_args — .*character_sheet/);
+
+        e.working.nodes.n_3.parentId = 'existing_rollup';
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'event', child_ids: ['n_3'], summary: 'x' },
+        }, e)).rejects.toThrow(/^mg_graph_compact_nodes: not_allowed — .*existing_rollup/);
+    });
+
+    test('edit_node permits title/summary on rollups and atomically rejects leaf fields or type changes', async () => {
+        const e = env();
+        const compacted = await tools.executeGraphWriteTool({
+            name: 'mg_graph_compact_nodes',
+            args: { type: 'location_state', child_ids: ['n_2'], summary: 'Initial rollup summary.' },
+        }, e);
+        const rollupId = compacted.id;
+
+        const edited = await tools.executeGraphWriteTool({
+            name: 'mg_graph_edit_node',
+            args: { node_id: rollupId, title: 'Harbor Arc', set_fields: { summary: 'Updated rollup summary.' } },
+        }, e);
+        expect(edited).toMatchObject({ ok: true, changed: true });
+        expect(e.working.nodes[rollupId].title).toBe('Harbor Arc');
+        expect(e.working.nodes[rollupId].fields).toEqual({ summary: 'Updated rollup summary.' });
+
+        e.working.nodes[rollupId].archived = true;
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_edit_node',
+            args: { node_id: rollupId, archived: false, set_fields: { state: 'disallowed' } },
+        }, e)).rejects.toThrow(/^mg_graph_edit_node: not_allowed — .*only permits editing title or summary/);
+        expect(e.working.nodes[rollupId].archived).toBe(true);
+
+        e.working.nodes[rollupId].archived = false;
+        await expect(tools.executeGraphWriteTool({
+            name: 'mg_graph_edit_node',
+            args: { node_id: rollupId, type: 'event' },
+        }, e)).rejects.toThrow(/^mg_graph_edit_node: not_allowed — .*cannot change type of rollup/);
+        expect(e.working.nodes[rollupId].type).toBe('location_state');
     });
 });
 

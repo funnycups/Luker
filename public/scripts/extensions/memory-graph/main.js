@@ -109,6 +109,7 @@ const SYMMETRIC_RELATIONS = new Set([
     'hostile_to',
     'family_of',
     'partner_of',
+    'related',
 ]);
 import {
     getFloorStateInstance,
@@ -143,7 +144,9 @@ import {
     normalizeMultilineText,
     ensureNodeFieldsObject,
     isExtractableAssistantMessage,
+    resolveStartSeqFromFloor,
 } from './primitives.js';
+export { resolveStartSeqFromFloor };
 import {
     cloneRollbackNodeSnapshot,
     cloneRollbackEdgeSnapshot,
@@ -382,6 +385,24 @@ let activeRecallToast = null;
 let activePersistentRuntimeNoticeToast = null;
 let activeRecallAbortController = null;
 let activeExtractionAbortController = null;
+let activeVectorAbortController = null;
+
+async function runWithMemoryActivity(context, { source, label, abortController }, fn) {
+    const guard = context?.activityGuard ?? getContext()?.activityGuard;
+    if (typeof guard?.run !== 'function') {
+        return await fn();
+    }
+    return await guard.run({
+        source,
+        label,
+        scope: 'chat',
+        onCancel: () => {
+            if (abortController && !abortController.signal.aborted) {
+                abortController.abort();
+            }
+        },
+    }, fn);
+}
 // Scope of the in-flight scheduled extraction pass, keyed to
 // `activeExtractionAbortController`. Only `runScheduledExtractionPass`
 // populates it; fill / rebuild / rebuild_recent / compression passes
@@ -2421,40 +2442,27 @@ export function archiveNode(store, oldId, replacementId = null) {
     store.edges = next;
 }
 
-function summarizeTextHeuristic(lines) {
-    return lines
-        .map(line => normalizeText(line))
-        .filter(Boolean)
-        .join('\n');
+function isRollupNode(node) {
+    return Boolean(node?.semanticRollup) || Number(node?.semanticDepth || 0) > 0;
 }
 
 function buildCompressionSummaryInstruction(baseInstruction, options = {}) {
     const base = normalizeText(baseInstruction || '');
     const defaultInstruction = 'Compress semantic nodes into concise higher-level memory while preserving stage-shifting facts.';
     const instruction = base || defaultInstruction;
+    const type = String(options?.type || '').trim() || 'semantic';
     const fanIn = Math.max(2, Math.floor(Number(options?.fanIn) || 2));
     const depth = Math.max(1, Math.floor(Number(options?.depth) || 1));
     const childDepth = depth - 1;
     const childDepthDesc = childDepth === 0
-        ? 'leaf events (direct from dialogue)'
-        : `depth-${childDepth} rollup events`;
+        ? 'leaf nodes'
+        : `depth-${childDepth} rollup summaries`;
     return [
         instruction,
         '',
-        `Compression context (HARD, from code — do not infer): rollup_depth=${depth}, children=${fanIn} (each child is a ${childDepthDesc}). Apply the depth-${depth} rules from the writing standard above. KEEP ≤ 3 hard bound applies regardless of fanIn; total chars ≤ 60 + 50 × (KEEP count).`,
-        'Never copy-paste or concatenate child summaries — re-synthesize. Do not continue story or predict future events.',
+        `Compression context (HARD, from code — do not infer): type=${type}, rollup_depth=${depth}, children=${fanIn} (each child is ${childDepthDesc}).`,
+        'Synthesize the child records into one concise summary preserving enduring facts and unresolved hooks. Never copy-paste or concatenate child records verbatim. Do not continue story or predict future events.',
     ].join('\n');
-}
-
-function getCompressionColumnNames(spec) {
-    const columns = Array.isArray(spec?.tableColumns)
-        ? spec.tableColumns.map(column => String(column || '').trim().toLowerCase()).filter(Boolean)
-        : [];
-    const deduped = Array.from(new Set(columns));
-    if (!deduped.includes('summary')) {
-        deduped.unshift('summary');
-    }
-    return deduped;
 }
 
 function rewriteDepthWorldInfoToAfter(payload = {}) {
@@ -2594,93 +2602,61 @@ function buildRuntimeWorldInfoFromPayload(payload = null) {
     return hasEffectiveRuntimeWorldInfo(rewritten) ? rewritten : null;
 }
 
-async function summarizeTextWithLLM(context, settings, instruction, lines, abortSignal = null) {
-    const joined = summarizeTextHeuristic(lines);
-    if (!joined) {
-        return '';
-    }
-
-    try {
-        const result = await runFunctionCallTask(context, settings, {
-            systemPrompt: instruction,
-            userPrompt: joined,
-            apiPresetName: settings.extractApiPresetName || '',
-            promptPresetName: settings.extractPresetName || '',
-            functionName: 'luker_rpg_summary',
-            functionDescription: 'Return compressed memory summary text.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    summary: { type: 'string' },
-                },
-                required: ['summary'],
-                additionalProperties: false,
-            },
-            abortSignal,
-            allowPreamble: true,
-        });
-        return normalizeText(result?.summary || '');
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] LLM summary failed`, error);
-        return '';
-    }
-}
-
-async function summarizeRollupFieldsWithLLM(context, settings, spec, instruction, group, abortSignal = null) {
-    const columns = getCompressionColumnNames(spec);
-    const rows = (Array.isArray(group) ? group : []).map((node) => {
-        const row = {
-            id: String(node?.id || ''),
-            title: String(node?.title || ''),
-            seq_to: String(node?.seqTo ?? ''),
-        };
-        for (const column of columns) {
-            row[column] = getTableCellValueFromNode(node, column);
-        }
-        return row;
-    });
-    if (rows.length === 0) {
-        return {};
-    }
-    const properties = {};
-    for (const column of columns) {
-        properties[column] = { type: 'string' };
-    }
-    const userPrompt = rows.map(row => JSON.stringify(row)).join('\n');
-    try {
-        const result = await runFunctionCallTask(context, settings, {
-            systemPrompt: [
-                instruction,
-                'Return only compressed rollup fields.',
-                'Keep each field concise and high-signal.',
-                'Do not continue story.',
-            ].join('\n'),
-            userPrompt,
-            apiPresetName: settings.extractApiPresetName || '',
-            promptPresetName: settings.extractPresetName || '',
-            functionName: 'luker_rpg_summary_fields',
-            functionDescription: 'Return compressed rollup fields for the higher-level memory node.',
-            parameters: {
-                type: 'object',
-                properties,
-                required: ['summary'],
-                additionalProperties: false,
-            },
-            abortSignal,
-            allowPreamble: true,
-        });
-        const out = {};
-        for (const column of columns) {
-            const normalized = normalizeText(result?.[column] ?? '');
-            if (normalized) {
-                out[column] = normalized;
+async function summarizeRollupWithLLM(context, settings, spec, instruction, group, abortSignal = null) {
+    const leafColumns = Array.from(new Set(
+        (Array.isArray(spec?.tableColumns) ? spec.tableColumns : [])
+            .map(column => String(column || '').trim())
+            .filter(Boolean),
+    ));
+    const rows = (Array.isArray(group) ? group : [])
+        .filter(Boolean)
+        .map((node) => {
+            const row = {
+                id: String(node?.id || ''),
+                title: String(node?.title || ''),
+                seq_to: String(node?.seqTo ?? ''),
+            };
+            if (isRollupNode(node)) {
+                row.summary = getNodeSummary(node);
+            } else {
+                const columns = leafColumns.length > 0
+                    ? leafColumns
+                    : Object.keys(node?.fields && typeof node.fields === 'object' && !Array.isArray(node.fields) ? node.fields : {});
+                for (const column of columns) {
+                    row[column] = getTableCellValueFromNode(node, column);
+                }
             }
-        }
-        return out;
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] LLM rollup fields failed`, error);
-        return {};
+            return row;
+        });
+    if (rows.length === 0) {
+        throw new Error('summarizeRollupWithLLM requires non-empty group.');
     }
+
+    const userPrompt = rows.map(row => JSON.stringify(row)).join('\n');
+    const result = await runFunctionCallTask(context, settings, {
+        systemPrompt: [
+            instruction,
+            'Return one concise synthesized summary via luker_rpg_summary.',
+            'Do not continue story.',
+        ].join('\n'),
+        userPrompt,
+        apiPresetName: settings.extractApiPresetName || '',
+        promptPresetName: settings.extractPresetName || '',
+        functionName: 'luker_rpg_summary',
+        functionDescription: 'Return compressed memory summary text for the higher-level rollup node.',
+        parameters: {
+            type: 'object',
+            properties: {
+                summary: { type: 'string' },
+            },
+            required: ['summary'],
+            additionalProperties: false,
+        },
+        abortSignal,
+        allowPreamble: true,
+        validateArgs: (args) => (normalizeText(args?.summary || '') ? '' : 'Compression summary must be a non-empty string.'),
+    });
+    return normalizeText(result.summary);
 }
 
 function isAbortSignalLike(value) {
@@ -2902,6 +2878,7 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
     recallRunToken = 0,
     allowPreamble = false,
     retriesOverride = null,
+    validateArgs = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -2968,6 +2945,12 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
             const matched = filteredCalls.find(call => call.name === fnName);
             if (!matched) {
                 throw markToolCallValidationError(new Error(`Model returned tool call, but not '${fnName}'.`));
+            }
+            if (typeof validateArgs === 'function') {
+                const argError = validateArgs(matched.args);
+                if (argError) {
+                    throw markToolCallValidationError(new Error(argError));
+                }
             }
             return matched.args;
         } catch (error) {
@@ -3098,6 +3081,7 @@ async function runFunctionCallTask(context, settings, {
     abortSignal = null,
     recallRunToken = 0,
     allowPreamble = false,
+    validateArgs = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -3134,6 +3118,7 @@ async function runFunctionCallTask(context, settings, {
         abortSignal,
         recallRunToken,
         allowPreamble,
+        validateArgs,
     });
 }
 
@@ -3289,7 +3274,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                         target_ref: { type: 'string', description: 'Optional. Use either target_ref or target_node_id. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                         target_node_id: { type: 'string', description: 'Optional. Use either target_node_id or target_ref. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                         relation: { type: 'string', description: `Canonical relation type only. Allowed values: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.` },
-                        direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                        direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: \'outgoing\' (source→target). Symmetric relations (allied_with, hostile_to, family_of, partner_of, related) always collapse into one canonical edge.' },
                     },
                     additionalProperties: false,
                 },
@@ -3443,7 +3428,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                                     target_ref: { type: 'string', description: 'Optional. Use either target_ref or target_node_id. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                                     target_node_id: { type: 'string', description: 'Optional. Use either target_node_id or target_ref. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                                     relation: { type: 'string', description: `Canonical relation type only. Allowed values: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.` },
-                                    direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                                    direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: \'outgoing\' (source→target). Symmetric relations (allied_with, hostile_to, family_of, partner_of, related) always collapse into one canonical edge.' },
                                 },
                                 additionalProperties: false,
                             },
@@ -3528,10 +3513,10 @@ function normalizeExtractLinks(rawLinks) {
             continue;
         }
         const relation = normalizeText(link?.relation || 'related') || 'related';
-        const directionRaw = String(link?.direction || 'bidirectional').toLowerCase();
+        const directionRaw = String(link?.direction || 'outgoing').toLowerCase();
         const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
             ? directionRaw
-            : 'bidirectional';
+            : 'outgoing';
         normalized.push({
             targetRef,
             targetNodeId,
@@ -3867,7 +3852,7 @@ function buildGraphNodeRow(node, schemaMap) {
         semantic_depth: Number(node?.semanticDepth ?? node?.metadata?.semantic_depth ?? 0),
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
     };
 }
 
@@ -4185,6 +4170,9 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                 if (!node || node.archived || !node.id) {
                     return false;
                 }
+                if (isRollupNode(node)) {
+                    return false;
+                }
                 if (extractionMaxSeq !== null) {
                     const seq = Number(node?.seqTo ?? NaN);
                     if (Number.isFinite(seq) && seq > extractionMaxSeq) {
@@ -4489,6 +4477,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         const explicitTarget = store?.nodes?.[explicitNodeId];
         if (
             isNodeVisibleAtSeq(explicitTarget)
+            && !isRollupNode(explicitTarget)
             && String(explicitTarget.type || '').toLowerCase() === type
         ) {
             target = explicitTarget;
@@ -4522,6 +4511,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
     if (!target && latestOnlyConfig.enabled) {
         const candidates = Object.values(store.nodes)
             .filter(node => isNodeVisibleAtSeq(node))
+            .filter(node => !isRollupNode(node))
             .filter(node => String(node.type || '').toLowerCase() === type)
             .map(node => ({ node, score: computeLatestOnlyMatchScore(node) }))
             .filter(entry => entry.score > 0)
@@ -4542,7 +4532,11 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         }
     } else if (!target) {
         const normalizedKey = `${type}::${title.toLowerCase()}`;
-        target = Object.values(store.nodes).find(node => isNodeVisibleAtSeq(node) && `${node.type}::${node.title.toLowerCase()}` === normalizedKey);
+        target = Object.values(store.nodes).find(
+            node => isNodeVisibleAtSeq(node)
+                && !isRollupNode(node)
+                && `${String(node.type || '').toLowerCase()}::${String(node.title || '').toLowerCase()}` === normalizedKey,
+        );
     }
 
     if (!target) {
@@ -4631,7 +4625,7 @@ function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
         }
 
         const relation = normalizeText(link?.relation || 'related') || 'related';
-        const direction = String(link?.direction || 'bidirectional').toLowerCase();
+        const direction = String(link?.direction || 'outgoing').toLowerCase();
 
         // Symmetric relations collapse to ONE canonical edge (sorted-id
         // from→to). Direction directive is ignored — "A allied_with B" and
@@ -4772,13 +4766,24 @@ function parseCompressionRuleClause(rawClause) {
     return { field, op, values };
 }
 
+const ROLLUP_RULE_FIELDS = new Set([
+    'summary',
+    'seq',
+    'seq_to',
+    'semantic_depth',
+    'depth',
+    'semantic_rollup',
+    'rollup',
+    'is_rollup',
+]);
+
 function getCompressionRuleFieldValue(node, field) {
     const key = String(field || '').trim().toLowerCase();
     if (!key) {
         return '';
     }
     if (key === 'semantic_rollup' || key === 'rollup' || key === 'is_rollup') {
-        return String(Boolean(node?.semanticRollup)).toLowerCase();
+        return String(isRollupNode(node)).toLowerCase();
     }
     if (key === 'semantic_depth' || key === 'depth') {
         return String(Number.isFinite(Number(node?.semanticDepth)) ? Number(node.semanticDepth) : 0);
@@ -4822,7 +4827,11 @@ function buildCompressionRuleMatcher(ruleText) {
         valid: true,
         invalid: [],
         test: (node) => {
+            const rollup = isRollupNode(node);
             for (const clause of clauses) {
+                if (rollup && !ROLLUP_RULE_FIELDS.has(clause.field)) {
+                    continue;
+                }
                 const actual = getCompressionRuleFieldValue(node, clause.field);
                 if (clause.op === 'exists') {
                     if (!actual) {
@@ -4891,18 +4900,24 @@ function getNextSemanticRollupOrdinal(store, type, depth) {
 }
 
 /**
- * Create a rollup node with the given children. Used by both:
- *   - compressSemanticHierarchical (internal compression loop)
+ * Create a single-summary rollup node with the given children. Used by both:
+ *   - compressSemanticHierarchical / compressSemanticFlat (internal compression loop)
  *   - write-api.js::compactNodes (external agent-driven compaction)
  *
  * Throws structured errors:
- *   - { code: 'BAD_ARGS' } when type or childIds missing/empty
+ *   - { code: 'BAD_ARGS' } when type, childIds, or normalized summary missing/empty
  *   - { code: 'CHILD_NOT_FOUND' } when a child id is not in the store
  *   - { code: 'CHILD_HAS_PARENT' } when a child already has a rollup parent of the same type
  */
-export function createRollupWithChildren(store, { type, childIds, summary, fields = {}, label = '' } = {}) {
+export function createRollupWithChildren(store, { type, childIds, summary, label = '' } = {}) {
     if (!type || !Array.isArray(childIds) || childIds.length === 0) {
         const err = new Error('createRollupWithChildren requires type and non-empty childIds.');
+        err.code = 'BAD_ARGS';
+        throw err;
+    }
+    const normalizedSummary = normalizeText(summary || '');
+    if (!normalizedSummary) {
+        const err = new Error('createRollupWithChildren requires a non-empty summary.');
         err.code = 'BAD_ARGS';
         throw err;
     }
@@ -4922,7 +4937,7 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
     const childDepths = children.map(c => Number(c.semanticDepth || 0));
     const rollupDepth = Math.max(...childDepths) + 1;
     const ordinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
-    const finalFields = { summary: String(summary || ''), ...fields };
+    const finalFields = { summary: normalizedSummary };
     // Partial-coverage rollup: union the floorRange of children that have a
     // well-formed one, and skip the rest. Legacy children pre-dating the
     // floor-anchor schema flag don't veto the parent's anchor — they just
@@ -4951,6 +4966,46 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
     for (const child of children) {
         reparentNode(store, child.id, parent.id);
         addEdge(store, parent.id, child.id, 'semantic_contains');
+    }
+    return parent;
+}
+
+async function applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+    rollupDepth,
+    eventDepth,
+    options,
+} = {}) {
+    const roundBeforeStore = typeof options?.onRoundApplied === 'function'
+        ? normalizeStoreForRuntime(store)
+        : null;
+    const instruction = buildCompressionSummaryInstruction(
+        config.summarizeInstruction
+        || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
+        { type, depth: rollupDepth, fanIn: group.length },
+    );
+    const summary = await summarizeRollupWithLLM(
+        context,
+        settings,
+        spec,
+        instruction,
+        group,
+        options?.abortSignal || null,
+    );
+
+    const parent = createRollupWithChildren(store, {
+        type: String(type || 'semantic'),
+        childIds: group.map(n => n.id),
+        summary,
+        label: config.label,
+    });
+    recordCompressionRound(options?.compressionStats, type, 1);
+    if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
+        await options.onRoundApplied({
+            type: String(type || ''),
+            depth: eventDepth,
+            roundSeqTo: Number(parent?.seqTo ?? 0),
+            beforeStore: roundBeforeStore,
+        });
     }
     return parent;
 }
@@ -5002,58 +5057,13 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
                 break;
             }
 
-            const roundBeforeStore = typeof options?.onRoundApplied === 'function'
-                ? normalizeStoreForRuntime(store)
-                : null;
-            const rollupDepth = depth + 1;
-            const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
-            const instruction = buildCompressionSummaryInstruction(
-                config.summarizeInstruction
-                || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
-                { depth: rollupDepth, fanIn: group.length },
-            );
-            const rollupFields = await summarizeRollupFieldsWithLLM(
-                context,
-                settings,
-                spec,
-                instruction,
-                group,
-                options?.abortSignal || null,
-            );
-            if (!normalizeText(rollupFields?.summary || '')) {
-                const fallbackSummary = await summarizeTextWithLLM(
-                    context,
-                    settings,
-                    instruction,
-                    lines,
-                    options?.abortSignal || null,
-                );
-                if (fallbackSummary) {
-                    rollupFields.summary = fallbackSummary;
-                }
-            }
-            if (!normalizeText(rollupFields?.summary || '')) {
-                break;
-            }
-
-            const parent = createRollupWithChildren(store, {
-                type,
-                childIds: group.map(n => n.id),
-                summary: rollupFields.summary,
-                fields: rollupFields,
-                label: config.label,
+            await applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+                rollupDepth: depth + 1,
+                eventDepth: depth,
+                options,
             });
             changed = true;
             compressedRounds += 1;
-            recordCompressionRound(options?.compressionStats, type, 1);
-            if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
-                await options.onRoundApplied({
-                    type: String(type || ''),
-                    depth,
-                    roundSeqTo: Number(parent?.seqTo ?? 0),
-                    beforeStore: roundBeforeStore,
-                });
-            }
         }
         if (compressedRounds >= maxRoundsPerType) {
             break;
@@ -5100,9 +5110,6 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
         }
         const group = candidates.slice(0, groupSize);
 
-        const roundBeforeStore = typeof options?.onRoundApplied === 'function'
-            ? normalizeStoreForRuntime(store)
-            : null;
         // Parent depth follows the "max(child)+1" invariant so subsequent
         // hierarchical compression and depth-based sorts remain coherent.
         const maxChildDepth = group.reduce((max, node) => {
@@ -5110,63 +5117,13 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
             return Number.isFinite(d) && d > max ? d : max;
         }, 0);
         const rollupDepth = maxChildDepth + 1;
-        const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
-        const instruction = buildCompressionSummaryInstruction(
-            config.summarizeInstruction
-            || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
-            { depth: rollupDepth, fanIn: group.length },
-        );
-        const rollupFields = await summarizeRollupFieldsWithLLM(
-            context,
-            settings,
-            spec,
-            instruction,
-            group,
-            options?.abortSignal || null,
-        );
-        if (!normalizeText(rollupFields?.summary || '')) {
-            const fallbackSummary = await summarizeTextWithLLM(
-                context,
-                settings,
-                instruction,
-                lines,
-                options?.abortSignal || null,
-            );
-            if (fallbackSummary) {
-                rollupFields.summary = fallbackSummary;
-            }
-        }
-        if (!normalizeText(rollupFields?.summary || '')) {
-            break;
-        }
-
-        const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
-        const parent = createNode(store, {
-            type: String(type || 'semantic'),
-            level: LEVEL.SEMANTIC,
-            title: `${String(config.label || type || 'Semantic')} Summary L${rollupDepth} #${rollupOrdinal}`,
-            fields: rollupFields,
-            archived: false,
-            semanticRollup: true,
-            semanticDepth: rollupDepth,
-            seqTo: Math.max(...group.map(node => Number(node.seqTo ?? 0))),
+        await applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+            rollupDepth,
+            eventDepth: rollupDepth - 1,
+            options,
         });
-
-        for (const child of group) {
-            reparentNode(store, child.id, parent.id);
-            addEdge(store, parent.id, child.id, 'semantic_contains');
-        }
         changed = true;
         compressedRounds += 1;
-        recordCompressionRound(options?.compressionStats, type, 1);
-        if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
-            await options.onRoundApplied({
-                type: String(type || ''),
-                depth: rollupDepth - 1,
-                roundSeqTo: Number(parent?.seqTo ?? 0),
-                beforeStore: roundBeforeStore,
-            });
-        }
     }
 
     return changed;
@@ -5839,6 +5796,23 @@ export function applyExtractionOpsImpl(store, operations, {
                 const clearFields = Array.isArray(item?.clearFields)
                     ? item.clearFields.map(key => String(key || '').trim()).filter(Boolean)
                     : [];
+                if (isRollupNode(targetNode)) {
+                    const disallowedSetKeys = Object.entries(setFields)
+                        .filter(([key, value]) => value !== undefined && value !== null && key !== 'summary')
+                        .map(([key]) => key);
+                    const disallowedClearKeys = clearFields.filter(key => key !== 'summary');
+                    const disallowedKeys = [...disallowedSetKeys, ...disallowedClearKeys];
+                    if (disallowedKeys.length > 0) {
+                        rejected.push({
+                            op: item,
+                            error: {
+                                code: 'ROLLUP_FIELDS_RESTRICTED',
+                                message: `edit: rollup node ${nodeId} only permits editing title or summary (disallowed: ${disallowedKeys.join(', ')}).`,
+                            },
+                        });
+                        continue;
+                    }
+                }
                 if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
                     targetNode.fields = {};
                 }
@@ -6218,7 +6192,7 @@ export function formatNodeBrief(node, settings = null, context = null, extra = {
         semantic_depth: Number(node?.semanticDepth ?? node?.metadata?.semantic_depth ?? 0),
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
         ...extra,
     };
     // Carry node.floorRange through as `floor_range` so every brief row is
@@ -6247,7 +6221,7 @@ function formatNodeDetail(node, settings = null, context = null, extra = {}) {
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
         children: Array.isArray(node?.childrenIds) ? node.childrenIds : [],
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
         ...extra,
     };
 }
@@ -6630,9 +6604,9 @@ export function buildProjectedEdges(store, {
             continue;
         }
         // Symmetric relations (allied_with / hostile_to / family_of /
-        // partner_of) collapse direction: A→B and B→A merge into a single row
-        // with canonical from = lexicographically smaller id. Non-symmetric
-        // relations keep direction in the key.
+        // partner_of / related) collapse direction: A→B and B→A merge into a
+        // single row with canonical from = lexicographically smaller id.
+        // Non-symmetric relations keep direction in the key.
         const isSymmetric = SYMMETRIC_RELATIONS.has(edgeType);
         const canonicalFrom = isSymmetric && fromVisible > toVisible ? toVisible : fromVisible;
         const canonicalTo = isSymmetric && fromVisible > toVisible ? fromVisible : toVisible;
@@ -7479,11 +7453,29 @@ function buildFocusTablesText(nodes, settings, options = {}, context = null) {
             const semanticType = String(bucket.slice('semantic:'.length) || '').trim().toLowerCase();
             const spec = schemaMap.get(semanticType);
             const columns = Array.isArray(spec?.tableColumns) ? spec.tableColumns : [];
+            bucketTitle = `${tablePrefix} ${spec?.tableName || semanticType || bucket}`;
             if (columns.length > 0) {
+                const isSingleSummarySchema = columns.length === 1 && String(columns[0] || '').trim().toLowerCase() === 'summary';
+                if (!isSingleSummarySchema) {
+                    const rollupNodes = bucketNodes.filter(isRollupNode);
+                    const leafNodes = bucketNodes.filter(node => !isRollupNode(node));
+                    if (rollupNodes.length > 0) {
+                        const rollupTable = toMarkdownTable(['summary'], rollupNodes.map(node => [getNodeSummary(node)]));
+                        if (rollupTable) {
+                            blocks.push(`[Table: ${bucketTitle} (Summaries)]\n${rollupTable}`);
+                        }
+                    }
+                    if (leafNodes.length > 0) {
+                        const leafTable = toMarkdownTable(columns, leafNodes.map(node => columns.map(column => getTableCellValueFromNode(node, column))));
+                        if (leafTable) {
+                            blocks.push(`[Table: ${bucketTitle}]\n${leafTable}`);
+                        }
+                    }
+                    continue;
+                }
                 headers = columns;
                 rows = bucketNodes.map(node => columns.map(column => getTableCellValueFromNode(node, column)));
             }
-            bucketTitle = `${tablePrefix} ${spec?.tableName || semanticType || bucket}`;
         }
 
         const table = toMarkdownTable(headers, rows);
@@ -8917,198 +8909,204 @@ async function runScheduledExtractionPass(chatKey) {
     if (!store) {
         return;
     }
-    const extractionAbortController = new AbortController();
-    activeExtractionAbortController = extractionAbortController;
-    try {
-        const settings = getEffectiveSettings(runtimeContext, getSettings());
-        if (!settings.enabled) {
-            refreshUiStats();
-            return;
-        }
-        alignStoreCoverageToChat(store, runtimeContext, settings);
-        const preview = computeExtractionWindow(runtimeContext, store, null, settings);
-        if (preview.beginSeq > preview.latestSeq || preview.gap < Number(settings.updateEvery || 1)) {
-            store.lastExtractionDebug = {
-                beginSeq: preview.beginSeq,
-                latestSeq: preview.latestSeq,
-                coveredSeqTo: preview.coveredSeqTo,
-                extracted: false,
-                reason: preview.beginSeq > preview.latestSeq ? 'already_up_to_date' : 'gap_below_threshold',
-                at: Date.now(),
-            };
-            const debug = store.lastExtractionDebug || {};
-            updateUiStatus(i18nFormat(
-                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-                'skip',
-                Number(debug.beginSeq || 0),
-                Number(debug.latestSeq || 0),
-                Number(debug.coveredSeqTo || 0),
-            ));
-            refreshUiStats();
-            return;
-        }
-        const workingStore = normalizeStoreForRuntime(store);
-        let committedStore = normalizeStoreForRuntime(store);
-        // Publish the pass's scope so `applyMutationInvalidationImpl`
-        // can decide per-mutation whether to abort, shrink the tail, or
-        // leave the pass alone. Stays live for the whole
-        // runExtractionForStore call and is cleared in the outer
-        // `finally` alongside `activeExtractionAbortController`.
-        activeExtractionScope = {
-            beginSeq: Number(preview.beginSeq || 0),
-            latestSeq: Number(preview.latestSeq || 0),
-            committedSeq: Number(preview.beginSeq || 0) - 1,
-            inFlightSeqFrom: null,
-            inFlightSeqTo: null,
+    const settings = getEffectiveSettings(runtimeContext, getSettings());
+    if (!settings.enabled) {
+        refreshUiStats();
+        return;
+    }
+    alignStoreCoverageToChat(store, runtimeContext, settings);
+    const preview = computeExtractionWindow(runtimeContext, store, null, settings);
+    if (preview.beginSeq > preview.latestSeq || preview.gap < Number(settings.updateEvery || 1)) {
+        store.lastExtractionDebug = {
+            beginSeq: preview.beginSeq,
+            latestSeq: preview.latestSeq,
+            coveredSeqTo: preview.coveredSeqTo,
+            extracted: false,
+            reason: preview.beginSeq > preview.latestSeq ? 'already_up_to_date' : 'gap_below_threshold',
+            at: Date.now(),
         };
-        const extractBatchTurns = Math.max(
-            1,
-            Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-        );
-        const initialEndSeq = Math.min(
-            Number(preview.latestSeq || 0),
-            Number(preview.beginSeq || 1) + extractBatchTurns - 1,
-        );
-        showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!extractionAbortController.signal.aborted) {
-                    extractionAbortController.abort();
-                }
-            },
-        });
-        // Each batch + each compression round commit anchors at the floor of
-        // the triggering batch (seqToFloor(batchEndSeq)). Compression runs
-        // inline after every batch and uses the batch's endSeq, never the
-        // rollup parent's own seqTo — the parent can fold in pre-existing
-        // older nodes whose seqTo predates the current batch, which would
-        // anchor the commit at a much earlier floor and break log-append
-        // monotonicity (see tests/floor-state/compaction-floor-anchor.test.js
-        // for the failure mode this avoids).
-        await runExtractionForStore(runtimeContext, workingStore, {
-            abortSignal: extractionAbortController.signal,
-            getEffectiveLatestSeq: () => activeExtractionScope?.latestSeq ?? Number(preview.latestSeq || 0),
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                if (activeExtractionScope) {
-                    activeExtractionScope.inFlightSeqFrom = Number(beginSeq || 0);
-                    activeExtractionScope.inFlightSeqTo = Number(endSeq || 0);
-                }
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                const batchResult = await commitMemoryStoreDiffByChatKey(
-                    runtimeContext,
-                    chatKey,
-                    committedStore,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
-                );
-                committedStore = batchResult.store;
-                if (activeExtractionScope) {
-                    activeExtractionScope.committedSeq = Math.max(
-                        activeExtractionScope.committedSeq,
-                        Number(endSeq || 0),
-                    );
-                    activeExtractionScope.inFlightSeqFrom = null;
-                    activeExtractionScope.inFlightSeqTo = null;
-                }
-            },
-            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                const compactionResult = await commitMemoryStoreDiffByChatKey(
-                    runtimeContext,
-                    chatKey,
-                    beforeStore,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
-                );
-                committedStore = compactionResult.store;
-                if (activeExtractionScope) {
-                    activeExtractionScope.committedSeq = Math.max(
-                        activeExtractionScope.committedSeq,
-                        Number(batchEndSeq || 0),
-                    );
-                }
-            },
-        });
-        // A mutation may have shrunk the pass below its launch-time bound, or
-        // a batch may have bailed without processing. Anchor the tail commit
-        // at the last batch that actually committed — `preview.latestSeq` can
-        // point past extracted coverage and, after a tail delete, no longer
-        // map to an existing floor.
-        const finalSeq = Number(activeExtractionScope ? activeExtractionScope.committedSeq : preview.latestSeq);
-        const finalResult = await commitMemoryStoreDiffByChatKey(
-            runtimeContext,
-            chatKey,
-            committedStore,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
-        );
-        const finalStore = finalResult.store;
-        // Sync vector index after extraction (only when RAG recall is enabled)
-        const effectiveStore = finalStore || workingStore;
-        const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
-        if (recallMethod !== 'llm' && effectiveStore) {
-            try {
-                const vectorConfig = getVectorConfigFromSettings(settings);
-                if (validateVectorConfig(vectorConfig).valid) {
-                    const chatIdForVector = String(chatKey || '').trim();
-                    const effectiveSchema = settings.nodeTypeSchema || defaultSettings.nodeTypeSchema;
-                    await syncVectorIndex(effectiveStore, vectorConfig, chatIdForVector, {
-                        signal: extractionAbortController.signal,
-                        schema: effectiveSchema,
-                    });
-                    // syncVectorIndex mutates effectiveStore.vectorIndexState
-                    // in place. That field is meta-sidecar after Commit B, so
-                    // we explicitly persist here — the preceding
-                    // commitMemoryStoreDiffByChatKey ran *before* the sync and
-                    // already wrote its meta snapshot without the new hashes.
-                    try {
-                        await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
-                    } catch (persistError) {
-                        console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync: ${persistError?.message || persistError}`);
-                    }
-                }
-            } catch (vecError) {
-                if (!isAbortError(vecError, extractionAbortController.signal)) {
-                    console.warn(`[${MODULE_NAME}] Vector index sync after extraction failed`, vecError);
-                }
-            }
-        }
-
-        const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+        const debug = store.lastExtractionDebug || {};
         updateUiStatus(i18nFormat(
             'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-            debug.extracted ? 'ok' : 'skip',
+            'skip',
             Number(debug.beginSeq || 0),
             Number(debug.latestSeq || 0),
             Number(debug.coveredSeqTo || 0),
         ));
-        clearPersistentRuntimeNotice();
         refreshUiStats();
-    } catch (error) {
-        if (isAbortError(error, extractionAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+        return;
+    }
+    const extractionAbortController = new AbortController();
+    activeExtractionAbortController = extractionAbortController;
+    await runWithMemoryActivity(runtimeContext, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: extractionAbortController,
+    }, async () => {
+        try {
+            const workingStore = normalizeStoreForRuntime(store);
+            let committedStore = normalizeStoreForRuntime(store);
+            // Publish the pass's scope so `applyMutationInvalidationImpl`
+            // can decide per-mutation whether to abort, shrink the tail, or
+            // leave the pass alone. Stays live for the whole
+            // runExtractionForStore call and is cleared in the outer
+            // `finally` alongside `activeExtractionAbortController`.
+            activeExtractionScope = {
+                beginSeq: Number(preview.beginSeq || 0),
+                latestSeq: Number(preview.latestSeq || 0),
+                committedSeq: Number(preview.beginSeq || 0) - 1,
+                inFlightSeqFrom: null,
+                inFlightSeqTo: null,
+            };
+            const extractBatchTurns = Math.max(
+                1,
+                Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+            );
+            const initialEndSeq = Math.min(
+                Number(preview.latestSeq || 0),
+                Number(preview.beginSeq || 1) + extractBatchTurns - 1,
+            );
+            showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
+                stopLabel: i18n('Stop'),
+                onStop: () => {
+                    if (!extractionAbortController.signal.aborted) {
+                        extractionAbortController.abort();
+                    }
+                },
+            });
+            // Each batch + each compression round commit anchors at the floor of
+            // the triggering batch (seqToFloor(batchEndSeq)). Compression runs
+            // inline after every batch and uses the batch's endSeq, never the
+            // rollup parent's own seqTo — the parent can fold in pre-existing
+            // older nodes whose seqTo predates the current batch, which would
+            // anchor the commit at a much earlier floor and break log-append
+            // monotonicity (see tests/floor-state/compaction-floor-anchor.test.js
+            // for the failure mode this avoids).
+            await runExtractionForStore(runtimeContext, workingStore, {
+                abortSignal: extractionAbortController.signal,
+                getEffectiveLatestSeq: () => activeExtractionScope?.latestSeq ?? Number(preview.latestSeq || 0),
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    if (activeExtractionScope) {
+                        activeExtractionScope.inFlightSeqFrom = Number(beginSeq || 0);
+                        activeExtractionScope.inFlightSeqTo = Number(endSeq || 0);
+                    }
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    const batchResult = await commitMemoryStoreDiffByChatKey(
+                        runtimeContext,
+                        chatKey,
+                        committedStore,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
+                    );
+                    committedStore = batchResult.store;
+                    if (activeExtractionScope) {
+                        activeExtractionScope.committedSeq = Math.max(
+                            activeExtractionScope.committedSeq,
+                            Number(endSeq || 0),
+                        );
+                        activeExtractionScope.inFlightSeqFrom = null;
+                        activeExtractionScope.inFlightSeqTo = null;
+                    }
+                },
+                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
+                    const compactionResult = await commitMemoryStoreDiffByChatKey(
+                        runtimeContext,
+                        chatKey,
+                        beforeStore,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
+                    );
+                    committedStore = compactionResult.store;
+                    if (activeExtractionScope) {
+                        activeExtractionScope.committedSeq = Math.max(
+                            activeExtractionScope.committedSeq,
+                            Number(batchEndSeq || 0),
+                        );
+                    }
+                },
+            });
+            // A mutation may have shrunk the pass below its launch-time bound, or
+            // a batch may have bailed without processing. Anchor the tail commit
+            // at the last batch that actually committed — `preview.latestSeq` can
+            // point past extracted coverage and, after a tail delete, no longer
+            // map to an existing floor.
+            const finalSeq = Number(activeExtractionScope ? activeExtractionScope.committedSeq : preview.latestSeq);
+            const finalResult = await commitMemoryStoreDiffByChatKey(
+                runtimeContext,
+                chatKey,
+                committedStore,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
+            );
+            const finalStore = finalResult.store;
+            // Sync vector index after extraction (only when RAG recall is enabled)
+            const effectiveStore = finalStore || workingStore;
+            const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
+            if (recallMethod !== 'llm' && effectiveStore) {
+                try {
+                    const vectorConfig = getVectorConfigFromSettings(settings);
+                    if (validateVectorConfig(vectorConfig).valid) {
+                        const chatIdForVector = String(chatKey || '').trim();
+                        const effectiveSchema = settings.nodeTypeSchema || defaultSettings.nodeTypeSchema;
+                        await syncVectorIndex(effectiveStore, vectorConfig, chatIdForVector, {
+                            signal: extractionAbortController.signal,
+                            schema: effectiveSchema,
+                        });
+                        // syncVectorIndex mutates effectiveStore.vectorIndexState
+                        // in place. That field is meta-sidecar after Commit B, so
+                        // we explicitly persist here — the preceding
+                        // commitMemoryStoreDiffByChatKey ran *before* the sync and
+                        // already wrote its meta snapshot without the new hashes.
+                        try {
+                            await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
+                        } catch (persistError) {
+                            console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync: ${persistError?.message || persistError}`);
+                        }
+                    }
+                } catch (vecError) {
+                    if (!isAbortError(vecError, extractionAbortController.signal)) {
+                        console.warn(`[${MODULE_NAME}] Vector index sync after extraction failed`, vecError);
+                    }
+                }
+            }
+
+            const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+            updateUiStatus(i18nFormat(
+                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
+                debug.extracted ? 'ok' : 'skip',
+                Number(debug.beginSeq || 0),
+                Number(debug.latestSeq || 0),
+                Number(debug.coveredSeqTo || 0),
+            ));
             clearPersistentRuntimeNotice();
             refreshUiStats();
-            return;
+        } catch (error) {
+            if (isAbortError(error, extractionAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                clearPersistentRuntimeNotice();
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Extraction failed`, error);
+            const failureText = i18nFormat('Memory graph operation failed (${0}): ${1}', 'extract', String(error?.message || error));
+            updateUiStatus(failureText);
+            showPersistentRuntimeNotice(failureText);
+        } finally {
+            if (activeExtractionAbortController === extractionAbortController) {
+                activeExtractionAbortController = null;
+                activeExtractionScope = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        console.warn(`[${MODULE_NAME}] Extraction failed`, error);
-        const failureText = i18nFormat('Recall injection failed (${0}): ${1}', 'extract', String(error?.message || error));
-        updateUiStatus(failureText);
-        showPersistentRuntimeNotice(failureText);
-    } finally {
-        if (activeExtractionAbortController === extractionAbortController) {
-            activeExtractionAbortController = null;
-            activeExtractionScope = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 function scheduleExtraction(context) {
@@ -9287,7 +9285,8 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = '
         timeOut: 0,
         extendedTimeOut: 0,
         tapToDismiss: false,
-        closeButton: true,
+        closeButton: false,
+        closable: false,
         progressBar: false,
     });
     if (kind === 'recall') { activeRecallToast = toastRef; } else { activeExtractionToast = toastRef; }
@@ -9365,6 +9364,9 @@ async function stopMemoryRuntimeWork() {
     }
     if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
         activeExtractionAbortController.abort();
+    }
+    if (activeVectorAbortController && !activeVectorAbortController.signal.aborted) {
+        activeVectorAbortController.abort();
     }
 
     if (recallRunToken > 0) {
@@ -9487,35 +9489,55 @@ async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
         progressToast = null;
     };
 
+    const vectorAbortController = new AbortController();
+    activeVectorAbortController = vectorAbortController;
     notifyInfo(i18n('Starting vector recompute…'));
-    try {
-        const result = await syncVectorIndex(store, vectorConfig, chatKey, {
-            schema,
-            purge,
-            tolerateErrors: true,
-            onProgress: ({ current, total }) => updateProgressToast(current, total),
-        });
-        await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
-        const total = Number(result?.stats?.total || 0);
-        const inserted = Number(result?.insertedCount || 0);
-        const deleted = Number(result?.deletedCount || 0);
-        const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
-        if (total === 0) {
-            notifyInfo(i18n('No eligible nodes to embed.'));
-        } else if (inserted === 0 && deleted === 0 && failed === 0) {
-            notifySuccess(i18n('Vector index already up to date.'));
-        } else if (failed > 0) {
-            notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
-        } else {
-            notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:vector-recompute',
+        label: i18n('Memory graph vector recompute'),
+        abortController: vectorAbortController,
+    }, async () => {
+        try {
+            const result = await syncVectorIndex(store, vectorConfig, chatKey, {
+                schema,
+                purge,
+                tolerateErrors: true,
+                signal: vectorAbortController.signal,
+                onProgress: ({ current, total }) => updateProgressToast(current, total),
+            });
+            if (vectorAbortController.signal.aborted) {
+                updateUiStatus(i18n('Memory graph vector recompute cancelled by user.'));
+                return;
+            }
+            await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
+            const total = Number(result?.stats?.total || 0);
+            const inserted = Number(result?.insertedCount || 0);
+            const deleted = Number(result?.deletedCount || 0);
+            const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
+            if (total === 0) {
+                notifyInfo(i18n('No eligible nodes to embed.'));
+            } else if (inserted === 0 && deleted === 0 && failed === 0) {
+                notifySuccess(i18n('Vector index already up to date.'));
+            } else if (failed > 0) {
+                notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
+            } else {
+                notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+            }
+        } catch (error) {
+            if (isAbortError(error, vectorAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph vector recompute cancelled by user.'));
+                return;
+            }
+            console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
+            notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
+        } finally {
+            if (activeVectorAbortController === vectorAbortController) {
+                activeVectorAbortController = null;
+            }
+            dismissProgressToast();
+            refreshUiStats();
         }
-    } catch (error) {
-        console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
-        notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
-    } finally {
-        dismissProgressToast();
-        refreshUiStats();
-    }
+    });
 }
 
 // ---- Shared by the settings drawer and Memory Lens --------------------------
@@ -9550,8 +9572,24 @@ export function stopMemoryExtraction() {
     }
 }
 
+export function getRebuildableRange(context, settings = getSettings()) {
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    const frames = buildPlayableFramesFromContext(context);
+    const latestSeq = getExtractableLatestSeq(frames.length, runtimeSettings);
+    if (latestSeq <= 0) {
+        return { latestSeq: 0, minFloor: 0, maxFloor: -1, assistantFloors: [] };
+    }
+    const assistantFloors = frames.slice(0, latestSeq).map(frame => frame.source_index);
+    return {
+        latestSeq,
+        minFloor: 0,
+        maxFloor: assistantFloors[assistantFloors.length - 1],
+        assistantFloors,
+    };
+}
+
 export function getRebuildableLatestSeq(context, settings = getSettings()) {
-    return getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, getEffectiveSettings(context, settings));
+    return getRebuildableRange(context, settings).latestSeq;
 }
 
 /** Routes to Workbench AI iteration for the chat memory graph. */
@@ -9768,116 +9806,184 @@ export async function resetMemoryGraphForChat(context, settings = getSettings())
     updateUiStatus(i18n('Reset memory graph for current chat.'));
 }
 
+async function runPartialRebuildFromSeq(context, startSeq, {
+    store,
+    chatKey,
+    runtimeSettings,
+    latestSeq,
+    operationName,
+    onComplete,
+}) {
+    const workingStore = normalizeStoreForRuntime(store);
+    truncateStoreFromSeq(workingStore, startSeq);
+    updateStoreSourceState(workingStore, context);
+    const rebuildAbortController = new AbortController();
+    activeExtractionAbortController = rebuildAbortController;
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: rebuildAbortController,
+    }, async () => {
+        let hasCommittedBatch = false;
+        const extractBatchTurns = Math.max(
+            1,
+            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+        );
+        const initialEndSeq = Math.min(
+            latestSeq,
+            startSeq + extractBatchTurns - 1,
+        );
+        showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!rebuildAbortController.signal.aborted) {
+                    rebuildAbortController.abort();
+                }
+            },
+        });
+        try {
+            const extracted = await runExtractionForStore(context, workingStore, {
+                force: true,
+                startSeq,
+                abortSignal: rebuildAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    if (!hasCommittedBatch) {
+                        const currentBatchEntries = getRollbackHistory(chatKey)
+                            .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
+                        trimRollbackHistoryFromSeq(chatKey, startSeq);
+                        for (const entry of currentBatchEntries) {
+                            recordRollbackEntry(chatKey, entry);
+                        }
+                        hasCommittedBatch = true;
+                    }
+                    await commitMemoryStoreReplaceByChatKey(
+                        context,
+                        chatKey,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                    );
+                },
+                onCompressionApplied: async ({ batchEndSeq }) => {
+                    await commitMemoryStoreReplaceByChatKey(
+                        context,
+                        chatKey,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                    );
+                },
+            });
+            const debug = workingStore.lastExtractionDebug || {};
+            if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
+                throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
+            }
+            const finalSeq = Number(latestSeq || debug.latestSeq || 0);
+            const persistResult = await commitMemoryStoreReplaceByChatKey(
+                context,
+                chatKey,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+            );
+            const persistedStore = persistResult.store;
+            const committedDebug = persistedStore?.lastExtractionDebug || debug;
+            const committedLatestSeq = Number(committedDebug.latestSeq || latestSeq);
+            refreshUiStats();
+            onComplete({ committedLatestSeq });
+        } catch (error) {
+            if (isAbortError(error, rebuildAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Partial rebuild (${operationName}) failed`, error);
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', operationName, String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
+        }
+    });
+}
+
 /** Re-extracts the latest N assistant turns. */
 export async function runRebuildRecent(context, recentTurns, settings = getSettings()) {
     await ensureMemoryStoreLoaded(context);
     const chatKey = getChatKey(context);
-    let store = memoryStoreCache.get(chatKey);
+    const store = memoryStoreCache.get(chatKey);
     if (!store) {
         notifyError(i18n('No active chat selected.'));
         return;
     }
     const runtimeSettings = getEffectiveSettings(context, settings);
     alignStoreCoverageToChat(store, context, runtimeSettings);
-    const latestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, runtimeSettings);
-    if (latestSeq <= 0) {
+    const range = getRebuildableRange(context, runtimeSettings);
+    if (range.latestSeq <= 0) {
+        notifyError(i18n('No assistant turns available to rebuild.'));
+        return;
+    }
+    if (typeof recentTurns !== 'number' || !Number.isInteger(recentTurns) || recentTurns < 1 || recentTurns > range.latestSeq) {
+        notifyError(i18nFormat('Please enter a valid integer between 1 and ${0}.', range.latestSeq));
+        return;
+    }
+
+    const startSeq = Math.max(1, range.latestSeq - recentTurns + 1);
+    await runPartialRebuildFromSeq(context, startSeq, {
+        store,
+        chatKey,
+        runtimeSettings,
+        latestSeq: range.latestSeq,
+        operationName: 'rebuild_recent',
+        onComplete: ({ committedLatestSeq }) => {
+            notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
+            updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, committedLatestSeq));
+        },
+    });
+}
+
+/** Re-extracts from the specified 0-based chat floor through the latest extractable turn. */
+export async function runRebuildFromFloor(context, startFloor, settings = getSettings()) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    alignStoreCoverageToChat(store, context, runtimeSettings);
+    const range = getRebuildableRange(context, runtimeSettings);
+    if (range.latestSeq <= 0) {
         notifyError(i18n('No assistant turns available to rebuild.'));
         return;
     }
 
-    const startSeq = Math.max(1, latestSeq - recentTurns + 1);
-    const workingStore = normalizeStoreForRuntime(store);
-    truncateStoreFromSeq(workingStore, startSeq);
-    updateStoreSourceState(workingStore, context);
-    const rebuildAbortController = new AbortController();
-    activeExtractionAbortController = rebuildAbortController;
-    let hasCommittedBatch = false;
-    const extractBatchTurns = Math.max(
-        1,
-        Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-    );
-    const initialEndSeq = Math.min(
-        latestSeq,
-        startSeq + extractBatchTurns - 1,
-    );
-    showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!rebuildAbortController.signal.aborted) {
-                rebuildAbortController.abort();
-            }
+    const startSeq = resolveStartSeqFromFloor(range.assistantFloors, startFloor);
+    if (startSeq === null) {
+        notifyError(i18nFormat('Please enter a valid integer between ${0} and ${1}.', range.minFloor, range.maxFloor));
+        return;
+    }
+
+    await runPartialRebuildFromSeq(context, startSeq, {
+        store,
+        chatKey,
+        runtimeSettings,
+        latestSeq: range.latestSeq,
+        operationName: 'rebuild_from_floor',
+        onComplete: ({ committedLatestSeq }) => {
+            const endFloor = seqToFloor(context, committedLatestSeq) ?? range.maxFloor;
+            notifySuccess(i18nFormat('Memory graph rebuilt from floor ${0}.', startFloor));
+            updateUiStatus(i18nFormat('Rebuilt memory graph from floor ${0} to ${1}.', startFloor, endFloor));
         },
     });
-    try {
-        const extracted = await runExtractionForStore(context, workingStore, {
-            force: true,
-            startSeq,
-            abortSignal: rebuildAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                if (!hasCommittedBatch) {
-                    const currentBatchEntries = getRollbackHistory(chatKey)
-                        .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
-                    trimRollbackHistoryFromSeq(chatKey, startSeq);
-                    for (const entry of currentBatchEntries) {
-                        recordRollbackEntry(chatKey, entry);
-                    }
-                    hasCommittedBatch = true;
-                }
-                await commitMemoryStoreReplaceByChatKey(
-                    context,
-                    chatKey,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                );
-            },
-            onCompressionApplied: async ({ batchEndSeq }) => {
-                await commitMemoryStoreReplaceByChatKey(
-                    context,
-                    chatKey,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                );
-            },
-        });
-        const debug = workingStore.lastExtractionDebug || {};
-        if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
-            throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
-        }
-        const finalSeq = Number(latestSeq || debug.latestSeq || 0);
-        const persistResult = await commitMemoryStoreReplaceByChatKey(
-            context,
-            chatKey,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-        );
-        const persistedStore = persistResult.store;
-        const committedDebug = persistedStore?.lastExtractionDebug || debug;
-        refreshUiStats();
-        notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
-        updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, Number(committedDebug.latestSeq || latestSeq)));
-    } catch (error) {
-        if (isAbortError(error, rebuildAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
-            refreshUiStats();
-            return;
-        }
-        console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === rebuildAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
 }
 
 /** Rebuilds the whole graph from the current chat. */
@@ -9890,46 +9996,52 @@ export async function runRebuildGraph(context, settings = getSettings()) {
     }
     const rebuildAbortController = new AbortController();
     activeExtractionAbortController = rebuildAbortController;
-    showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!rebuildAbortController.signal.aborted) {
-                rebuildAbortController.abort();
-            }
-        },
-    });
-    try {
-        const store = await rebuildStoreFromCurrentChat(context, {
-            abortSignal: rebuildAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: rebuildAbortController,
+    }, async () => {
+        showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!rebuildAbortController.signal.aborted) {
+                    rebuildAbortController.abort();
+                }
             },
         });
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        refreshUiStats();
-        notifySuccess(i18n('Memory graph rebuilt from current chat.'));
-        notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
-        updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
-    } catch (error) {
-        if (isAbortError(error, rebuildAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+        try {
+            const store = await rebuildStoreFromCurrentChat(context, {
+                abortSignal: rebuildAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+            });
+            if (!store) {
+                notifyError(i18n('No active chat selected.'));
+                return;
+            }
             refreshUiStats();
-            return;
+            notifySuccess(i18n('Memory graph rebuilt from current chat.'));
+            notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
+            updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
+        } catch (error) {
+            if (isAbortError(error, rebuildAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === rebuildAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 /** Runs recall for a test query without injecting anything. */
@@ -10024,100 +10136,106 @@ export async function runFillGraph(context, settings = getSettings()) {
     }
     const runtimeSettings = getEffectiveSettings(context, settings);
     alignStoreCoverageToChat(store, context, runtimeSettings);
+    const preview = computeExtractionWindow(context, store, null, runtimeSettings);
+    if (preview.beginSeq > preview.latestSeq) {
+        notifySuccess(i18n('Memory graph is already up to date.'));
+        updateUiStatus(i18n('Memory graph is already up to date.'));
+        refreshUiStats();
+        return;
+    }
     const fillAbortController = new AbortController();
     activeExtractionAbortController = fillAbortController;
-    try {
-        const preview = computeExtractionWindow(context, store, null, runtimeSettings);
-        if (preview.beginSeq > preview.latestSeq) {
-            notifySuccess(i18n('Memory graph is already up to date.'));
-            updateUiStatus(i18n('Memory graph is already up to date.'));
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: fillAbortController,
+    }, async () => {
+        try {
+            const extractBatchTurns = Math.max(
+                1,
+                Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+            );
+            const initialEndSeq = Math.min(
+                Number(preview.latestSeq || 0),
+                Number(preview.beginSeq || 1) + extractBatchTurns - 1,
+            );
+            showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
+                stopLabel: i18n('Stop'),
+                onStop: () => {
+                    if (!fillAbortController.signal.aborted) {
+                        fillAbortController.abort();
+                    }
+                },
+            });
+            const workingStore = normalizeStoreForRuntime(store);
+            let committedStore = normalizeStoreForRuntime(store);
+            await runExtractionForStore(context, workingStore, {
+                force: true,
+                abortSignal: fillAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    const batchResult = await commitMemoryStoreDiffByChatKey(
+                        context,
+                        chatKey,
+                        committedStore,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                    );
+                    committedStore = batchResult.store;
+                },
+                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
+                    const compactionResult = await commitMemoryStoreDiffByChatKey(
+                        context,
+                        chatKey,
+                        beforeStore,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                    );
+                    committedStore = compactionResult.store;
+                },
+            });
+            const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
+            const finalResult = await commitMemoryStoreDiffByChatKey(
+                context,
+                chatKey,
+                committedStore,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+            );
+            const finalStore = finalResult.store;
+            const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+            updateUiStatus(i18nFormat(
+                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
+                debug.extracted ? 'ok' : 'skip',
+                Number(debug.beginSeq || 0),
+                Number(debug.latestSeq || 0),
+                Number(debug.coveredSeqTo || 0),
+            ));
             refreshUiStats();
-            return;
+            notifySuccess(i18n('Memory graph incremental fill completed.'));
+        } catch (error) {
+            if (isAbortError(error, fillAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'fill', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === fillAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        const extractBatchTurns = Math.max(
-            1,
-            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-        );
-        const initialEndSeq = Math.min(
-            Number(preview.latestSeq || 0),
-            Number(preview.beginSeq || 1) + extractBatchTurns - 1,
-        );
-        showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!fillAbortController.signal.aborted) {
-                    fillAbortController.abort();
-                }
-            },
-        });
-        const workingStore = normalizeStoreForRuntime(store);
-        let committedStore = normalizeStoreForRuntime(store);
-        await runExtractionForStore(context, workingStore, {
-            force: true,
-            abortSignal: fillAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                const batchResult = await commitMemoryStoreDiffByChatKey(
-                    context,
-                    chatKey,
-                    committedStore,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                );
-                committedStore = batchResult.store;
-            },
-            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                const compactionResult = await commitMemoryStoreDiffByChatKey(
-                    context,
-                    chatKey,
-                    beforeStore,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                );
-                committedStore = compactionResult.store;
-            },
-        });
-        const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
-        const finalResult = await commitMemoryStoreDiffByChatKey(
-            context,
-            chatKey,
-            committedStore,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-        );
-        const finalStore = finalResult.store;
-        const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
-        updateUiStatus(i18nFormat(
-            'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-            debug.extracted ? 'ok' : 'skip',
-            Number(debug.beginSeq || 0),
-            Number(debug.latestSeq || 0),
-            Number(debug.coveredSeqTo || 0),
-        ));
-        refreshUiStats();
-        notifySuccess(i18n('Memory graph incremental fill completed.'));
-    } catch (error) {
-        if (isAbortError(error, fillAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
-            refreshUiStats();
-            return;
-        }
-        console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === fillAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 /** Routes to Workbench AI iteration for Memory Graph configuration. */
@@ -10155,22 +10273,27 @@ export async function runManualCompression(context, settings, values) {
         }
     }
 
-    const beforeNodes = Object.values(store.nodes || {});
+    const beforeStore = normalizeStoreForRuntime(store);
+    const workingStore = normalizeStoreForRuntime(store);
+    const beforeNodes = Object.values(beforeStore.nodes || {});
     const beforeNodeCount = beforeNodes.length;
     const beforeArchivedCount = beforeNodes.filter(node => Boolean(node?.archived)).length;
-    const beforeStore = normalizeStoreForRuntime(store);
     const compressionStats = createCompressionStats();
     const compressionAbortController = new AbortController();
     activeExtractionAbortController = compressionAbortController;
-    showRuntimeInfoToast(i18n('Memory graph update running...'), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!compressionAbortController.signal.aborted) {
-                compressionAbortController.abort();
-            }
-        },
-    });
-    try {
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: compressionAbortController,
+    }, async () => {
+        showRuntimeInfoToast(i18n('Memory graph update running...'), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!compressionAbortController.signal.aborted) {
+                    compressionAbortController.abort();
+                }
+            },
+        });
         // Manual compression collapses into a single tail commit after all
         // rounds finish. Per-round commits would form a non-monotonic anchor
         // sequence (each round's roundSeqTo can jump backwards across types),
@@ -10178,57 +10301,83 @@ export async function runManualCompression(context, settings, values) {
         // after truncation. The covered seq advances by the highest roundSeqTo
         // observed, which yields the same anchor as the legacy "one commit at
         // tail" shape.
-        let highestRoundSeqTo = getStoreCoveredSeqTo(store);
-        const changed = await runCompressionLoop(context, store, settings, {
-            typeIds: values.selectedTypeIds,
-            force: values.mode === 'force' || values.mode === 'flat',
-            flatten: values.mode === 'flat',
-            maxRoundsPerType: values.maxRoundsPerType,
-            maxSeq,
-            compressionStats,
-            abortSignal: compressionAbortController.signal,
-            onRoundApplied: ({ roundSeqTo }) => {
-                const candidate = Number(roundSeqTo || 0);
-                if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
-                    highestRoundSeqTo = candidate;
+        let highestRoundSeqTo = getStoreCoveredSeqTo(workingStore);
+        let completedRounds = 0;
+        try {
+            const changed = await runCompressionLoop(context, workingStore, settings, {
+                typeIds: values.selectedTypeIds,
+                force: values.mode === 'force' || values.mode === 'flat',
+                flatten: values.mode === 'flat',
+                maxRoundsPerType: values.maxRoundsPerType,
+                maxSeq,
+                compressionStats,
+                abortSignal: compressionAbortController.signal,
+                onRoundApplied: ({ roundSeqTo }) => {
+                    completedRounds += 1;
+                    const candidate = Number(roundSeqTo || 0);
+                    if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
+                        highestRoundSeqTo = candidate;
+                    }
+                },
+            });
+            if (compressionAbortController.signal.aborted) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            if (!changed) {
+                notifySuccess(i18n('Manual compression made no changes.'));
+                return;
+            }
+            await commitMemoryStoreDiffByChatKey(
+                context,
+                getChatKey(context),
+                beforeStore,
+                workingStore,
+                highestRoundSeqTo,
+                { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
+            );
+            const afterNodes = Object.values(workingStore.nodes || {});
+            const afterNodeCount = afterNodes.length;
+            const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
+            const createdDelta = Math.max(0, afterNodeCount - beforeNodeCount);
+            const archivedDelta = Math.max(0, afterArchivedCount - beforeArchivedCount);
+            refreshUiStats();
+            const summary = i18nFormat('Manual compression completed. Created=${0}, archived=${1}', createdDelta, archivedDelta);
+            notifySuccess(summary);
+            notifyEventCompressionIfAny(compressionStats);
+            updateUiStatus(summary);
+        } catch (error) {
+            if (isAbortError(error, compressionAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            if (completedRounds > 0) {
+                try {
+                    await commitMemoryStoreDiffByChatKey(
+                        context,
+                        getChatKey(context),
+                        beforeStore,
+                        workingStore,
+                        highestRoundSeqTo,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
+                    );
+                } catch (commitError) {
+                    console.error(`[${MODULE_NAME}] Failed to commit partial manual compression rounds`, commitError);
+                    notifyError(i18nFormat('Failed to save completed compression rounds: ${0}', String(commitError?.message || commitError)));
                 }
-            },
-        });
-        if (!changed) {
-            notifySuccess(i18n('Manual compression made no changes.'));
-            return;
+            }
+            refreshUiStats();
+            console.warn(`[${MODULE_NAME}] Manual compression failed`, error);
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'compress', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === compressionAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        await commitMemoryStoreDiffByChatKey(
-            context,
-            getChatKey(context),
-            beforeStore,
-            store,
-            highestRoundSeqTo,
-            { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
-        );
-        const afterNodes = Object.values(store.nodes || {});
-        const afterNodeCount = afterNodes.length;
-        const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
-        const createdDelta = Math.max(0, afterNodeCount - beforeNodeCount);
-        const archivedDelta = Math.max(0, afterArchivedCount - beforeArchivedCount);
-        refreshUiStats();
-        const summary = i18nFormat('Manual compression completed. Created=${0}, archived=${1}', createdDelta, archivedDelta);
-        notifySuccess(summary);
-        notifyEventCompressionIfAny(compressionStats);
-        updateUiStatus(summary);
-    } catch (error) {
-        if (isAbortError(error, compressionAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
-            return;
-        }
-        console.warn(`[${MODULE_NAME}] Manual compression failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'compress', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === compressionAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 export function getRawGraphJson(context) {
@@ -10703,6 +10852,14 @@ export function _setPersistentDrainHookForTest(hook) {
     __testPersistentDrainHook = (typeof hook === 'function') ? hook : null;
 }
 export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
+export { runScheduledExtractionPass as _runScheduledExtractionPassForTest };
+export { isRollupNode as _isRollupNodeForTest };
+export { summarizeRollupWithLLM as _summarizeRollupWithLLMForTest };
+export { buildCompressionRuleMatcher as _buildCompressionRuleMatcherForTest };
+export { runCompressionLoop as _runCompressionLoopForTest };
+export { runExtractionForStore as _runExtractionForStoreForTest };
+export { buildGraphNodeRow as _buildGraphNodeRowForTest };
+export { buildFocusTablesText as _buildFocusTablesTextForTest };
 
 async function initializeCharacterPromptDefaults(context) {
     try {
@@ -10761,6 +10918,12 @@ jQuery(async () => {
     // early on every chat switch; (b) run an explicit migration for the
     // initial chat before mounting the singleton.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+        if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+            activeExtractionAbortController.abort();
+        }
+        if (activeVectorAbortController && !activeVectorAbortController.signal.aborted) {
+            activeVectorAbortController.abort();
+        }
         await initializeCharacterPromptDefaults(getContext());
         latestRecallSnapshot = null;
         void ensureMemoryStoreLoaded(getContext()).catch(() => {});

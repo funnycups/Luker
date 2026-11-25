@@ -14,9 +14,108 @@ import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { debounce_timeout, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../constants.js';
 import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { t } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildCaptionSummaryModel } from './behavior-summary-model.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
+
+let captionSummaryHandle = null;
+
+function translateSummary(text, key = null) {
+    const fn = getContext()?.translate ?? globalThis.__i18n?.translate;
+    return typeof fn === 'function' ? fn(String(text ?? ''), key) : String(text ?? '');
+}
+
+function readSelectDisplayLabel(selectEl) {
+    if (!(selectEl instanceof HTMLSelectElement) || !selectEl.value) {
+        return '';
+    }
+    const selected = selectEl.selectedOptions?.[0]
+        || (selectEl.selectedIndex >= 0 ? selectEl.options?.[selectEl.selectedIndex] : null);
+    return String(selected?.textContent || '').trim();
+}
+
+function refreshCaptionBehaviorSummary() {
+    captionSummaryHandle?.refresh();
+}
+
+function mountCaptionBehaviorSummary() {
+    captionSummaryHandle?.destroy();
+    captionSummaryHandle = null;
+
+    const container = document.getElementById('caption_container') || document;
+    const drawerContent = container.querySelector('.caption_settings .inline-drawer-content');
+    if (!drawerContent) {
+        return null;
+    }
+
+    captionSummaryHandle = mountBehaviorSummary({
+        id: 'caption-settings',
+        root: drawerContent,
+        anchor: drawerContent,
+        position: 'prepend',
+        ariaLabel: translateSummary('Image captioning behavior summary'),
+        fields: {
+            source: '#caption_source',
+            multimodalApi: { selector: '#caption_multimodal_api', highlight: '.flex-container.flexFlowColumn' },
+            multimodalModel: { selector: '#caption_multimodal_model', highlight: '.flex-container.flexFlowColumn' },
+            customModel: { selector: '#caption_custom_model', highlight: '[data-type="custom"]' },
+            ollamaCustomModel: { selector: '#caption_ollama_custom_model', highlight: '.marginTop5' },
+            allowReverseProxy: { selector: '#caption_allow_reverse_proxy', highlight: '.checkbox_label' },
+            altEndpointEnabled: { selector: '#caption_altEndpoint_enabled', highlight: '.checkbox_label' },
+            altEndpointUrl: '#caption_altEndpoint_url',
+            prompt: '#caption_prompt',
+            promptAsk: { selector: '#caption_prompt_ask', highlight: '.checkbox_label' },
+            template: '#caption_template',
+            autoMode: { selector: '#caption_auto_mode', highlight: '.checkbox_label' },
+            refineMode: { selector: '#caption_refine_mode', highlight: '.checkbox_label' },
+            showInChat: { selector: '#caption_show_in_chat', highlight: '.checkbox_label' },
+        },
+        readState: (rootEl) => {
+            const apiSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#caption_multimodal_api'));
+            const modelSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#caption_multimodal_model'));
+            return {
+                source: String(rootEl.querySelector('#caption_source')?.value || extension_settings.caption?.source || 'local'),
+                multimodalApi: String(apiSel?.value || extension_settings.caption?.multimodal_api || 'openai'),
+                multimodalApiLabel: readSelectDisplayLabel(apiSel),
+                multimodalModel: String(modelSel?.value || extension_settings.caption?.multimodal_model || ''),
+                multimodalModelLabel: readSelectDisplayLabel(modelSel),
+                customModel: String(rootEl.querySelector('#caption_custom_model')?.value ?? ''),
+                ollamaCustomModel: String(rootEl.querySelector('#caption_ollama_custom_model')?.value ?? ''),
+                currentOllamaModel: String(textgenerationwebui_settings?.ollama_model ?? ''),
+                currentVllmModel: String(textgenerationwebui_settings?.vllm_model ?? ''),
+                currentCustomModel: String(oai_settings?.custom_model ?? ''),
+                allowReverseProxy: Boolean(rootEl.querySelector('#caption_allow_reverse_proxy')?.checked),
+                reverseProxyConfigured: Boolean(oai_settings?.reverse_proxy),
+                altEndpointEnabled: Boolean(rootEl.querySelector('#caption_altEndpoint_enabled')?.checked),
+                altEndpointUrl: String(rootEl.querySelector('#caption_altEndpoint_url')?.value ?? ''),
+                prompt: String(rootEl.querySelector('#caption_prompt')?.value ?? ''),
+                promptAsk: Boolean(rootEl.querySelector('#caption_prompt_ask')?.checked),
+                template: String(rootEl.querySelector('#caption_template')?.value ?? ''),
+                autoMode: Boolean(rootEl.querySelector('#caption_auto_mode')?.checked),
+                refineMode: Boolean(rootEl.querySelector('#caption_refine_mode')?.checked),
+                showInChat: Boolean(rootEl.querySelector('#caption_show_in_chat')?.checked),
+                i18n: translateSummary,
+            };
+        },
+        build: buildCaptionSummaryModel,
+    });
+
+    return captionSummaryHandle;
+}
+
+async function withCaptionActivity(fn) {
+    const guard = getContext()?.activityGuard;
+    if (typeof guard?.run !== 'function') {
+        return await fn();
+    }
+    return await guard.run({
+        source: 'caption:run',
+        label: t`Image captioning`,
+        scope: 'chat',
+    }, fn);
+}
 
 const PROMPT_DEFAULT = 'What\'s in this image?';
 const TEMPLATE_DEFAULT = '[{{user}} sends {{char}} a picture that contains: {{caption}}]';
@@ -158,32 +257,34 @@ async function captionExistingMessage(message, mediaIndex) {
         throw new Error('Captioning videos is not supported for the current source.');
     }
 
-    const imageData = await fetch(mediaAttachment.url);
-    const blob = await imageData.blob();
-    const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
-    const file = new File([blob], fileName, { type: blob.type });
-    const caption = await getCaptionForFile(file, null, true);
+    await withCaptionActivity(async () => {
+        const imageData = await fetch(mediaAttachment.url);
+        const blob = await imageData.blob();
+        const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
+        const file = new File([blob], fileName, { type: blob.type });
+        const caption = await getCaptionForFile(file, null, true);
 
-    if (!caption) {
-        console.warn('Failed to generate a caption for the image.');
-        return;
-    }
+        if (!caption) {
+            console.warn('Failed to generate a caption for the image.');
+            return;
+        }
 
-    const wrappedCaption = await wrapCaptionTemplate(caption);
+        const wrappedCaption = await wrapCaptionTemplate(caption);
 
-    const messageText = String(message.mes).trim();
+        const messageText = String(message.mes).trim();
 
-    if (!messageText) {
-        message.extra.inline_image = false;
-        message.mes = wrappedCaption;
-        mediaAttachment.title = wrappedCaption;
-        mediaAttachment.captioned = true;
-    } else {
-        message.extra.inline_image = true;
-        mediaAttachment.append_title = true;
-        mediaAttachment.title = wrappedCaption;
-        mediaAttachment.captioned = true;
-    }
+        if (!messageText) {
+            message.extra.inline_image = false;
+            message.mes = wrappedCaption;
+            mediaAttachment.title = wrappedCaption;
+            mediaAttachment.captioned = true;
+        } else {
+            message.extra.inline_image = true;
+            mediaAttachment.append_title = true;
+            mediaAttachment.title = wrappedCaption;
+            mediaAttachment.captioned = true;
+        }
+    });
 }
 
 /**
@@ -391,29 +492,31 @@ async function captionCommandCallback(args, prompt) {
         /** @type {ChatMessage} */
         const message = getContext().chat[messageId];
         if (Array.isArray(message?.extra?.media) && message.extra.media.length > 0) {
-            try {
-                const mediaAttachment = message.extra.media[index] || message.extra.media[0];
-                if (!mediaAttachment || !mediaAttachment.url) {
-                    toastr.error('The specified message does not contain an image.');
-                    return '';
-                }
-                if (mediaAttachment.type === MEDIA_TYPE.AUDIO) {
-                    toastr.error('The specified media is an audio file. Captioning audio files is not supported.');
-                    return '';
-                }
-                if (mediaAttachment.type === MEDIA_TYPE.VIDEO && !isVideoCaptioningAvailable()) {
-                    toastr.error('The specified media is a video. Captioning videos is not supported for the current source.');
-                    return '';
-                }
-                const fetchResult = await fetch(mediaAttachment.url);
-                const blob = await fetchResult.blob();
-                const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
-                const file = new File([blob], fileName, { type: blob.type });
-                return await getCaptionForFile(file, prompt, quiet);
-            } catch (error) {
-                toastr.error('Failed to get image from the message. Make sure the image is accessible.');
+            const mediaAttachment = message.extra.media[index] || message.extra.media[0];
+            if (!mediaAttachment || !mediaAttachment.url) {
+                toastr.error('The specified message does not contain an image.');
                 return '';
             }
+            if (mediaAttachment.type === MEDIA_TYPE.AUDIO) {
+                toastr.error('The specified media is an audio file. Captioning audio files is not supported.');
+                return '';
+            }
+            if (mediaAttachment.type === MEDIA_TYPE.VIDEO && !isVideoCaptioningAvailable()) {
+                toastr.error('The specified media is a video. Captioning videos is not supported for the current source.');
+                return '';
+            }
+            return await withCaptionActivity(async () => {
+                try {
+                    const fetchResult = await fetch(mediaAttachment.url);
+                    const blob = await fetchResult.blob();
+                    const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
+                    const file = new File([blob], fileName, { type: blob.type });
+                    return await getCaptionForFile(file, prompt, quiet);
+                } catch (error) {
+                    toastr.error('Failed to get image from the message. Make sure the image is accessible.');
+                    return '';
+                }
+            });
         }
     }
 
@@ -422,8 +525,14 @@ async function captionCommandCallback(args, prompt) {
         input.type = 'file';
         input.accept = 'image/*,video/*';
         input.onchange = async (e) => {
-            const caption = await onSelectImage(e, prompt, quiet);
-            resolve(caption);
+            let caption = '';
+            try {
+                caption = await withCaptionActivity(() => onSelectImage(e, prompt, quiet));
+            } catch (error) {
+                console.error(error);
+            } finally {
+                resolve(caption);
+            }
         };
         input.oncancel = () => resolve('');
         input.click();
@@ -537,7 +646,7 @@ export async function init() {
         imgInput.id = 'img_file';
         imgInput.accept = 'image/*,video/*';
         imgInput.hidden = true;
-        imgInput.addEventListener('change', (e) => onSelectImage(e, '', false));
+        imgInput.addEventListener('change', (e) => withCaptionActivity(() => onSelectImage(e, '', false)));
         const imgForm = document.createElement('form');
         imgForm.id = 'img_form';
         imgForm.appendChild(imgInput);
@@ -561,6 +670,7 @@ export async function init() {
             const types = type.split(',');
             $(this).toggle(types.includes(extension_settings.caption.multimodal_api));
         });
+        refreshCaptionBehaviorSummary();
     }
     async function addSettings() {
         const html = await renderExtensionTemplateAsync('caption', 'settings', { TEMPLATE_DEFAULT, PROMPT_DEFAULT });
@@ -640,6 +750,7 @@ export async function init() {
         extension_settings.caption.prompt = PROMPT_DEFAULT;
         $('#caption_prompt').val(PROMPT_DEFAULT);
         saveSettingsDebounced();
+        refreshCaptionBehaviorSummary();
     });
     $('#caption_template').on('input', () => {
         extension_settings.caption.template = String($('#caption_template').val());
@@ -701,6 +812,11 @@ export async function init() {
         await switchMultimodalBlocks();
         saveSettingsDebounced();
     });
+
+    mountCaptionBehaviorSummary();
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshCaptionBehaviorSummary);
+    }
 
     const onMessageEvent = async (/** @type {number} */ messageId) => {
         if (!extension_settings.caption.auto_mode) {
