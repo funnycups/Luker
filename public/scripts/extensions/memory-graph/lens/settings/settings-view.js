@@ -7,6 +7,8 @@
 // and error surfacing.
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
+import { escapeHtml } from '../../../../lib/html-escape.js';
+import { renderFieldHelpButtonElement } from '../../../../lib/field-help-button.js';
 import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
 import { CONFIG_FIELDS } from '../../config-iteration/fields.js';
 import { resolveStartSeqFromFloor } from '../../primitives.js';
@@ -74,6 +76,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     let needsReload = true;
     let advanced = null;
     let savedAdvanced = null;
+    let advancedRevision = 0;
     let lastNotifiedDirtyCount = 0;
     let techOpen = false;
     let busy = false;
@@ -225,7 +228,16 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     };
 
     const toggle = (key, label) => fieldWrap(key, switchControl(label, view.values[key], (value) => { setValue(key, value); if (!REPAINT_KEYS.has(key)) paint(); }));
-    const pick = (key, label, options) => fieldWrap(key, formField(label, selectInput(options, view.values[key], (value) => setValue(key, value))));
+    const pick = (key, label, options, help = null) => {
+        const field = fieldWrap(key, formField(label, selectInput(options, view.values[key], (value) => setValue(key, value))));
+        if (help) {
+            field.querySelector('.lw-field-label').append(renderFieldHelpButtonElement({
+                title: i18n(help.title),
+                bodyHtml: escapeHtml(i18n(help.body)),
+            }));
+        }
+        return field;
+    };
     const setValue2 = (key, value) => (setValue(key, value), view.values[key]);
     const number = (key, label, min, max) => fieldWrap(key, formField(label, h('input', {
         class: 'ml-schema-input', type: 'number', min, max, step: 1, value: String(view.values[key] ?? ''),
@@ -235,6 +247,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     })));
 
     function onAdvancedFieldMutated() {
+        advancedRevision += 1;
         syncStickyBar();
         notifyDirtyIfChanged();
         syncAllSummaries();
@@ -285,6 +298,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     let activeModalCleanup = null;
 
     function applyCadencePreset(preset) {
+        advancedRevision += 1;
         Object.assign(advanced, preset.values);
         cadenceVisualizer.setParams(advanced);
         paint();
@@ -370,6 +384,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             okLabel: i18n('Apply'),
             wide: true,
             onOk() {
+                advancedRevision += 1;
                 advanced.llmVisibleRecentMessages = clampByField('llmVisibleRecentMessages', draft.llmVisibleRecentMessages, advanced.llmVisibleRecentMessages);
                 advanced.updateEvery = clampByField('updateEvery', draft.updateEvery, advanced.updateEvery);
                 advanced.extractBatchTurns = clampByField('extractBatchTurns', draft.extractBatchTurns, advanced.extractBatchTurns);
@@ -481,6 +496,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             { value: 'oneshot', label: i18n('One-shot (full graph input)') },
             { value: 'crawl', label: i18n('Crawl (LLM-explored local slice)') },
         ], isCrawl ? 'crawl' : 'oneshot', (value) => {
+            advancedRevision += 1;
             advanced.extractMode = value === 'crawl' ? 'crawl' : 'oneshot';
             paint();
             notifyDirtyIfChanged();
@@ -539,7 +555,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                     [p.ANTop, 'Before Author\'s Note'], [p.ANBottom, 'After Author\'s Note'],
                     [p.EMTop, 'Before Example Messages'], [p.EMBottom, 'After Example Messages'],
                     [p.atDepth, 'At Chat Depth'],
-                ].map(([value, label]) => ({ value: String(value), label: i18n(label) }))),
+                ].map(([value, label]) => ({ value: String(value), label: i18n(label) })), { title: 'About Injection position', body: 'Injection position help body' }),
                 atDepth ? fields(
                     number('recallInjectDepth', i18n('Injection depth'), 0, 10000),
                     pick('recallInjectRole', i18n('Injection role'), [
@@ -992,11 +1008,36 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     }
 
     async function saveAdvanced(work, doneText) {
+        const savedRevision = advancedRevision;
         clearError();
         try {
             await work();
             app.notify?.(doneText);
-            reload();
+            if (advancedRevision === savedRevision) {
+                reload();
+            } else {
+                const latest = source.settings.read();
+                if (view) {
+                    view.options = latest.options;
+                    view.values = latest.values;
+                    view.advanced = latest.advanced;
+                } else {
+                    view = latest;
+                }
+                savedAdvanced = clone(latest.advanced.values);
+                if (editingHere()) {
+                    needsReload = true;
+                    statusEl.textContent = source.ops.status();
+                    syncErrorBanner();
+                    syncStickyBar();
+                    syncAllSummaries();
+                    notifyDirtyIfChanged();
+                } else {
+                    needsReload = false;
+                    paint();
+                    notifyDirtyIfChanged();
+                }
+            }
         } catch (err) {
             surfaceError(err);
         }
@@ -1041,6 +1082,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 okLabel: i18n('Reset'),
                 danger: true,
                 onOk: () => {
+                    advancedRevision += 1;
                     advanced = clone(info.defaults);
                     cadenceVisualizer.setParams(advanced);
                     paint();

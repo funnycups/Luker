@@ -104,8 +104,8 @@ export function planConfigCommit({ before, next, scope, inheritedSettings } = {}
  *        global branch mutates it in place
  * @param {(schema: any[]) => Promise<boolean>} opts.persistCharacterSchema
  * @param {(patch: {set: object, unset: string[]}) => Promise<boolean>} opts.persistCharacterSettings
- * @param {() => Promise<void>} opts.saveGlobalSettings
- * @returns {Promise<void>} throws when a character write is rejected
+ * @param {() => Promise<{ok: boolean, status: string, error?: string, reason?: string}>} opts.saveGlobalSettings
+ * @returns {Promise<void>} throws when persistence is not acknowledged
  */
 export async function applyConfigPlan(plan, opts) {
     const {
@@ -133,6 +133,12 @@ export async function applyConfigPlan(plan, opts) {
         return;
     }
 
+    const keys = [
+        ...(plan.schemaChanged ? ['nodeTypeSchema'] : []),
+        ...Object.keys(plan.set || {}),
+        ...(plan.unset || []),
+    ];
+    const previous = new Map(keys.map(key => [key, { present: Object.hasOwn(globalSettings, key), value: globalSettings[key] }]));
     if (plan.schemaChanged) {
         globalSettings.nodeTypeSchema = plan.schema;
     }
@@ -142,5 +148,20 @@ export async function applyConfigPlan(plan, opts) {
     for (const key of plan.unset || []) {
         delete globalSettings[key];
     }
-    await saveGlobalSettings();
+    const written = new Map(keys.map(key => [key, { present: Object.hasOwn(globalSettings, key), value: JSON.stringify(globalSettings[key]) }]));
+    try {
+        const outcome = await saveGlobalSettings();
+        if (outcome?.ok !== true || outcome.status !== 'saved') {
+            throw new Error(`applyConfigPlan: global settings write rejected: ${outcome?.error || outcome?.reason || outcome?.status}`);
+        }
+    } catch (error) {
+        for (const key of keys) {
+            const attempted = written.get(key);
+            if (Object.hasOwn(globalSettings, key) !== attempted.present || JSON.stringify(globalSettings[key]) !== attempted.value) continue;
+            const before = previous.get(key);
+            if (before.present) globalSettings[key] = before.value;
+            else delete globalSettings[key];
+        }
+        throw error;
+    }
 }

@@ -59,7 +59,10 @@ function pickBase(fallbackSource) {
 }
 
 function normalizeInt(def, input, base) {
-    const raw = Number(input[def.key]);
+    const rawValue = input[def.key];
+    const raw = (rawValue === '' || rawValue === null || rawValue === undefined || typeof rawValue === 'boolean')
+        ? NaN
+        : Number(rawValue);
     const fallback = Number(base[def.key] ?? def.defaultValue);
     let value = Math.floor(Number.isFinite(raw) ? raw : fallback);
     if (Number.isFinite(def.min)) {

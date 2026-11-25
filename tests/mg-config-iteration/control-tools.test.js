@@ -21,13 +21,9 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     return { lodash };
 });
 
-let MG_CONFIG_TOOL_DISPLAY;
 let CONTROL_TOOL_NAMES;
 
 beforeAll(async () => {
-    ({ MG_CONFIG_TOOL_DISPLAY } = await import(
-        '../../public/scripts/extensions/memory-graph/config-iteration/tool-display.js'
-    ));
     ({ CONTROL_TOOL_NAMES } = await import(
         '../../public/scripts/extensions/memory-graph/config-iteration/tools.js'
     ));
@@ -39,34 +35,5 @@ describe('MG schema control tools', () => {
         expect(CONTROL_TOOL_NAMES.finalize).toBeUndefined();
         expect(CONTROL_TOOL_NAMES.resetToBlank).toBe('luker_mg_schema_reset_live_to_blank');
         expect(CONTROL_TOOL_NAMES.resetToGlobal).toBe('luker_mg_schema_reset_live_to_global');
-    });
-
-    it('classifies both reset tools as control type in tool-display (no continue / finalize)', () => {
-        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_continue_iteration).toBeUndefined();
-        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_finalize_iteration).toBeUndefined();
-        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_reset_live_to_blank?.type).toBe('control');
-        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_reset_live_to_global?.type).toBe('control');
-    });
-
-    it('exposes exactly these 2 control tools (drift guard)', () => {
-        const controlNames = Object.entries(MG_CONFIG_TOOL_DISPLAY)
-            .filter(([, v]) => v?.type === 'control')
-            .map(([k]) => k)
-            .sort();
-        expect(controlNames).toEqual([
-            'luker_mg_schema_reset_live_to_blank',
-            'luker_mg_schema_reset_live_to_global',
-        ]);
-    });
-
-    it('provides a non-empty icon + label for each control tool', () => {
-        for (const name of [
-            'luker_mg_schema_reset_live_to_blank',
-            'luker_mg_schema_reset_live_to_global',
-        ]) {
-            const entry = MG_CONFIG_TOOL_DISPLAY[name];
-            expect(entry?.icon).toBeTruthy();
-            expect(entry?.label).toMatch(/[A-Za-z]/);
-        }
     });
 });

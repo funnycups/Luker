@@ -120,4 +120,162 @@ describe('Memory Lens unsaved-changes propagation to topbar and Workbench hostAp
         const settingsTabCleared = [...host.querySelectorAll('.ml-viewswitch .lw-seg-btn')].at(-1);
         expect(settingsTabCleared.dataset.dirty).toBeUndefined();
     });
+
+    test('concurrent edits during in-flight saveAdvanced preserve edits across all edit paths and keep focused inputs mounted', async () => {
+        const makeState = (overrides = {}) => ({
+            values: {
+                enabled: true,
+                autoExtractionEnabled: true,
+                autoCompressionEnabled: true,
+                recallEnabled: true,
+                recallMethod: 'llm',
+                recallInjectPosition: 1,
+                recallInjectDepth: 4,
+                recallInjectRole: 0,
+            },
+            options: {
+                connections: [],
+                presets: [],
+                embeddingProfiles: [],
+                rerankProfiles: [],
+                positions: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+                roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+                compressibleTypes: [],
+            },
+            advanced: {
+                values: {
+                    updateEvery: 2,
+                    extractBatchTurns: 2,
+                    extractContextTurns: 2,
+                    extractExcludeRecentTurns: 0,
+                    extractMode: 'oneshot',
+                    llmVisibleRecentMessages: 5,
+                    persistentInjectionMaxSeqDistance: 0,
+                    ...overrides,
+                },
+                defaults: {
+                    updateEvery: 2,
+                    extractBatchTurns: 2,
+                    extractContextTurns: 2,
+                    extractExcludeRecentTurns: 0,
+                    extractMode: 'oneshot',
+                    llmVisibleRecentMessages: 5,
+                    persistentInjectionMaxSeqDistance: 0,
+                },
+                scope: 'global',
+                hasAvatar: false,
+                hasOverride: false,
+                avatar: '',
+                characterName: '',
+            },
+        });
+
+        let persistedAdvanced = {
+            updateEvery: 2,
+            extractBatchTurns: 2,
+            extractContextTurns: 2,
+            extractExcludeRecentTurns: 0,
+            extractMode: 'oneshot',
+            llmVisibleRecentMessages: 5,
+            persistentInjectionMaxSeqDistance: 0,
+        };
+        let resolveSave = null;
+        const fakeSource = {
+            load: jest.fn(async () => ({
+                chatKey: 'c1',
+                chatLabel: 'Chat 1',
+                loadedAt: Date.now(),
+                nodes: [],
+                edges: [],
+                schema: { types: [] },
+                columnLabels: {},
+                injection: null,
+                lastRecall: null,
+                tokens: { current: null, entries: [] },
+            })),
+            settings: {
+                read: () => makeState(persistedAdvanced),
+                set: (_k, v) => v,
+                saveAdvanced: jest.fn((draft) => new Promise((resolve) => {
+                    const snapshot = JSON.parse(JSON.stringify(draft));
+                    resolveSave = () => {
+                        persistedAdvanced = snapshot;
+                        resolve();
+                    };
+                })),
+                clearAdvanced: jest.fn(async () => {}),
+                subscribe: () => () => {},
+            },
+            ops: {
+                status: () => '',
+                onStatus: () => () => {},
+                stats: () => ({ nodeCount: 0, edgeCount: 0, messageCount: 0, sourceMessageCount: 0, levelCount: { semantic: 0 } }),
+            },
+        };
+
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        lens = mountMemoryLens({ source: fakeSource, container: host, opts: { subview: 'settings' } });
+        await new Promise(r => setTimeout(r, 0));
+
+        const clickSaveGlobal = () => {
+            const btn = [...host.querySelectorAll('.ml-settings-sticky button')].at(-1);
+            btn.click();
+        };
+
+        // 1. Cadence preset clicked while save is in flight
+        clickSaveGlobal();
+        host.querySelector('[data-cadence-preset="saver"]').click();
+        resolveSave();
+        await new Promise(r => setTimeout(r, 0));
+        expect(host.querySelector('[data-cadence-preset="saver"]').classList.contains('is-active')).toBe(true);
+        expect(lens.unsavedCount()).toBeGreaterThan(0);
+
+        // 2. Custom cadence modal Apply clicked while save is in flight
+        clickSaveGlobal();
+        host.querySelector('[data-cadence-custom="true"]').click();
+        const modalUpdateInput = host.querySelector('.ml-custom-cadence-modal [data-field-key="updateEvery"] input');
+        modalUpdateInput.value = '7';
+        modalUpdateInput.dispatchEvent(new Event('input', { bubbles: true }));
+        host.querySelector('.ml-dialog .ml-schema-modal-foot button:last-child').click();
+        resolveSave();
+        await new Promise(r => setTimeout(r, 0));
+        expect(host.querySelector('[data-cadence-custom="true"]').classList.contains('is-active')).toBe(true);
+        expect(lens.unsavedCount()).toBeGreaterThan(0);
+
+        // 3. extractMode select changed while save is in flight
+        clickSaveGlobal();
+        const modeSelect = host.querySelector('[data-field-key="extractMode"] select');
+        modeSelect.value = 'crawl';
+        modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        resolveSave();
+        await new Promise(r => setTimeout(r, 0));
+        expect(host.querySelector('[data-field-key="extractMode"] select').value).toBe('crawl');
+        expect(lens.unsavedCount()).toBeGreaterThan(0);
+
+        // 4. Reset Advanced Settings confirmed while save is in flight
+        clickSaveGlobal();
+        const resetBtn = [...host.querySelectorAll('.ml-settings-sticky button')]
+            .find(btn => btn.textContent.includes('重置高级设置') || btn.textContent.includes('Reset Advanced'));
+        resetBtn.click();
+        host.querySelector('.ml-dialog .ml-schema-modal-foot button:last-child').click();
+        resolveSave();
+        await new Promise(r => setTimeout(r, 0));
+        expect(host.querySelector('[data-field-key="extractMode"] select').value).toBe('oneshot');
+        expect(lens.unsavedCount()).toBeGreaterThan(0);
+
+        // 5. Focused input is NOT torn down during concurrent saveAdvanced refresh
+        clickSaveGlobal();
+        const horizonInput = host.querySelector('[data-field-key="persistentInjectionMaxSeqDistance"] input');
+        horizonInput.focus();
+        horizonInput.value = '9';
+        horizonInput.dispatchEvent(new Event('input', { bubbles: true }));
+        expect(document.activeElement).toBe(horizonInput);
+        resolveSave();
+        await new Promise(r => setTimeout(r, 0));
+        expect(horizonInput.isConnected).toBe(true);
+        expect(document.activeElement).toBe(horizonInput);
+        expect(horizonInput.value).toBe('9');
+        expect(lens.unsavedCount()).toBeGreaterThan(0);
+    });
 });

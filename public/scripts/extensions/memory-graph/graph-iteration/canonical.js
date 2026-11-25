@@ -40,7 +40,7 @@ const NODE_FIELD_WHITELIST = [
     'archived',
 ];
 
-export const LINK_KEY_SEPARATOR = '\u241F';
+const LINK_KEY_SEPARATOR = '\u241F';
 
 export function linkKey(from, type, to) {
     return `${String(from)}${LINK_KEY_SEPARATOR}${String(type)}${LINK_KEY_SEPARATOR}${String(to)}`;

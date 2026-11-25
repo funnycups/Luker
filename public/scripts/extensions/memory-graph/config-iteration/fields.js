@@ -82,7 +82,7 @@ const REGISTRY = [
     textField('configIterSystemPrompt', 'iteration', 'Configuration Iteration Prompt (configuration-editor AI)', 'System prompt for this configuration workbench.', DEFAULT_CONFIG_ITER_SYSTEM_PROMPT),
 
     // ---- runtime ----------------------------------------------------------
-    intField('toolCallRetryMax', 'runtime', 'Tool-call retries', 'Number of retries after a failed tool call.', 2, { min: 0, max: 10 }),
+    intField('toolCallRetryMax', 'runtime', 'Tool-call retries', 'Number of retries after a failed tool call.', 2, { min: 0 }),
     intField('rpmLimit', 'runtime', 'RPM limit (0 = unlimited)', 'Requests per minute limit; 0 means unlimited.', 0, { min: 0 }),
 ];
 

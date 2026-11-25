@@ -45,12 +45,8 @@ jest.unstable_mockModule(
         // re-exports from vector-index-core via vector-index.js
         buildCollectionId: () => '',
         buildNodeVectorText: () => '',
-        buildNodeVectorHash: () => '',
-        buildDesiredIndexEntries: () => new Map(),
-        diffAgainstRemote: () => ({ toInsert: [], toDelete: [], stats: { total: 0, indexed: 0, pending: 0, stale: 0 } }),
         // EmbeddingService-backed helpers used by retriever.js
         queryVectorCollection: async () => [],
-        queryVectorCollectionByVector: async () => [],
         rerankDocuments: async (_q, docs) => docs,
         insertVectorItems: async () => ({}),
         deleteVectorItems: async () => ({}),

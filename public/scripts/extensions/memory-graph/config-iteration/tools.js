@@ -12,16 +12,8 @@
  *                               structure tools (set / remove / reorder),
  *                               one discovery tool, one read tool, and three
  *                               configuration write tools.
- *   - TOOL_DISPLAY:             friendly UI labels keyed by tool name. The
- *                               labels are raw English strings; callers that
- *                               want i18n must wrap them at the call site
- *                               (this module is pure and has no i18n binding).
  *   - CONTROL_TOOL_NAMES:       names of the runner-side control tools used
  *                               for schema resets.
- *   - SESSIONS_BUCKET_KEY:      the legacy schema session bucket under
- *                               `extension_settings.memory_graph`. Exposed so
- *                               the session-store migrator can derive the old
- *                               bucket location from a single source.
  *   - applyToolCallToSandbox:   mutates `sandboxSession.workingProfile`
  *                               (`{ schema, settings }`) per the executor
  *                               logic. Returns true if the document changed,
@@ -47,8 +39,6 @@
 import { applyStringPatch } from '../../../iteration-library/system-prompt-patch.js';
 import { diagnoseAnchorMiss } from '../../../iteration-library/anchor-diagnostic.js';
 import { getFieldDef, validateFieldValue } from './fields.js';
-
-export const SESSIONS_BUCKET_KEY = 'iterStudioV2Schema';
 
 const TOOL_SET_NODE_TYPE = 'mg_schema_set_node_type';
 const TOOL_REMOVE_NODE_TYPE = 'mg_schema_remove_node_type';
@@ -108,19 +98,6 @@ const READ_TOOL_NAME_SET = new Set([
 export function isMgConfigReadTool(toolCall) {
     return READ_TOOL_NAME_SET.has(String(toolCall?.name || ''));
 }
-
-export const TOOL_DISPLAY = Object.freeze({
-    [TOOL_CONFIG_LIST_FIELDS]: 'list config fields',
-    [TOOL_CONFIG_READ_FIELDS]: 'read config fields',
-    [TOOL_CONFIG_PATCH_PROMPT]: 'patch settings text',
-    [TOOL_CONFIG_SET_FIELDS]: 'set config fields',
-    [TOOL_SCHEMA_PATCH_TEXT]: 'patch node type text',
-    [TOOL_SET_NODE_TYPE]: 'set node type',
-    [TOOL_REMOVE_NODE_TYPE]: 'remove node type',
-    [TOOL_REORDER_NODE_TYPES]: 'reorder node types',
-    [CONTROL_TOOL_NAMES.resetToBlank]: '♻ Reset schema to blank',
-    [CONTROL_TOOL_NAMES.resetToGlobal]: '⬇ Reset schema to global',
-});
 
 function compressionParams() {
     return {

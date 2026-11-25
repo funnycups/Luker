@@ -65,7 +65,7 @@ const MEMORY_DISABLED_HINT = 'Memory-graph is disabled or not loaded. Enable it 
 // derivation step.
 // ---------------------------------------------------------------------------
 
-let SESSION_CACHE = new WeakMap();
+const SESSION_CACHE = new WeakMap();
 
 function findCachedSession(context) {
     if (!context || typeof context !== 'object') return undefined;
@@ -123,17 +123,6 @@ function requireSession(toolName, context) {
 export function __setSessionForTest(context, session) {
     if (!context || typeof context !== 'object') return;
     SESSION_CACHE.set(context, session);
-}
-
-/**
- * @internal — exposed for tests. Resets the entire session cache by
- * rebinding the module-level reference to a fresh WeakMap. Useful
- * between test cases that reuse ctx-like objects and need a guaranteed
- * cold start. (WeakMap has no `clear()`, so re-binding is the only way
- * to invalidate every entry at once.)
- */
-export function __clearSessionCacheForTest() {
-    SESSION_CACHE = new WeakMap();
 }
 
 // ---------------------------------------------------------------------------

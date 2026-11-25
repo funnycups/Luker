@@ -22,7 +22,7 @@ import {
     loadMetaFields,
     persistMetaFields,
     migrateLegacyMemoryGraphState,
-    resetFloorStateInstanceForTesting,
+    resetFloorStateInstance,
     constants as adapterConstants,
 } from '../../public/scripts/extensions/memory-graph/persistence.js';
 
@@ -260,7 +260,7 @@ async function commitGraphEntryFixture(context, entry, floor, reducer) {
 }
 
 beforeEach(() => {
-    resetFloorStateInstanceForTesting();
+    resetFloorStateInstance();
 });
 
 // --- helpers exported by adapter ---

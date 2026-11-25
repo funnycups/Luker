@@ -115,13 +115,6 @@ export function resetFloorStateInstance() {
 }
 
 /**
- * @deprecated keep the old name around for any test still importing it.
- */
-export function resetFloorStateInstanceForTesting() {
-    floorStatePromise = null;
-}
-
-/**
  * Read the metadata sidecar (`<ns>__meta`). May return `null` when the
  * sidecar has never been written for this chat OR when the read failed —
  * callers treat both the same (no cached meta, derive from store).
@@ -323,7 +316,7 @@ export function createEmptyStore() {
  * stamped on every `synthesizePersistedStateFromStoreAndMeta` call so
  * stored states always advertise their format.
  */
-export function createEmptyPersistedMemoryState() {
+function createEmptyPersistedMemoryState() {
     return {
         version: PERSISTED_STORE_VERSION,
         coveredSeqTo: 0,
@@ -621,23 +614,10 @@ export function normalizePersistedMemoryState(raw, context) {
 }
 
 /**
- * Cheap "is this state actually populated?" test. Used to decide whether
- * to skip a write when the store is empty in all the ways that matter.
- */
-export function hasPersistedMemoryStatePayload(state) {
-    const normalized = normalizePersistedStateBase(state);
-    return normalized.coveredSeqTo > 0
-        || normalized.opLog.length > 0
-        || normalized.lastRecallTrace.length > 0
-        || Boolean(normalized.lastRecallProjection)
-        || normalized.sourceMessageCount > 0;
-}
-
-/**
  * Apply a single `upsert_node` snapshot to the store, also bumping the
  * counters that drive new-id allocation. Used by `applyMemoryLogEntryToStore`.
  */
-export function applyLoggedNodeSnapshot(store, node) {
+function applyLoggedNodeSnapshot(store, node) {
     const snapshot = cloneRollbackNodeSnapshot(node);
     if (!snapshot) {
         return;

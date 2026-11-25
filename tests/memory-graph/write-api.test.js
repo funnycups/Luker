@@ -14,30 +14,14 @@
  * loads, following the pattern in `apply-extraction-ops.test.js`.
  */
 
-import { describe, test, expect, jest, beforeAll } from '@jest/globals';
+import { describe, test, expect, jest, beforeAll, afterAll } from '@jest/globals';
+import { installBrowserModuleContext, installDomReadyJQuery } from '../util/browser-module-context.js';
 
 // -----------------------------------------------------------------------------
 // Browser/jQuery shims for main.js's module-level `jQuery(() => …)` init
 // -----------------------------------------------------------------------------
 
-// Chainable jQuery stub so top-level init like
-// `jQuery(document).off('click.foo').on('click.foo', fn)` in
-// public/scripts/extensions/luker-tabs.js (transitively imported via
-// memory-graph) doesn't blow up at module-load time.
-globalThis.jQuery = (cb) => {
-    if (typeof cb === 'function') { /* swallow init handlers */ }
-    const chain = new Proxy(function () {}, {
-        get(_t, prop) {
-            if (prop === 'then') return undefined;
-            if (prop === 'length') return 0;
-            return () => chain;
-        },
-        apply() { return chain; },
-    });
-    return chain;
-};
-globalThis.jQuery.escapeSelector = (s) => String(s);
-globalThis.$ = globalThis.jQuery;
+const jqueryEnv = installDomReadyJQuery();
 globalThis.window = globalThis.window || globalThis;
 globalThis.document = globalThis.document || {
     addEventListener: () => {},
@@ -51,6 +35,39 @@ globalThis.document = globalThis.document || {
 // -----------------------------------------------------------------------------
 
 const extensionSettingsMock = { memory_graph: {} };
+const browserEnv = installBrowserModuleContext({
+    extensionSettings: extensionSettingsMock,
+    constants: {
+        promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+        promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
+        wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        unset: Symbol('UNSET_VALUE'),
+    },
+    resolveChatStateTarget: () => null,
+    saveSettings: () => Promise.resolve({ ok: true, status: 'saved' }),
+    saveSettingsDebounced: () => {},
+    download: () => {},
+    getFileText: () => Promise.resolve(''),
+    getStringHash: () => '',
+    escapeHtml: (s) => String(s || ''),
+    worldInfoEntry: { template: () => ({}), setGlobalSelection: () => {} },
+    addLocaleData: () => {},
+    translate: (k) => String(k ?? ''),
+    getCurrentLocale: () => 'en-US',
+    registerExtensionApi: () => {},
+    getExtensionApi: () => null,
+    eventSource: { on: () => {}, off: () => {}, emit: () => {} },
+    eventTypes: {},
+    lib: {
+        showdown: { Converter: class { makeHtml(text) { return String(text || ''); } } },
+        DOMPurify: { sanitize: (html) => html },
+    },
+});
+
+afterAll(() => {
+    browserEnv.restore();
+    jqueryEnv.restore();
+});
 
 // public/lib.js pulls in a webpack-bundled file that can't be resolved under
 // jest. Stub to the bare set of exports memory-graph reaches for at import

@@ -1,4 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
+import { installBrowserModuleContext } from '../util/browser-module-context.js';
 import * as advancedSettings from '../../public/scripts/extensions/memory-graph/config-iteration/advanced-settings.js';
 const {
     ADVANCED_SETTING_DEFAULTS,
@@ -63,5 +64,25 @@ describe('stored advanced prompts', () => {
 
     test('rejects a cleared graph iteration prompt at execution', () => {
         expect(() => buildGraphIterSystemPrompt({ graphIterSystemPrompt: '' })).toThrow();
+    });
+
+    test('internal defaults module owns defaultSettings without removed legacy lorebookNameOverride key', async () => {
+        const env = installBrowserModuleContext({
+            constants: {
+                promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+                wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+            },
+            worldInfoEntry: { template: { position: 0, depth: 4, role: 0 } },
+        });
+        try {
+            const defaults = await import('../../public/scripts/extensions/memory-graph/defaults.js');
+            expect(defaults.defaultSettings).not.toHaveProperty('lorebookNameOverride');
+            expect(defaults.defaultSettings.nodeTypeSchema).toBe(defaults.defaultNodeTypeSchema);
+            for (const [key, value] of Object.entries(ADVANCED_SETTING_DEFAULTS)) {
+                expect(defaults.defaultSettings[key]).toBe(value);
+            }
+        } finally {
+            env.restore();
+        }
     });
 });

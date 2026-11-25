@@ -10,15 +10,7 @@
  */
 
 import { renderDiffCard } from '../../../iteration-library/ui/diff.js';
-
-function escapeHtmlLocal(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
+import { escapeHtml as escapeHtmlLocal } from '../../../lib/html-escape.js';
 
 function sameRecord(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);

@@ -23,7 +23,7 @@ import { canonicalFromStore } from './canonical.js';
 
 const NODE_ID_HINT = 'use mg_graph_search_nodes or mg_graph_list_nodes to find the right node id';
 
-export const GRAPH_READ_TOOL_NAMES = new Set([
+const GRAPH_READ_TOOL_NAMES = new Set([
     'mg_graph_read_fields',
     'mg_graph_list_nodes',
     'mg_graph_search_nodes',
@@ -33,7 +33,7 @@ export const GRAPH_READ_TOOL_NAMES = new Set([
     'mg_graph_read_chat',
 ]);
 
-export const GRAPH_WRITE_TOOL_NAMES = new Set([
+const GRAPH_WRITE_TOOL_NAMES = new Set([
     'mg_graph_create_node',
     'mg_graph_edit_node',
     'mg_graph_delete_node',

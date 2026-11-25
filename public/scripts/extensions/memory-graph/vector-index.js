@@ -15,7 +15,6 @@ import {
     validateVectorConfig,
     buildCollectionId,
     buildNodeVectorText,
-    buildNodeVectorHash,
     ensureVectorIndexState,
     buildDesiredIndexEntries,
     diffAgainstRemote,
@@ -25,10 +24,7 @@ export {
     validateVectorConfig,
     buildCollectionId,
     buildNodeVectorText,
-    buildNodeVectorHash,
     ensureVectorIndexState,
-    buildDesiredIndexEntries,
-    diffAgainstRemote,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,27 +109,6 @@ export async function queryVectorCollection(collectionId, profile, searchText, t
             result.__queryVector = response.queryVector;
         }
         return result;
-    }
-    return [];
-}
-
-/**
- * Query the vector collection using a raw vector instead of text. Skips
- * embedding computation on the backend.
- */
-export async function queryVectorCollectionByVector(collectionId, profile, vector, topK = 10, threshold = 0.0, signal, includeVectors = false) {
-    if (!profile) return [];
-    const response = await EmbeddingService.queryByVector({
-        profile,
-        collectionId,
-        vector,
-        topK,
-        threshold,
-        includeVectors,
-        signal,
-    });
-    if (response && Array.isArray(response.metadata)) {
-        return response.metadata;
     }
     return [];
 }

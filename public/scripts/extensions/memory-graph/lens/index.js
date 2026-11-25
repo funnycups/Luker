@@ -4,7 +4,6 @@
 // and SuggestRuleProvider with Workbench, and starts the background tag filter
 // and token recorder.
 
-import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
 import {
     getCharacterAdvancedOverrideByAvatar,
     getCharacterSchemaOverrideByAvatar,
@@ -32,7 +31,6 @@ import {
 import { getMemoryGraphReadApi } from '../read-api.js';
 import { getMemoryGraphWriteApi } from '../write-api.js';
 import { startTagFilter } from './filter/filter-runtime.js';
-import { registerLocaleData } from '../i18n.js';
 import { i18n } from './i18n.js';
 import { createMemoryConfigTarget, createMemoryGraphTarget } from './iterate-targets.js';
 import { createMemoryAskProvider, createMemorySuggestRuleProvider } from './providers.js';
@@ -45,11 +43,7 @@ let stopBackground = null;
 
 export function initMemoryLens() {
     const ctx = getContext();
-    const { addLocaleData, workbench } = ctx;
-    if (typeof addLocaleData === 'function') {
-        registerLensSharedLocaleData(addLocaleData);
-        registerLocaleData(addLocaleData);
-    }
+    const { workbench } = ctx;
 
     for (const unreg of unregisters.splice(0)) unreg?.();
 

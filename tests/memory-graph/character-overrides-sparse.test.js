@@ -10,10 +10,8 @@
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 
-// character-overrides.js captures `constants.unset` at module load.
-const UNSET_VALUE = Symbol.for('test.unset');
 globalThis.Luker = {
-    getContext: () => ({ constants: { unset: UNSET_VALUE } }),
+    getContext: () => ({}),
 };
 
 const { ADVANCED_SETTING_DEFAULTS, normalizeAdvancedSettings } =
@@ -61,7 +59,7 @@ function makeContext(advancedOverride, { schemaOverride = [{ id: 'event' }] } = 
     return {
         characters: [character],
         characterId: 0,
-        writeExtensionField: jest.fn(async () => {}),
+        writeExtensionField: jest.fn(async () => true),
     };
 }
 
@@ -151,12 +149,10 @@ describe('persistCharacterAdvancedOverridePatch', () => {
         expect(ctx.writeExtensionField).toHaveBeenCalledWith(
             0,
             'memory_graph',
-            expect.objectContaining({
-                schemaOverride: [{ id: 'event' }],
-                advancedOverride: { recallMaxIterations: 6, promptDefaultsInitialized: true },
-            }),
+            expect.any(Function),
         );
-        const written = ctx.writeExtensionField.mock.calls[0][2];
+        const written = ctx.writeExtensionField.mock.calls[0][2](ctx.characters[0].data.extensions.memory_graph);
+        expect(written.schemaOverride).toEqual([{ id: 'event' }]);
         expect(written.advancedOverride).toEqual({ recallMaxIterations: 6, promptDefaultsInitialized: true });
         expect(Object.keys(written.advancedOverride)).toHaveLength(2);
     });
@@ -168,7 +164,7 @@ describe('persistCharacterAdvancedOverridePatch', () => {
             unset: ['extractBatchTurns'],
         });
 
-        const written = ctx.writeExtensionField.mock.calls[0][2];
+        const written = ctx.writeExtensionField.mock.calls[0][2](ctx.characters[0].data.extensions.memory_graph);
         expect(written.advancedOverride).toEqual({ recallMaxIterations: 6, promptDefaultsInitialized: true });
     });
 
@@ -179,20 +175,21 @@ describe('persistCharacterAdvancedOverridePatch', () => {
             unset: [],
         });
 
-        const written = ctx.writeExtensionField.mock.calls[0][2];
+        const written = ctx.writeExtensionField.mock.calls[0][2](ctx.characters[0].data.extensions.memory_graph);
         expect(written.advancedOverride).toEqual({ updateEvery: 4, promptDefaultsInitialized: true });
         expect(written.schemaOverride).toEqual([{ id: 'event' }]);
     });
 
-    test('writes the unset sentinel when no keys remain', async () => {
+    test('removes the override key when no keys remain', async () => {
         const ctx = makeContext({ recallMaxIterations: 5 });
         await persistCharacterAdvancedOverridePatch(ctx, 'a.png', {
             set: {},
             unset: ['recallMaxIterations'],
         });
 
-        const written = ctx.writeExtensionField.mock.calls.at(-1)[2];
-        expect(written.advancedOverride).toBe(UNSET_VALUE);
+        const written = ctx.writeExtensionField.mock.calls.at(-1)[2](ctx.characters[0].data.extensions.memory_graph);
+        expect(Object.hasOwn(written, 'advancedOverride')).toBe(false);
+        expect(written.schemaOverride).toEqual([{ id: 'event' }]);
     });
 
     test('returns false without writing for unusable targets', async () => {
@@ -219,7 +216,7 @@ describe('persistCharacterAdvancedOverridePatch', () => {
             unset: [],
         });
 
-        const written = ctx.writeExtensionField.mock.calls[0][2];
+        const written = ctx.writeExtensionField.mock.calls[0][2](ctx.characters[0].data.extensions.memory_graph);
         expect(written.advancedOverride).toEqual({
             extractIncludeWorldInfo: false,
             recallIncludeWorldInfo: true,
@@ -243,7 +240,10 @@ describe('persistCharacterAdvancedOverride', () => {
         const ctx = makeContext({ recallMaxIterations: 5 });
         await persistCharacterAdvancedOverride(ctx, 'a.png', { recallMaxIterations: 6 });
 
-        const written = ctx.writeExtensionField.mock.calls[0][2];
+        const pending = ctx.writeExtensionField.mock.calls[0][2];
+        const written = typeof pending === 'function'
+            ? await pending({ ...ctx.characters[0].data.extensions.memory_graph })
+            : pending;
         expect(Object.keys(written.advancedOverride)).toHaveLength(
             Object.keys(CONFIG_FIELDS).length + 1,
         );

@@ -12,8 +12,6 @@ import { describe, test, expect } from '@jest/globals';
 
 import {
     TOOL_DEFS,
-    TOOL_DISPLAY,
-    SESSIONS_BUCKET_KEY,
     CONTROL_TOOL_NAMES,
     buildToolCatalog,
     applyToolCallToSandbox,
@@ -69,16 +67,6 @@ describe('MG config — tool catalog', () => {
             CONTROL_TOOL_NAMES.resetToGlobal,
         ]));
         expect(new Set(names).size).toBe(10);
-    });
-
-    test('every catalog entry has a TOOL_DISPLAY label', () => {
-        for (const def of buildToolCatalog()) {
-            expect(TOOL_DISPLAY[def.function.name]).toBeTruthy();
-        }
-    });
-
-    test('SESSIONS_BUCKET_KEY stays the legacy V2 bucket name', () => {
-        expect(SESSIONS_BUCKET_KEY).toBe('iterStudioV2Schema');
     });
 
     test('mg_config_list_fields takes an optional group', () => {

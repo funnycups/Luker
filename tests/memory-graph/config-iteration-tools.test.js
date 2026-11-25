@@ -18,7 +18,6 @@ import { describe, test, expect } from '@jest/globals';
 
 import {
     TOOL_DEFS,
-    TOOL_DISPLAY,
     CONTROL_TOOL_NAMES,
     buildToolCatalog,
     isMgSchemaControlCall,
@@ -90,22 +89,6 @@ describe('MG schema — buildToolCatalog', () => {
         const names = buildToolCatalog().map(d => d.function?.name);
         expect(names).toContain(CONTROL_TOOL_NAMES.resetToGlobal);
         expect(CONTROL_TOOL_NAMES.resetToGlobal).toBe('luker_mg_schema_reset_live_to_global');
-    });
-
-    test('every catalog entry has a TOOL_DISPLAY label', () => {
-        const catalog = buildToolCatalog();
-        for (const def of catalog) {
-            expect(TOOL_DISPLAY[def.function.name]).toBeTruthy();
-        }
-    });
-
-    test('TOOL_DISPLAY covers all ten entries including the read tools', () => {
-        expect(Object.keys(TOOL_DISPLAY)).toHaveLength(10);
-        expect(TOOL_DISPLAY.mg_config_list_fields).toBeTruthy();
-        expect(TOOL_DISPLAY.mg_config_read_fields).toBeTruthy();
-        expect(TOOL_DISPLAY.mg_config_patch_prompt).toBeTruthy();
-        expect(TOOL_DISPLAY.mg_config_set_fields).toBeTruthy();
-        expect(TOOL_DISPLAY.mg_schema_patch_text).toBeTruthy();
     });
 
     test('reset tools have minimal parameter schemas', () => {

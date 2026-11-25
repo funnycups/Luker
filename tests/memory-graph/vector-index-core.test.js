@@ -5,7 +5,6 @@
  * Covers:
  *   - validateVectorConfig
  *   - buildCollectionId (chat-id sanitization, prefix override)
- *   - getStringHash (stability + non-string handling)
  *   - buildNodeVectorText: schema priority, fallback priority, title fallback,
  *     array/object/scalar field handling, omitted/empty fields
  *   - buildNodeVectorHash: composition, profile-sensitivity, seqTo handling
@@ -17,7 +16,6 @@
 
 import { describe, test, expect } from '@jest/globals';
 import {
-    getStringHash,
     validateVectorConfig,
     buildCollectionId,
     buildNodeVectorText,
@@ -66,32 +64,6 @@ describe('buildCollectionId', () => {
 
     test('coerces non-strings via String()', () => {
         expect(buildCollectionId(42)).toBe('mg_42');
-    });
-});
-
-describe('getStringHash', () => {
-    test('deterministic across calls', () => {
-        expect(getStringHash('abc')).toBe(getStringHash('abc'));
-    });
-
-    test('different inputs produce different hashes', () => {
-        expect(getStringHash('abc')).not.toBe(getStringHash('abd'));
-    });
-
-    test('seed changes the result', () => {
-        expect(getStringHash('abc', 1)).not.toBe(getStringHash('abc', 2));
-    });
-
-    test('non-string returns 0', () => {
-        expect(getStringHash(null)).toBe(0);
-        expect(getStringHash(undefined)).toBe(0);
-        expect(getStringHash(42)).toBe(0);
-        expect(getStringHash({})).toBe(0);
-    });
-
-    test('empty string is a valid hashable input (returns deterministic value)', () => {
-        expect(getStringHash('')).toBe(getStringHash(''));
-        expect(typeof getStringHash('')).toBe('number');
     });
 });
 

@@ -1,14 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 
-import { jest } from '@jest/globals';
+import { jest, beforeAll, afterAll } from '@jest/globals';
+import { installBrowserModuleContext } from '../util/browser-module-context.js';
 
-const {
-    readMemoryGraphCardOverride,
-    hasMemoryGraphCardOverride,
-    summarizeMemoryGraphCardOverride,
-    registerMemoryGraphCardBindingSlot,
-} = await import('/scripts/extensions/memory-graph/card-binding-slot.js');
+let browserEnv;
+let readMemoryGraphCardOverride;
+let hasMemoryGraphCardOverride;
+let summarizeMemoryGraphCardOverride;
+let registerMemoryGraphCardBindingSlot;
+
+beforeAll(async () => {
+    browserEnv = installBrowserModuleContext({});
+    ({
+        readMemoryGraphCardOverride,
+        hasMemoryGraphCardOverride,
+        summarizeMemoryGraphCardOverride,
+        registerMemoryGraphCardBindingSlot,
+    } = await import('/scripts/extensions/memory-graph/card-binding-slot.js'));
+});
+
+afterAll(() => {
+    browserEnv?.restore();
+});
 
 test('read keeps only the schema and advanced override keys', () => {
     const character = {
@@ -59,8 +73,8 @@ test('register wires a descriptor that persists each preserved key', async () =>
     await descriptor.write(0, { schemaOverride: [{ id: 'tide' }], advancedOverride: { recallTopN: 7 } });
     const writes = context.writeExtensionField.mock.calls.filter(call => call[1] === 'memory_graph');
     expect(writes).toHaveLength(2);
-    expect(writes[0][2].schemaOverride).toEqual([{ id: 'tide' }]);
-    expect(writes[1][2].advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
+    expect(writes[0][2]({}).schemaOverride).toEqual([{ id: 'tide' }]);
+    expect(writes[1][2]({}).advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
 });
 
 test('write skips an empty schema override beside a non-empty advanced override', async () => {
@@ -75,8 +89,8 @@ test('write skips an empty schema override beside a non-empty advanced override'
     await descriptor.write(0, { schemaOverride: [], advancedOverride: { recallTopN: 7 } });
     const writes = context.writeExtensionField.mock.calls.filter(call => call[1] === 'memory_graph');
     expect(writes).toHaveLength(1);
-    expect(writes[0][2].advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
-    expect(writes[0][2]).not.toHaveProperty('schemaOverride');
+    expect(writes[0][2]({}).advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
+    expect(writes[0][2]({})).not.toHaveProperty('schemaOverride');
 });
 
 test('write skips an empty advanced override beside a non-empty schema override', async () => {
@@ -91,6 +105,6 @@ test('write skips an empty advanced override beside a non-empty schema override'
     await descriptor.write(0, { schemaOverride: [{ id: 'tide' }], advancedOverride: {} });
     const writes = context.writeExtensionField.mock.calls.filter(call => call[1] === 'memory_graph');
     expect(writes).toHaveLength(1);
-    expect(writes[0][2].schemaOverride).toEqual([{ id: 'tide' }]);
-    expect(writes[0][2]).not.toHaveProperty('advancedOverride');
+    expect(writes[0][2]({}).schemaOverride).toEqual([{ id: 'tide' }]);
+    expect(writes[0][2]({})).not.toHaveProperty('advancedOverride');
 });

@@ -19,11 +19,8 @@
  * sibling overrides (e.g. schemaOverride when writing advancedOverride)
  * survive the round-trip.
  *
- * Removal is implemented via the `UNSET_VALUE` sentinel. Since
- * `writeExtensionField` is replace-mode, omitting a subkey on the new
- * blob already drops it — but `UNSET_VALUE` is still the way to remove
- * a key from the blob's payload without changing the rest of the shape
- * (the server's `processUnsetSentinels` sweep deletes it post-merge).
+ * Removal omits the selected subkey from the queued replacement, keeping
+ * the acknowledged local and persisted namespace shapes identical.
  *
  * To keep this module decoupled from main.js, callers wire an explicit
  * `deps` object once at module bootstrap (`configure({...})`) carrying:
@@ -38,7 +35,6 @@
 import { migrateLegacyWorldInfoToggle } from './config-iteration/advanced-settings.js';
 
 const getContext = Luker.getContext;
-const UNSET_VALUE = Luker.getContext().constants.unset;
 
 let deps = {
     MODULE_NAME: 'memory_graph',
@@ -203,17 +199,15 @@ export async function persistCharacterSchemaOverride(context, avatar, schema, op
     if (characterIndex < 0) {
         return false;
     }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    const next = {
+    const normalized = deps.normalizeNodeTypeSchema(schema);
+    const updater = previous => ({
         ...previous,
-        [CHARACTER_SCHEMA_OVERRIDE_KEY]: deps.normalizeNodeTypeSchema(schema),
-    };
+        [CHARACTER_SCHEMA_OVERRIDE_KEY]: normalized,
+    });
     if (options?.requireSaved) {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
-    } else {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+        return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater, { requireSaved: true });
     }
-    return true;
+    return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater);
 }
 
 export async function removeCharacterSchemaOverride(context, avatar, options = {}) {
@@ -225,21 +219,15 @@ export async function removeCharacterSchemaOverride(context, avatar, options = {
     if (characterIndex < 0) {
         return false;
     }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    if (!Object.prototype.hasOwnProperty.call(previous, CHARACTER_SCHEMA_OVERRIDE_KEY)) {
-        return true;
-    }
-    const next = { ...previous };
-    // Use UNSET_VALUE so the server's processUnsetSentinels sweep deletes
-    // the key from the on-disk blob. Plain `null` would only set the field
-    // to null and leave the key in place.
-    next[CHARACTER_SCHEMA_OVERRIDE_KEY] = UNSET_VALUE;
+    const updater = current => {
+        const next = { ...current };
+        delete next[CHARACTER_SCHEMA_OVERRIDE_KEY];
+        return next;
+    };
     if (options?.requireSaved) {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
-    } else {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+        return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater, { requireSaved: true });
     }
-    return true;
+    return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater);
 }
 
 /**
@@ -248,7 +236,7 @@ export async function removeCharacterSchemaOverride(context, avatar, options = {
  * Reads the raw sparse object, shallow-copies it, writes `patch.set`, deletes
  * `patch.unset` keys, and writes the result back. The payload is not
  * normalized: only the keys the caller touched differ from the globals. When
- * no keys remain, the `UNSET_VALUE` sentinel clears the blob slot. Sibling
+ * no keys remain, the override key is removed from the namespace. Sibling
  * keys such as `schemaOverride` pass through untouched. A failed write
  * propagates to the caller.
  */
@@ -261,27 +249,26 @@ export async function persistCharacterAdvancedOverridePatch(context, avatar, pat
     if (characterIndex < 0) {
         return false;
     }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    const nextOverride = { ...(getCharacterAdvancedOverrideByAvatar(context, target) || {}) };
-    migrateLegacyWorldInfoToggle(nextOverride);
-    const setValues = patch?.set && typeof patch.set === 'object' ? patch.set : {};
-    Object.assign(nextOverride, setValues);
-    const unsetKeys = Array.isArray(patch?.unset) ? patch.unset : [];
-    for (const key of unsetKeys) {
-        delete nextOverride[String(key)];
-    }
-    const next = {
-        ...previous,
-        [CHARACTER_ADVANCED_OVERRIDE_KEY]: Object.keys(nextOverride).some(key => key !== 'promptDefaultsInitialized')
-            ? { ...nextOverride, promptDefaultsInitialized: true }
-            : UNSET_VALUE,
+    const setValues = structuredClone(patch?.set && typeof patch.set === 'object' ? patch.set : {});
+    const unsetKeys = Array.isArray(patch?.unset) ? patch.unset.map(String) : [];
+    const updater = previous => {
+        const current = previous?.[CHARACTER_ADVANCED_OVERRIDE_KEY];
+        const nextOverride = current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+        migrateLegacyWorldInfoToggle(nextOverride);
+        Object.assign(nextOverride, setValues);
+        for (const key of unsetKeys) delete nextOverride[key];
+        const next = { ...previous };
+        if (Object.keys(nextOverride).some(key => key !== 'promptDefaultsInitialized')) {
+            next[CHARACTER_ADVANCED_OVERRIDE_KEY] = { ...nextOverride, promptDefaultsInitialized: true };
+        } else {
+            delete next[CHARACTER_ADVANCED_OVERRIDE_KEY];
+        }
+        return next;
     };
     if (options?.requireSaved) {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
-    } else {
-        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+        return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater, { requireSaved: true });
     }
-    return true;
+    return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, updater);
 }
 
 /**
@@ -299,16 +286,14 @@ export async function persistCharacterAdvancedOverride(context, avatar, advanced
     if (characterIndex < 0) {
         return false;
     }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    const next = {
-        ...previous,
-        [CHARACTER_ADVANCED_OVERRIDE_KEY]: {
-            ...deps.normalizeAdvancedSettings(advancedSettings, deps.defaultSettings),
-            promptDefaultsInitialized: true,
-        },
+    const normalized = {
+        ...deps.normalizeAdvancedSettings(advancedSettings, deps.defaultSettings),
+        promptDefaultsInitialized: true,
     };
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
-    return true;
+    return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, previous => ({
+        ...previous,
+        [CHARACTER_ADVANCED_OVERRIDE_KEY]: normalized,
+    }), { requireSaved: true });
 }
 
 export async function removeCharacterAdvancedOverride(context, avatar) {
@@ -320,14 +305,9 @@ export async function removeCharacterAdvancedOverride(context, avatar) {
     if (characterIndex < 0) {
         return false;
     }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    if (!Object.prototype.hasOwnProperty.call(previous, CHARACTER_ADVANCED_OVERRIDE_KEY)) {
-        return true;
-    }
-    const next = { ...previous };
-    // Same reasoning as removeCharacterSchemaOverride: use UNSET_VALUE so
-    // the server actually deletes the key instead of leaving a null value.
-    next[CHARACTER_ADVANCED_OVERRIDE_KEY] = UNSET_VALUE;
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
-    return true;
+    return await context.writeExtensionField(characterIndex, deps.MODULE_NAME, current => {
+        const next = { ...current };
+        delete next[CHARACTER_ADVANCED_OVERRIDE_KEY];
+        return next;
+    });
 }

@@ -19,27 +19,12 @@
  */
 
 import { jest } from '@jest/globals';
+import { installBrowserModuleContext, installDomReadyJQuery } from '../../util/browser-module-context.js';
 
 // ---- Browser / jQuery shims ----
-// Return a chainable stub so top-level code like
-// `jQuery(document).off('click.foo').on('click.foo', ...)` in
-// public/scripts/extensions/luker-tabs.js (transitively imported via
-// memory-graph) doesn't blow up at module-load time.
-// Any prop access returns a callable that returns the same chain.
-globalThis.jQuery = (cb) => {
-    if (typeof cb === 'function') { /* swallow DOM-ready callback */ }
-    const chain = new Proxy(function () {}, {
-        get(_t, prop) {
-            if (prop === 'then') return undefined;
-            if (prop === 'length') return 0;
-            return () => chain;
-        },
-        apply() { return chain; },
-    });
-    return chain;
-};
-globalThis.jQuery.escapeSelector = (s) => String(s);
-globalThis.$ = globalThis.jQuery;
+// Explicit non-Proxy jQuery adapter for module-load DOM-ready registration and
+// luker-tabs's delegated `jQuery(document).off(...).on(...)` listener.
+installDomReadyJQuery();
 globalThis.window = globalThis.window || globalThis;
 globalThis.document = globalThis.document || {
     addEventListener: () => {}, removeEventListener: () => {},
@@ -48,6 +33,40 @@ globalThis.document = globalThis.document || {
 
 // ---- Module mocks ----
 const extensionSettingsMock = { memory_graph: {} };
+
+const mockLukerContext = {
+    extensionSettings: extensionSettingsMock,
+    constants: {
+        promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+        promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
+        wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        unset: Symbol('UNSET_VALUE'),
+    },
+    resolveChatStateTarget: () => ({ is_group: false, avatar_url: 'avatar.png', file_name: 'chat' }),
+    saveSettings: () => Promise.resolve({ ok: true, status: 'saved' }),
+    saveSettingsDebounced: () => {},
+    download: () => {},
+    getFileText: () => Promise.resolve(''),
+    getStringHash: () => '',
+    escapeHtml: (s) => String(s || ''),
+    worldInfoEntry: {
+        template: () => ({}),
+        setGlobalSelection: () => {},
+    },
+    addLocaleData: () => {},
+    translate: (k) => String(k ?? ''),
+    getCurrentLocale: () => 'en-US',
+    registerExtensionApi: () => {},
+    getExtensionApi: () => null,
+    eventSource: { on: () => {}, off: () => {}, emit: () => {} },
+    eventTypes: {},
+    lib: {
+        showdown: { Converter: class { makeHtml(t) { return String(t || ''); } } },
+        DOMPurify: { sanitize: (h) => h },
+    },
+};
+installBrowserModuleContext(mockLukerContext);
+globalThis.lukerContext = mockLukerContext;
 
 // NOTE on relative paths: `jest.unstable_mockModule` resolves the specifier
 // relative to the consuming test file (the import-graph root), NOT this

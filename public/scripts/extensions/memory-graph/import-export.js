@@ -26,7 +26,7 @@ import {
  * `[a-z0-9._-]` with underscores, and trim leading/trailing
  * underscores. Falls back to `fallback` when the result would be empty.
  */
-export function sanitizeMemoryGraphFileNamePart(value, fallback = 'current-chat') {
+function sanitizeMemoryGraphFileNamePart(value, fallback = 'current-chat') {
     const sanitized = String(value || '')
         .trim()
         .replace(/\.[^/.]+$/, '')

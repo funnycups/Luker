@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    installDomReadyJQuery,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 
+installDomReadyJQuery();
 globalThis.window = globalThis.window || globalThis;
 globalThis.document = globalThis.document || {
     addEventListener: () => {}, removeEventListener: () => {},
@@ -19,8 +26,9 @@ globalThis.toastr = {
     clear: () => {},
 };
 
-const baseLukerCtx = globalThis.Luker.getContext();
-const customLukerCtx = new Proxy({
+const stateErrors = await loadStateErrorsApi();
+const extensionRegistry = createExtensionRegistry();
+const customLukerCtx = {
     constants: {
         promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
         promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
@@ -42,23 +50,16 @@ const customLukerCtx = new Proxy({
         template: {},
         setGlobalSelection: () => {},
     },
-    stateErrors: baseLukerCtx.stateErrors,
-    regex: baseLukerCtx.regex,
-    getExtensionApi: baseLukerCtx.getExtensionApi,
-    registerExtensionApi: () => {},
+    stateErrors,
+    regex: { getScripts: () => [], saveScripts: () => {} },
+    getExtensionApi: extensionRegistry.getExtensionApi,
+    registerExtensionApi: extensionRegistry.registerExtensionApi,
     translate: (s) => String(s ?? ''),
     addLocaleData: () => {},
     getCurrentLocale: () => 'en-US',
-}, {
-    get(target, prop) {
-        if (prop in target) return target[prop];
-        return baseLukerCtx[prop];
-    },
-});
+};
 
-globalThis.Luker = { getContext: () => customLukerCtx };
-globalThis.st = globalThis.Luker;
-globalThis.SillyTavern = globalThis.Luker;
+installBrowserModuleContext(customLukerCtx);
 
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');

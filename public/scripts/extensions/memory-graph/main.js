@@ -15,7 +15,6 @@ const getStringHash = __ctx.getStringHash;
 const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
 const setGlobalWorldInfoSelection = __ctx.worldInfoEntry.setGlobalSelection;
 const world_info_position = __ctx.constants.wiPosition;
-const { STATE_ERROR_REASONS } = __ctx.stateErrors;
 // Register the Layer-1 session API at module load.
 import './api.js';
 // Publishes memory-graph's read + write tools into the orchestrator's
@@ -23,7 +22,7 @@ import './api.js';
 // agenda / director) can dispatch them. Silent no-op when orchestrator
 // isn't loaded — memory-graph stays independently functional.
 import { registerMemoryGraphOrchestrationTools } from './orchestrator-tools.js';
-import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
+import { i18n, i18nFormat } from './i18n.js';
 import {
     DEFAULT_PER_TYPE_INSTRUCTIONS,
     computeActiveExtractionTypes,
@@ -55,8 +54,16 @@ import {
 } from './import-export.js';
 import { migrateConfigIterationPrompt } from './config-iteration/prompt-migration.js';
 import {
-    DEFAULT_EVENT_COMPRESS_INSTRUCTION,
-} from './default-prompts.js';
+    MODULE_NAME,
+    RECALL_INJECT_POSITION_SCHEMA_VERSION,
+    SUPPORTED_WORLD_INFO_POSITIONS,
+    defaultNodeTypeSchema,
+    SYMMETRIC_RELATIONS,
+    CANONICAL_EXTRACT_RELATION_TYPES_TEXT,
+    defaultSettings,
+    DEFAULT_MANAGED_LOREBOOK_ENTRY_CONFIG,
+} from './defaults.js';
+export { defaultSettings };
 import {
     ADVANCED_SETTING_DEFAULTS,
     applyAdvancedSettings,
@@ -77,11 +84,9 @@ export {
 import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
 import { cookPluginFloorText } from '../../lib/plugin-floors.js';
 import { markPluginFloorMessage } from '../../lib/plugin-prompt-regex.js';
+import { normalizeToolCallRetryMax, requestToolCallsWithRetry } from '../../lib/iter-tool-calling.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
-import {
-    TOOL_PROTOCOL_STYLE,
-    validateParsedToolCalls,
-} from '../function-call-runtime.js';
+import { getConnectionProfileNames, getOpenAIPresetNames } from '../../lens-shared/preset-selectors.js';
 import { runRagRecall, hasRecallableNodes } from './retriever.js';
 import {
     getVectorConfigFromSettings,
@@ -99,18 +104,6 @@ import {
 } from '../connection-manager/embed-rerank.js';
 import { getEmbeddingProfileById } from '../connection-manager/embed-rerank.js';
 import { resolveGraphVectorProfile, syncGraphVectorsAfterMutation as runGraphVectorSync } from './graph-iteration/vector-sync.js';
-
-// Symmetric relations collapse direction: A→B and B→A merge into a single
-// canonical edge sorted by node id. Used by the extraction writer and edge
-// reader paths — kept here (not in retriever.js) because it's graph-storage
-// invariant, not a recall concept.
-const SYMMETRIC_RELATIONS = new Set([
-    'allied_with',
-    'hostile_to',
-    'family_of',
-    'partner_of',
-    'related',
-]);
 import {
     getFloorStateInstance,
     resetFloorStateInstance,
@@ -138,6 +131,7 @@ import {
     resolveInFlightAnchor,
     seqToFloor,
 } from './persistence.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 import {
     LEVEL,
     normalizeText,
@@ -159,8 +153,9 @@ import {
     reparentNode,
 } from './graph-ops.js';
 import { __recordInjectedNodeIds } from './external-api.js';
+import { escapeHtml } from '../../lib/html-escape.js';
+import { createAbortError, isAbortError, isAbortSignalLike, linkAbortSignals, throwIfAborted } from '../../lib/abort-utils.js';
 
-const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
 const META_NAMESPACE = floorStateAdapterConstants.META_NAMESPACE;
 const META_SCHEMA_VERSION = floorStateAdapterConstants.SCHEMA_VERSION;
@@ -172,206 +167,6 @@ const RECALL_ALLOWED_GENERATION_TYPES = new Set(['normal', 'continue', 'regenera
 const RECALL_REUSE_GENERATION_TYPES = new Set(['continue', 'regenerate', 'swipe']);
 const GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID = `${MODULE_NAME}_generation_visible_history`;
 const GENERATION_VISIBLE_HISTORY_REGEX_SCRIPT_ID = `${MODULE_NAME}_generation_visible_history_runtime_script`;
-const RECALL_INJECT_POSITION_SCHEMA_VERSION = 2;
-const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
-    world_info_position.before,
-    world_info_position.after,
-    world_info_position.ANTop,
-    world_info_position.ANBottom,
-    world_info_position.EMTop,
-    world_info_position.EMBottom,
-    world_info_position.atDepth,
-]);
-
-const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'A prose body covering event skeleton, key decisions, and causal chains, with the in-world time and place anchors at the top and three optional structured sections at the end (不可逆 / 未结 / 原文摘录, all default empty). See the event summary writing standard for the exact format and section gating.';
-const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes — written as a prose body with an in-world time and place anchor at the top, plus three optional sections at the end (不可逆 / 未结 / 原文摘录, default empty).';
-
-// Built-in node types shipped as the default schema. `thread` is the long-
-// running plotline / foreshadow / mystery tracker — high write threshold,
-// extraction prompt enforces cross-scene-only creation and aggressive
-// resolution on goal completion. The compression instruction body is the
-// imported default; users can edit per-type via the Schema Editor popup.
-const defaultNodeTypeSchema = [
-    {
-        id: 'event',
-        label: 'Event',
-        tableName: 'event_table',
-        tableColumns: ['summary'],
-        embeddingColumns: ['summary'],
-        columnHints: {
-            summary: DEFAULT_EVENT_SUMMARY_COLUMN_HINT,
-        },
-        requiredColumns: ['summary'],
-        forceUpdate: true,
-        editable: false,
-        level: LEVEL.SEMANTIC,
-        extractHint: DEFAULT_EVENT_EXTRACT_HINT,
-        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.event,
-        keywords: ['battle', 'reveal', 'deal', 'betrayal', 'event', 'outcome'],
-        alwaysInject: true,
-        latestOnly: false,
-        recordsFloorRange: true,
-        primaryKeyColumns: [],
-        compression: {
-            mode: 'hierarchical',
-            threshold: 5,
-            fanIn: 3,
-            maxDepth: 10,
-            keepRecentLeaves: 3,
-            summarizeInstruction: DEFAULT_EVENT_COMPRESS_INSTRUCTION,
-        },
-    },
-    {
-        id: 'character_sheet',
-        label: 'Character Sheet',
-        tableName: 'character_table',
-        tableColumns: ['title', 'aliases', 'traits', 'identity', 'goal', 'inventory', 'language_sample', 'addressing_user'],
-        embeddingColumns: ['title', 'aliases', 'traits', 'identity', 'goal'],
-        columnHints: {
-            title: 'Canonical character name only. Do not include aliases, English names, titles, translations, or any parenthetical/bracketed clarification here.',
-            aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names — only when they pass the alias-write threshold (see extractionInstructions).',
-            traits: 'Long-term personality + appearance/style markers, observed across multiple batches. Avoid momentary tone/expression descriptors.',
-            identity: 'Long-term identity/background facts (24h+ persistence). Do NOT record temporary roles.',
-            goal: 'Long-term goal that drives the character across multiple scenes. Single-scene goals are events, not goals.',
-            inventory: 'Plot-critical items only (信物/钥匙/标志性武器/凭证/关键技术物品). No regular clothes/accessories or single-scene props.',
-            language_sample: 'STYLE DESCRIPTIONS ONLY — never quoted dialogue lines. e.g. "公关式精确措辞, 战斗时短促命令式".',
-            addressing_user: 'Stable cross-scene addressing of the user. Single-scene tone shifts do not count.',
-        },
-        requiredColumns: ['title'],
-        forceUpdate: false,
-        editable: true,
-        level: LEVEL.SEMANTIC,
-        extractHint: 'Stable character facts and evolving state. Prefer structured JSON-like content: aliases/traits/identity/status/goal/inventory/core notes.',
-        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.character_sheet,
-        extractEveryN: 1,
-        keywords: ['character', 'alias', 'traits', 'personality', 'status', 'relationship', 'inventory', 'goal', 'core note'],
-        alwaysInject: false,
-        latestOnly: true,
-        primaryKeyColumns: ['title', 'aliases'],
-        compression: {
-            mode: 'none',
-            threshold: 2,
-            fanIn: 2,
-            maxDepth: 1,
-            keepRecentLeaves: 1,
-            summarizeInstruction: '',
-        },
-    },
-    {
-        id: 'location_state',
-        label: 'Location State',
-        tableName: 'location_table',
-        tableColumns: ['title', 'aliases', 'controller', 'danger', 'resources', 'state'],
-        embeddingColumns: ['title', 'aliases', 'controller', 'state', 'danger'],
-        columnHints: {
-            title: 'Canonical location name only. Do not include aliases, English names, translations, or any parenthetical/bracketed clarification here.',
-            aliases: 'Alternative location names, English names, translated names, short names, or colloquial references. Store them here instead of appending them to title.',
-            controller: 'Current long-term controller. May use "X(名义)/Y(实际)". Forbid temporary stand-in roles.',
-            danger: 'Long-term risk profile (e.g. permafrost planet). Not single-visit encounters.',
-            resources: 'Long-term fixtures / features / geography. No event traces.',
-            state: 'Long-term identity (≤50 chars). Single-visit traces forbidden.',
-        },
-        requiredColumns: ['title'],
-        forceUpdate: false,
-        editable: true,
-        level: LEVEL.SEMANTIC,
-        extractHint: 'Location status, aliases, ownership/control, danger level, and environmental/resource changes. Prefer structured JSON-like content.',
-        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.location_state,
-        extractEveryN: 1,
-        keywords: ['location', 'alias', 'control', 'danger', 'resource', 'region', 'base'],
-        alwaysInject: false,
-        latestOnly: true,
-        primaryKeyColumns: ['title', 'aliases'],
-        compression: {
-            mode: 'none',
-            threshold: 2,
-            fanIn: 2,
-            maxDepth: 1,
-            keepRecentLeaves: 1,
-            summarizeInstruction: '',
-        },
-    },
-    {
-        id: 'thread',
-        label: 'Thread',
-        tableName: 'thread_table',
-        tableColumns: ['title', 'status', 'note'],
-        embeddingColumns: ['title', 'note'],
-        columnHints: {
-            title: 'Short noun-phrase name of the thread (≤10 chars). Forbid AI-coined adjective+noun labels.',
-            status: 'One of: active (推进中) / resolved (达成或彻底解决) / abandoned (永久放弃). Default active.',
-            note: '≤80 chars. Must cover: (a) core fact, (b) involved characters, (c) trigger conditions / current progress.',
-        },
-        requiredColumns: ['title', 'status', 'note'],
-        forceUpdate: false,
-        editable: true,
-        level: LEVEL.SEMANTIC,
-        extractHint: 'Long-running plotline / promise / mystery that spans multiple events. High write threshold.',
-        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.thread,
-        extractEveryN: 1,
-        keywords: ['thread', 'plotline', 'foreshadow', 'promise', 'quest', 'mystery'],
-        alwaysInject: true,
-        latestOnly: true,
-        primaryKeyColumns: ['title'],
-        compression: {
-            mode: 'none',
-            threshold: 2,
-            fanIn: 2,
-            maxDepth: 1,
-            keepRecentLeaves: 1,
-            summarizeInstruction: '',
-        },
-    },
-];
-
-const CANONICAL_EXTRACT_RELATION_TYPES = [
-    // Generic graph relations (existing)
-    'related', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'updates', 'advances',
-    // Character-character relations (new — spec §3.2)
-    // Symmetric (use bidirectional direction in upsert):
-    'partner_of', 'family_of', 'allied_with', 'hostile_to',
-    // Directed (from = action originator):
-    'mentor_of', 'sworn_to', 'debt_owed_to', 'deceiving',
-];
-const CANONICAL_EXTRACT_RELATION_TYPES_TEXT = CANONICAL_EXTRACT_RELATION_TYPES.join(', ');
-
-
-export const defaultSettings = {
-    enabled: false,
-    autoExtractionEnabled: true,
-    autoCompressionEnabled: true,
-    ...ADVANCED_SETTING_DEFAULTS,
-    maxTurns: 900,
-    recallEnabled: true,
-    recallMethod: 'llm',
-    recallInjectPosition: world_info_position.atDepth,
-    recallInjectDepth: 9999,
-    recallInjectRole: extension_prompt_roles.SYSTEM,
-    recallApiPresetName: '',
-    recallPresetName: '',
-    extractApiPresetName: '',
-    extractPresetName: '',
-    requestApiPresetName: '',
-    requestLlmPresetName: '',
-    lorebookNameOverride: '',
-    lorebookEntryOrderBase: 9800,
-    nodeTypeSchema: defaultNodeTypeSchema,
-    embeddingProfileId: '',
-    rerankProfileId: '',
-    vectorTopK: 20,
-    hybridMaxResults: 15,
-    // RAG per-type bucketing: default quota per node type. Each vector
-    // pre-filter hit is bucketed by node.type; each bucket takes at most
-    // ragDefaultPerTypeK hits (or the per-type override in
-    // schema.ragPerTypeK). Prevents one dominant type (typically `event`)
-    // from starving other types out of recall. Set to 0 to disable
-    // bucketing and use the legacy shared-pool topK behaviour.
-    ragDefaultPerTypeK: 3,
-    ragUseRerank: false,
-    ragUseQueryRewrite: false,
-    ragRewriteApiPresetName: '',
-    ragRewriteLlmPresetName: '',
-};
 
 
 const extractionTimers = new Map();
@@ -728,6 +523,15 @@ function ensureSettings() {
         delete extension_settings[MODULE_NAME].schemaIterationPresetName;
     }
 
+    extension_settings[MODULE_NAME].toolCallRetryMax = normalizeToolCallRetryMax(
+        extension_settings[MODULE_NAME].toolCallRetryMax,
+        defaultSettings.toolCallRetryMax,
+    );
+    extension_settings[MODULE_NAME].rpmLimit = Math.max(
+        0,
+        Math.floor(Number(extension_settings[MODULE_NAME].rpmLimit) || 0),
+    );
+
     if (!hasRecallInjectPositionSchemaVersion) {
         extension_settings[MODULE_NAME].recallInjectPosition = migrateLegacyRecallInjectPosition(
             extension_settings[MODULE_NAME].recallInjectPosition,
@@ -738,6 +542,7 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].recallInjectDepth = normalizeRecallInjectDepth(extension_settings[MODULE_NAME].recallInjectDepth);
     extension_settings[MODULE_NAME].recallInjectRole = normalizeRecallInjectRole(extension_settings[MODULE_NAME].recallInjectRole);
     delete extension_settings[MODULE_NAME].plainTextFunctionCallMode;
+    delete extension_settings[MODULE_NAME].lorebookNameOverride;
     extension_settings[MODULE_NAME].autoExtractionEnabled =
         extension_settings[MODULE_NAME].autoExtractionEnabled !== false;
     extension_settings[MODULE_NAME].autoCompressionEnabled =
@@ -796,28 +601,6 @@ export function normalizeLegacyRecallSettings(settings) {
 
 export function getSettings() {
     return extension_settings[MODULE_NAME];
-}
-
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll('\'', '&#39;');
-}
-
-function getOpenAIPresetNames(context) {
-    const manager = context.getPresetManager?.('openai');
-    if (!manager || typeof manager.getAllPresets !== 'function') {
-        return [];
-    }
-    const names = manager.getAllPresets();
-    if (!Array.isArray(names)) {
-        return [];
-    }
-    return [...new Set(names.map(name => String(name || '').trim()).filter(Boolean))];
 }
 
 function getConnectionProfiles() {
@@ -2659,114 +2442,12 @@ async function summarizeRollupWithLLM(context, settings, spec, instruction, grou
     return normalizeText(result.summary);
 }
 
-function isAbortSignalLike(value) {
-    return Boolean(value && typeof value === 'object' && 'aborted' in value);
-}
-
-function isAbortError(error, abortSignal = null) {
-    if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
-        return true;
-    }
-    const name = String(error?.name || '').toLowerCase();
-    if (name === 'aborterror') {
-        return true;
-    }
-    const message = String(error?.message || error || '').toLowerCase();
-    return message.includes('aborted') || message.includes('abort');
-}
-
-function createAbortError(message = 'Operation aborted.') {
-    try {
-        return new DOMException(String(message || 'Operation aborted.'), 'AbortError');
-    } catch {
-        const error = new Error(String(message || 'Operation aborted.'));
-        error.name = 'AbortError';
-        return error;
-    }
-}
-
-function throwIfAborted(abortSignal, message = 'Operation aborted.') {
-    if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
-        throw createAbortError(message);
-    }
-}
-
 function throwIfRecallRunInvalid(runToken, abortSignal, message = 'Memory recall aborted.') {
     throwIfAborted(abortSignal, message);
     const normalizedRunToken = Number(runToken);
     if (Number.isFinite(normalizedRunToken) && normalizedRunToken > 0 && normalizedRunToken !== activeRecallRunToken) {
         throw createAbortError(message);
     }
-}
-
-function linkAbortSignals(...signals) {
-    const validSignals = signals.filter(isAbortSignalLike);
-    if (validSignals.length === 0) {
-        return { signal: null, cleanup: () => {} };
-    }
-    if (validSignals.length === 1) {
-        return { signal: validSignals[0], cleanup: () => {} };
-    }
-
-    const controller = new AbortController();
-    const onAbort = () => {
-        if (!controller.signal.aborted) {
-            controller.abort();
-        }
-    };
-
-    for (const signal of validSignals) {
-        if (signal.aborted) {
-            onAbort();
-            break;
-        }
-        signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return {
-        signal: controller.signal,
-        cleanup: () => {
-            for (const signal of validSignals) {
-                signal.removeEventListener('abort', onAbort);
-            }
-        },
-    };
-}
-
-function createLinkedAbortController(...signals) {
-    const validSignals = signals.filter(isAbortSignalLike);
-    const controller = new AbortController();
-    if (validSignals.length === 0) {
-        return {
-            controller,
-            signal: controller.signal,
-            cleanup: () => {},
-        };
-    }
-
-    const onAbort = () => {
-        if (!controller.signal.aborted) {
-            controller.abort();
-        }
-    };
-
-    for (const signal of validSignals) {
-        if (signal.aborted) {
-            onAbort();
-            break;
-        }
-        signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return {
-        controller,
-        signal: controller.signal,
-        cleanup: () => {
-            for (const signal of validSignals) {
-                signal.removeEventListener('abort', onAbort);
-            }
-        },
-    };
 }
 
 function registerActiveRecallRequest(runToken, controller) {
@@ -2830,43 +2511,35 @@ async function abortActiveRecallRequests(runToken, timeoutMs = 400) {
     ]);
 }
 
-const _rpmTimestamps = [];
-
-async function waitForRpmSlot(settings, abortSignal = null) {
-    const limit = Math.max(0, Math.floor(Number(settings?.rpmLimit) || 0));
-    if (limit <= 0) return;
-    const windowMs = 60_000;
-    const pollMs = 200;
-    while (true) {
-        if (isAbortSignalLike(abortSignal) && abortSignal.aborted) return;
-        const now = Date.now();
-        while (_rpmTimestamps.length > 0 && _rpmTimestamps[0] <= now - windowMs) {
-            _rpmTimestamps.shift();
-        }
-        if (_rpmTimestamps.length < limit) {
-            _rpmTimestamps.push(now);
-            return;
-        }
-        const waitUntil = _rpmTimestamps[0] + windowMs;
-        const delay = Math.min(pollMs, Math.max(10, waitUntil - now));
-        await new Promise(resolve => setTimeout(resolve, delay));
+// Recall-scoped request wrapper. Checks the recall run token before and
+// after `run`, and registers a controller in the active-recall registry so
+// abortActiveRecallRequests (user Stop, runtime stop, a newer recall start)
+// cancels the in-flight request even while the caller's own signal is
+// still live. A failure that lands after the token went stale surfaces as
+// an abort, so callers skip their fallback path.
+async function runRecallScoped(recallRunToken, abortSignal, run) {
+    throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
+    const requestController = new AbortController();
+    const linked = linkAbortSignals(abortSignal, requestController.signal);
+    const activeRequestState = registerActiveRecallRequest(recallRunToken, requestController);
+    try {
+        const result = await run(linked.signal);
+        throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
+        return result;
+    } catch (error) {
+        throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
+        throw error;
+    } finally {
+        finishActiveRecallRequest(activeRequestState);
+        linked.cleanup();
     }
 }
 
-/**
- * Tag an error thrown while parsing / validating the model's tool calls, so
- * retry toasts can describe it as an unusable-output retry rather than a
- * request failure. Transport errors stay untagged and read as request
- * failures.
- */
-function markToolCallValidationError(error) {
-    if (error && typeof error === 'object') {
-        try { error.__toolCallValidation = true; } catch { /* frozen error */ }
-    }
-    return error;
-}
-
-async function requestSingleFunctionCallWithRetry(context, settings, {
+// Single-function request on the shared runner. The function is forced
+// (tool_choice + requiredFunctionName) unless the caller allows a preamble.
+// Requests count against memory-graph's own RPM window and render macros
+// in the task messages, as memory-graph requests always have.
+async function requestMgFunctionCall(context, settings, {
     taskMessages = [],
     runtimeWorldInfo = null,
     apiPresetName = '',
@@ -2884,14 +2557,6 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
     if (!fnName) {
         throw new Error('Function name is required.');
     }
-    if (!context || typeof context.generateTask !== 'function') {
-        throw new Error('context.generateTask is unavailable.');
-    }
-
-    const retriesSource = retriesOverride === null || retriesOverride === undefined
-        ? Number(settings?.toolCallRetryMax)
-        : Number(retriesOverride);
-    const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
     const tools = [{
         type: 'function',
         function: {
@@ -2900,160 +2565,24 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
             parameters: parameters && typeof parameters === 'object' ? parameters : { type: 'object', additionalProperties: true },
         },
     }];
-    const toolChoice = allowPreamble
-        ? 'auto'
-        : { type: 'function', function: { name: fnName } };
-    const functionCallOptions = {
-        protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-    };
-    if (!allowPreamble) {
-        functionCallOptions.requiredFunctionName = fnName;
-    }
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        const requestController = createLinkedAbortController(isAbortSignalLike(abortSignal) ? abortSignal : null);
-        const activeRequestState = registerActiveRecallRequest(recallRunToken, requestController.controller);
-        try {
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            await waitForRpmSlot(settings, abortSignal);
-            const generateTaskOpts = {
-                taskMessages,
-                includeCharacterCard: true,
-                worldInfoSource: 'none',
-                runtimeWorldInfo,
-                apiPresetName: String(apiPresetName || '').trim(),
-                llmPresetName: String(llmPresetName || '').trim(),
-                tools,
-                toolChoice,
-                functionCallMode: 'auto',
-                functionCallOptions,
-                abortSignal: requestController.signal,
-            };
-            const result = await context.generateTask(generateTaskOpts);
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const normalizedCalls = rawCalls.map(call => ({
-                name: String(call?.name || ''),
-                args: call?.args && typeof call.args === 'object' ? call.args : {},
-                raw: call?.raw || null,
-            }));
-            const filteredCalls = normalizedCalls.filter(call => call.name === fnName);
-            const validationError = validateParsedToolCalls(filteredCalls, tools);
-            if (validationError) {
-                throw markToolCallValidationError(new Error(validationError));
-            }
-            const matched = filteredCalls.find(call => call.name === fnName);
-            if (!matched) {
-                throw markToolCallValidationError(new Error(`Model returned tool call, but not '${fnName}'.`));
-            }
-            if (typeof validateArgs === 'function') {
-                const argError = validateArgs(matched.args);
-                if (argError) {
-                    throw markToolCallValidationError(new Error(argError));
-                }
-            }
-            return matched.args;
-        } catch (error) {
-            if (isAbortError(error, abortSignal)) {
-                throw error;
-            }
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            lastError = error;
-            if (attempt >= retries) {
-                throw error;
-            }
-            notifyInfo(i18nFormat('Memory graph request failed, retrying (${0}/${1})…', attempt + 1, retries));
-            console.warn(`[${MODULE_NAME}] Tool call '${fnName}' failed. Retrying (${attempt + 1}/${retries})...`, error);
-        } finally {
-            finishActiveRecallRequest(activeRequestState);
-            requestController.cleanup();
-        }
-    }
-
-    throw lastError || new Error(`Tool call '${fnName}' failed.`);
-}
-
-async function requestToolCallsWithRetry(context, settings, {
-    taskMessages = [],
-    runtimeWorldInfo = null,
-    apiPresetName = '',
-    llmPresetName = '',
-    tools = [],
-    allowedNames = null,
-    retriesOverride = null,
-    abortSignal = null,
-    recallRunToken = 0,
-} = {}) {
-    if (!Array.isArray(tools) || tools.length === 0) {
-        throw new Error('Tools are required.');
-    }
-    if (!context || typeof context.generateTask !== 'function') {
-        throw new Error('context.generateTask is unavailable.');
-    }
-
-    const retriesSource = retriesOverride === null || retriesOverride === undefined
-        ? Number(settings?.toolCallRetryMax)
-        : Number(retriesOverride);
-    const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
-    const allowedSet = Array.isArray(allowedNames)
-        ? new Set(allowedNames.map(name => String(name || '').trim()).filter(Boolean))
-        : (allowedNames instanceof Set ? allowedNames : null);
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        const requestController = createLinkedAbortController(isAbortSignalLike(abortSignal) ? abortSignal : null);
-        const activeRequestState = registerActiveRecallRequest(recallRunToken, requestController.controller);
-        try {
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            await waitForRpmSlot(settings, abortSignal);
-            const generateTaskOpts = {
-                taskMessages,
-                includeCharacterCard: true,
-                worldInfoSource: 'none',
-                runtimeWorldInfo,
-                apiPresetName: String(apiPresetName || '').trim(),
-                llmPresetName: String(llmPresetName || '').trim(),
-                tools,
-                toolChoice: 'auto',
-                functionCallMode: 'auto',
-                functionCallOptions: {
-                    protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-                },
-                abortSignal: requestController.signal,
-            };
-            const result = await context.generateTask(generateTaskOpts);
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const normalizedCalls = rawCalls.map(call => ({
-                name: String(call?.name || ''),
-                args: call?.args && typeof call.args === 'object' ? call.args : {},
-                raw: call?.raw || null,
-            }));
-            const filteredCalls = allowedSet && allowedSet.size > 0
-                ? normalizedCalls.filter(call => allowedSet.has(call.name))
-                : normalizedCalls;
-            const validationError = validateParsedToolCalls(filteredCalls, tools);
-            if (validationError) {
-                throw markToolCallValidationError(new Error(validationError));
-            }
-            return filteredCalls;
-        } catch (error) {
-            if (isAbortError(error, abortSignal)) {
-                throw error;
-            }
-            throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            lastError = error;
-            if (attempt >= retries) {
-                throw error;
-            }
-            notifyInfo(i18nFormat('Memory graph request failed, retrying (${0}/${1})…', attempt + 1, retries));
-            console.warn(`[${MODULE_NAME}] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, error);
-        } finally {
-            finishActiveRecallRequest(activeRequestState);
-            requestController.cleanup();
-        }
-    }
-
-    throw lastError || new Error('Multi tool call request failed.');
+    const calls = await runRecallScoped(recallRunToken, abortSignal, signal => requestToolCallsWithRetry(context, settings, {
+        taskMessages,
+        runtimeWorldInfo,
+        apiPresetName: String(apiPresetName || '').trim(),
+        llmPresetName: String(llmPresetName || '').trim(),
+        tools,
+        allowedNames: [fnName],
+        retriesOverride,
+        toolChoice: allowPreamble ? 'auto' : { type: 'function', function: { name: fnName } },
+        requiredFunctionName: allowPreamble ? '' : fnName,
+        validateArgs,
+        substituteMacros: true,
+        rpmBucket: MODULE_NAME,
+        logLabel: `${MODULE_NAME}:${fnName}`,
+        abortSignal: signal,
+        onRetry: ({ attemptIndex, maxRetries }) => notifyExtractionRetry('request', attemptIndex, maxRetries),
+    }));
+    return calls[0].args;
 }
 
 async function runFunctionCallTask(context, settings, {
@@ -3061,7 +2590,7 @@ async function runFunctionCallTask(context, settings, {
     userPrompt = '',
     // Optional pre-assembled taskMessages. When provided, systemPrompt /
     // userPrompt are ignored and the array is threaded through to
-    // requestSingleFunctionCallWithRetry verbatim. Callers that need
+    // requestMgFunctionCall verbatim. Callers that need
     // role-alternating chat between the system prefix and the tail user
     // task (extraction / recall route / recall finalize) construct this
     // themselves so per-turn plugin-lane regex applies at real chat depth
@@ -3107,7 +2636,7 @@ async function runFunctionCallTask(context, settings, {
             { role: 'user', content: String(userPrompt || '').trim() },
         ];
 
-    return await requestSingleFunctionCallWithRetry(context, settings, {
+    return await requestMgFunctionCall(context, settings, {
         taskMessages,
         runtimeWorldInfo: resolvedWorldInfo,
         apiPresetName: String(apiPresetName || '').trim(),
@@ -3189,9 +2718,7 @@ function buildDynamicToolDescription(spec = {}, mode = 'create') {
     return chunks.join(' ');
 }
 
-export { buildDynamicExtractTools };
-
-function buildDynamicExtractTools(schema = [], options = {}) {
+export function buildDynamicExtractTools(schema = [], options = {}) {
     const tools = [];
     const specByToolName = new Map();
     const usedNames = new Set();
@@ -4163,7 +3690,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         allowLinks: includeLinks,
     });
     const allowedNames = new Set(['luker_rpg_extract_done', ...specByToolName.keys()]);
-    const semanticRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
+    const semanticRetries = normalizeToolCallRetryMax(settings?.toolCallRetryMax, 0);
     const editableNodes = new Map(
         listNodesByLevel(store, LEVEL.SEMANTIC)
             .filter((node) => {
@@ -4214,6 +3741,12 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                 allowedNames,
                 retriesOverride: 0,
                 abortSignal: options?.abortSignal || null,
+                // An empty or text-only reply returns [] so the semantic
+                // retry loop below re-prompts with its reminder.
+                substituteMacros: true,
+                allowEmptyResponse: true,
+                rpmBucket: MODULE_NAME,
+                logLabel: `${MODULE_NAME}:extract`,
             });
         } catch (error) {
             if (isAbortError(error, options?.abortSignal || null)) {
@@ -5371,8 +4904,15 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
             // semantic-retry loop around this call, so transient tool-parse
             // failures fall back to the user's toolCallRetryMax instead of
             // hard-failing the whole extraction.
-            retriesOverride: Math.max(0, Math.floor(Number(settings?.toolCallRetryMax) || 0)),
+            retriesOverride: normalizeToolCallRetryMax(settings?.toolCallRetryMax, 0),
             abortSignal: options?.abortSignal || null,
+            // A reply without read calls ends exploration (the
+            // `calls.length === 0` break below) instead of retrying.
+            substituteMacros: true,
+            allowEmptyResponse: true,
+            rpmBucket: MODULE_NAME,
+            logLabel: `${MODULE_NAME}:crawl`,
+            onRetry: ({ attemptIndex, maxRetries }) => notifyExtractionRetry('request', attemptIndex, maxRetries),
         });
         let done = false;
         for (const call of calls) {
@@ -6021,7 +5561,7 @@ async function runExtractionForStore(context, store, {
 
     const schema = getEffectiveNodeTypeSchema(context, settings);
     const compressionStats = createCompressionStats();
-    const frameErrorRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
+    const frameErrorRetries = normalizeToolCallRetryMax(settings?.toolCallRetryMax, 0);
     const extractBatchTurns = Math.max(
         1,
         Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
@@ -6420,14 +5960,14 @@ async function runQueryRewrite(context, settings, queryBundle, opts = {}) {
     const rewriteInputTail = [
         '  </recent_dialogue_context>',
         '  <task>',
-        '  Following the system rules above, produce one sentence optimised for vector recall of related past memory-graph events. Output strictly via the rewrite_recall_query function call.',
+        '  Invoke rewrite_recall_query for the recent_dialogue_context above.',
         '  </task>',
         '</rewrite_recall_query_input>',
     ].join('\n');
     const roleSplitChatMessages = buildRoleSplitChatMessages(recentMessages, context);
 
     try {
-        const args = await requestSingleFunctionCallWithRetry(context, settings, {
+        const args = await requestMgFunctionCall(context, settings, {
             taskMessages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'system', content: rewriteInputHead },
@@ -7078,10 +6618,7 @@ async function chooseFocusNodes(context, settings, recallState) {
             alwaysInjectNodeIds: alwaysInjectIds,
             routeResult: recallState.route || {},
             selectionConstraints: {
-                include_non_event_nodes: true,
-                require_event_continuity: true,
                 recall_query_recent_messages: sanitizeRecallQueryMessages(settings.recallQueryMessages),
-                min_event_nodes_if_available: 2,
             },
         });
         const roleSplitChatMessages = buildRoleSplitChatMessages(
@@ -7497,15 +7034,6 @@ function buildFocusTablesText(nodes, settings, options = {}, context = null) {
 
     return blocks.join('\n\n');
 }
-
-const DEFAULT_MANAGED_LOREBOOK_ENTRY_CONFIG = Object.freeze({
-    position: Number(newWorldInfoEntryTemplate.position ?? world_info_position.before),
-    depth: Math.max(0, Math.min(10000, Math.floor(Number(newWorldInfoEntryTemplate.depth ?? 4) || 0))),
-    role: [extension_prompt_roles.SYSTEM, extension_prompt_roles.USER, extension_prompt_roles.ASSISTANT]
-        .includes(Number(newWorldInfoEntryTemplate.role))
-        ? Number(newWorldInfoEntryTemplate.role)
-        : extension_prompt_roles.SYSTEM,
-});
 
 function normalizeManagedLorebookEntryConfig(entryConfig = {}, fallbackConfig = DEFAULT_MANAGED_LOREBOOK_ENTRY_CONFIG) {
     const fallback = fallbackConfig && typeof fallbackConfig === 'object'
@@ -8744,7 +8272,12 @@ async function safeInjectMemoryPrompts(context, payload, trigger = 'after_world_
     if (activeRecallAbortController && !activeRecallAbortController.signal.aborted) {
         activeRecallAbortController.abort();
     }
+    const previousRecallRunToken = activeRecallRunToken;
     const recallRunToken = ++activeRecallRunToken;
+    // The shared runner has no run-token check between retry attempts;
+    // abort the superseded run's registered requests so its retry loop
+    // stops. Settlement is not awaited — the new run does not depend on it.
+    void abortActiveRecallRequests(previousRecallRunToken, 0);
     const recallAbortController = shouldShowRuntimeToast ? new AbortController() : null;
     if (recallAbortController) {
         activeRecallAbortController = recallAbortController;
@@ -9393,9 +8926,21 @@ function refreshUiStats() {}
 
 
 async function persistAdvancedToGlobal(settings, advancedSettings) {
+    const previous = normalizeAdvancedSettings(settings, defaultSettings);
     applyAdvancedSettings(settings, advancedSettings);
     invalidateLatestRecallSnapshot();
-    await saveSettings();
+    try {
+        const outcome = await saveSettings();
+        if (outcome && typeof outcome === 'object' && outcome.ok === false) {
+            applyAdvancedSettings(settings, previous);
+            invalidateLatestRecallSnapshot();
+        }
+        return outcome;
+    } catch (error) {
+        applyAdvancedSettings(settings, previous);
+        invalidateLatestRecallSnapshot();
+        throw error;
+    }
 }
 
 async function persistAdvancedToCharacter(context, avatar, advancedSettings) {
@@ -9685,7 +9230,7 @@ export function getMemorySettingsView(context) {
     return {
         values,
         options: {
-            connections: getConnectionProfiles().map(profile => profile.name).filter(Boolean),
+            connections: getConnectionProfileNames(getConnectionProfiles()),
             presets: getOpenAIPresetNames(context),
             positions: { ...world_info_position },
             roles: { ...extension_prompt_roles },
@@ -9706,7 +9251,14 @@ export function getMemorySettingsView(context) {
 /** @param {'global'|'character'} scope */
 export async function saveMemoryAdvancedSettings(context, values, scope, expectedAvatar) {
     const settings = getSettings();
-    const normalized = normalizeAdvancedSettings(values, settings);
+    const rawValues = values && typeof values === 'object' ? values : {};
+    const preparedValues = Object.prototype.hasOwnProperty.call(rawValues, 'toolCallRetryMax')
+        ? {
+            ...rawValues,
+            toolCallRetryMax: normalizeToolCallRetryMax(rawValues.toolCallRetryMax, defaultSettings.toolCallRetryMax),
+        }
+        : rawValues;
+    const normalized = normalizeAdvancedSettings(preparedValues, settings);
     if (scope === 'character') {
         const info = getAdvancedScopeInfo(context, settings);
         if (expectedAvatar !== undefined && info.avatar !== expectedAvatar) throw new Error(i18n('The active character has changed.'));
@@ -9715,7 +9267,10 @@ export async function saveMemoryAdvancedSettings(context, values, scope, expecte
             throw new Error(i18n('Failed to persist character advanced override.'));
         }
     } else {
-        await persistAdvancedToGlobal(settings, normalized);
+        const outcome = await persistAdvancedToGlobal(settings, normalized);
+        if (outcome && typeof outcome === 'object' && outcome.ok === false) {
+            throw new Error(i18n('Operation failed'));
+        }
     }
     syncGenerationVisibleHistoryRuntimeRegexScripts();
 }
@@ -10895,7 +10450,6 @@ async function initializeCharacterPromptDefaults(context) {
 
 jQuery(async () => {
     const context = getContext();
-    registerLocaleData();
     import('./lens/index.js')
         .then(({ initMemoryLens }) => initMemoryLens())
         .catch(err => console.error(`[${MODULE_NAME}] Failed to start Memory Lens`, err));

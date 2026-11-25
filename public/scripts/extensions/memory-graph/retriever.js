@@ -22,6 +22,7 @@ import {
     getVectorConfigFromSettings,
     validateVectorConfig,
 } from './vector-index.js';
+import { isStrictAbortError, throwIfAborted } from '../../lib/abort-utils.js';
 
 const MODULE_NAME = 'memory_graph';
 
@@ -29,18 +30,6 @@ const MODULE_NAME = 'memory_graph';
 // resolve to a schema type. Kept as one bucket so no candidate is silently
 // dropped just because its type is unknown.
 const UNKNOWN_TYPE = '__unknown__';
-
-function isAbortError(error) {
-    return error?.name === 'AbortError';
-}
-
-function throwIfAborted(signal) {
-    if (signal?.aborted) {
-        const err = new Error('RAG recall aborted');
-        err.name = 'AbortError';
-        throw err;
-    }
-}
 
 export function normalizeQueryText(value) {
     return String(value ?? '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
@@ -168,7 +157,7 @@ async function rerankBucket(query, bucket, rerankProfile, settings, store, signa
         bucketMeta.rerankApplied = true;
         return bucket;
     } catch (err) {
-        if (isAbortError(err)) throw err;
+        if (isStrictAbortError(err)) throw err;
         console.warn(`[${MODULE_NAME}] Rerank failed for bucket, falling back to vector order`, err);
         bucketMeta.skipReasons.push('Rerank failed, fell back to vector order');
         return bucket;
@@ -252,7 +241,7 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
 
     // Vector pre-filter — auto-lift topK so per-type quotas can fill.
     const effectiveTopK = computeEffectiveVectorTopK(vectorTopK, perTypeK, defaultPerTypeK, maxResults);
-    throwIfAborted(signal);
+    throwIfAborted(signal, 'RAG recall aborted');
     const tVec = performance.now();
     let vectorHits = [];
     try {
@@ -262,10 +251,7 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
             signal,
         });
     } catch (err) {
-        // Vector / embedding failures are not recall results. Propagate them
-        // so the caller can surface the failure and skip caching instead of
-        // treating an empty candidate list as a successful empty selection.
-        if (isAbortError(err)) throw err;
+        if (isStrictAbortError(err)) throw err;
         console.warn(`[${MODULE_NAME}] Vector search failed`, err);
         throw err;
     }
@@ -304,7 +290,7 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
     if (!bucketingConfigured) {
         let candidates = scored;
         if (useRerank && rerankProfile && candidates.length > 0) {
-            throwIfAborted(signal);
+            throwIfAborted(signal, 'RAG recall aborted');
             const tRerank = performance.now();
             const legacyBucketMeta = createBucketMeta();
             candidates = await rerankBucket(effectiveQuery, candidates, rerankProfile, settings, store, signal, legacyBucketMeta);
@@ -339,7 +325,7 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
         let capped = bucket.slice(0, quota);
 
         if (useRerank && rerankProfile && capped.length > 0) {
-            throwIfAborted(signal);
+            throwIfAborted(signal, 'RAG recall aborted');
             const tRerank = performance.now();
             capped = await rerankBucket(effectiveQuery, capped, rerankProfile, settings, store, signal, bucketMeta);
             tRerankTotal += performance.now() - tRerank;

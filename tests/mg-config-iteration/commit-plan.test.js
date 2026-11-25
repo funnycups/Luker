@@ -208,8 +208,35 @@ describe('applyConfigPlan — character scope is fail-closed', () => {
 });
 
 describe('applyConfigPlan — global scope', () => {
+    test.each([
+        { ok: false, status: 'failed', error: 'storage refused the write' },
+        { ok: false, status: 'deferred', reason: 'data_import' },
+    ])('an unacknowledged global save preserves the prior configuration: $status', async outcome => {
+        const originalSchema = [{ id: 'old' }];
+        const globalSettings = { nodeTypeSchema: originalSchema, recallMaxIterations: 3, rpmLimit: 30 };
+        await expect(applyConfigPlan(
+            { schemaChanged: true, schema: [{ id: 'event' }], set: { recallMaxIterations: 5 }, unset: ['rpmLimit'] },
+            { scope: 'global', globalSettings, saveGlobalSettings: async () => outcome },
+        )).rejects.toThrow(/global settings/);
+        expect(globalSettings).toEqual({ nodeTypeSchema: originalSchema, recallMaxIterations: 3, rpmLimit: 30 });
+        expect(globalSettings.nodeTypeSchema).toBe(originalSchema);
+    });
+
+    test('an unacknowledged global save cannot undo a later settings edit', async () => {
+        const globalSettings = { recallMaxIterations: 3, rpmLimit: 30 };
+        await expect(applyConfigPlan(
+            { schemaChanged: false, set: { recallMaxIterations: 5 }, unset: ['rpmLimit'] },
+            { scope: 'global', globalSettings, saveGlobalSettings: async () => {
+                globalSettings.recallMaxIterations = 8;
+                globalSettings.sibling = 'later edit';
+                return { ok: false, status: 'failed', error: 'storage refused the write' };
+            } },
+        )).rejects.toThrow(/global settings/);
+        expect(globalSettings).toEqual({ recallMaxIterations: 8, rpmLimit: 30, sibling: 'later edit' });
+    });
+
     test('writes the schema, applies set, deletes unset, and saves exactly once', async () => {
-        const saveGlobalSettings = jest.fn(async () => {});
+        const saveGlobalSettings = jest.fn(async () => ({ ok: true, status: 'saved' }));
         const globalSettings = {
             nodeTypeSchema: [{ id: 'old' }],
             recallMaxIterations: 3,
@@ -239,7 +266,7 @@ describe('applyConfigPlan — global scope', () => {
     });
 
     test('an unchanged schema leaves globalSettings.nodeTypeSchema untouched', async () => {
-        const saveGlobalSettings = jest.fn(async () => {});
+        const saveGlobalSettings = jest.fn(async () => ({ ok: true, status: 'saved' }));
         const originalSchema = [{ id: 'old' }];
         const globalSettings = { nodeTypeSchema: originalSchema, recallMaxIterations: 3 };
         await applyConfigPlan(

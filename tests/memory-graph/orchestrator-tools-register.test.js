@@ -1,4 +1,9 @@
-import { describe, test, expect, beforeEach } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    loadOrchestratorToolRegistryApi,
+} from '../util/browser-module-context.js';
 import {
     registerMemoryGraphOrchestrationTools,
     unregisterMemoryGraphOrchestrationTools,
@@ -7,6 +12,18 @@ import {
 import { __getExtensionRegistryForTest } from '../../public/scripts/extensions/orchestrator/register-custom-tool.js';
 
 describe('memory-graph orchestrator tools', () => {
+    let browserEnv;
+
+    beforeAll(async () => {
+        const orchestrator = await loadOrchestratorToolRegistryApi();
+        const registry = createExtensionRegistry({ orchestrator });
+        browserEnv = installBrowserModuleContext({ getExtensionApi: registry.getExtensionApi });
+    });
+
+    afterAll(() => {
+        browserEnv?.restore();
+    });
+
     beforeEach(async () => {
         __getExtensionRegistryForTest().clear();
         // The register implementation is async (it dynamically imports

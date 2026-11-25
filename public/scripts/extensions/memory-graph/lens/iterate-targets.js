@@ -417,44 +417,34 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
         }
     };
 
-    const resolveMeta = (live, targetRef = null, { scope = null, ctx = null } = {}) => {
-        if (targetRef && typeof targetRef === 'object' && targetRef.scope) {
+    const invalidSource = () => new SourceError('source', i18n('The saved configuration source is missing or invalid. Start a new conversation.'));
+    const resolveMeta = (live, targetRef = null) => {
+        if (targetRef !== null) {
+            if (!targetRef || typeof targetRef !== 'object'
+                || !['character', 'global'].includes(targetRef.scope)
+                || (targetRef.scope === 'character' && !String(targetRef.avatar || '').trim())) {
+                throw invalidSource();
+            }
             return {
-                scope: targetRef.scope === 'character' ? 'character' : 'global',
-                avatar: String(targetRef.avatar || ''),
+                scope: targetRef.scope,
+                avatar: String(targetRef.avatar || '').trim(),
                 hasOverride: Boolean(targetRef.hasOverride),
                 characterName: String(targetRef.characterName || ''),
             };
         }
-        if (targetRef && typeof targetRef === 'object' && metaByRef.has(targetRef)) {
-            return metaByRef.get(targetRef);
-        }
         if (live && typeof live === 'object' && metaByRef.has(live)) {
             return metaByRef.get(live);
         }
-        const resolvedScope = scope === 'character' ? 'character' : 'global';
-        if (resolvedScope === 'character') {
-            const c = ctx || resolveCtx();
-            const avatar = resolveActiveAvatar(c);
-            const info = avatar ? resolveScopeInfo(c, getMgSettings()) : null;
-            return {
-                scope: 'character',
-                avatar,
-                hasOverride: Boolean(info?.hasOverride),
-                characterName: String(info?.characterName || (avatar ? resolveActiveCharacterName(c, avatar) : '') || ''),
-            };
-        }
-        return {
-            scope: 'global',
-            avatar: '',
-            hasOverride: false,
-            characterName: '',
-        };
+        throw invalidSource();
     };
 
     const getMgSettings = () => deps.getSettings?.() || resolveCtx()?.extensionSettings?.memory_graph || {};
     const normalizeSchema = (schema) => (typeof deps.normalizeNodeTypeSchema === 'function' ? deps.normalizeNodeTypeSchema(schema) : schema);
     const defaultSchema = () => (typeof deps.getDefaultNodeTypeSchema === 'function' ? deps.getDefaultNodeTypeSchema() : []);
+    const characterSettings = (ctx, avatar, settings) => normalizeAdvancedSettings({
+        ...settings,
+        ...deps.getCharacterAdvancedOverrideByAvatar(ctx, avatar),
+    }, ADVANCED_SETTING_DEFAULTS);
 
     function resolveGlobalDoc(mgSettings) {
         return {
@@ -575,7 +565,10 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
 
             return h('div', { class: 'wb-preset-controls wb-memory-controls' }, blankBtn, globalBtn);
         },
-        targetKey: (t) => (t?.scope === 'character' ? `memory:character:${t.avatar || ''}` : 'memory:global'),
+        targetKey: (targetRef) => {
+            const meta = resolveMeta(null, targetRef);
+            return meta.scope === 'character' ? `memory:character:${meta.avatar}` : 'memory:global';
+        },
         renderPreview: ({ base, ai }) => renderMemoryConfigPreview({ base, ai }),
         async load(scope, ctx) {
             const c = resolveCtx(ctx);
@@ -623,22 +616,21 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
         async prompt(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
             const mgSettings = getMgSettings();
-            const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
+            const meta = resolveMeta(live, extra?.target);
             if (meta.scope === 'character') {
-                const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
+                const effective = characterSettings(c, meta.avatar, mgSettings);
                 const base = readStoredPrompt(effective?.configIterSystemPrompt, 'Configuration Iteration Prompt (configuration-editor AI)');
                 return appendScopeHintIfNeeded(base, {
                     scope: 'character',
                     hasOverride: Boolean(meta.hasOverride),
-                    characterDisplayName: meta.characterName || resolveActiveCharacterName(c, meta.avatar || resolveActiveAvatar(c)),
+                    characterDisplayName: meta.characterName || resolveActiveCharacterName(c, meta.avatar),
                 });
             }
             return readStoredPrompt(mgSettings?.configIterSystemPrompt, 'Configuration Iteration Prompt (configuration-editor AI)');
         },
         async tools(live, scope, ctx, extra = {}) {
-            const c = resolveCtx(ctx);
-            const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
-            if (meta.scope === 'character' && (meta.avatar || resolveActiveAvatar(c))) {
+            const meta = resolveMeta(live, extra?.target);
+            if (meta.scope === 'character') {
                 const catalog = buildToolCatalog().filter((def) => {
                     const name = def?.function?.name;
                     if (name === CONTROL_TOOL_NAMES.resetToGlobal) return Boolean(meta.hasOverride);
@@ -653,10 +645,10 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             const c = resolveCtx();
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            const meta = resolveMeta(live, helpers?.target, { ctx: c });
+            const meta = resolveMeta(live, helpers?.target);
 
             if (isLorebookReadTool(name)) {
-                const avatar = meta.scope === 'character' ? (meta.avatar || resolveActiveAvatar(c)) : '';
+                const avatar = meta.scope === 'character' ? meta.avatar : '';
                 const out = await runLorebookReadTool({ id: call?.id, name, args }, { context: c, avatar });
                 if (!out?.ok) {
                     throw new SourceError('read', String(out?.error || i18n('Read failed')));
@@ -728,24 +720,17 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
         rebuild: (base, ai, keys) => rebuildMemoryConfig(base, ai, keys),
         async commit(targetRef, base, next, keys) {
             const c = resolveCtx();
-            const scope = targetRef?.scope === 'character' ? 'character' : 'global';
-            const expectedAvatar = String(targetRef?.avatar || '').trim();
-
-            const checkAvatar = () => {
-                if (scope !== 'character') return '';
-                const liveAvatar = resolveActiveAvatar(c);
-                if (!expectedAvatar || liveAvatar !== expectedAvatar) {
-                    throw new SourceError('character-changed', i18n('The active character has changed.'));
-                }
-                return expectedAvatar;
-            };
+            const { scope, avatar } = resolveMeta(null, targetRef);
 
             const readDiskDoc = (avatar) => {
+                if (scope === 'character' && !c.characters.some(character => character.avatar === avatar)) {
+                    throw new SourceError('character-changed', i18nFormat('The source character "${0}" no longer exists.', avatar));
+                }
                 const mgSettings = getMgSettings();
                 const globalDoc = resolveGlobalDoc(mgSettings);
                 if (scope === 'character') {
                     const charSchemaOverride = deps.getCharacterSchemaOverrideByAvatar?.(c, avatar) || null;
-                    const charSettings = resolveSettingsForView(deps.getEffectiveSettings?.(c, mgSettings) || mgSettings);
+                    const charSettings = resolveSettingsForView(characterSettings(c, avatar, mgSettings));
                     return {
                         doc: {
                             schema: normalizeSchema(clone(charSchemaOverride || mgSettings?.nodeTypeSchema || [])),
@@ -802,14 +787,16 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                             globalSettings: mgSettings,
                             persistCharacterSchema: async () => true,
                             persistCharacterSettings: async () => true,
-                            saveGlobalSettings: () => {
-                                // Reset stores the current built-in text alongside scalar defaults.
+                            saveGlobalSettings: async () => {
+                                // Keep seeded defaults present on mgSettings while leaving
+                                // unseeded prompt/flag slots deleted when reset to default.
                                 for (const key of plan.unset || []) {
                                     if (Object.prototype.hasOwnProperty.call(ADVANCED_SETTING_DEFAULTS, key)) {
                                         mgSettings[key] = ADVANCED_SETTING_DEFAULTS[key];
                                     }
                                 }
-                                return saveSettingsChecked(c);
+                                await saveSettingsChecked(c);
+                                return { ok: true, status: 'saved' };
                             },
                         });
                     } catch (err) {
@@ -827,7 +814,6 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 try { deps.syncGenerationVisibleHistoryRuntimeRegexScripts?.(); } catch { /* runtime regex sync optional in isolated tests */ }
             };
 
-            const avatar = checkAvatar();
             const { doc: beforeDisk, hasCharSchemaOverride } = readDiskDoc(avatar);
             const ops = fieldPlan(memoryConfigUnits(base), memoryConfigUnits(next), keys);
             const merged = mergeOps(memoryConfigUnits(beforeDisk), ops);
@@ -846,12 +832,11 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 failure: '',
                 async undo() {
                     if (!merged.write.length) return;
-                    const undoAvatar = checkAvatar();
-                    const { doc: nowDisk } = readDiskDoc(undoAvatar);
+                    const { doc: nowDisk } = readDiskDoc(avatar);
                     const back = mergeOps(memoryConfigUnits(nowDisk), reverseOps(merged.write));
                     if (back.write.length) {
                         const revertedDoc = applyMemoryConfigOps(nowDisk, back.write);
-                        await writeDoc(undoAvatar, nowDisk, revertedDoc, {
+                        await writeDoc(avatar, nowDisk, revertedDoc, {
                             removeOverrideIfMatchesGlobal: true,
                             priorHadSchemaOverride: hasCharSchemaOverride,
                         });
@@ -1033,6 +1018,14 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
         return key && key !== 'invalid_target' ? key : '';
     };
 
+    const assertChatTarget = (ctx, target) => {
+        const expectedKey = String(target?.chatKey || target?.name || '').trim();
+        if (!expectedKey || resolveChatKey(ctx) !== expectedKey) {
+            throw new SourceError('chat-changed', i18n('The active chat has changed.'));
+        }
+        return expectedKey;
+    };
+
     const hasOpenChat = (ctx) => {
         if (!ctx) return false;
         const chatId = typeof ctx.getCurrentChatId === 'function' ? ctx.getCurrentChatId() : ctx.chatId;
@@ -1052,12 +1045,9 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
     const graphTargetHandler = {
         async read(target) {
             const c = resolveCtx();
-            const expectedKey = String(target?.chatKey || target?.name || '').trim();
-            const liveKey = resolveChatKey(c);
-            if (!expectedKey || !liveKey || liveKey !== expectedKey) {
-                throw new SourceError('chat-changed', i18n('The active chat has changed.'));
-            }
+            assertChatTarget(c, target);
             const liveStore = await deps.ensureStoreSyncedWithChat?.(c);
+            assertChatTarget(resolveCtx(), target);
             if (!liveStore) {
                 throw new SourceError('no-chat', i18n('Open a chat first.'));
             }
@@ -1065,12 +1055,9 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
         },
         async write(target, nextDoc) {
             const c = resolveCtx();
-            const expectedKey = String(target?.chatKey || target?.name || '').trim();
-            const liveKey = resolveChatKey(c);
-            if (!expectedKey || !liveKey || liveKey !== expectedKey) {
-                throw new SourceError('chat-changed', i18n('The active chat has changed.'));
-            }
+            const liveKey = assertChatTarget(c, target);
             const liveStore = await deps.ensureStoreSyncedWithChat?.(c);
+            assertChatTarget(resolveCtx(), target);
             if (!liveStore) {
                 throw new SourceError('no-chat', i18n('Open a chat first.'));
             }
@@ -1200,8 +1187,9 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             return [...GRAPH_TOOL_DEFS, ...LOREBOOK_READ_TOOL_DEFS];
         },
         isRead: (name) => isGraphReadTool(name) || isLorebookReadTool(name),
-        async runRead(call, live) {
+        async runRead(call, live, helpers) {
             const c = resolveCtx();
+            assertChatTarget(c, helpers.target);
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             if (isLorebookReadTool(name)) {
@@ -1213,6 +1201,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
                 return out.result;
             }
             const baseStore = await deps.ensureStoreSyncedWithChat?.(c);
+            assertChatTarget(resolveCtx(), helpers.target);
             if (!baseStore) {
                 throw new GraphToolError(name || 'unknown', 'not_allowed', 'no graph is loaded for this chat');
             }
@@ -1230,12 +1219,14 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
         },
         async runEdit(call, live, helpers) {
             const c = resolveCtx();
+            const chatKey = assertChatTarget(c, helpers.target);
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             if (!isGraphWriteTool(name)) {
                 throw new GraphToolError(name || 'unknown', 'unknown_tool', `unknown tool "${name}"`);
             }
             const baseStore = await deps.ensureStoreSyncedWithChat?.(c);
+            assertChatTarget(resolveCtx(), helpers.target);
             if (!baseStore) {
                 throw new GraphToolError(name, 'not_allowed', 'no graph is loaded for this chat');
             }
@@ -1260,7 +1251,6 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             if (payload?.changed === false || docsEqual(live, afterDoc)) {
                 return live;
             }
-            const chatKey = resolveChatKey(c);
             await helpers.propose({
                 kind: 'graph-revision',
                 target: { type: 'memory-graph', name: chatKey, chatKey },

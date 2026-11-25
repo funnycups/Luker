@@ -79,8 +79,21 @@ export function fieldLabel(key, type = '') {
     return isChineseLocale() ? i18n('Unnamed item') : humanizeKey(key);
 }
 
+const DEPTH_LABELS = Object.freeze([
+    'Level 1 summary',
+    'Level 2 summary',
+    'Level 3 summary',
+    'Level 4 summary',
+    'Level 5 summary',
+    'Level 6 summary',
+    'Level 7 summary',
+    'Level 8 summary',
+    'Level 9 summary',
+    'Level 10 summary',
+]);
+
 /** "Level 1 summary" for depth 1, etc. */
 export function depthLabel(depth) {
     const n = Math.max(1, Math.floor(Number(depth) || 1));
-    return n <= 10 ? i18n(`Level ${n} summary`) : i18nFormat('Level ${0} summary', n);
+    return n <= DEPTH_LABELS.length ? i18n(DEPTH_LABELS[n - 1]) : i18nFormat('Level ${0} summary', n);
 }

@@ -446,14 +446,19 @@ function createSchemaAccess(resolveApi) {
                 characterTypes: info.hasOverride ? structuredClone(info.schema) : null,
                 labels: sanitizeMemoryLensLabels(labelStore(ctx)),
             };
+            let removedCharacterOverride = false;
+            let persistedCharacterOverride = false;
             if (scope === 'character') {
                 const ok = await mg.persistCharacterSchemaOverride(ctx, info.avatar, normalized);
-                if (!ok) throw new SourceError('write-failed');
+                if (ok === false) throw new SourceError('write-failed');
+                persistedCharacterOverride = true;
             } else {
-                settings.nodeTypeSchema = normalized;
                 if (info.hasOverride) {
-                    await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                    const removed = await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                    if (removed === false) throw new SourceError('write-failed');
+                    removedCharacterOverride = true;
                 }
+                settings.nodeTypeSchema = normalized;
             }
             if (labels) {
                 const cleanLabels = sanitizeMemoryLensLabels(labels);
@@ -462,7 +467,35 @@ function createSchemaAccess(resolveApi) {
                 Object.assign(store, cleanLabels);
             }
             invalidateLatestRecallSnapshot();
-            await ctx.saveSettings();
+            const rollback = async () => {
+                settings.nodeTypeSchema = previous.globalTypes;
+                if (labels) {
+                    const store = labelStore(ctx);
+                    for (const key of Object.keys(store)) delete store[key];
+                    Object.assign(store, sanitizeMemoryLensLabels(previous.labels || {}));
+                }
+                if (removedCharacterOverride && previous.characterTypes && info.hasAvatar) {
+                    await mg.persistCharacterSchemaOverride(ctx, info.avatar, previous.characterTypes);
+                } else if (persistedCharacterOverride && info.hasAvatar) {
+                    if (previous.characterTypes) {
+                        await mg.persistCharacterSchemaOverride(ctx, info.avatar, previous.characterTypes);
+                    } else {
+                        await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                    }
+                }
+                invalidateLatestRecallSnapshot();
+            };
+            let outcome;
+            try {
+                outcome = await ctx.saveSettings();
+            } catch (error) {
+                await rollback();
+                throw error;
+            }
+            if (outcome && typeof outcome === 'object' && outcome.ok === false) {
+                await rollback();
+                throw new SourceError('write-failed', i18n('Operation failed'));
+            }
             return previous;
         },
 
@@ -475,17 +508,51 @@ function createSchemaAccess(resolveApi) {
             if (expectedAvatar !== undefined && String(info.avatar || '') !== String(expectedAvatar || '')) {
                 throw new SourceError('character-changed', i18n('The active character has changed.'));
             }
-            settings.nodeTypeSchema = previous.globalTypes ?? settings.nodeTypeSchema;
+            const beforeRestore = {
+                globalTypes: structuredClone(settings.nodeTypeSchema ?? null),
+                characterTypes: info.hasOverride ? structuredClone(info.schema) : null,
+                labels: sanitizeMemoryLensLabels(labelStore(ctx)),
+            };
+            let characterAction = 'none';
             if (previous.characterTypes && info.hasAvatar) {
-                await mg.persistCharacterSchemaOverride(ctx, info.avatar, previous.characterTypes);
+                const ok = await mg.persistCharacterSchemaOverride(ctx, info.avatar, previous.characterTypes);
+                if (ok === false) throw new SourceError('write-failed');
+                characterAction = 'persisted';
             } else if (!previous.characterTypes && info.hasOverride) {
-                await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                const ok = await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                if (ok === false) throw new SourceError('write-failed');
+                characterAction = 'removed';
             }
+            settings.nodeTypeSchema = previous.globalTypes ?? settings.nodeTypeSchema;
             const store = labelStore(ctx);
             for (const key of Object.keys(store)) delete store[key];
             Object.assign(store, sanitizeMemoryLensLabels(previous.labels || {}));
             invalidateLatestRecallSnapshot();
-            await ctx.saveSettings();
+            const rollback = async () => {
+                settings.nodeTypeSchema = beforeRestore.globalTypes;
+                const currentStore = labelStore(ctx);
+                for (const key of Object.keys(currentStore)) delete currentStore[key];
+                Object.assign(currentStore, sanitizeMemoryLensLabels(beforeRestore.labels || {}));
+                if (characterAction !== 'none' && info.hasAvatar) {
+                    if (beforeRestore.characterTypes) {
+                        await mg.persistCharacterSchemaOverride(ctx, info.avatar, beforeRestore.characterTypes);
+                    } else {
+                        await mg.removeCharacterSchemaOverride(ctx, info.avatar);
+                    }
+                }
+                invalidateLatestRecallSnapshot();
+            };
+            let outcome;
+            try {
+                outcome = await ctx.saveSettings();
+            } catch (error) {
+                await rollback();
+                throw error;
+            }
+            if (outcome && typeof outcome === 'object' && outcome.ok === false) {
+                await rollback();
+                throw new SourceError('write-failed', i18n('Operation failed'));
+            }
         },
 
         async clearCharacter() {

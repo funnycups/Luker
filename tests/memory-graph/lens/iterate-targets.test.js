@@ -324,7 +324,8 @@ describe('memory IterateTarget (config + schema)', () => {
             },
         });
         const target = createMemoryConfigTarget(() => h.ctx, h.deps);
-        const prompt = await target.prompt({}, 'global', h.ctx);
+        const loaded = await target.load('global', h.ctx);
+        const prompt = await target.prompt(loaded.live, 'global', h.ctx, { target: loaded.target });
         expect(prompt).toBe('CUSTOM CONFIG ITER PROMPT');
 
         const info = await target.promptInfo(h.ctx);
@@ -332,11 +333,11 @@ describe('memory IterateTarget (config + schema)', () => {
         expect(info.text).toBe('CUSTOM CONFIG ITER PROMPT');
 
         delete h.mgSettings.configIterSystemPrompt;
-        await expect(target.prompt({}, 'global', h.ctx)).rejects.toThrow();
+        await expect(target.prompt(loaded.live, 'global', h.ctx, { target: loaded.target })).rejects.toThrow();
         expect((await target.promptInfo(h.ctx)).custom).toBe(false);
         expect((await target.promptInfo(h.ctx)).text).toBe('');
         h.mgSettings.configIterSystemPrompt = '';
-        await expect(target.prompt({}, 'global', h.ctx)).rejects.toThrow();
+        await expect(target.prompt(loaded.live, 'global', h.ctx, { target: loaded.target })).rejects.toThrow();
     });
 
     test('character scope exposes LOREBOOK_READ_TOOL_DEFS + mg_schema_* + mg_config_* and dispatches lorebook reads via runLorebookReadTool', async () => {
@@ -353,7 +354,8 @@ describe('memory IterateTarget (config + schema)', () => {
         globalThis.Luker = { getContext: () => h.ctx };
         const target = createMemoryConfigTarget(() => h.ctx, h.deps);
 
-        const globalTools = (await target.tools({}, 'global', h.ctx)).map(t => t.function.name);
+        const globalLoaded = await target.load('global', h.ctx);
+        const globalTools = (await target.tools(globalLoaded.live, 'global', h.ctx, { target: globalLoaded.target })).map(t => t.function.name);
         expect(globalTools).toContain('mg_config_list_fields');
         expect(globalTools).toContain('mg_config_read_fields');
         expect(globalTools).toContain('mg_schema_set_node_type');
@@ -361,13 +363,13 @@ describe('memory IterateTarget (config + schema)', () => {
             expect(globalTools).toContain(lbTool);
         }
 
-        const charTools = (await target.tools({}, 'character', h.ctx)).map(t => t.function.name);
+        const loaded = await target.load('character', h.ctx);
+        const charTools = (await target.tools(loaded.live, 'character', h.ctx, { target: loaded.target })).map(t => t.function.name);
         for (const lbTool of LOREBOOK_READ_TOOL_NAMES) {
             expect(charTools).toContain(lbTool);
             expect(target.isRead(lbTool)).toBe(true);
         }
 
-        const loaded = await target.load('character', h.ctx);
         const booksRes = await target.runRead({ id: 'lb1', name: 'world_book_list', args: {} }, loaded.live);
         expect(booksRes.books).toContain('AliceLore');
 
@@ -420,13 +422,13 @@ describe('memory IterateTarget (config + schema)', () => {
                     },
                 },
             },
-        }, ai);
+        }, ai, { target: loaded.target });
 
         ai = await target.runEdit({
             id: 'e2',
             name: 'mg_config_set_fields',
             args: { set: { 'settings.recallMaxIterations': 5 } },
-        }, ai);
+        }, ai, { target: loaded.target });
 
         const changes = diffUnits(target.units(base), target.units(ai));
         expect(changes.map(c => c.key)).toEqual(expect.arrayContaining(['schema:character_sheet', 'settings:recallMaxIterations']));
@@ -464,12 +466,12 @@ describe('memory IterateTarget (config + schema)', () => {
             id: 'e1',
             name: 'mg_schema_set_node_type',
             args: { node_type: { id: 'quest', label: 'Quest', tableColumns: ['title', 'status'], primaryKeyColumns: ['title'] } },
-        }, clone(base));
+        }, clone(base), { target: loaded.target });
         ai = await target.runEdit({
             id: 'e2',
             name: 'mg_config_set_fields',
             args: { set: { 'settings.updateEvery': 6 } },
-        }, ai);
+        }, ai, { target: loaded.target });
 
         const keys = diffUnits(target.units(base), target.units(ai)).map(c => c.key);
         const next = target.rebuild(base, ai, keys);
@@ -514,7 +516,7 @@ describe('memory IterateTarget (config + schema)', () => {
             id: 'e1',
             name: 'mg_config_set_fields',
             args: { set: { 'settings.updateEvery': 8 } },
-        }, clone(base));
+        }, clone(base), { target: loaded.target });
         const keys = ['settings:updateEvery'];
         await expect(target.commit(loaded.target, base, target.rebuild(base, ai, keys), keys))
             .rejects.toThrow(/disk write denied/);
@@ -565,7 +567,7 @@ describe('memory IterateTarget (config + schema)', () => {
             id: 'e1',
             name: 'mg_config_set_fields',
             args: { set: { 'settings.recallMaxIterations': 6 } },
-        }, clone(loaded.live));
+        }, clone(loaded.live), { target: loaded.target });
         const preview = target.renderPreview({ base: loaded.live, ai, target: loaded.target });
         expect(preview).toBeInstanceOf(Node);
         expect(preview.textContent).toContain('事件');
@@ -867,6 +869,7 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
             bus,
             proposalKinds: target.proposalKinds,
             isRead: (n) => target.isRead(n),
+            targetRef: loaded.target,
             runRead: (call, live, helpers) => target.runRead(call, live, helpers),
             runEdit: (call, live, helpers) => target.runEdit(call, live, helpers),
             request: async () => {
@@ -949,6 +952,7 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
             bus,
             proposalKinds: target.proposalKinds,
             isRead: (n) => target.isRead(n),
+            targetRef: loaded.target,
             runRead: (call, live, helpers) => target.runRead(call, live, helpers),
             runEdit: (call, live, helpers) => target.runEdit(call, live, helpers),
             request: async () => {
@@ -1035,6 +1039,7 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
             bus,
             proposalKinds: target.proposalKinds,
             isRead: (n) => target.isRead(n),
+            targetRef: loaded.target,
             runRead: (call, live, helpers) => target.runRead(call, live, helpers),
             runEdit: (call, live, helpers) => target.runEdit(call, live, helpers),
             request: async () => {
@@ -1084,6 +1089,7 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
             bus,
             proposalKinds: target.proposalKinds,
             isRead: (n) => target.isRead(n),
+            targetRef: loaded.target,
             runRead: (call, live, helpers) => target.runRead(call, live, helpers),
             runEdit: (call, live, helpers) => target.runEdit(call, live, helpers),
             request: async () => {
@@ -1137,7 +1143,7 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
                     embeddingColumns: ['name'],
                 },
             },
-        }, ai);
+        }, ai, { target: beforeOverride.target });
         const next = target.rebuild(beforeOverride.live, ai, ['schema:character_sheet']);
         await target.commit(beforeOverride.target, beforeOverride.live, next, ['schema:character_sheet']);
 

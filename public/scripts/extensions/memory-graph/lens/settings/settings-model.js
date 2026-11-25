@@ -11,7 +11,7 @@ const rewrites = (values) => values.recallMethod === 'rag' && Boolean(values.rag
 
 export const TECHNICAL_FIELDS = [
     { key: 'recallMaxIterations', label: 'Recall max iterations', kind: 'int', min: 2, max: 6, when: isLlm },
-    { key: 'toolCallRetryMax', label: 'Tool-call retries', kind: 'int', min: 0, max: 10 },
+    { key: 'toolCallRetryMax', label: 'Tool-call retries', kind: 'int', min: 0 },
     { key: 'rpmLimit', label: 'RPM limit (0 = unlimited)', kind: 'int', min: 0, max: 600 },
     { key: 'recallQueryMessages', label: 'Recall query recent assistant turns', kind: 'int', min: 1, max: 64 },
     { key: 'extractConcurrent', label: 'Concurrent extraction', kind: 'bool' },

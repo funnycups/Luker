@@ -16,7 +16,7 @@ import {
     persistCharacterAdvancedOverride,
 } from './character-overrides.js';
 
-export const MEMORY_GRAPH_BINDING_SLOT_ID = 'memory-graph-override';
+const MEMORY_GRAPH_BINDING_SLOT_ID = 'memory-graph-override';
 
 function isNonEmpty(value) {
     if (Array.isArray(value)) return value.length > 0;
@@ -74,10 +74,14 @@ export function registerMemoryGraphCardBindingSlot(context) {
                 throw new Error(`${MEMORY_GRAPH_BINDING_SLOT_ID}: character not found at index ${characterId}`);
             }
             if (isNonEmpty(preserved?.schemaOverride)) {
-                await persistCharacterSchemaOverride(context, avatar, preserved.schemaOverride);
+                if (await persistCharacterSchemaOverride(context, avatar, preserved.schemaOverride) === false) {
+                    throw new Error('Failed to save character memory schema binding');
+                }
             }
             if (isNonEmpty(preserved?.advancedOverride)) {
-                await persistCharacterAdvancedOverride(context, avatar, preserved.advancedOverride);
+                if (await persistCharacterAdvancedOverride(context, avatar, preserved.advancedOverride) === false) {
+                    throw new Error('Failed to save character memory settings binding');
+                }
             }
         },
     });

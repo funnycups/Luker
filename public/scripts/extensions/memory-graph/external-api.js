@@ -148,18 +148,6 @@ export function addInjectionChangedListener(cb) {
     return () => { _changeListeners.delete(cb); };
 }
 
-/**
- * Removes a previously registered injection-changed listener. Returns true
- * if the listener was present and removed, false otherwise — matches the
- * semantics of `Set.prototype.delete`.
- *
- * @param {Function} cb the callback originally passed to `addInjectionChangedListener`
- * @returns {boolean}
- */
-export function removeInjectionChangedListener(cb) {
-    return _changeListeners.delete(cb);
-}
-
 /** @internal test helper: set a snapshot directly */
 export function __setInjectedForTest(payload) {
     __recordInjectedNodeIds(payload);
@@ -180,16 +168,4 @@ export function __resetInjectedForTest() {
 export function __resetListenersForTest() {
     _changeListeners.clear();
     _lastVisibleIds = new Set();
-}
-
-/**
- * @internal test helper: overwrite the cached visibleIds snapshot directly,
- * bypassing `__recordInjectedNodeIds`. Useful when a test wants to assert
- * `getCurrentlyInjectedNodeIds` / `getMemoryGraphInjectionState` exposes the
- * visible-ids field without firing change listeners.
- *
- * @param {Iterable<string>} ids
- */
-export function __setVisibleIdsForTest(ids) {
-    _lastVisibleIds = toIdSet(ids);
 }

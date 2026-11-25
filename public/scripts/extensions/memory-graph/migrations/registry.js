@@ -20,7 +20,3 @@ export const SHAPES = [
     v8Oplog,         // detect: data.opLog 是 array
     v2FloorState,    // terminal
 ];
-
-export function findShape(predicate) {
-    return SHAPES.find(predicate) || null;
-}
