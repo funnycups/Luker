@@ -1,9 +1,19 @@
-import { getRequestHeaders } from '../../../script.js';
-import { extension_settings } from '../../extensions.js';
-import { chat_completion_sources, oai_settings } from '../../openai.js';
+import { eventSource, event_types, getRequestHeaders } from '../../../script.js';
+import { getContext } from '../../extensions.js';
+import { t, translate } from '../../i18n.js';
+import { oai_settings, proxies } from '../../openai.js';
 import { isValidUrl } from '../../utils.js';
-import { resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
+import {
+    listGoogleNativeTtsConnectionProfiles,
+    resolveGoogleNativeTtsConnection,
+} from './google-native-connection.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+
+const CONNECTION_PROFILE_EVENTS = [
+    event_types.CONNECTION_PROFILE_CREATED,
+    event_types.CONNECTION_PROFILE_UPDATED,
+    event_types.CONNECTION_PROFILE_DELETED,
+];
 
 
 export class GoogleNativeTtsProvider {
@@ -16,8 +26,21 @@ export class GoogleNativeTtsProvider {
         voiceMap: {},
         model: 'gemini-3.1-flash-tts-preview',
         apiType: 'makersuite',
-        connectionSource: 'global',
+        connectionProfile: '',
     };
+
+    constructor() {
+        this.onConnectionProfilesChanged = () => {
+            this.renderConnectionProfileSelect();
+            this.renderConnStatus();
+        };
+    }
+
+    dispose() {
+        CONNECTION_PROFILE_EVENTS.forEach(event => {
+            eventSource.removeListener(event, this.onConnectionProfilesChanged);
+        });
+    }
 
     get settingsHtml() {
         return `
@@ -31,12 +54,9 @@ export class GoogleNativeTtsProvider {
                 </select>
             </div>
             <div>
-                <label for="google-tts-conn-source">Connection source:</label>
-                <select id="google-tts-conn-source">
-                    <option value="global">Follow the chat connection</option>
-                    <option value="attribution">Use the "Attribution API connection"</option>
-                </select>
-                <small id="google-tts-conn-status"></small>
+                <label for="google-tts-connection-profile">${translate('Connection profile:')}</label>
+                <select id="google-tts-connection-profile"></select>
+                <small id="google-tts-conn-status" class="google-tts-conn-status"></small>
             </div>
             <div>
                 <label for="google-tts-model">Model:</label>
@@ -49,19 +69,66 @@ export class GoogleNativeTtsProvider {
         </div>`;
     }
 
+    getConnectionProfiles() {
+        const profiles = getContext()?.connectionProfiles?.list?.();
+        return Array.isArray(profiles) ? profiles : [];
+    }
+
+    renderConnectionProfileSelect() {
+        const select = $('#google-tts-connection-profile');
+        if (!select.length) {
+            return;
+        }
+        const selected = String(this.settings?.connectionProfile || '').trim();
+        const allProfiles = this.getConnectionProfiles();
+        const compatible = listGoogleNativeTtsConnectionProfiles(allProfiles);
+        const compatibleNames = compatible.map(profile => profile.name);
+
+        select.empty();
+        const globalOpt = document.createElement('option');
+        globalOpt.value = '';
+        globalOpt.text = translate('Follow the chat connection');
+        select.append(globalOpt);
+
+        for (const name of compatibleNames) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.text = name;
+            select.append(opt);
+        }
+
+        if (selected && !compatibleNames.includes(selected)) {
+            const existsInAll = allProfiles.some(profile => String(profile?.name || '').trim() === selected);
+            const suffix = existsInAll ? translate('(incompatible)') : translate('(missing)');
+            const staleOpt = document.createElement('option');
+            staleOpt.value = selected;
+            staleOpt.text = `${selected} ${suffix}`;
+            select.append(staleOpt);
+        }
+
+        select.val(selected);
+    }
+
     async loadSettings(settings) {
         if (Object.keys(settings).length === 0) {
             console.info('Using default Google TTS Provider settings');
         }
 
         this.settings = { ...this.defaultSettings, ...settings };
+        this.settings.connectionProfile = String(this.settings.connectionProfile || '').trim();
 
         $('#google-tts-api-type').val(this.settings.apiType);
         $('#google-tts-model').val(this.settings.model);
+        this.renderConnectionProfileSelect();
 
-        $('#google-tts-conn-source').val(this.settings.connectionSource === 'attribution' ? 'attribution' : 'global');
+        $('#google-tts-api-type, #google-tts-model').on('change', () => this.onSettingsChange({ resetVoices: true }));
+        $('#google-tts-connection-profile').on('change', () => this.onSettingsChange({ resetVoices: false }));
 
-        $('#google-tts-api-type, #google-tts-conn-source, #google-tts-model').on('change', () => this.onSettingsChange());
+        this.dispose();
+        CONNECTION_PROFILE_EVENTS.forEach(event => {
+            eventSource.on(event, this.onConnectionProfilesChanged);
+        });
+
         this.renderConnStatus();
 
         try {
@@ -72,12 +139,14 @@ export class GoogleNativeTtsProvider {
         }
     }
 
-    onSettingsChange() {
+    onSettingsChange({ resetVoices = true } = {}) {
         this.settings.apiType = $('#google-tts-api-type').val();
         this.settings.model = $('#google-tts-model').val();
-        this.settings.connectionSource = $('#google-tts-conn-source').val() === 'attribution' ? 'attribution' : 'global';
+        this.settings.connectionProfile = String($('#google-tts-connection-profile').val() || '').trim();
 
-        this.voices = []; // Reset voices cache so it re-fetches
+        if (resetVoices) {
+            this.voices = []; // Reset voices cache so it re-fetches
+        }
         saveTtsProviderSettings();
         this.renderConnStatus();
     }
@@ -87,6 +156,8 @@ export class GoogleNativeTtsProvider {
     }
 
     async onRefreshClick() {
+        this.renderConnectionProfileSelect();
+        this.renderConnStatus();
         await this.checkReady();
     }
 
@@ -173,75 +244,62 @@ export class GoogleNativeTtsProvider {
         }
     }
 
-    /**
-     * Connection fields for native TTS generation requests: reverse_proxy / proxy_password / base_url / secret_id.
-     * global: follow the global chat connection (reverse proxy only when it is a valid URL).
-     * attribution: use the connection profile selected as the "Attribution API connection"; if none is selected, same as global.
-     * A missing profile or a non-MakerSuite source throws instead of silently falling back to the chat connection.
-     */
-    buildConnectionFields() {
-        const globalFields = () => {
-            const useReverseProxy = oai_settings.reverse_proxy && isValidUrl(oai_settings.reverse_proxy);
-            return {
-                reverse_proxy: useReverseProxy ? oai_settings.reverse_proxy : '',
-                proxy_password: useReverseProxy ? oai_settings.proxy_password : '',
-                base_url: '',
-                secret_id: '',
-            };
-        };
-
-        if (this.settings?.connectionSource !== 'attribution') {
-            return globalFields();
+    localizeConnectionError(error) {
+        const name = String(error?.profileName ?? this.settings?.connectionProfile ?? '').trim();
+        switch (error?.code) {
+            case 'profile_not_found':
+                return t`Connection profile "${name}" was not found. TTS request aborted.`;
+            case 'profile_incompatible':
+                return t`Connection profile "${name}" is not Google AI Studio (MakerSuite). TTS request aborted.`;
+            case 'profile_missing_secret':
+                return t`Connection profile "${name}" has no saved API key. TTS request aborted.`;
+            default:
+                return String(error?.message ?? error);
         }
-
-        const name = String(extension_settings?.tts?.npcAttributionApiPresetName ?? '').trim();
-        if (!name) {
-            return globalFields();
-        }
-
-        const { profile, apiSettingsOverride: override } = resolveChatCompletionRequestProfile({ profileName: name, defaultApi: 'openai' });
-        if (!profile) {
-            throw new Error(`Connection profile "${name}" was not found; TTS request aborted (no fallback to the chat connection).`);
-        }
-        if (override?.chat_completion_source !== chat_completion_sources.MAKERSUITE) {
-            throw new Error(`Connection profile "${name}" is not Google AI Studio (MakerSuite); TTS request aborted (no fallback to the chat connection).`);
-        }
-        return {
-            reverse_proxy: String(override.reverse_proxy ?? ''),
-            proxy_password: String(override.proxy_password ?? ''),
-            base_url: String(override.base_url ?? ''),
-            secret_id: String(override.secret_id ?? ''),
-        };
     }
 
-    /** Status line: profile name, whether a key slot is bound, and the reverse proxy hostname only (never keys or full URLs). */
+    resolveConnection() {
+        return resolveGoogleNativeTtsConnection({
+            profileName: this.settings?.connectionProfile,
+            profiles: this.getConnectionProfiles(),
+            proxies,
+            oaiSettings: oai_settings,
+            isValidUrl,
+        });
+    }
+
+    /**
+     * Connection fields for native TTS generation requests: reverse_proxy / proxy_password / base_url / secret_id / strict_secret_id.
+     * Empty connectionProfile follows the global chat connection.
+     * A named connectionProfile resolves that MakerSuite profile and throws if missing, incompatible, or keyless (direct).
+     */
+    buildConnectionFields() {
+        try {
+            return this.resolveConnection().requestFields;
+        } catch (error) {
+            throw new Error(this.localizeConnectionError(error));
+        }
+    }
+
+    /** Status line: profile name, whether a key slot is bound, and the endpoint hostname only (never keys or full URLs). */
     renderConnStatus() {
         const el = $('#google-tts-conn-status');
         if (!el.length) {
             return;
         }
-        if (this.settings?.connectionSource !== 'attribution') {
-            el.text('Following the global chat connection.');
-            return;
-        }
-        const name = String(extension_settings?.tts?.npcAttributionApiPresetName ?? '').trim();
-        if (!name) {
-            el.text('No "Attribution API connection" is selected; same as following the chat connection.');
-            return;
-        }
         try {
-            const fields = this.buildConnectionFields();
-            let proxy = 'none';
-            if (fields.reverse_proxy) {
-                try {
-                    proxy = new URL(fields.reverse_proxy).hostname || 'configured';
-                } catch {
-                    proxy = 'configured';
-                }
+            const resolved = this.resolveConnection();
+            if (resolved.mode === 'global') {
+                el.text(translate('Following the global chat connection.'));
+                return;
             }
-            el.text(`Profile: ${name}; bound key slot: ${fields.secret_id ? 'yes' : 'no'}; reverse proxy: ${proxy}`);
+            const keyState = resolved.hasBoundSecret ? translate('yes') : translate('no');
+            const endpoint = !resolved.endpointHost
+                ? translate('Default')
+                : (resolved.endpointHost === 'configured' ? translate('configured') : resolved.endpointHost);
+            el.text(t`Profile: ${resolved.profileName} · Key bound: ${keyState} · Endpoint: ${endpoint}`);
         } catch (error) {
-            el.text(String(error?.message ?? error));
+            el.text(this.localizeConnectionError(error));
         }
     }
 
