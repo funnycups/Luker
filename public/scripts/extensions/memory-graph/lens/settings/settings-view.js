@@ -28,7 +28,9 @@ import {
     buildMgExtractionModeModel,
     buildMgRecallSectionModel,
     buildMgTechnicalSectionModel,
+    buildMgManualCompressionModalModel,
 } from './behavior-summary-models.js';
+import { typeDisplayName } from '../schema/schema-model.js';
 import { createCadenceVisualizer } from './cadence-visualizer.js';
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../../../lens-shared/preset-examples.js';
 
@@ -714,36 +716,151 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             surfaceError(new Error(i18n('No compressible types in current schema.')));
             return;
         }
-        const scope = selectInput([{ value: 'all', label: i18n('All nodes') }, { value: 'older', label: i18n('Older nodes only (exclude recent N assistant turns)') }], 'older');
-        const excludeRecent = h('input', { class: 'ml-schema-input', type: 'number', min: 0, step: 1, value: '2' });
+        activeModalCleanup?.();
+        const displayTypes = types.map(item => ({
+            ...item,
+            displayLabel: typeDisplayName(item),
+        }));
+        const selected = new Set(displayTypes.map(item => item.id));
+        const draft = {
+            scope: 'older',
+            excludeRecent: 2,
+            mode: 'schema',
+            roundLimitMode: 'unlimited',
+            maxRoundsPerType: 3,
+            selectedTypeIds: [...selected],
+        };
+
+        const modalSummary = createBehaviorSummary({
+            id: 'mg-manual-compress-modal',
+            ariaLabel: i18n('Manual compression summary'),
+            build: () => buildMgManualCompressionModalModel({ draft, types: displayTypes }),
+        });
+
+        let cleanedUp = false;
+        function cleanupModal() {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            modalSummary.destroy();
+            if (activeModalCleanup === cleanupModal) activeModalCleanup = null;
+        }
+        activeModalCleanup = cleanupModal;
+
+        let excludeField = null;
+        let roundsField = null;
+        function syncModalState() {
+            if (excludeField) excludeField.hidden = draft.scope !== 'older';
+            if (roundsField) roundsField.hidden = draft.roundLimitMode !== 'limited';
+            modalSummary.update();
+        }
+
+        const scope = selectInput([
+            { value: 'older', label: i18n('Older nodes only (exclude recent N assistant turns)') },
+            { value: 'all', label: i18n('All nodes') },
+        ], draft.scope, (value) => {
+            draft.scope = value;
+            syncModalState();
+        });
+        const excludeRecent = h('input', {
+            class: 'ml-schema-input',
+            type: 'number',
+            min: 0,
+            step: 1,
+            value: String(draft.excludeRecent),
+            onInput: (event) => {
+                draft.excludeRecent = event.target.value === '' ? '' : Number(event.target.value);
+                syncModalState();
+            },
+        });
         const mode = selectInput([
             { value: 'schema', label: i18n('Use schema thresholds') },
             { value: 'force', label: i18n('Force compress (ignore threshold)') },
             { value: 'flat', label: i18n('Force compress across depths (ignore hierarchy)') },
-        ], 'schema');
-        const rounds = h('input', { class: 'ml-schema-input', type: 'number', min: 1, step: 1, value: '3' });
-        const selected = new Set(types.map(item => item.id));
+        ], draft.mode, (value) => {
+            draft.mode = value;
+            syncModalState();
+        });
+        const roundLimitMode = selectInput([
+            { value: 'unlimited', label: i18n('Compress until done') },
+            { value: 'limited', label: i18n('Stop after N merges per type') },
+        ], draft.roundLimitMode, (value) => {
+            draft.roundLimitMode = value;
+            syncModalState();
+        });
+        const rounds = h('input', {
+            class: 'ml-schema-input',
+            type: 'number',
+            min: 1,
+            step: 1,
+            value: String(draft.maxRoundsPerType),
+            onInput: (event) => {
+                draft.maxRoundsPerType = event.target.value === '' ? '' : Number(event.target.value);
+                syncModalState();
+            },
+        });
+
+        const scopeField = fieldWrap('scope', formField(i18n('Compression scope'), scope));
+        excludeField = fieldWrap('excludeRecent', formField(i18n('Exclude recent assistant turns'), excludeRecent));
+        const modeField = fieldWrap('mode', formField(i18n('Compression mode'), mode));
+        const roundLimitField = fieldWrap('roundLimitMode', formField(i18n('Stop rule'), roundLimitMode));
+        roundsField = fieldWrap('maxRoundsPerType', formField(i18n('Max merges per type'), rounds));
+        const typesField = h('div', { class: 'ml-aiset-field', dataset: { fieldKey: 'selectedTypeIds' } },
+            h('span', { class: 'ml-aiset-label', text: i18n('Types to compress') }),
+            displayTypes.map(item => checkRow({
+                checked: true,
+                label: item.displayLabel,
+                onChange: (value) => {
+                    if (value) selected.add(item.id);
+                    else selected.delete(item.id);
+                    draft.selectedTypeIds = displayTypes.filter(t => selected.has(t.id)).map(t => t.id);
+                    syncModalState();
+                },
+            })));
+
+        const content = h('div', { class: 'ml-aiset ml-manual-compress-modal' },
+            modalSummary.el,
+            scopeField,
+            excludeField,
+            modeField,
+            roundLimitField,
+            roundsField,
+            typesField);
+        modalSummary.bindScope(content);
+        syncModalState();
+
         openModal(app, {
             title: i18n('Manual Compression'),
-            content: h('div', { class: 'ml-aiset' },
-                formField(i18n('Compression scope'), scope),
-                formField(i18n('Exclude recent assistant turns'), excludeRecent),
-                formField(i18n('Compression mode'), mode),
-                formField(i18n('Max rounds per type'), rounds),
-                h('div', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: i18n('Types to compress') }),
-                    types.map(item => checkRow({ checked: true, label: item.label, onChange: (value) => { if (value) selected.add(item.id); else selected.delete(item.id); } })))),
+            content,
             okLabel: i18n('Apply Manual Compression'),
             onOk() {
+                if (draft.selectedTypeIds.length === 0) {
+                    app.notify(i18n('Select at least one type to compress.'));
+                    return false;
+                }
+                const maxRoundsPerType = draft.roundLimitMode === 'limited'
+                    ? Math.max(1, Math.floor(Number(draft.maxRoundsPerType) || 1))
+                    : null;
+                cleanupModal();
                 void run(() => source.ops.compress({
-                    scope: scope.value,
-                    mode: mode.value,
-                    excludeRecent: Math.max(0, Math.floor(Number(excludeRecent.value) || 0)),
-                    maxRoundsPerType: Math.max(1, Math.floor(Number(rounds.value) || 1)),
-                    selectedTypeIds: [...selected],
+                    scope: draft.scope,
+                    mode: draft.mode,
+                    excludeRecent: Math.max(0, Math.floor(Number(draft.excludeRecent) || 0)),
+                    maxRoundsPerType,
+                    selectedTypeIds: draft.selectedTypeIds.slice(),
                 }));
                 return true;
             },
         });
+
+        const observer = typeof MutationObserver === 'function'
+            ? new MutationObserver(() => {
+                if (!content.isConnected) {
+                    cleanupModal();
+                    observer.disconnect();
+                }
+            })
+            : null;
+        observer?.observe(app.root, { childList: true });
     }
 
     function askRawEdit() {

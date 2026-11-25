@@ -646,6 +646,112 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(app.root.querySelector('.ml-dialog')).toBeNull();
         expect(app.showToast).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: true }));
     });
+
+    test('manual compression modal renders live summary, hides conditional fields, and submits unlimited or limited merges', async () => {
+        const { app, source, view } = mountSettingsView({
+            snap: {
+                options: {
+                    compressibleTypes: [{
+                        id: 'event',
+                        label: 'Event',
+                        mode: 'hierarchical',
+                        threshold: 5,
+                        fanIn: 3,
+                        maxDepth: 10,
+                        keepRecentLeaves: 3,
+                    }],
+                },
+            },
+        });
+        const compressBtn = [...view.el.querySelectorAll('[data-settings-section="operations"] button')]
+            .find(b => b.textContent.includes('手动压缩') || b.textContent.includes('Manual Compress'));
+        expect(compressBtn).toBeTruthy();
+        compressBtn.click();
+
+        let modal = app.root.querySelector('.ml-manual-compress-modal');
+        expect(modal).toBeTruthy();
+
+        const summary = modal.querySelector('.luker-bsum[data-bsum-id="mg-manual-compress-modal"]');
+        expect(summary).toBeTruthy();
+        expect(summary.querySelectorAll('.luker-bsum-row')).toHaveLength(3);
+        expect(summary.textContent).toContain('事件');
+        expect(summary.textContent).toContain('5');
+        expect(summary.textContent).toContain('3');
+        expect(summary.textContent).toContain('10');
+
+        const excludeWrap = modal.querySelector('[data-field-key="excludeRecent"]');
+        const roundsWrap = modal.querySelector('[data-field-key="maxRoundsPerType"]');
+        expect(excludeWrap.hidden).toBe(false);
+        expect(roundsWrap.hidden).toBe(true);
+
+        // Switching scope to 'all' hides excludeRecent and updates summary live
+        const scopeSelect = modal.querySelector('[data-field-key="scope"] select');
+        scopeSelect.value = 'all';
+        scopeSelect.dispatchEvent(new Event('change'));
+        expect(excludeWrap.hidden).toBe(true);
+
+        // Switching stop rule to 'limited' reveals maxRoundsPerType and updates summary without losing focus
+        const limitSelect = modal.querySelector('[data-field-key="roundLimitMode"] select');
+        limitSelect.value = 'limited';
+        limitSelect.dispatchEvent(new Event('change'));
+        expect(roundsWrap.hidden).toBe(false);
+
+        const roundsInput = roundsWrap.querySelector('input');
+        roundsInput.focus();
+        roundsInput.value = '7';
+        roundsInput.dispatchEvent(new Event('input'));
+        expect(document.activeElement).toBe(roundsInput);
+        expect(summary.textContent).toContain('7');
+
+        // Unchecking the only type surfaces a warning and blocks submission
+        const typeCheck = modal.querySelector('[data-field-key="selectedTypeIds"] button[role="checkbox"]');
+        typeCheck.click();
+        expect(summary.classList.contains('is-warn')).toBe(true);
+        let okBtn = [...app.root.querySelectorAll('.ml-dialog footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(app.notify).toHaveBeenCalled();
+        expect(source.ops.compress).not.toHaveBeenCalled();
+        expect(app.root.querySelector('.ml-dialog')).toBeTruthy();
+
+        // Re-check type, switch back to unlimited, and submit -> maxRoundsPerType: null
+        typeCheck.click();
+        expect(summary.classList.contains('is-warn')).toBe(false);
+        limitSelect.value = 'unlimited';
+        limitSelect.dispatchEvent(new Event('change'));
+        expect(roundsWrap.hidden).toBe(true);
+        okBtn.click();
+        await flushMicrotasks();
+        expect(source.ops.compress).toHaveBeenCalledWith({
+            scope: 'all',
+            mode: 'schema',
+            excludeRecent: 2,
+            maxRoundsPerType: null,
+            selectedTypeIds: ['event'],
+        });
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+
+        // Reopen and submit limited mode with 4 merges
+        source.ops.compress.mockClear();
+        compressBtn.click();
+        modal = app.root.querySelector('.ml-manual-compress-modal');
+        const limitSelect2 = modal.querySelector('[data-field-key="roundLimitMode"] select');
+        limitSelect2.value = 'limited';
+        limitSelect2.dispatchEvent(new Event('change'));
+        const roundsInput2 = modal.querySelector('[data-field-key="maxRoundsPerType"] input');
+        roundsInput2.value = '4';
+        roundsInput2.dispatchEvent(new Event('input'));
+        okBtn = [...app.root.querySelectorAll('.ml-dialog footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(source.ops.compress).toHaveBeenCalledWith({
+            scope: 'older',
+            mode: 'schema',
+            excludeRecent: 2,
+            maxRoundsPerType: 4,
+            selectedTypeIds: ['event'],
+        });
+    });
 });
 
 describe('Workbench providers for memory-graph', () => {

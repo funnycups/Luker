@@ -3,7 +3,7 @@
 // Pure live behavioral summary models for Memory Graph settings (1A–1D),
 // Custom Cadence modal, and Schema Type Editor (1E). No DOM dependencies.
 
-import { i18n, i18nFormat } from '../i18n.js';
+import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { detectVisibilityGap } from './settings-model.js';
 
 const IDENTITY_CANDIDATES = ['title', 'name', 'aliases'];
@@ -853,5 +853,199 @@ export function buildMgSchemaTypeModel({ draft = {}, globalSettings = {} } = {})
         rows: [visibilityRow, recordingRow, compressionRow],
         warnings: [],
         dormantFields,
+    };
+}
+
+/**
+ * Manual Compression modal: translates scope, mode, stop rule, and selected types
+ * into plain natural language with 1:1 token-to-field highlighting.
+ */
+export function buildMgManualCompressionModalModel({ draft = {}, types = [] } = {}) {
+    const scope = draft?.scope === 'all' ? 'all' : 'older';
+    const excludeRecent = safeInt(draft?.excludeRecent, 2, { min: 0 });
+    const mode = ['schema', 'force', 'flat'].includes(draft?.mode) ? draft.mode : 'schema';
+    const roundLimitMode = draft?.roundLimitMode === 'limited' ? 'limited' : 'unlimited';
+    const maxRoundsPerType = safeInt(draft?.maxRoundsPerType, 3, { min: 1 });
+
+    const typeList = Array.isArray(types) ? types : [];
+    const typeById = new Map(typeList.map(item => [String(item?.id || ''), item]));
+    const selectedIds = Array.isArray(draft?.selectedTypeIds)
+        ? draft.selectedTypeIds.map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+    const selectedTypes = selectedIds.map(id => typeById.get(id) || { id, label: id });
+    const hasTypes = selectedTypes.length > 0;
+    const typeNamesText = hasTypes
+        ? selectedTypes.map(item => String(item.displayLabel || item.label || item.id || '').trim()).filter(Boolean).join(listSeparator())
+        : i18n('none selected');
+
+    const selectedTypesToken = {
+        field: 'selectedTypeIds',
+        text: typeNamesText,
+        tone: hasTypes ? 'active' : 'warn',
+    };
+    const scopeToken = {
+        field: 'scope',
+        text: scope === 'all' ? i18n('all nodes') : i18n('older nodes only'),
+        tone: 'active',
+    };
+
+    let targetRow;
+    if (!hasTypes) {
+        targetRow = {
+            role: i18n('Target'),
+            tone: 'warn',
+            template: i18n('No type selected (${selectedTypeIds}) — check at least one type below to run manual compression.'),
+            tokens: { selectedTypeIds: selectedTypesToken },
+        };
+    } else if (scope === 'all') {
+        targetRow = {
+            role: i18n('Target'),
+            template: i18n('Compresses ${selectedTypeIds} across ${scope}, including the latest replies.'),
+            tokens: {
+                selectedTypeIds: selectedTypesToken,
+                scope: scopeToken,
+            },
+        };
+    } else if (excludeRecent > 0) {
+        targetRow = {
+            role: i18n('Target'),
+            template: i18n('Compresses ${selectedTypeIds} in ${scope}, leaving the latest ${excludeRecent} assistant replies untouched.'),
+            tokens: {
+                selectedTypeIds: selectedTypesToken,
+                scope: scopeToken,
+                excludeRecent: { field: 'excludeRecent', text: String(excludeRecent), tone: 'active' },
+            },
+        };
+    } else {
+        targetRow = {
+            role: i18n('Target'),
+            template: i18n('Compresses ${selectedTypeIds} in ${scope} (skipping ${excludeRecent} recent replies, same as all nodes).'),
+            tokens: {
+                selectedTypeIds: selectedTypesToken,
+                scope: scopeToken,
+                excludeRecent: { field: 'excludeRecent', text: String(excludeRecent), tone: 'off' },
+            },
+        };
+    }
+
+    const singleSpec = selectedTypes.length === 1 ? selectedTypes[0] : null;
+    const hasSingleMetrics = Boolean(
+        singleSpec
+        && Number.isFinite(Number(singleSpec.threshold))
+        && Number.isFinite(Number(singleSpec.fanIn))
+        && Number.isFinite(Number(singleSpec.maxDepth)),
+    );
+    const singleThreshold = hasSingleMetrics ? safeInt(singleSpec.threshold, 6, { min: 2 }) : 6;
+    const singleFanIn = hasSingleMetrics ? safeInt(singleSpec.fanIn, 3, { min: 2 }) : 3;
+    const singleMaxDepth = hasSingleMetrics ? safeInt(singleSpec.maxDepth, 6, { min: 1 }) : 6;
+    const singleKeepRecent = hasSingleMetrics ? safeInt(singleSpec.keepRecentLeaves, 0, { min: 0 }) : 0;
+
+    const modeLabel = mode === 'force'
+        ? i18n('Force compress (ignore threshold)')
+        : mode === 'flat'
+            ? i18n('Force compress across depths (ignore hierarchy)')
+            : i18n('Use schema thresholds');
+    const modeToken = { field: 'mode', text: modeLabel, tone: 'active' };
+
+    let mergeRow;
+    if (mode === 'schema') {
+        if (hasSingleMetrics && singleKeepRecent > 0) {
+            mergeRow = {
+                role: i18n('Merge rule'),
+                template: i18n('${mode} — waits until ${threshold} eligible entries accumulate, merges oldest ${fanIn} into 1 summary (up to ${maxDepth} levels, keeping latest ${keepRecentLeaves} raw).'),
+                tokens: {
+                    mode: modeToken,
+                    threshold: { field: null, text: String(singleThreshold), tone: 'active' },
+                    fanIn: { field: null, text: String(singleFanIn), tone: 'active' },
+                    maxDepth: { field: null, text: String(singleMaxDepth), tone: 'active' },
+                    keepRecentLeaves: { field: null, text: String(singleKeepRecent), tone: 'active' },
+                },
+            };
+        } else if (hasSingleMetrics) {
+            mergeRow = {
+                role: i18n('Merge rule'),
+                template: i18n('${mode} — waits until ${threshold} eligible entries accumulate, merges oldest ${fanIn} into 1 summary (up to ${maxDepth} levels).'),
+                tokens: {
+                    mode: modeToken,
+                    threshold: { field: null, text: String(singleThreshold), tone: 'active' },
+                    fanIn: { field: null, text: String(singleFanIn), tone: 'active' },
+                    maxDepth: { field: null, text: String(singleMaxDepth), tone: 'active' },
+                },
+            };
+        } else {
+            mergeRow = {
+                role: i18n('Merge rule'),
+                template: i18n('${mode} — follows each type\'s own threshold, group size, max depth, and recent-leaf retention, merging oldest entries layer by layer.'),
+                tokens: { mode: modeToken },
+            };
+        }
+    } else if (mode === 'force') {
+        if (hasSingleMetrics) {
+            mergeRow = {
+                role: i18n('Merge rule'),
+                template: i18n('${mode} — ignores threshold and recent-leaf retention, merging up to ${fanIn} ungrouped entries on the same level whenever 2 or more exist (up to ${maxDepth} levels).'),
+                tokens: {
+                    mode: modeToken,
+                    fanIn: { field: null, text: String(singleFanIn), tone: 'active' },
+                    maxDepth: { field: null, text: String(singleMaxDepth), tone: 'active' },
+                },
+            };
+        } else {
+            mergeRow = {
+                role: i18n('Merge rule'),
+                template: i18n('${mode} — ignores threshold and recent-leaf retention, merging any 2 or more ungrouped entries on the same level into a higher-level summary.'),
+                tokens: { mode: modeToken },
+            };
+        }
+    } else if (hasSingleMetrics) {
+        mergeRow = {
+            role: i18n('Merge rule'),
+            template: i18n('${mode} — ignores level boundaries and thresholds, folding up to ${fanIn} top-level entries or summaries along the timeline into a new summary.'),
+            tokens: {
+                mode: modeToken,
+                fanIn: { field: null, text: String(singleFanIn), tone: 'active' },
+            },
+        };
+    } else {
+        mergeRow = {
+            role: i18n('Merge rule'),
+            template: i18n('${mode} — ignores level boundaries and thresholds, folding all top-level raw entries and existing summaries together along the timeline.'),
+            tokens: { mode: modeToken },
+        };
+    }
+
+    const stopRow = roundLimitMode === 'limited'
+        ? {
+            role: i18n('Stop rule'),
+            template: i18n('${roundLimitMode} — stops after at most ${maxRoundsPerType} merges per selected type (each merge produces 1 summary via 1 model request).'),
+            tokens: {
+                roundLimitMode: { field: 'roundLimitMode', text: i18n('Stop after N merges per type'), tone: 'active' },
+                maxRoundsPerType: { field: 'maxRoundsPerType', text: String(maxRoundsPerType), tone: 'active' },
+            },
+        }
+        : {
+            role: i18n('Stop rule'),
+            template: i18n('${roundLimitMode} — keeps merging each selected type until no eligible groups remain (each merge produces 1 summary via 1 model request).'),
+            tokens: {
+                roundLimitMode: { field: 'roundLimitMode', text: i18n('Compress until done'), tone: 'active' },
+            },
+        };
+
+    const warnings = hasTypes
+        ? []
+        : [{
+            severity: 'warn',
+            tone: 'warn',
+            template: i18n('Select at least one type in ${selectedTypeIds} before starting manual compression.'),
+            tokens: {
+                selectedTypeIds: { field: 'selectedTypeIds', text: i18n('Types to compress'), tone: 'warn' },
+            },
+        }];
+
+    return {
+        tone: hasTypes ? 'active' : 'warn',
+        rows: [targetRow, mergeRow, stopRow],
+        warnings,
+        dormantFields: [],
     };
 }

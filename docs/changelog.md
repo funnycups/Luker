@@ -16,6 +16,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Memory Graph
 
+- Added an unlimited compress-until-done option and a live behavioral summary card to the Memory Graph manual compression modal.
 - Fixed Memory Graph manual compression being skipped when Auto compression is disabled.
 - Added rollup node compaction to Memory graph content AI iteration in Workbench.
 - Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.

@@ -5010,13 +5010,22 @@ async function applyRollupCompressionRound(context, store, settings, spec, type,
     return parent;
 }
 
+function normalizeMaxRoundsPerType(raw) {
+    if (raw === null || raw === undefined || raw === '') {
+        return Number.POSITIVE_INFINITY;
+    }
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(1, Math.floor(numeric));
+}
+
 async function compressSemanticHierarchical(context, store, settings, spec, type, config, options = {}) {
     let changed = false;
     let compressedRounds = 0;
     const forceMode = Boolean(options?.force);
-    const maxRoundsPerType = Number.isFinite(Number(options?.maxRoundsPerType))
-        ? Math.max(1, Math.floor(Number(options.maxRoundsPerType)))
-        : Number.POSITIVE_INFINITY;
+    const maxRoundsPerType = normalizeMaxRoundsPerType(options?.maxRoundsPerType);
     const threshold = forceMode
         ? 2
         : Math.max(2, Number(config.threshold || 2));
@@ -5079,9 +5088,7 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
 async function compressSemanticFlat(context, store, settings, spec, type, config, options = {}) {
     let changed = false;
     let compressedRounds = 0;
-    const maxRoundsPerType = Number.isFinite(Number(options?.maxRoundsPerType))
-        ? Math.max(1, Math.floor(Number(options.maxRoundsPerType)))
-        : Number.POSITIVE_INFINITY;
+    const maxRoundsPerType = normalizeMaxRoundsPerType(options?.maxRoundsPerType);
     const threshold = 2;
     const fanIn = Math.max(2, Number(config.fanIn || 2));
     const ruleMatcher = buildCompressionRuleMatcher(config.rule);
@@ -9417,6 +9424,10 @@ export function getCompressibleTypeSpecs(settings, context = null) {
             id: typeId,
             label: String(item?.label || typeId),
             mode: config.mode,
+            threshold: config.threshold,
+            fanIn: config.fanIn,
+            maxDepth: config.maxDepth,
+            keepRecentLeaves: config.keepRecentLeaves,
         });
     }
     return specs;

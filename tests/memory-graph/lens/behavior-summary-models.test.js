@@ -13,6 +13,7 @@ import {
     buildMgRecallSectionModel,
     buildMgTechnicalSectionModel,
     buildMgSchemaTypeModel,
+    buildMgManualCompressionModalModel,
 } from '../../../public/scripts/extensions/memory-graph/lens/settings/behavior-summary-models.js';
 
 function renderModelText(model) {
@@ -611,5 +612,107 @@ describe('schema-view live behavioral summary DOM integration', () => {
         expect(view.el.querySelector('[data-bsum-id="mg-schema-type"]').textContent).toContain('12');
 
         view.destroy();
+    });
+});
+
+describe('buildMgManualCompressionModalModel', () => {
+    const eventType = {
+        id: 'event',
+        label: 'Event',
+        displayLabel: '事件',
+        threshold: 5,
+        fanIn: 3,
+        maxDepth: 10,
+        keepRecentLeaves: 3,
+    };
+    const momentType = {
+        id: 'moment',
+        label: 'Moment',
+        displayLabel: '重要时刻',
+        threshold: 4,
+        fanIn: 2,
+        maxDepth: 4,
+        keepRecentLeaves: 0,
+    };
+
+    test('renders 3 plain-language rows with read-only schema metrics for a single selected type and unlimited stop rule', () => {
+        const model = buildMgManualCompressionModalModel({
+            draft: {
+                scope: 'older',
+                excludeRecent: 2,
+                mode: 'schema',
+                roundLimitMode: 'unlimited',
+                maxRoundsPerType: 3,
+                selectedTypeIds: ['event'],
+            },
+            types: [eventType],
+        });
+        expect(model.tone).toBe('active');
+        expect(model.rows).toHaveLength(3);
+        expect(model.warnings).toEqual([]);
+
+        const rendered = renderModelText(model);
+        expect(rendered.fullText).toContain('事件');
+        expect(rendered.fullText).toContain('2');
+        expect(rendered.fullText).toContain('5');
+        expect(rendered.fullText).toContain('3');
+        expect(rendered.fullText).toContain('10');
+        expect(rendered.fullText).not.toContain('NaN');
+
+        const keys = tokenFieldKeys(model);
+        expect(keys).toEqual(new Set(['selectedTypeIds', 'scope', 'excludeRecent', 'mode', 'roundLimitMode']));
+    });
+
+    test('covers all scope, force/flat modes, multi-type summary, limited rounds, and transient blank inputs', () => {
+        const forceLimited = buildMgManualCompressionModalModel({
+            draft: {
+                scope: 'all',
+                excludeRecent: '',
+                mode: 'force',
+                roundLimitMode: 'limited',
+                maxRoundsPerType: 7,
+                selectedTypeIds: ['event'],
+            },
+            types: [eventType],
+        });
+        const forceRendered = renderModelText(forceLimited);
+        expect(forceRendered.fullText).toContain('7');
+        expect(forceRendered.fullText).not.toContain('NaN');
+        expect(tokenFieldKeys(forceLimited)).toEqual(new Set(['selectedTypeIds', 'scope', 'mode', 'roundLimitMode', 'maxRoundsPerType']));
+
+        const flatMulti = buildMgManualCompressionModalModel({
+            draft: {
+                scope: 'older',
+                excludeRecent: 0,
+                mode: 'flat',
+                roundLimitMode: 'limited',
+                maxRoundsPerType: '',
+                selectedTypeIds: ['event', 'moment'],
+            },
+            types: [eventType, momentType],
+        });
+        const flatRendered = renderModelText(flatMulti);
+        expect(flatRendered.fullText).toContain('事件');
+        expect(flatRendered.fullText).toContain('重要时刻');
+        expect(flatRendered.fullText).not.toContain('NaN');
+    });
+
+    test('emits amber warning when no types are selected', () => {
+        const empty = buildMgManualCompressionModalModel({
+            draft: {
+                scope: 'older',
+                excludeRecent: 2,
+                mode: 'schema',
+                roundLimitMode: 'unlimited',
+                maxRoundsPerType: 3,
+                selectedTypeIds: [],
+            },
+            types: [eventType],
+        });
+        expect(empty.tone).toBe('warn');
+        expect(empty.warnings).toHaveLength(1);
+        expect(empty.warnings[0].severity).toBe('warn');
+        const rendered = renderModelText(empty);
+        expect(rendered.fullText).not.toContain('NaN');
     });
 });

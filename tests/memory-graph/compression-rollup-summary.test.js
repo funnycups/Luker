@@ -1080,6 +1080,38 @@ describe('runManualCompression workingStore isolation & fail-loud commits', () =
         const persisted = await getFloorState().get();
         expect(Object.values(persisted.state.nodes).filter(isRollupNode)).toHaveLength(2);
     });
+
+    test('runs until done when maxRoundsPerType is null or 0', async () => {
+        configureEventSchema();
+        const chat = makeChatForTurns(4);
+        let call = 0;
+        const { context, generateTask, getFloorState } = makeFloorStateHarness(chat, async () => {
+            call += 1;
+            return { toolCalls: [{ name: 'luker_rpg_summary', args: { summary: `Unlimited arc #${call}` } }] };
+        });
+
+        await ensureMemoryStoreLoaded(context, { force: true });
+        await commitGraphUiMutation(context, getChatKey(context), {
+            afterStore: makeSeededManualCompressionStore(),
+            replaceGraph: true,
+            seq: 4,
+        });
+
+        await runManualCompression(context, extensionSettingsMock.memory_graph, {
+            selectedTypeIds: ['event'],
+            scope: 'all',
+            mode: 'schema',
+            maxRoundsPerType: null,
+        });
+
+        expect(generateTask).toHaveBeenCalledTimes(2);
+        expect(toastrErrors).toEqual([]);
+        expect(toastrSuccesses).toHaveLength(1);
+        expect(toastrSuccesses[0]).toMatch(/Manual compression completed/);
+
+        const persisted = await getFloorState().get();
+        expect(Object.values(persisted.state.nodes).filter(isRollupNode)).toHaveLength(2);
+    });
 });
 
 describe('orchestrator-tools memory_compact_nodes schema & exec', () => {
