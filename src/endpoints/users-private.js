@@ -17,6 +17,7 @@ import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, createBackupArc
 import { SETTINGS_FILE, PUBLIC_DIRECTORIES, UPLOADS_DIRECTORY } from '../constants.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { invalidateRecentChatIndex } from './chats.js';
+import { invalidateLegacyThemeMigration } from '../themes/theme-migration.js';
 import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
@@ -1454,6 +1455,7 @@ router.post('/restore-backup', async (request, response) => {
             },
         );
         await invalidateRecentChatIndex(request);
+        invalidateLegacyThemeMigration(handle);
 
         const payload = { mode, ...restoreResult };
         if (stream) {
@@ -1557,6 +1559,7 @@ router.post('/lan-migration/import', async (request, response) => {
             { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress, scratchCreds },
         );
         await invalidateRecentChatIndex(request);
+        invalidateLegacyThemeMigration(handle);
 
         const payload = {
             mode,
@@ -1633,6 +1636,7 @@ router.post('/import/data-zip', async (request, response) => {
             { includeGlobalExtensions: false, scratchCreds },
         );
         await invalidateRecentChatIndex(request);
+        invalidateLegacyThemeMigration(request.user.profile.handle);
 
         return response.json({
             mode,
@@ -1780,6 +1784,7 @@ router.post('/reset-step2', async (request, response) => {
 
         await ensurePublicDirectoriesExist();
         await checkForNewContent([request.user.directories]);
+        invalidateLegacyThemeMigration(request.user.profile.handle);
 
         await resetLimiter.delete(ip);
         RESET_CACHE.remove(request.user.profile.handle);

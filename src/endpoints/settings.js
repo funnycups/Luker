@@ -12,6 +12,8 @@ import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { buildSettingsFieldStructure, decodeResourcePointer } from '../../public/scripts/util/resource-fields.js';
 import { resolveJsonResourceRepresentation, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
+import { getBuiltinTheme, isBuiltinThemeName, listBuiltinThemeNames, listBuiltinThemes } from '../themes/builtin-themes.js';
+import { ensureLegacyThemesMigrated, invalidateLegacyThemeMigration } from '../themes/theme-migration.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
@@ -115,6 +117,50 @@ async function namedDocsFromRepo(handle, bucket) {
     });
 }
 
+async function loadThemesForSettings(handle, { includeContents = true, selectedThemeName = '' } = {}) {
+    if (includeContents) {
+        const byName = new Map();
+        for (const builtinTheme of listBuiltinThemes()) {
+            byName.set(builtinTheme.name, builtinTheme);
+        }
+        const userThemes = await namedDocsFromRepo(handle, 'themes');
+        for (const userTheme of userThemes) {
+            if (userTheme?.name && !byName.has(userTheme.name)) {
+                byName.set(userTheme.name, userTheme);
+            }
+        }
+        return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const builtinNames = new Set(listBuiltinThemeNames());
+    const userEntries = await getNamedDocRepo().list(handle, 'themes');
+    const allNames = new Set(builtinNames);
+    for (const entry of userEntries) {
+        const name = entry?.key?.name;
+        if (typeof name === 'string' && name.length > 0) {
+            allNames.add(name);
+        }
+    }
+    const sortedNames = [...allNames].sort((a, b) => a.localeCompare(b));
+    let selectedDoc = null;
+    if (typeof selectedThemeName === 'string' && selectedThemeName) {
+        if (isBuiltinThemeName(selectedThemeName)) {
+            selectedDoc = getBuiltinTheme(selectedThemeName);
+        } else {
+            const raw = await getNamedDocRepo().get(handle, 'themes', selectedThemeName);
+            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+                selectedDoc = typeof raw.name === 'string' && raw.name ? raw : { ...raw, name: selectedThemeName };
+            }
+        }
+    }
+    return sortedNames.map((name) => {
+        if (selectedDoc && selectedDoc.name === name) {
+            return selectedDoc;
+        }
+        return { name, builtin: builtinNames.has(name), _summary: true };
+    });
+}
+
 async function loadOrInitializeSettings(request) {
     const handle = request.user.profile.handle;
     let parsedSettings = await getSettingsRepo().get(handle);
@@ -133,11 +179,14 @@ async function loadOrInitializeSettings(request) {
             await getSettingsRepo().save(handle, parsedSettings);
         }
     }
-    return parsedSettings;
+    await ensureLegacyThemesMigrated(handle);
+    const migrated = await getSettingsRepo().get(handle);
+    return migrated ?? parsedSettings;
 }
 
 async function loadOrInitializeSettingsReadEntry(request) {
     const handle = request.user.profile.handle;
+    await ensureLegacyThemesMigrated(handle);
     const existing = await getSettingsRepo().read(handle);
     if (existing.exists) {
         return { document: existing.value, cacheEntry: existing.cacheEntry ?? null };
@@ -178,7 +227,7 @@ function buildSettingsDirectoryRepresentation({ account, document, cacheEntry })
     return directoryRepresentation;
 }
 
-export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
+export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true, includeThemeContents = true } = {}) {
     const handle = request.user.profile.handle;
     const parsedSettings = await loadOrInitializeSettings(request);
     const settings = JSON.stringify(parsedSettings);
@@ -200,7 +249,11 @@ export async function buildSettingsResponse(request, { includePresetContents = t
 
     const world_names = await getWorldInfoRepo().listNames(handle);
 
-    const themes = await namedDocsFromRepo(handle, 'themes');
+    const selectedThemeName = parsedSettings?.power_user?.theme;
+    const themes = await loadThemesForSettings(handle, {
+        includeContents: includeThemeContents,
+        selectedThemeName,
+    });
     const movingUIPresets = await namedDocsFromRepo(handle, 'movingUI');
     const quickReplyPresets = includeQuickReplyPresets
         ? await namedDocsFromRepo(handle, 'quickReplies')
@@ -509,6 +562,7 @@ router.post('/bootstrap', async (request, response) => {
         return response.send(await buildSettingsResponse(request, {
             includePresetContents: false,
             includeQuickReplyPresets: false,
+            includeThemeContents: false,
         }));
     } catch (e) {
         return response.sendStatus(500);
@@ -600,6 +654,7 @@ router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (r
             return response.status(400).send({ error: 'Snapshot file is corrupt.' });
         }
         await getSettingsRepo().save(request.user.profile.handle, parsed);
+        invalidateLegacyThemeMigration(request.user.profile.handle);
 
         response.sendStatus(204);
     } catch (error) {

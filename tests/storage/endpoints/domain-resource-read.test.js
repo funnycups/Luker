@@ -91,7 +91,6 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
     });
 
     test.each([
-        ['themes', '/api/themes', 'themes'],
         ['moving-ui', '/api/moving-ui', 'movingUI'],
         ['quick-replies', '/api/quick-replies', 'quickReplies'],
     ])('lists and reads %s documents with validation', async (_label, route, bucket) => {
@@ -122,6 +121,48 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
             .expect(404);
     });
 
+    test('lists built-in and user themes and reads both with conditional validation', async () => {
+        const doc = { name: 'Sample', value: 1 };
+        await getNamedDocRepo().save(harness.handle, 'themes', 'Sample', doc);
+
+        const list = await request(harness.server)
+            .get('/api/themes/list')
+            .query({ account: harness.handle })
+            .expect(200);
+        expect(list.body.builtin).toContain('Lens');
+        expect(list.body.names).toEqual(expect.arrayContaining([...list.body.builtin, 'Sample']));
+
+        const userFirst = await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Sample' })
+            .expect(200);
+        expect(userFirst.body).toEqual(doc);
+
+        await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Sample' })
+            .set('If-None-Match', userFirst.headers.etag)
+            .expect(304);
+
+        const builtinFirst = await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Lens' })
+            .expect(200);
+        expect(builtinFirst.body.builtin).toBe(true);
+        expect(builtinFirst.body.builtin_stylesheet).toBe('css/themes/lens.css');
+
+        await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Lens' })
+            .set('If-None-Match', builtinFirst.headers.etag)
+            .expect(304);
+
+        await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Missing' })
+            .expect(404);
+    });
+
     test('rejects a different account', async () => {
         const response = await request(harness.server)
             .get('/api/themes/list')
@@ -131,7 +172,6 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
     });
 
     test.each([
-        ['/api/themes', 'themes', 'themes'],
         ['/api/moving-ui', 'movingUI', 'movingUI'],
         ['/api/quick-replies', 'quickReplies', 'quickreplies'],
     ])('fetches every advertised legacy whitespace name from %s exactly', async (route, bucket, dirKey) => {
@@ -164,7 +204,35 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
             .query({ account: harness.handle, name: '../Sample' }).expect(404);
     });
 
-    test.each(['/api/themes', '/api/moving-ui', '/api/quick-replies'])('keeps new %s saves normalized and validated', async (route) => {
+    test('fetches every advertised legacy whitespace theme name exactly alongside built-ins', async () => {
+        const names = [' Sample', 'Sample', 'Trailing ', ' Both '];
+        if (mode === 'fs') names.push('Sample ', '   ');
+        for (const name of names) {
+            const doc = { name, marker: `stored:${name}` };
+            if (mode === 'fs') {
+                fs.writeFileSync(path.join(harness.dirs.themes, `${name}.json`), JSON.stringify(doc));
+            } else {
+                await getNamedDocRepo().save(harness.handle, 'themes', name, doc);
+            }
+        }
+        const list = await request(harness.server).get('/api/themes/list')
+            .query({ account: harness.handle }).expect(200);
+        expect(list.body.names).toEqual(expect.arrayContaining([...list.body.builtin, ...names]));
+        for (const name of names) {
+            const first = await request(harness.server).get('/api/themes/get')
+                .query({ account: harness.handle, name }).expect(200);
+            expect(first.body).toEqual({ name, marker: `stored:${name}` });
+            await request(harness.server).get('/api/themes/get')
+                .query({ account: harness.handle, name })
+                .set('If-None-Match', first.headers.etag).expect(304);
+        }
+        await request(harness.server).get('/api/themes/get')
+            .query({ account: harness.handle, name: '' }).expect(400);
+        await request(harness.server).get('/api/themes/get')
+            .query({ account: harness.handle, name: '../Sample' }).expect(404);
+    });
+
+    test.each(['/api/moving-ui', '/api/quick-replies'])('keeps new %s saves normalized and validated', async (route) => {
         await request(harness.server).post(`${route}/save`)
             .send({ name: ' Saved ', value: 1 }).expect(200);
         await request(harness.server).post(`${route}/save`)
@@ -176,6 +244,23 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
             .query({ account: harness.handle, name: 'Saved' }).expect(200);
         expect(saved.body).toEqual({ name: ' Saved ', value: 1 });
         await request(harness.server).get(`${route}/get`)
+            .query({ account: harness.handle, name: ' Saved ' }).expect(404);
+    });
+
+    test('keeps new /api/themes saves normalized, validated, and read-only for built-ins', async () => {
+        await request(harness.server).post('/api/themes/save')
+            .send({ name: ' Saved ', value: 1 }).expect(200);
+        await request(harness.server).post('/api/themes/save')
+            .send({ name: '../Escape' }).expect(400);
+        await request(harness.server).post('/api/themes/save')
+            .send({ name: 'Lens', custom_css: 'body{}' }).expect(403);
+        const list = await request(harness.server).get('/api/themes/list')
+            .query({ account: harness.handle }).expect(200);
+        expect(list.body.names).toContain('Saved');
+        const saved = await request(harness.server).get('/api/themes/get')
+            .query({ account: harness.handle, name: 'Saved' }).expect(200);
+        expect(saved.body).toEqual({ name: ' Saved ', value: 1 });
+        await request(harness.server).get('/api/themes/get')
             .query({ account: harness.handle, name: ' Saved ' }).expect(404);
     });
 

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
@@ -311,4 +313,119 @@ test('palette strip stays within viewport and mobile drawers disable backdrop bl
         expect(item.height).toBeGreaterThanOrEqual(40);
         expect(item.hitOk).toBe(true);
     }
+});
+
+test('built-in themes lazy-load without duplicating CSS into settings, enforce read-only UI, and support independent derivation with Theme API writeback', async ({ page }) => {
+    const themeGetsDuringBoot = [];
+    const onRequest = (req) => {
+        const url = new URL(req.url());
+        if (url.pathname === '/api/themes/get') {
+            themeGetsDuringBoot.push(url.searchParams.get('name'));
+        }
+    };
+    page.on('request', onRequest);
+
+    await awaitMainUI(page, server.baseURL);
+    page.off('request', onRequest);
+
+    // Boot must NOT eagerly fetch all unselected theme documents
+    expect(themeGetsDuringBoot.length).toBeLessThanOrEqual(1);
+
+    // Select built-in Lens via real UI
+    await selectTheme(page, 'Lens');
+    await openUserSettingsDrawer(page);
+
+    // Built-in Lens mounts managed static <link> before <style id="custom-style"> (no version query param)
+    const builtinState = await page.evaluate(() => {
+        const headChildren = Array.from(document.head.children);
+        const link = document.getElementById('builtin-theme-style');
+        const customStyle = document.getElementById('custom-style');
+        return {
+            linkHref: link?.getAttribute('href') ?? null,
+            linkBeforeCustom: Boolean(link && customStyle && headChildren.indexOf(link) < headChildren.indexOf(customStyle)),
+            customStyleText: customStyle?.textContent ?? '',
+            updateDisabled: document.getElementById('ui-preset-update-button')?.classList.contains('disabled') ?? false,
+            deleteDisabled: document.getElementById('ui-preset-delete-button')?.classList.contains('disabled') ?? false,
+        };
+    });
+    expect(builtinState).toEqual({
+        linkHref: 'css/themes/lens.css',
+        linkBeforeCustom: true,
+        customStyleText: '',
+        updateDisabled: true,
+        deleteDisabled: true,
+    });
+    await expect(page.locator('#customCSS_builtin_notice')).toBeVisible();
+    await expect(page.locator('#customCSS')).toBeDisabled();
+
+    // Verify settings.json on disk does NOT duplicate custom_css or palettes
+    await page.waitForTimeout(1200);
+    const settingsPath = path.join(server.dataRoot, 'default-user', 'settings.json');
+    const persistedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    expect(persistedSettings.power_user.theme).toBe('Lens');
+    expect(Object.prototype.hasOwnProperty.call(persistedSettings.power_user, 'custom_css')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(persistedSettings.power_user, 'palettes')).toBe(false);
+
+    // Built-in themes are NOT copied into user's themes directory
+    const userThemesDir = path.join(server.dataRoot, 'default-user', 'themes');
+    expect(fs.existsSync(path.join(userThemesDir, 'Lens.json'))).toBe(false);
+
+    // Click one-click "Create editable copy" to derive an independent user theme from built-in Lens
+    await page.locator('#ui_preset_derive_button').click();
+    await expect(page.locator('#themes')).toHaveValue('Lens (Custom)');
+    await expect(page.locator('#customCSS_builtin_notice')).toBeHidden();
+    await expect(page.locator('#customCSS')).toBeEnabled();
+
+    const derivedState = await page.evaluate(() => ({
+        hasBuiltinLink: Boolean(document.getElementById('builtin-theme-style')),
+        customCssLen: (document.getElementById('custom-style')?.textContent || '').length,
+        updateDisabled: document.getElementById('ui-preset-update-button')?.classList.contains('disabled') ?? false,
+        deleteDisabled: document.getElementById('ui-preset-delete-button')?.classList.contains('disabled') ?? false,
+    }));
+    expect(derivedState.hasBuiltinLink).toBe(false);
+    expect(derivedState.customCssLen).toBeGreaterThan(10000);
+    expect(derivedState.updateDisabled).toBe(false);
+    expect(derivedState.deleteDisabled).toBe(false);
+
+    // Derived theme on disk is self-contained with no builtin_stylesheet coupling
+    const derivedPath = path.join(userThemesDir, 'Lens (Custom).json');
+    expect(fs.existsSync(derivedPath)).toBe(true);
+    const derivedOnDisk = JSON.parse(fs.readFileSync(derivedPath, 'utf8'));
+    expect(derivedOnDisk.builtin).toBeUndefined();
+    expect(derivedOnDisk.builtin_stylesheet).toBeUndefined();
+    expect(derivedOnDisk.custom_css.length).toBeGreaterThan(10000);
+
+    // Edit Custom CSS via real textarea input -> writes via /api/themes/patch, NEVER settings.json
+    const patchPromise = page.waitForResponse((res) => res.url().includes('/api/themes/patch') && res.status() === 200);
+    const markerRule = '\n/* e2e-marker */ #send_form { --e2e-theme-patch: 42px; }';
+    const currentCss = await page.locator('#customCSS').inputValue();
+    await page.locator('#customCSS').fill(currentCss + markerRule);
+    await patchPromise;
+
+    const updatedOnDisk = JSON.parse(fs.readFileSync(derivedPath, 'utf8'));
+    expect(updatedOnDisk.custom_css).toContain('--e2e-theme-patch: 42px;');
+    const settingsAfterEdit = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    expect(Object.prototype.hasOwnProperty.call(settingsAfterEdit.power_user, 'custom_css')).toBe(false);
+
+    // Reload page and confirm edited CSS persists cleanly from Theme API
+    await awaitMainUI(page, server.baseURL);
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.getElementById('send_form')).getPropertyValue('--e2e-theme-patch').trim())).toBe('42px');
+
+    // Derive from the NON-built-in theme via "Save as a new theme" and verify complete independence
+    await openUserSettingsDrawer(page);
+    await page.locator('#ui-preset-save-button').click();
+    const popupInput = page.locator('.popup-input');
+    await expect(popupInput).toBeVisible();
+    await popupInput.fill('Lens Independent Fork');
+    await page.locator('.popup-button-ok').click();
+    await expect(page.locator('#themes')).toHaveValue('Lens Independent Fork');
+
+    const forkPatchPromise = page.waitForResponse((res) => res.url().includes('/api/themes/patch') && res.status() === 200);
+    await page.locator('#customCSS').fill('/* fork only */ #send_form { --e2e-fork-only: 99px; }');
+    await forkPatchPromise;
+
+    // Original user theme must remain completely untouched
+    const originalAfterForkEdit = JSON.parse(fs.readFileSync(derivedPath, 'utf8'));
+    expect(originalAfterForkEdit.custom_css).toContain('--e2e-theme-patch: 42px;');
+    expect(originalAfterForkEdit.custom_css).not.toContain('--e2e-fork-only');
 });

@@ -5576,6 +5576,18 @@ body:not(.caption) .mes_img_caption {
     min-height: 20dvh;
 }
 
+#customCSS:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+#customCSS_builtin_notice {
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    align-items: flex-start;
+}
+
 #ui_language_select {
     width: 8em;
 }

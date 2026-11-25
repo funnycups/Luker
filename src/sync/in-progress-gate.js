@@ -80,7 +80,7 @@ export const GATED_ROUTES = Object.freeze([
     route(/^\/api\/instruct\/(save|delete)$/i, ['instruct']),
     route(/^\/api\/context\/(save|delete)$/i, ['context']),
     route(/^\/api\/reasoning\/(save|delete)$/i, ['reasoning']),
-    route(/^\/api\/themes\/(save|delete)$/i, ['themes']),
+    route(/^\/api\/themes\/(save|patch|delete)$/i, ['themes']),
     route(/^\/api\/quick-replies\/(save|delete)$/i, ['quickreplies']),
     route(/^\/api\/moving-ui\/save$/i, ['movingUI']),
     route(/^\/api\/worldinfo\/(edit|patch|delete|import)$/i, ['worlds']),

@@ -1,4 +1,4 @@
-import { readResourceJson, resourceQuery } from './resource-read.js';
+import { invalidateResourceReadsByPrefix, readResourceJson, resourceQuery } from './resource-read.js';
 import { t } from './i18n.js';
 
 const NAMED_DOC_ROUTES = Object.freeze({
@@ -121,6 +121,41 @@ export async function loadPresetDocumentEntries(apiId, { signal } = {}) {
         assertNoMissing(entries);
     }
     return withoutMissing(entries);
+}
+
+export async function listThemeDirectory({ signal } = {}) {
+    const query = await resourceQuery();
+    const { value } = await readResourceJson(`/api/themes/list?${query}`, { signal });
+    const names = Array.isArray(value?.names) ? value.names : [];
+    const builtin = Array.isArray(value?.builtin) ? value.builtin : [];
+    return { names, builtin };
+}
+
+export async function readThemeDocument(name, { signal } = {}) {
+    if (typeof name !== 'string' || !name) {
+        return null;
+    }
+    try {
+        const query = await resourceQuery({ name });
+        const { value } = await readResourceJson(`/api/themes/get?${query}`, { signal });
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            return typeof value.name === 'string' && value.name ? value : { ...value, name };
+        }
+        return null;
+    } catch (error) {
+        if (error?.status === 404) {
+            return null;
+        }
+        if (isInvalidResource(error)) {
+            warnInvalidResource(`themes document ${name}`, error);
+            return null;
+        }
+        throw error;
+    }
+}
+
+export function invalidateThemeResourceReads() {
+    invalidateResourceReadsByPrefix('/api/themes/');
 }
 
 export async function listWorldInfoNames({ signal } = {}) {

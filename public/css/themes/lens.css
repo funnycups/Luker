@@ -1,0 +1,1248 @@
+/*
+ * 透镜主题 · 公共样式
+ * 默认「夜空」配色跟随「用户设置 → 主题颜色」；晨雾 / 墨玉 / 素笺通过 [data-theme-palette] 提供独立成套配色。
+ */
+
+/* ====== 可调 ====== */
+:root {
+    /* 圆角：卡片 / 小件 */
+    --lt-radius: 12px;
+    --lt-radius-sm: 8px;
+    /* 消息之间的间距 */
+    --lt-gap: 8px;
+    /* 正文字号：默认跟随设置里的字体缩放，也可直接写死如 15.5px */
+    --lt-size: var(--mainFontSize);
+    /* 正文行高 */
+    --lt-line: 2.1;
+    /* 段落间距 */
+    --lt-para: 1em;
+    /* 代码块 / 思考块限高 */
+    --lt-code-max: 320px;
+    --lt-think-max: 420px;
+    /* 正文字重：400 常规，500 原生偏粗 */
+    --lt-weight: 400;
+    /* 顶栏图标大小（相对原生） */
+    --lt-top-icon: 0.58;
+}
+
+/* ====== 变量（跟随主题颜色） ====== */
+:root {
+    --lt-ink: var(--SmartThemeBodyColor);
+    --lt-dim: var(--SmartThemeEmColor);
+    --lt-accent: var(--SmartThemeQuoteColor);
+    --lt-accent-2: var(--SmartThemeUnderlineColor);
+    --lt-surface: var(--SmartThemeBlurTintColor);
+    --lt-hair: var(--SmartThemeBorderColor);
+    --lt-faint: color-mix(in srgb, var(--lt-dim) 62%, var(--lt-surface));
+    --lt-fill: color-mix(in srgb, var(--lt-ink) 5%, transparent);
+    --lt-fill-2: color-mix(in srgb, var(--lt-ink) 9%, transparent);
+    --lt-hair-strong: color-mix(in srgb, var(--lt-ink) 18%, transparent);
+    --lt-accent-soft: color-mix(in srgb, var(--lt-accent) 15%, transparent);
+    --lt-accent-line: color-mix(in srgb, var(--lt-accent) 45%, transparent);
+    --lt-field: color-mix(in srgb, var(--lt-ink) 4%, var(--lt-surface));
+    --lt-shadow: 0 6px 18px -10px var(--SmartThemeShadowColor);
+    --lt-shadow-lg: 0 14px 32px -12px var(--SmartThemeShadowColor);
+    --lt-bad: #e0604f;
+    --lt-bad-soft: color-mix(in srgb, #e0604f 14%, transparent);
+    --lt-good: #2fae7a;
+    --lt-good-soft: color-mix(in srgb, #2fae7a 14%, transparent);
+    --lt-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --lt-font: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --lt-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Noto Sans Mono", monospace;
+
+    /* 面板底色与磨砂参数：纯色配色设为 none 彻底跳过 GPU 离屏回读，磨砂配色在配色块中覆写 */
+    --lt-panel: var(--lt-surface);
+    --lt-backdrop: none;
+    --lt-backdrop-mobile: none;
+    --lt-bubble-border: var(--lt-hair);
+    --lt-bubble-hi: transparent;
+    --lt-chat-edge: transparent;
+    --lt-theme-color: #07090f;
+
+    /* 交给 Luker 原生变量 */
+    --mainFontFamily: var(--lt-font);
+    --monoFontFamily: var(--lt-mono);
+    --black30a: var(--lt-field);
+    --interactable-outline-color: var(--lt-accent);
+    --interactable-outline-color-faint: var(--lt-accent-line);
+    --theme-palette-accent: var(--lt-accent);
+}
+
+/* ====== 全局 ====== */
+html {
+    font-size: 15px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+body {
+    font-family: var(--lt-font);
+    background-color: var(--lt-theme-color);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+.drawer-content,
+.menu_button {
+    text-shadow: none !important;
+}
+
+::selection {
+    background: var(--lt-accent-soft);
+    color: inherit;
+}
+
+:focus-visible {
+    outline-color: var(--lt-accent);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+    width: 6px !important;
+    height: 6px !important;
+}
+
+::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:vertical,
+::-webkit-scrollbar-thumb:horizontal {
+    background-color: var(--lt-fill-2) !important;
+    border: 0 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--lt-hair-strong) !important;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent !important;
+}
+
+/* ====== 顶栏 ====== */
+#top-bar {
+    background-color: var(--lt-panel) !important;
+    -webkit-backdrop-filter: var(--lt-backdrop);
+    backdrop-filter: var(--lt-backdrop);
+    border: 0 !important;
+    border-bottom: 1px solid var(--lt-hair) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+
+#top-settings-holder .drawer-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: calc(var(--topBarIconSize) * 1.15);
+    height: calc(var(--topBarIconSize) * 1.15);
+    padding: 0;
+    line-height: 1;
+    font-size: calc(var(--topBarIconSize) * var(--lt-top-icon));
+    border-radius: 10px;
+    transition: background-color 0.16s var(--lt-ease), color 0.16s, opacity 0.16s;
+    text-shadow: none;
+    filter: none;
+}
+
+#top-settings-holder .drawer-icon.closedIcon:not(.redOverlayGlow) {
+    color: var(--lt-ink);
+    opacity: 0.55;
+}
+
+#top-settings-holder .drawer-icon.openIcon:not(.redOverlayGlow) {
+    color: var(--lt-accent);
+    background-color: var(--lt-accent-soft);
+    opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    #top-settings-holder .drawer-icon.closedIcon:not(.redOverlayGlow):hover {
+        opacity: 0.9;
+        background-color: var(--lt-fill);
+    }
+}
+
+/* ====== 抽屉 / 弹窗 / 菜单 ====== */
+.drawer-content,
+#character_popup,
+#dialogue_popup,
+dialog.popup,
+#select_chat_popup,
+#options,
+#extensionsMenu,
+#character_context_menu,
+.list-group,
+#qr--popout {
+    color: var(--lt-ink);
+    background-color: var(--lt-panel) !important;
+    background-image: none !important;
+    -webkit-backdrop-filter: var(--lt-backdrop) !important;
+    backdrop-filter: var(--lt-backdrop) !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius) !important;
+    box-shadow: var(--lt-shadow-lg) !important;
+}
+
+#options .options-content,
+#extensionsMenu .options-content {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+#options .options-content a,
+#extensionsMenu .list-group-item,
+#extensionsMenu > .extension_container > div,
+#extensionsMenu > div:not(.extension_container) {
+    border-radius: var(--lt-radius-sm);
+    transition: background-color 0.16s var(--lt-ease);
+}
+
+#options .options-content a:hover,
+#extensionsMenu .list-group-item:hover,
+#extensionsMenu > .extension_container > div:hover,
+#extensionsMenu > div:not(.extension_container):hover {
+    background-color: var(--lt-fill-2);
+}
+
+dialog::backdrop,
+.popup[open]::backdrop,
+#shadow_select_chat_popup {
+    background-color: rgba(0, 0, 0, 0.38) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+dialog:has(#loader) {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+/* 设置区标题 */
+#extensions_settings .inline-drawer-toggle.inline-drawer-header,
+#extensions_settings2 .inline-drawer-toggle.inline-drawer-header,
+#user-settings-block h4,
+.standoutHeader {
+    color: var(--lt-ink);
+    background: var(--lt-fill) !important;
+    background-image: none !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius-sm) !important;
+    box-shadow: none !important;
+    padding: 6px 10px !important;
+    font-weight: 600;
+    text-shadow: none;
+}
+
+#extensions_settings .inline-drawer-toggle.inline-drawer-header:hover,
+#extensions_settings2 .inline-drawer-toggle.inline-drawer-header:hover {
+    background: var(--lt-fill-2) !important;
+}
+
+.standoutHeader ~ .inline-drawer-content {
+    background-color: transparent;
+    border-color: var(--lt-hair);
+}
+
+/* ====== 按钮 ====== */
+.menu_button {
+    color: var(--lt-ink);
+    background-color: var(--lt-fill);
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+    filter: none;
+    box-shadow: none;
+    transition: background-color 0.16s var(--lt-ease), border-color 0.16s, color 0.16s;
+}
+
+.menu_button:hover {
+    background-color: var(--lt-fill-2);
+    border-color: var(--lt-hair-strong);
+    filter: none;
+}
+
+.menu_button.toggleable.toggled,
+.menu_button.active {
+    color: var(--lt-accent);
+    background-color: var(--lt-accent-soft);
+    border-color: var(--lt-accent-line);
+}
+
+.menu_button.popup-button-ok,
+.mes_edit_done {
+    color: var(--lt-on-accent) !important;
+    background-color: var(--lt-accent) !important;
+    border-color: transparent !important;
+}
+
+.menu_button.popup-button-ok:hover,
+.mes_edit_done:hover {
+    filter: brightness(1.08) !important;
+}
+
+.redWarningBG,
+#dialogue_del_mes_ok,
+#delete_button {
+    color: var(--lt-bad) !important;
+    background-color: var(--lt-bad-soft) !important;
+    border-color: color-mix(in srgb, var(--lt-bad) 35%, transparent) !important;
+}
+
+.mes_button,
+.mes_edit_buttons,
+.extraMesButtons {
+    filter: none !important;
+}
+
+/* 开关图标 */
+.fa-toggle-on {
+    color: var(--lt-accent) !important;
+}
+
+/* ====== 输入 ====== */
+.text_pole,
+select {
+    color: var(--lt-ink);
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+    box-shadow: none;
+    transition: border-color 0.16s var(--lt-ease), box-shadow 0.16s;
+}
+
+.text_pole:focus,
+select:focus,
+.edit_textarea:focus {
+    outline: none;
+    border-color: var(--lt-accent-line);
+    box-shadow: 0 0 0 3px var(--lt-accent-soft);
+}
+
+select option {
+    color: var(--lt-ink);
+    background-color: var(--lt-surface);
+}
+
+input.widthNatural {
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+
+/* 勾选框：浅色与深色抽屉下均有清晰边框，勾选后反白突出 */
+input[type="checkbox"] {
+    outline: 0;
+    border: 1px solid color-mix(in srgb, var(--lt-ink) 28%, transparent) !important;
+    border-radius: 4px;
+    background-color: var(--lt-field) !important;
+    box-shadow: none !important;
+    transition: background-color 0.16s var(--lt-ease), border-color 0.16s;
+}
+
+input[type="checkbox"]:hover {
+    border-color: var(--lt-accent-line) !important;
+}
+
+input[type="checkbox"]:checked {
+    background-color: var(--lt-accent) !important;
+    border-color: var(--lt-accent) !important;
+    box-shadow: none !important;
+}
+
+input[type="checkbox"]::before {
+    box-shadow: inset 1em 1em var(--lt-on-accent);
+}
+
+/* 滑块 */
+input[type="range"] {
+    height: 3px;
+    background: var(--lt-fill-2) !important;
+    border-radius: 3px;
+    box-shadow: none !important;
+    filter: none !important;
+}
+
+input[type="range"]:hover {
+    filter: none !important;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--lt-accent);
+    border: 2px solid var(--lt-surface);
+    box-shadow: 0 0 0 1px var(--lt-accent-line), 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    background: var(--lt-accent);
+    border: 2px solid var(--lt-surface);
+}
+
+input[type="range"]:disabled {
+    opacity: 0.45;
+}
+
+/* ====== 聊天 ====== */
+#chat {
+    padding-top: 6px;
+    overflow-anchor: auto;
+}
+
+body.bubblechat .mes {
+    padding: 12px 14px 10px;
+    margin-bottom: var(--lt-gap);
+    border: 1px solid var(--lt-bubble-border);
+    border-radius: var(--lt-radius);
+    box-shadow: inset 0 1px 0 var(--lt-bubble-hi);
+}
+
+body.bubblechat .last_mes {
+    margin-bottom: 0;
+}
+
+/* 头像居中在上，楼层号 / 耗时 / token 一行排在下面，正文占满整宽；用 layout style 隔离单楼层重排 */
+#chat .mes {
+    flex-direction: column;
+    align-items: stretch;
+    contain: layout style;
+}
+
+#chat .mesAvatarWrapper {
+    display: flex;
+    flex-flow: row wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 2px 8px;
+    width: 100%;
+    margin: 0 0 6px;
+    padding: 0;
+}
+
+#chat .mesAvatarWrapper::before {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+    height: 2px;
+}
+
+#chat .mesAvatarWrapper > :not(.avatar) {
+    order: 2;
+    width: auto;
+    margin: 0;
+}
+
+#chat .mesAvatarWrapper .avatar {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+#chat .mes_block {
+    width: 100%;
+    padding: 0;
+}
+
+#chat .mes_block .ch_name {
+    align-items: center;
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--lt-hair);
+}
+
+#chat .mes_text,
+#chat .mes .mes_media_wrapper {
+    padding-right: 0;
+}
+
+#chat .mes_reasoning_details {
+    margin-right: 0;
+}
+
+#chat .mes_reasoning_details .mes_reasoning_summary {
+    margin-right: 0;
+}
+
+/* 给左右翻页箭头留出底部一条 */
+#chat .last_mes {
+    padding-bottom: 34px;
+}
+
+body.swipeAllMessages #chat .mes:not(.last_mes) {
+    padding-bottom: 24px;
+}
+
+#chat .last_mes .mesAvatarWrapper {
+    padding-bottom: 0;
+}
+
+@media screen and (max-width: 1000px) {
+    #chat {
+        padding-left: 4px;
+        padding-right: 4px;
+    }
+
+    body.bubblechat #chat .mes {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}
+
+.mes .ch_name .name_text {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.mes .timestamp,
+.mesIDDisplay,
+.mes_timer,
+.tokenCounterDisplay {
+    font-family: var(--lt-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72em;
+    color: var(--lt-faint);
+    opacity: 1;
+}
+
+.avatar img {
+    box-shadow: 0 0 0 1px var(--lt-hair);
+}
+
+.mes_text,
+.mes_reasoning {
+    line-height: var(--lt-line);
+    font-weight: var(--lt-weight);
+}
+
+.mes_text {
+    font-size: var(--lt-size);
+}
+
+.mes_text p {
+    margin: 0 0 var(--lt-para);
+    line-height: var(--lt-line);
+    text-wrap: wrap;
+}
+
+.mes_text > p {
+    text-align: justify;
+    text-align-last: start;
+}
+
+.mes_text p:last-child {
+    margin-bottom: 0;
+}
+
+.mes_text a,
+.mes_reasoning a {
+    color: var(--lt-accent);
+    text-decoration-color: var(--lt-accent-line);
+    text-underline-offset: 2px;
+}
+
+/* 表格：细分隔线 + 柔和表头，替代原生硬黑框 */
+.mes_text table,
+.mes_reasoning table {
+    width: auto;
+    max-width: 100%;
+    margin: 0.5em 0 var(--lt-para);
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+    overflow: hidden;
+    font-size: 0.92em;
+}
+
+.mes_text th,
+.mes_text td,
+.mes_reasoning th,
+.mes_reasoning td {
+    border: 0;
+    border-bottom: 1px solid var(--lt-hair);
+    border-right: 1px solid var(--lt-hair);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.mes_text th:last-child,
+.mes_text td:last-child,
+.mes_reasoning th:last-child,
+.mes_reasoning td:last-child {
+    border-right: 0;
+}
+
+.mes_text tr:last-child td,
+.mes_reasoning tr:last-child td {
+    border-bottom: 0;
+}
+
+.mes_text th,
+.mes_reasoning th {
+    background-color: var(--lt-fill);
+    font-weight: 600;
+    color: var(--lt-ink);
+}
+
+.mes_text tbody tr:nth-child(even) td,
+.mes_reasoning tbody tr:nth-child(even) td {
+    background-color: color-mix(in srgb, var(--lt-ink) 2.5%, transparent);
+}
+
+.mes_text blockquote {
+    margin: 0.4em 0 var(--lt-para);
+    padding: 6px 12px;
+    border-left: 2px solid var(--lt-accent);
+    border-radius: 0 var(--lt-radius-sm) var(--lt-radius-sm) 0;
+    background-color: var(--lt-fill);
+}
+
+.mes_text hr {
+    border: 0;
+    border-top: 1px solid var(--lt-hair);
+}
+
+.mes_text mark {
+    color: inherit;
+    background-color: var(--lt-accent-soft);
+    border-radius: 3px;
+    padding: 0 0.15em;
+}
+
+.mes_text del,
+.mes_text s {
+    color: var(--lt-faint);
+}
+
+/* 代码 */
+.mes_text code:not(pre code) {
+    font-family: var(--lt-mono);
+    font-size: 0.86em;
+    color: inherit;
+    background-color: var(--lt-fill-2);
+    border: 0;
+    border-radius: 5px;
+    padding: 0.1em 0.35em;
+}
+
+.mes_text pre {
+    max-height: var(--lt-code-max);
+    overflow: auto;
+    background-color: var(--lt-fill);
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+    padding: 0;
+}
+
+.mes_text pre code {
+    font-size: 0.86em;
+    background-color: transparent !important;
+    border: 0;
+}
+
+/* 编辑框 */
+.edit_textarea,
+.mes_reasoning_details textarea {
+    color: var(--lt-ink);
+    background-color: var(--lt-field);
+    border: 1px solid var(--lt-hair-strong);
+    border-radius: var(--lt-radius-sm);
+}
+
+/* 思考块 */
+.mes_reasoning_header {
+    margin: 2px 0 8px;
+    padding: 4px 12px;
+    padding-right: calc(0.7em + 12px);
+    color: var(--lt-dim);
+    background-color: var(--lt-fill) !important;
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+    font-size: calc(var(--mainFontSize) * 0.82);
+}
+
+.mes_reasoning_header:hover {
+    background-color: var(--lt-fill-2) !important;
+}
+
+.mes_reasoning {
+    max-height: var(--lt-think-max);
+    overflow-y: auto;
+    margin: 0 0 10px 2px;
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid var(--lt-accent-line);
+    color: var(--lt-dim);
+    font-size: calc(var(--lt-size) * 0.92);
+}
+
+/* ====== 输入区 ====== */
+#send_form {
+    background-color: var(--lt-panel) !important;
+    -webkit-backdrop-filter: var(--lt-backdrop);
+    backdrop-filter: var(--lt-backdrop);
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius) var(--lt-radius) 0 0;
+    box-shadow: none !important;
+}
+
+#send_textarea {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+/* 按钮：小圆钮，悬停有底色 */
+#leftSendForm,
+#rightSendForm {
+    align-items: center;
+    gap: 2px;
+}
+
+#leftSendForm > div,
+#rightSendForm > div:not(.mes_stop) {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    font-size: 16px;
+    color: var(--lt-dim);
+    opacity: 1;
+    filter: none;
+    transition: background-color 0.16s var(--lt-ease), color 0.16s;
+}
+
+#leftSendForm > div:hover,
+#rightSendForm > div:not(.mes_stop):hover {
+    color: var(--lt-ink);
+    background-color: var(--lt-fill-2);
+    filter: none;
+}
+
+#send_but {
+    color: var(--lt-on-accent) !important;
+    background-color: var(--lt-accent);
+}
+
+#send_but:hover {
+    background-color: var(--lt-accent) !important;
+    filter: brightness(1.08) !important;
+}
+
+#send_form #mes_stop {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    font-size: 15px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1;
+    color: var(--lt-bad);
+    background-color: var(--lt-bad-soft);
+    opacity: 1;
+}
+
+#mes_stop i {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+/* 图标 */
+#options_button::before { content: "\f141"; }          /* 三个点 */
+#send_but::before { content: "\f062"; }                /* 向上箭头 */
+#mes_continue::before { content: "\f051"; }            /* 继续 */
+#mes_impersonate::before { content: "\f303"; }         /* 代写：笔 */
+#mes_stop i::before {
+    content: "\f04d";                                  /* 方块停止 */
+    display: block;
+    line-height: 1;
+    vertical-align: baseline;
+}
+
+#send_textarea::placeholder {
+    color: var(--lt-faint);
+    opacity: 1;
+}
+
+/* 输入框贴底，不留缝；纯色模式下桌面聊天列两侧加 1px 细边收口 */
+@media screen and (min-width: 1001px) {
+    body:not(.movingUI) #sheld {
+        height: calc(var(--doc-height) - var(--topBarBlockSize));
+        max-height: calc(var(--doc-height) - var(--topBarBlockSize));
+    }
+
+    #chat {
+        border-left: 1px solid var(--lt-chat-edge);
+        border-right: 1px solid var(--lt-chat-edge);
+    }
+}
+
+#form_sheld {
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+#send_form {
+    margin-bottom: 0 !important;
+    border-bottom: 0 !important;
+}
+
+/* 手机：输入框做成离边 8px 的圆角矩形，跟屏幕圆角同心，角上的按钮不落进弧里 */
+@media screen and (max-width: 1000px) {
+    #form_sheld {
+        padding: 0 8px max(8px, env(safe-area-inset-bottom, 0px)) !important;
+    }
+
+    #send_form {
+        margin: 0 !important;
+        padding: 6px !important;
+        border: 1px solid var(--lt-hair) !important;
+        border-radius: 28px !important;
+        box-shadow: inset 0 1px 0 var(--lt-glass-hi, transparent), 0 4px 16px rgba(0, 0, 0, 0.28) !important;
+        align-items: flex-end;
+    }
+
+    #nonQRFormItems {
+        min-width: 0;
+        align-items: flex-end;
+    }
+
+    #send_textarea {
+        min-width: 0;
+        flex: 1 1 0;
+        padding-top: 9px !important;
+        padding-bottom: 9px !important;
+        line-height: 22px !important;
+    }
+
+    #leftSendForm,
+    #rightSendForm {
+        flex-wrap: nowrap;
+        flex-shrink: 0;
+        align-self: flex-end;
+    }
+
+    #leftSendForm > div,
+    #rightSendForm > div:not(.mes_stop),
+    #send_form #mes_stop {
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+    }
+}
+
+/* 快捷回复 */
+#qr--bar {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 4px 0;
+}
+
+#qr--bar > .qr--buttons .qr--button,
+#qr--popout > .qr--body > .qr--buttons .qr--button {
+    color: var(--lt-dim) !important;
+    background: var(--lt-panel) !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius-sm) !important;
+    font-size: 0.86em;
+    padding: 2px 10px;
+    text-shadow: none !important;
+}
+
+#qr--bar > .qr--buttons .qr--button:hover,
+#qr--popout > .qr--body > .qr--buttons .qr--button:hover {
+    color: var(--lt-accent) !important;
+    background: var(--lt-accent-soft) !important;
+    border-color: var(--lt-accent-line) !important;
+}
+
+/* ====== 列表 ====== */
+/* 预设条目 */
+.completion_prompt_manager_prompt {
+    border-radius: var(--lt-radius-sm);
+    transition: background-color 0.16s var(--lt-ease);
+}
+
+.completion_prompt_manager_prompt:hover {
+    background-color: var(--lt-fill);
+}
+
+.completion_prompt_manager_prompt:has(.fa-toggle-off) .completion_prompt_manager_prompt_name {
+    color: var(--lt-faint);
+}
+
+/* 正则 */
+.regex-script-label {
+    background-color: var(--lt-fill);
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+}
+
+.regex-script-label:has(.disable_regex:checked) {
+    background-color: transparent;
+    color: var(--lt-faint);
+}
+
+/* 世界书 */
+.world_entry_form:has(.killSwitch.fa-toggle-on) {
+    background-color: var(--lt-fill);
+}
+
+.world_entry_form {
+    border-radius: var(--lt-radius-sm);
+}
+
+/* 聊天记录 */
+.select_chat_block {
+    background-color: var(--lt-fill) !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius-sm) !important;
+}
+
+.select_chat_block[highlight="true"] {
+    background-color: var(--lt-accent-soft) !important;
+    border-color: var(--lt-accent-line) !important;
+}
+
+/* 扩展管理 */
+.extension_block {
+    background-color: var(--lt-fill);
+    border: 1px solid var(--lt-hair);
+    border-radius: var(--lt-radius-sm);
+}
+
+.extension_block:has(.extension_disabled) {
+    background-color: transparent;
+}
+
+/* 用户设定 */
+.avatar-container {
+    border-radius: var(--lt-radius-sm);
+}
+
+.avatar-container.selected {
+    background-color: var(--lt-accent-soft) !important;
+    border-color: var(--lt-accent-line) !important;
+}
+
+/* 角色列表 */
+.character_select,
+.group_select,
+.bogus_folder_select {
+    border-radius: var(--lt-radius-sm);
+    transition: background-color 0.16s var(--lt-ease);
+}
+
+.character_select:hover,
+.group_select:hover,
+.bogus_folder_select:hover {
+    background-color: var(--lt-fill-2);
+}
+
+.character_select.is_fav .ch_name {
+    color: var(--lt-accent);
+}
+
+.recentChat {
+    border-radius: var(--lt-radius-sm) !important;
+}
+
+/* 收藏角色一行横向滚动 */
+#HotSwapWrapper {
+    overflow: hidden;
+}
+
+#HotSwapWrapper > div {
+    overflow: auto hidden;
+    flex-wrap: nowrap;
+}
+
+/* Select2 下拉框与世界书多选标签：统一浅/深色边框、底色与磨砂，去掉原生硬黑阴影 */
+.select2-dropdown {
+    background-color: var(--lt-panel) !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius-sm) !important;
+    box-shadow: var(--lt-shadow-lg) !important;
+    -webkit-backdrop-filter: var(--lt-backdrop) !important;
+    backdrop-filter: var(--lt-backdrop) !important;
+    color: var(--lt-ink) !important;
+}
+
+.select2-container--default .select2-selection--single,
+.select2-container--default .select2-selection--multiple {
+    background-color: var(--lt-field) !important;
+    border: 1px solid var(--lt-hair) !important;
+    border-radius: var(--lt-radius-sm) !important;
+    color: var(--lt-ink) !important;
+}
+
+.select2-container--default .select2-results__option--highlighted[aria-selected],
+.select2-container--default .select2-results__option--highlighted.select2-results__option--selectable {
+    background-color: var(--lt-accent-soft) !important;
+    color: var(--lt-accent) !important;
+}
+
+.select2-container--default .select2-results__option[aria-selected="true"] {
+    background-color: var(--lt-fill-2) !important;
+    color: var(--lt-ink) !important;
+}
+
+.select2-container--default .select2-selection--multiple .select2-selection__choice {
+    color: var(--lt-accent);
+    background-color: var(--lt-accent-soft);
+    border: 0;
+    border-radius: 6px;
+}
+
+.select2-container--default .select2-selection--multiple .select2-selection__choice__display,
+.select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: inherit !important;
+}
+
+/* 提示 */
+#toast-container > .toast {
+    border-radius: var(--lt-radius-sm);
+    box-shadow: var(--lt-shadow) !important;
+}
+
+/* 删除模式：选中的消息标红 */
+#chat .mes.selected {
+    background-color: var(--lt-bad-soft) !important;
+    border-color: color-mix(in srgb, var(--lt-bad) 55%, transparent) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lt-bad) 55%, transparent) !important;
+}
+
+#chat .mes .del_checkbox:checked {
+    background-color: var(--lt-bad);
+}
+
+/* ====== 性能兜底：尊重禁用模糊，并在移动端降级全屏抽屉模糊 ====== */
+body.no-blur #top-bar,
+body.no-blur #send_form,
+body.no-blur .drawer-content,
+body.no-blur #character_popup,
+body.no-blur #dialogue_popup,
+body.no-blur dialog.popup,
+body.no-blur #select_chat_popup,
+body.no-blur #options,
+body.no-blur #extensionsMenu,
+body.no-blur #character_context_menu,
+body.no-blur .list-group,
+body.no-blur #qr--popout,
+body.no-blur dialog::backdrop,
+body.no-blur .popup[open]::backdrop,
+body.no-blur #shadow_select_chat_popup {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+@media screen and (max-width: 1000px) {
+    /* 手机端大面积抽屉/弹窗几乎全屏，关闭 backdrop-filter 避免 WebView 每帧重算整屏模糊，并用 contain 隔离布局重排 */
+    .drawer-content,
+    #character_popup,
+    #dialogue_popup,
+    dialog.popup,
+    #select_chat_popup {
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+        background-color: color-mix(in srgb, var(--lt-surface) 94%, transparent) !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28) !important;
+        contain: layout style;
+    }
+
+    dialog::backdrop,
+    .popup[open]::backdrop,
+    #shadow_select_chat_popup {
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+    }
+
+    /* 小面积浮层/顶栏/输入栏在移动端使用轻量模糊（纯色模式为 none，磨砂模式为 8px 且无 saturate） */
+    #top-bar,
+    #send_form,
+    #options,
+    #extensionsMenu,
+    #character_context_menu,
+    .list-group,
+    #qr--popout {
+        -webkit-backdrop-filter: var(--lt-backdrop-mobile) !important;
+        backdrop-filter: var(--lt-backdrop-mobile) !important;
+    }
+}
+
+/* ====== 磨砂背景（仅在夜空 / 晨雾配色下启用） ====== */
+:root {
+    --lt-scene-display: none;
+    --lt-glass-hi: transparent;
+    --lt-scene-base: transparent;
+    --lt-blob-1: transparent;
+    --lt-blob-2: transparent;
+    --lt-blob-3: transparent;
+    --lt-blob-4: transparent;
+    /* 气泡不透明度 */
+    --lt-bubble: 100%;
+}
+
+body::before {
+    content: "";
+    display: var(--lt-scene-display);
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    contain: strict;
+    transform: translateZ(0);
+    background-color: var(--lt-scene-base);
+    background-image:
+        radial-gradient(38% 34% at 14% 18%, var(--lt-blob-1), transparent 70%),
+        radial-gradient(34% 32% at 86% 12%, var(--lt-blob-2), transparent 70%),
+        radial-gradient(36% 36% at 78% 86%, var(--lt-blob-3), transparent 70%),
+        radial-gradient(30% 30% at 20% 88%, var(--lt-blob-4), transparent 70%);
+}
+
+/* 省显卡：关闭 Luker 自带的整块聊天区模糊，避免每帧重算整屏 */
+#chat {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+/* 顶部细高光边（仅磨砂模式非透明，0 模糊开销） */
+.drawer-content,
+dialog.popup,
+#options,
+#extensionsMenu {
+    box-shadow: inset 0 1px 0 var(--lt-glass-hi), var(--lt-shadow-lg) !important;
+}
+
+#top-bar,
+#send_form {
+    box-shadow: inset 0 1px 0 var(--lt-glass-hi) !important;
+}
+
+/* 气泡透明度在这里统一控制，主题颜色本身保持不透明以免卡片混色后文字变淡 */
+body.bubblechat #chat .mes {
+    background-color: color-mix(in srgb, var(--SmartThemeBotMesBlurTintColor) var(--lt-bubble), transparent);
+}
+
+body.bubblechat #chat .mes[is_user="true"] {
+    background-color: color-mix(in srgb, var(--SmartThemeUserMesBlurTintColor) var(--lt-bubble), transparent);
+}
+
+/* ====== 配色（由主题 palettes 字段声明，通过 html[data-theme-palette] 切换） ====== */
+
+/* 0 夜空 */
+:root {
+    color-scheme: dark;
+    --blurStrength: 8 !important;
+    --lt-accent: #4aa3ff;
+    --lt-on-accent: #ffffff;
+    --lt-scene-display: block;
+    --lt-bubble: 66%;
+    --lt-glass-hi: rgba(255, 255, 255, 0.12);
+    --lt-bubble-hi: rgba(255, 255, 255, 0.08);
+    --lt-bubble-border: rgba(255, 255, 255, 0.09);
+    --lt-chat-edge: transparent;
+    --lt-scene-base: #07090f;
+    --lt-theme-color: #07090f;
+    --lt-panel: color-mix(in srgb, var(--lt-surface) 64%, transparent);
+    --lt-backdrop: blur(16px) saturate(140%);
+    --lt-backdrop-mobile: blur(8px);
+    --lt-blob-1: color-mix(in srgb, #1e4fb8 52%, transparent);
+    --lt-blob-2: color-mix(in srgb, #5a2fa8 50%, transparent);
+    --lt-blob-3: color-mix(in srgb, #0f6b5f 52%, transparent);
+    --lt-blob-4: color-mix(in srgb, #7a3d1e 45%, transparent);
+}
+
+/* 1 晨雾 */
+:root[data-theme-palette="mist"] {
+    color-scheme: light;
+    --SmartThemeBodyColor: rgba(30, 41, 59, 1) !important;
+    --SmartThemeEmColor: rgba(100, 116, 139, 1) !important;
+    --SmartThemeUnderlineColor: rgba(109, 92, 198, 1) !important;
+    --SmartThemeQuoteColor: rgba(42, 122, 123, 1) !important;
+    --SmartThemeBlurTintColor: rgba(255, 255, 255, 1) !important;
+    --SmartThemeChatTintColor: rgba(255, 255, 255, 0) !important;
+    --SmartThemeUserMesBlurTintColor: rgba(224, 236, 250, 1) !important;
+    --SmartThemeBotMesBlurTintColor: rgba(255, 255, 255, 1) !important;
+    --SmartThemeShadowColor: rgba(24, 38, 66, 0.16) !important;
+    --SmartThemeBorderColor: rgba(28, 42, 68, 0.09) !important;
+    --blurStrength: 8 !important;
+    --lt-accent: #2b7de9;
+    --lt-on-accent: #ffffff;
+    --lt-scene-display: block;
+    --lt-bubble: 74%;
+    --lt-glass-hi: rgba(255, 255, 255, 0.92);
+    --lt-bubble-hi: rgba(255, 255, 255, 0.9);
+    --lt-bubble-border: rgba(255, 255, 255, 0.78);
+    --lt-chat-edge: transparent;
+    --lt-scene-base: #e8ecf3;
+    --lt-theme-color: #e8ecf3;
+    --lt-panel: color-mix(in srgb, var(--lt-surface) 62%, transparent);
+    --lt-backdrop: blur(16px) saturate(140%);
+    --lt-backdrop-mobile: blur(8px);
+    --lt-blob-1: color-mix(in srgb, #9ec0f2 44%, transparent);
+    --lt-blob-2: color-mix(in srgb, #c6c0eb 40%, transparent);
+    --lt-blob-3: color-mix(in srgb, #9dd6cf 42%, transparent);
+    --lt-blob-4: color-mix(in srgb, #bfd4ee 36%, transparent);
+}
+
+/* 2 墨玉 */
+:root[data-theme-palette="ink"] {
+    color-scheme: dark;
+    --SmartThemeBodyColor: rgba(228, 233, 242, 1) !important;
+    --SmartThemeEmColor: rgba(143, 155, 176, 1) !important;
+    --SmartThemeUnderlineColor: rgba(212, 184, 138, 1) !important;
+    --SmartThemeQuoteColor: rgba(134, 178, 177, 1) !important;
+    --SmartThemeBlurTintColor: rgba(22, 26, 35, 1) !important;
+    --SmartThemeChatTintColor: rgba(15, 18, 25, 1) !important;
+    --SmartThemeUserMesBlurTintColor: rgba(31, 41, 59, 1) !important;
+    --SmartThemeBotMesBlurTintColor: rgba(25, 30, 40, 1) !important;
+    --SmartThemeShadowColor: rgba(0, 0, 0, 0.5) !important;
+    --SmartThemeBorderColor: rgba(255, 255, 255, 0.075) !important;
+    --blurStrength: 0 !important;
+    --lt-accent: #68b8b0;
+    --lt-on-accent: #09211f;
+    --lt-scene-display: none;
+    --lt-bubble: 100%;
+    --lt-glass-hi: transparent;
+    --lt-bubble-hi: transparent;
+    --lt-bubble-border: var(--lt-hair);
+    --lt-chat-edge: var(--lt-hair);
+    --lt-theme-color: #0f1219;
+    --lt-panel: var(--lt-surface);
+    --lt-backdrop: none;
+    --lt-backdrop-mobile: none;
+}
+
+/* 3 素笺 */
+:root[data-theme-palette="paper"] {
+    color-scheme: light;
+    --SmartThemeBodyColor: rgba(45, 41, 38, 1) !important;
+    --SmartThemeEmColor: rgba(122, 114, 105, 1) !important;
+    --SmartThemeUnderlineColor: rgba(104, 128, 108, 1) !important;
+    --SmartThemeQuoteColor: rgba(56, 114, 106, 1) !important;
+    --SmartThemeBlurTintColor: rgba(248, 246, 241, 1) !important;
+    --SmartThemeChatTintColor: rgba(239, 236, 229, 1) !important;
+    --SmartThemeUserMesBlurTintColor: rgba(229, 235, 232, 1) !important;
+    --SmartThemeBotMesBlurTintColor: rgba(252, 251, 248, 1) !important;
+    --SmartThemeShadowColor: rgba(55, 48, 40, 0.14) !important;
+    --SmartThemeBorderColor: rgba(55, 48, 40, 0.085) !important;
+    --blurStrength: 0 !important;
+    --lt-accent: var(--SmartThemeQuoteColor);
+    --lt-on-accent: #ffffff;
+    --lt-scene-display: none;
+    --lt-bubble: 100%;
+    --lt-glass-hi: transparent;
+    --lt-bubble-hi: transparent;
+    --lt-bubble-border: var(--lt-hair);
+    --lt-chat-edge: var(--lt-hair);
+    --lt-theme-color: #efece5;
+    --lt-panel: var(--lt-surface);
+    --lt-backdrop: none;
+    --lt-backdrop-mobile: none;
+}

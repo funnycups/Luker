@@ -1,10 +1,12 @@
 import { assembleResourceFields, loadResourceBootstrap } from './resource-read.js';
 import { assembleJsonFields } from './util/resource-fields.js';
 import {
+    listThemeDirectory,
     listWorldInfoNames,
     loadNamedDocumentEntries,
     loadPresetDocumentEntries,
     loadPresetResources,
+    readThemeDocument,
     stampNamedDocuments,
 } from './named-resource-read.js';
 
@@ -39,11 +41,14 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
     const metadata = await loadResourceBootstrap({ signal });
     const settingsDocument = await loadSettingsDocument({ signal });
     const selected = selectedPresetNames(settingsDocument);
+    const selectedThemeName = typeof settingsDocument?.power_user?.theme === 'string'
+        ? settingsDocument.power_user.theme
+        : '';
 
     const [
         presetData,
         world_names,
-        themes,
+        themeData,
         movingUIPresets,
         quickReplyEntries,
         instruct,
@@ -53,7 +58,15 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
     ] = await Promise.all([
         loadPresetResources({ selected, complete: !bootstrap, signal }),
         listWorldInfoNames({ signal }),
-        loadNamedDocumentEntries('themes', { signal }),
+        bootstrap
+            ? Promise.all([
+                listThemeDirectory({ signal }),
+                selectedThemeName ? readThemeDocument(selectedThemeName, { signal }) : Promise.resolve(null),
+            ]).then(([directory, activeTheme]) => ({ directory, activeTheme }))
+            : Promise.all([
+                listThemeDirectory({ signal }),
+                loadNamedDocumentEntries('themes', { signal }),
+            ]).then(([directory, entries]) => ({ directory, entries })),
         loadNamedDocumentEntries('movingUI', { signal }),
         bootstrap ? [] : loadNamedDocumentEntries('quickReplies', { signal }),
         loadAdvancedPreset('instruct', { signal }),
@@ -62,11 +75,32 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
         loadAdvancedPreset('reasoning', { signal }),
     ]);
 
+    const themeDirectory = themeData.directory;
+    const builtinSet = new Set(themeDirectory.builtin);
+    let themes;
+    let activeTheme = null;
+    if (bootstrap) {
+        activeTheme = themeData.activeTheme ?? null;
+        themes = themeDirectory.names.map((name) => {
+            if (activeTheme && activeTheme.name === name) {
+                return activeTheme;
+            }
+            return { name, builtin: builtinSet.has(name), _summary: true };
+        });
+    } else {
+        themes = stampNamedDocuments(themeData.entries);
+        activeTheme = selectedThemeName
+            ? (themes.find(t => t?.name === selectedThemeName) ?? null)
+            : null;
+    }
+
     return {
         ...presetData,
         settings: JSON.stringify(settingsDocument),
         world_names,
-        themes: stampNamedDocuments(themes),
+        themes,
+        theme_directory: themeDirectory,
+        active_theme: activeTheme,
         movingUIPresets: stampNamedDocuments(movingUIPresets),
         quickReplyPresets: bootstrap ? [] : stampNamedDocuments(quickReplyEntries),
         instruct,

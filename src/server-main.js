@@ -170,6 +170,7 @@ import { createDeliveryServer } from './ws-delivery.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
+import { migrateLegacyThemesForAllUsers } from './themes/theme-migration.js';
 import { initializeAllUserMetadata } from './endpoints/image-metadata.js';
 import { applyPendingSafeMode } from './safe-mode.js';
 
@@ -698,6 +699,7 @@ async function preSetupTasks() {
     // Content seeding can add new characters/worlds; finish before the
     // metadata/cache stages scan those directories.
     await checkForNewContent(directories);
+    await migrateLegacyThemesForAllUsers(directories);
 
     migrateFlatSecrets(directories);
     cleanUploads();

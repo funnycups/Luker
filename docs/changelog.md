@@ -40,6 +40,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
 - Added a unified background activity guard API for extensions and lifecycle-scoped CardApps, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
 
+### Themes
+
+- Separated built-in themes into read-only version-managed assets with on-demand theme loading, standalone theme derivation, and direct theme-level persistence for custom CSS and palettes.
+
 ### Fixes
 
 - Fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.

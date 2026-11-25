@@ -25,7 +25,9 @@ import {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const LENS_THEME_PATH = path.join(REPO_ROOT, 'default/content/themes/Lens.json');
+const LENS_CSS_PATH = path.join(REPO_ROOT, 'public/css/themes/lens.css');
 const LENS_THEME = JSON.parse(fs.readFileSync(LENS_THEME_PATH, 'utf8'));
+const LENS_CSS = fs.readFileSync(LENS_CSS_PATH, 'utf8');
 
 function installMatchMediaStub(initialDark = true) {
     let prefersDark = initialDark;
@@ -68,20 +70,22 @@ describe('Declarative theme palettes & built-in Lens theme', () => {
         localStorage.clear();
     });
 
-    test('default content registers Lens.json with valid declarative palettes and balanced CSS', () => {
+    test('built-in Lens theme declares static stylesheet, valid palettes, and is not seeded via content index', () => {
         const indexPath = path.join(REPO_ROOT, 'default/content/index.json');
         const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-        expect(index).toContainEqual({ filename: 'themes/Lens.json', type: 'theme' });
+        expect(index.filter((entry) => entry.type === 'theme')).toEqual([]);
 
         expect(LENS_THEME.name).toBe('Lens');
+        expect(LENS_THEME.builtin_stylesheet).toBe('css/themes/lens.css');
+        expect(LENS_THEME.custom_css).toBe('');
         const normalized = normalizeThemePalettes(LENS_THEME.palettes);
         expect(normalized).not.toBeNull();
         expect(normalized.default).toBe('night');
         expect(normalized.items.map((p) => p.id)).toEqual(['night', 'mist', 'ink', 'paper']);
         expect(normalized.auto).toMatchObject({ dark: 'night', light: 'mist' });
 
-        const openBraces = (LENS_THEME.custom_css.match(/\{/g) || []).length;
-        const closeBraces = (LENS_THEME.custom_css.match(/\}/g) || []).length;
+        const openBraces = (LENS_CSS.match(/\{/g) || []).length;
+        const closeBraces = (LENS_CSS.match(/\}/g) || []).length;
         expect(openBraces).toBeGreaterThan(0);
         expect(openBraces).toBe(closeBraces);
     });

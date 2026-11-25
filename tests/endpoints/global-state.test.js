@@ -442,7 +442,7 @@ describe.each(ENDPOINT_HARNESSES)('/api/state endpoints on $name', ({ mode }) =>
             .send({})
             .expect(200);
 
-        expect(settingsRes.body.themes).toEqual([{ name: 'RealTheme', color: 'blue' }]);
+        expect(settingsRes.body.themes).toContainEqual({ name: 'RealTheme', color: 'blue' });
         const serialized = JSON.stringify(settingsRes.body);
         expect(serialized).not.toContain('secret_global_state');
         expect(serialized).not.toContain('should_not_appear_in_settings');

@@ -35,6 +35,7 @@ router.post('/bootstrap', async (request, response) => {
             ? await buildSettingsResponse(request, {
                 includePresetContents: false,
                 includeQuickReplyPresets: false,
+                includeThemeContents: false,
             })
             : null;
         const avatars = getImages(directories.avatars);
