@@ -134,11 +134,24 @@ Bulk variant for groups — calls `unshallowCharacter` on every member of the gr
 writeExtensionField(
     characterId: number | string,
     key: string,
-    value: any,
-): Promise<void>
+    value: any | ((current: any) => any | Promise<any>),
+    options?: {
+        isCurrent?: () => boolean
+        ifMatch?: object
+        onAcknowledged?: (response: Response) => void
+    },
+): Promise<boolean>
 ```
 
 Writes `data.extensions[key]` on a character card and persists.
+
+Returns `true` when the HTTP response is successful and `false` for a non-OK response or a missing character. Network failures reject the promise. A failed request does not publish its value to the live character or editor JSON. After success, local synchronization leaves a replaced character or subsequently changed extension value untouched. Callers that mutate the live value before writing must restore their own failed edits without overwriting subsequent changes.
+
+For a read/modify/write operation, pass a callback instead of a precomputed replacement. Callback writes to the same character object and extension key execute in invocation order. The callback receives a clone of the current value after the preceding callback write has settled, so failed writes do not become the next mutation's base. Return the complete replacement or the unset sentinel. Callback exceptions reject without a request. Replaced character objects refuse queued writes with `false`. Do not call the same field's callback writer recursively from inside its callback.
+
+An async callback keeps ownership of its original character and source while preparing the replacement. If that character is replaced, the source value changes, or a direct write to the same field starts before preparation completes, the callback write returns `false` without sending its request. The callback executes once and is not retried. Direct values remain complete replacements and are not merged with pending callback output.
+
+`isCurrent` supplies additional source ownership for direct values and callbacks. It is checked before preparation, before HTTP and before local acknowledgement publication; `false` returns `false` without publishing. This cannot undo an already committed server write. `ifMatch` passes original write versions to conditional server updates. `onAcknowledged` observes a successful response only when its value still owns local publication.
 
 **Replace semantics.** The full `value` becomes the new `data.extensions[key]` on disk. Sibling subkeys present in the previous on-disk value are **not** preserved — callers that require a partial update must read the previous value, spread it, and apply the changes themselves. Other extension keys under `data.extensions.*` (other plugins' data) are never touched.
 
@@ -173,6 +186,8 @@ writeExtensionFieldBulk(
 ```
 
 Single batched write across many characters, same replace semantics as `writeExtensionField` applied per card. `avatars: null` or `[]` targets every character. When `value` is the `unset` sentinel and no `filterPath` is supplied, automatically defaults `filterPath` to `data.extensions.<key>` so cards without that field are skipped.
+
+A non-OK HTTP response or network failure rejects the promise. Successful HTTP responses retain the per-character `updated`, `skipped` and `failed` summary. Local character data is synchronized only for `updated` avatars.
 
 ### createCharacterData
 

@@ -59,7 +59,6 @@ import { registerOrchestrationTool } from
 - `ctx.chat`、`ctx.characters`、`ctx.characterId`、`ctx.groups`、`ctx.groupId`、`ctx.name1`、`ctx.name2`
 - `ctx.eventSource`、`ctx.eventTypes` —— 執行時事件總線
 - `ctx.getExtensionApi(name)` —— 其他擴充功能發布的 API
-- `ctx.registerOrchestrationTool`、`ctx.bridgeSillyTavernTool` 等 —— 本文件介紹的整套 API 均掛在 ctx 上
 
 編排執行時掛的（只在編排過程中存在）:
 
@@ -101,37 +100,39 @@ throw Object.assign(new Error('Database is read-only.'), {
 
 如果你想精確控制 mode 和 simulate 語意，就用 `registerOrchestrationTool` 包一層；不在意的話橋接是零成本路徑。選擇器的標籤和模式選項透過 `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` 暴露，呼叫方想自己驅動橋接也行。
 
+## collectResolvedSkillsForOrchPreset(payload)
+
+接受包含 `mode`、`name` 與 `profile` 的匯出預設資料。返回 `Promise<Map<string, {scope: object, names: string[]}>>`，按來源範圍分組收集預設中 agent 可見的技能，技能名稱去重並排序。不包含角色範圍的技能，無效資料返回空 Map。
+
 ## 角色級 override 存取器
 
-除了工具註冊介面，`'orchestrator'` 這個 extension api 還發布了存取器與寫入 helper，其他擴充用它讀取或寫入角色級編排 override。CardApp 的 `ctx.getOrchestratorOverride` / `setOrchestratorOverride` / `clearOrchestratorOverride`，以及 CardApp Studio 的工具 `character_get_orchestrator` / `character_update_orchestrator` / `character_clear_orchestrator` 均走這同一套介面。
+除了工具註冊介面，`'orchestrator'` 這個 extension api 還發布了存取器與寫入 helper，其他擴充用它讀取或切換角色卡的編排預設。CardApp 的 `ctx.getOrchestratorOverride` / `setOrchestratorOverride` / `clearOrchestratorOverride`，以及 CardApp Studio 的工具 `character_get_orchestrator` / `character_update_orchestrator` / `character_clear_orchestrator` 均走這同一套介面。
 
 ```js
 const orch = ctx.getExtensionApi('orchestrator');
 if (!orch) { /* 編排器未安裝 */ return; }
 
-const override = orch.getCharacterOverrideByAvatar(ctx, avatar);
-const charIndex = orch.getCharacterIndexByAvatar(ctx, avatar);
-const prev = orch.getCharacterExtensionDataByAvatar(ctx, avatar);
-
-const next = orch.normalizeCharacterOverrideMode({ ...override, mode: 'agenda' });
-await orch.persistOrchestratorCharacterExtension(ctx, charIndex, { ...prev, override: next });
-
-// 同步 extension_settings.orchestrator.executionMode，讓 dispatcher 下次生成
-// 時挑到 override 的分支。不做這一步的話，切換 mode 的 override 會被執行期
-// 靜默忽略。
-orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrator, avatar);
+const mode = orch.getCharacterSavedExecutionModeByAvatar(ctx, avatar);
+if (mode) {
+    const result = await orch.setCharacterActivePresetForSavedMode(
+        ctx, ctx.extensionSettings?.orchestrator, avatar, 'preset_id_from_the_card_library',
+    );
+    // result: { ok: true, mode } | { ok: false, mode, reason }
+}
 ```
 
 | 方法 | 用途 |
 | --- | --- |
-| `getCharacterOverrideByAvatar(ctx, avatar)` | 讀取 `avatar` 對應角色卡上的 `character.data.extensions.orchestrator.override` 原始 payload；不存在時回傳 `null`。 |
+| `getCharacterSavedExecutionModeByAvatar(ctx, avatar)` | 回傳角色卡釘住的執行 mode：卡上存在該 mode 的預設庫時取 `override.mode`，否則取第一個帶預設庫的 mode；卡上沒有預設庫時回傳 `''`。 |
+| `getRuntimePresetScope(ctx, avatar, mode)` | 角色卡在 `mode` 下的啟用槽指向卡內預設庫中的預設時回傳 `'character'`，否則回傳 `'global'`。 |
+| `getCharacterActivePresetId(ctx, avatar, mode)` | 回傳角色卡在 `mode` 下的啟用預設 id；槽為空或指向不存在的預設時回傳 `''`。 |
+| `setCharacterActivePresetForSavedMode(ctx, settings, avatar, presetId)` | 切換角色卡在已儲存 mode 下的啟用預設，儲存角色卡，並重新對齊 `settings.executionMode`。`presetId` 取卡內該 mode 預設庫中的 id；傳 `''` 則執行全域啟用預設並保留卡內預設庫。回傳 `{ ok: true, mode }` 或 `{ ok: false, mode, reason }`，`reason` 取值為 `character_not_found`、`no_saved_mode`、`preset_not_found`、`set_failed`、`persist_failed`。 |
 | `getCharacterIndexByAvatar(ctx, avatar)` | 解析 `persistOrchestratorCharacterExtension` 需要的角色索引；找不到回傳 `-1`。 |
-| `getCharacterExtensionDataByAvatar(ctx, avatar)` | 讀取完整的 `character.data.extensions.orchestrator` blob（override 及其他兄弟鍵）。寫入前 spread 一下，避免誤刪兄弟子鍵。 |
-| `normalizeCharacterOverrideMode(override)` | 根據存在的子 payload（`spec` / `agenda` / `loop` / `director`）和最新的 `updatedAt` 釘住 `override.mode`。會原地修改 override 並回傳它。 |
+| `getCharacterExtensionDataByAvatar(ctx, avatar)` | 讀取完整的 `character.data.extensions.orchestrator` blob。寫入前 spread 一下，避免誤刪兄弟子鍵。 |
 | `applyCharacterExecutionModeForAvatar(ctx, settings, avatar)` | 把 `settings.executionMode` 重新對齊到該角色已儲存的 mode；變動時回傳 `true`。 |
-| `persistOrchestratorCharacterExtension(ctx, characterIndex, modulePayload)` | 透過 `ctx.writeExtensionField` 持久化整個 `extensions.orchestrator` blob。傳 `null` 作為 `modulePayload` 會把整個 blob 刪除；成功回傳 `true`。 |
+| `persistOrchestratorCharacterExtension(ctx, characterIndex, modulePayload)` | 透過 `ctx.writeExtensionField` 持久化整個 `extensions.orchestrator` blob。傳入 `null` 作為 `modulePayload` 會刪除整個 blob。HTTP 成功時回傳 `true`，角色不存在、HTTP 失敗或網路異常時回傳 `false`。 |
 
-這些存取器只動角色卡，從來不修改全域編排器設定。
+除 `applyCharacterExecutionModeForAvatar` 與 `setCharacterActivePresetForSavedMode` 會重新對齊 `settings.executionMode` 外，這些存取器只修改角色卡。
 
 ## 共享技能工具目錄
 

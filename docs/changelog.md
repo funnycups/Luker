@@ -4,6 +4,60 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Connections & Models
+
+- Centralized provider capability rules, lifted outdated Gemini image-mode restrictions on system prompts and supported web search, and rejected unsupported capability combinations explicitly instead of dropping parameters silently.
+- Updated model capability rules and context and output limits across Gemini, Claude, OpenAI, Azure OpenAI, and MiniMax, including Gemini image-model thinking levels, 1M context limits for supported Claude and MiniMax models, OpenAI and Azure reasoning effort gating, and Claude Haiku 5 thinking summaries.
+- Preserved lossless multi-turn thinking signatures, native protocol parts, and token usage across Gemini, Claude, OpenAI Chat, and OpenAI Responses while stripping incompatible replay fields when switching providers.
+- Restored verbatim native HTTP response passthrough for streaming and non-streaming chat completions, delivering internal generation metadata over a dedicated WebSocket channel.
+- Moved plain-text function calling orchestration, trigger management, history normalization, strict parsing, and format-correction retries to the backend, and enabled plain-text tool calls on models without native tool support.
+- Added automatic continuation for paused Claude server-tool turns, preserving native content blocks and reasoning across continuation rounds.
+- Added source citation display below assistant messages for providers that return citations, merging sources across continuations.
+- Preserved full turn metadata, including citations, finish reasons, and refusal replies, when the server saves a generation after a client disconnect.
+
+### Request Inspector
+
+- Unified strict wire-protocol parsing across generation, persistence, and the Request Inspector, displaying protocol mismatches and malformed responses as parse errors with collapsible raw diagnostic payloads.
+- Added plain-text function call inspection showing parsed calls, parse failures, format-correction retry chains, and per-region raw text toggling without altering preceding thinking or reply text.
+
+### Memory Graph
+
+- Fixed a delayed global advanced-settings save clearing the dirty marker for later edits.
+- Added missing Chinese translations for graph inspection and extraction messages.
+- Fixed clearing the Memory Graph **Tool-call retries** field setting the retry count to 0 instead of the default.
+- Removed hidden recall selection constraints so editable Memory Graph prompts control recall behavior directly.
+
+### Background Keep-Alive
+
+- Fixed background keep-alive remaining active after slash commands or overlapping generations had finished.
+
+### Extension API
+
+- Fixed preset extension writes failing to update card-bound presets and their active read cache, creating unintended global presets, discarding acknowledged sampler changes, replacing extensions on an empty-array path, rejecting JSON-equivalent acknowledgements, losing earlier saves on subsequent write failures, and reporting success after a dependent save failed or its global target changed.
+- Updated `saveSettings` to return saved, failed, or deferred outcomes with the acknowledged payload, establish its baseline strictly from complete stored sources, and preserve later saves and live edits across overlapping server reads.
+- Updated `writeExtensionField` to return HTTP success as a boolean, reject stale callbacks after target changes or conflicting edits, preserve the character creation buffer on acknowledgement, and reject non-OK bulk extension writes instead of returning an empty summary.
+- Propagated failed character extension writes for character-bound presets, CardApp field updates, and Memory Graph overrides while preserving queued changes during concurrent preset additions, legacy binding migration, and override removal.
+- Removed the `storage`, `ui.apply`, and `ui.toolcall` namespaces from `ctx.iterationLibrary`, along with `zoomOverlay.closeExpandedDiff`, `zoomOverlay.beginLineDiffResize`, and `runner.abortUtils.isNoToolCallExtractionError`.
+- Removed the unused ProposalBus `hasPendingSiblingsFor` method and added `listEntries`, tool-call id collection, strict abort detection, and request routing options to the documented iteration library API.
+- Added `createScopedI18n`, which creates a translator that looks up the extension's own table first and falls back to the core translations.
+- Removed the legacy `prompt_json` alias from `context.generateTask` `functionCallMode`, standardizing plain-text tool calling on `prompt_xml`.
+
+### Fixes
+
+- Fixed character export warnings displaying garbled world book names containing non-ASCII characters.
+- Fixed character cards copied directly into the characters folder losing their first extension data change.
+- Fixed the untouched Default chat completion preset reading as having unsaved changes on a new install, which raised the unsaved-changes dialog on the first director-mode turn and on the first preset switch.
+- Fixed clicks in the merge chats and split chat dialogs being ignored while the dialog was still opening, such as **+ Add chat** not opening the chat picker.
+- Fixed a stopped streaming reply not being saved when a feature such as background **Auto-select** had failed to generate text while the reply streamed.
+- Fixed the World Info page counter showing in English on Traditional Chinese.
+- Fixed built-in plugin translations overriding the matching text in the core UI and in other plugins, such as the orchestrator injection position help showing the Memory Graph explanation.
+- Fixed parts of the run panel and the Iteration Studio showing in English on Chinese locales when only one plugin, such as Memory Graph, Search Tools or the Completion Preset Assistant, is enabled.
+- Fixed some Chinese UI text not using the Memory Graph and Multi-Agent Orchestrator names 记忆图 and 多智能体编排.
+- Fixed the announcement form title field showing as 名稱 on Traditional Chinese.
+- Fixed <span v-pre>`{{each}}`</span> rendering nothing for an inline JSON literal that contains <span v-pre>`}}`</span> or ends right before the closing braces, such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>.
+- Fixed scoped regex persistence silently swallowing write failures or removing the source entry before the target scope save succeeded.
+- Fixed missing content in long mobile extension settings drawers and skipped empty blur layers when Blur Strength is set to zero.
+
 ### Image generation
 
 - Added prompt preset creation and deletion to Image Generation AI iteration in Workbench.
@@ -11,10 +65,95 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed regenerating an inline illustration not displaying the activity capsule and Run panel progress.
 - Fixed clicking an inline illustration blocking the action dialog on a backend workflow request.
 - Fixed regenerating an inline illustration interrupting other active regenerations in the same message.
+- Fixed character image prompt sharing updates silently ignoring failed saves or overwriting another character's settings after switching characters.
 
-### Fixes
+### Multi-Agent Orchestrator
 
-- Fixed missing content in long mobile extension settings drawers and skipped empty blur layers when Blur Strength is set to zero.
+- Standardized missing-id tool failures in Iteration Studio to distinguish invalid arguments from missing targets with separate action details.
+- Removed the "Orchestrator running..." toast from spec, agenda, loop, and single-agent runs, leaving run status and the Stop button in the run panel.
+- Fixed orchestrator runs in spec, agenda, loop, and single-agent modes showing as failed in the run panel after you stopped them.
+- Fixed approving and rolling back world book entry changes in the orchestrator's Iteration Studio failing.
+- Fixed CardApps and CardApp Studio being unable to read or switch the card's orchestration preset.
+- Fixed external card preset switches leaving stale orchestration editor drafts that could overwrite the selected preset.
+- Fixed rolling back or regenerating an approved orchestration preset change in the orchestrator's Iteration Studio failing with a conflict.
+- Fixed the default custom tools returning to a spec orchestration preset after all of its custom tools were removed and the preset was saved again.
+- Fixed agent presets, stages, and nodes whose ids contain Chinese or other non-ASCII characters being renamed, the orchestrator's Iteration Studio creating a duplicate when editing such a preset, node references breaking after applying to global, and regenerating failing with a conflict.
+- Fixed nodes whose agent preset id contains Chinese or other non-ASCII characters running without their preset after applying to global in v2.8.0, relinking unambiguous matches on load.
+- Fixed the orchestrator's Iteration Studio editing only the first of several stages or nodes that share an id.
+- Fixed adding or removing stages, nodes, agent presets, agents, or tool overrides in the orchestration editor discarding other unsaved edits.
+- Fixed switching connection profile, changing chat, editing the character card, editing or deleting messages, or finishing an orchestration run discarding unsaved edits in the orchestration editor.
+- Fixed character-scoped runtime-limit and custom-tool auto-saves causing a later host refresh to discard other unsaved orchestration edits.
+- Fixed global preset changes misdirecting unsaved drafts, delayed saves discarding later edits, and preset skill operations using an unacknowledged source name, being skipped after unrelated selections or running before persistence succeeded.
+- Fixed failed character preset switches, override clearing and auto-saves being treated as successful writes.
+- Fixed overlapping character preset switches and auto-saves acknowledging changed sources or restoring unsuccessful pending changes.
+- Fixed the orchestrator's Iteration Studio setting an agent's API or prompt preset without access to the available connection profiles and chat completion presets.
+- Fixed a director mode reply being lost after a page reload, and the Stop button disappearing or failing to stop the reply, when the Prompt Manager recounted tokens or another feature such as background **Auto-select** generated text while the reply was being generated.
+- Fixed the director mode orchestration editor title showing the generic mode name instead of the current profile title on Chinese locales.
+- Removed duplicate hidden planner instructions from agenda mode so editable prompt settings serve as the single source.
+
+### Documentation
+
+- Updated the card editor docs to match the editor assistant's current entry points, settings, Workbench card editing, and rollback, and removed the Character Editor Assistant API page, which described an API Luker does not provide.
+- Rewrote the Iteration Studio Framework page as the reference for the iteration library modules extensions can use.
+- Updated the Skills docs to describe the export confirms and the install dialog, and removed descriptions of a skill manager multi-select mode, a preset packing action and a character editor bundled skills section, which Luker does not provide.
+
+### Search Tools
+
+- Reworked the pre-request search agent into a tool-call loop that ends when it stops calling tools, added a read tool returning all requested managed entries, and showed the run in the run panel.
+
+### Storage & Sync
+
+- Fixed settings storage failures returning HTTP success, immediate saves acknowledging older or unsaved payloads, and overlapping reads discarding later drafts after a refused world-book reference write.
+- Fixed cross-mode restore failures before destination writes incorrectly reporting partially modified or restored data.
+- Fixed cross-mode restore refusals concealing a failed snapshot rollback and its recovery location.
+- Fixed LAN Sync status messages, the panel description and other translated strings showing in English on Chinese locales.
+- Fixed restoring a corrupt backup on SQLite, MySQL, and PostgreSQL storage, or a backup interrupted by a database connection error on MySQL and PostgreSQL storage, erasing the existing data.
+- Fixed restoring a backup on MySQL and PostgreSQL storage running arbitrary SQL statements from the backup file, which let a crafted backup change other accounts' data.
+- Fixed restoring a SQLite, MySQL, or PostgreSQL backup into an account other than the one it was made from leaving that account empty.
+- Fixed restoring a corrupt backup from another storage mode reporting a failed conversion that might have left the existing data partially changed, instead of rejecting the backup.
+- Fixed restoring a backup on SQLite storage whose database file is not a Luker database erasing the existing data.
+- Fixed restoring a backup on MySQL storage failing when the database runs in the NO_BACKSLASH_ESCAPES SQL mode and the data contains quotes or backslashes.
+- Fixed SQLite backup restore accepting databases with missing required columns or unsupported triggers.
+- Fixed SQLite backup restore failing when temporary files and user data are on different volumes.
+- Fixed world book persistence adoption rejecting entries whose storage locator differs from the display name on case-sensitive filesystems.
+
+### Testing
+
+- Added test data generation and execution-scope declarations.
+- Added managed browser test resources with application startup, restart and complete failure traces.
+- Added managed storage leases for storage test suites, reusing external database namespaces across a run and dropping them afterward.
+
+### Iteration Studio
+
+- Fixed rolling back or regenerating an Iteration Studio step running its approved skill and custom tool changes a second time.
+- Fixed spec-mode Iteration Studio reading custom tools from the wrong profile field and not saving approved tools to the preset.
+- Fixed Iteration Studio changes awaiting approval, and later changes to the same content, failing to apply when approved after the page was reloaded or the server restarted.
+- Fixed rolling back restored Iteration Studio changes overwriting overlapping external edits, requiring a new proposal for restored array edits that lack drift expectations.
+- Fixed turn rollback actions counting changes whose proposal kind is no longer available, and invalid saved timestamps displaying an invalid time.
+- Fixed approving, rejecting or rolling back one turn's changes in Iteration Studio also acting on other turns when the model repeated a tool call id.
+- Fixed approving an Iteration Studio skill file rewrite or skill deletion overwriting changes made to the skill after the proposal.
+- Removed the upper limit on LLM tool-call retry counts, including TTS NPC attribution.
+
+### Character Editor Assistant
+
+- Fixed CardApp Studio file and session attributes breaking when their values contain quotes.
+- Fixed CardApp Studio AI file creation reporting false drift for missing files and mishandling quoted file paths.
+- Corrected the editor's default prompt and post-replace instructions to name the available world book editing tools.
+- Removed the **History** block from the settings panel.
+- Fixed a tool-call retry count of 0 being reset to 2.
+- Fixed settings fields losing the value being typed when another setting was saved.
+
+### Skills
+
+- Fixed export confirms showing untranslated scope labels and character avatar filenames instead of display names.
+- Standardized skill drift refusals to return HTTP 409 conflict responses.
+- Added optional bundling of a character's skills into exported character cards, prompting whether to include them when the character has skills.
+- Fixed chat completion preset export not offering to bundle the preset's skills when the Multi-Agent Orchestrator extension was disabled.
+- Fixed skills bundled in a card-bound preset not being offered for installation when an imported card was first opened.
+- Fixed exporting a chat completion preset with Skip, or with no confirm because the preset had no skills, still carrying the skills bundled into the preset when it was imported.
+- Fixed the first save in the Skill Manager file editor overwriting a file that was changed elsewhere after the editor opened it.
+- Fixed "+ New file" in the Skill Manager file editor emptying an existing file when its path was entered.
+- Fixed opening the Skill Manager replacing some Chinese translations elsewhere in the UI with its own wording.
 
 ## v2.9.0-rc.5 (2026-11-25)
 

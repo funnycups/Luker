@@ -21,6 +21,7 @@ Studio 提供程式碼編輯器、即時預覽與 AI 輔助。需要編寫自訂
 
 ## 相關頁面
 
-- [角色卡編輯助手](/zh-TW/features/card-editor/) —— 含 CardApp 角色卡的編輯入口
-- [CardApp Studio](/zh-TW/features/card-editor/studio) —— 開發和除錯 CardApp 的工作台
-- [狀態系統](/zh-TW/features/state-system) —— CardApp 的資料如何隨聊天儲存
+- [角色卡編輯助手](/zh-TW/features/card-editor/) — CardApp Studio 的入口
+- [CardApp Studio](/zh-TW/features/card-editor/studio) — 開發和除錯 CardApp 的完整環境
+- [角色卡開發者指南](/zh-TW/development/card-developers) — 完整的 CardApp API 參考和開發文件
+- [狀態系統](/zh-TW/features/state-system) — 角色狀態和聊天狀態

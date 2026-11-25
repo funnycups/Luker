@@ -134,11 +134,22 @@ unshallowGroupMembers(groupId: string): Promise<void>
 writeExtensionField(
     characterId: number | string,
     key: string,
-    value: any,
-): Promise<void>
+    value: any | ((current: any) => any | Promise<any>),
+    options?: {
+        isCurrent?: () => boolean
+        ifMatch?: object
+        onAcknowledged?: (response: Response) => void
+    },
+): Promise<boolean>
 ```
 
 寫入角色卡的 `data.extensions[key]` 並持久化。
+
+`isCurrent` 為直接值及回呼提供額外的來源校驗。在準備寫入、傳送 HTTP 及發布本地確認前執行校驗；傳回 `false` 時，不發布寫入結果並傳回 `false`，但無法撤銷伺服器已經提交的寫入。`ifMatch` 將原始寫入版本傳入伺服器條件更新。`onAcknowledged` 僅在成功回應仍然持有本地發布權時接收回應。
+
+非同步回呼準備替換值期間始終綁定原角色物件與來源。準備完成前，若角色物件已替換、來源值已修改或同一欄位開始直接寫入，則回呼寫入回傳 `false`，不會傳送請求。回呼僅執行一次，不會重試。直接傳入的值仍然完整替換欄位，不會與待處理回呼的結果合併。
+
+讀取、修改並寫回時，可以傳入回呼，而非預先計算的替換值。同一角色物件與擴充鍵的回呼寫入按照呼叫順序執行。回呼取得前序回呼寫入結束後目前值的副本，失敗的寫入不會成為後續修改的基礎。回傳完整替換值或刪除哨兵。回呼異常會拒絕 Promise，不會傳送請求。角色物件已替換時，排隊寫入回傳 `false`。不要在回呼內部遞迴呼叫同一欄位的回呼寫入。
 
 **替換語義。** 完整的 `value` 會成為磁碟上新的 `data.extensions[key]`。先前磁碟值中存在的兄弟子鍵**不會**被保留——需要做局部更新的呼叫方必須自行讀取舊值、展開並疊加變更。`data.extensions.*` 下的其他擴充 key（其他外掛的資料）則永遠不會被觸碰。
 
@@ -161,6 +172,8 @@ await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', ctx.constants.
 
 這是寫入外掛擴充欄位的**安全路徑**——它完全繞過 `context.characters` Proxy。
 
+HTTP 成功時回傳 `true`，HTTP 失敗或角色不存在時回傳 `false`。網路異常會拒絕 Promise。請求失敗時，不會將傳入值寫入目前角色資料或編輯器 JSON。請求成功後，若角色物件已替換或擴充值已發生後續修改，則保留目前內容。呼叫前自行修改目前值的呼叫方，需要自行恢復失敗的修改，並保留後續變更。
+
 ### writeExtensionFieldBulk
 
 ```ts
@@ -173,6 +186,8 @@ writeExtensionFieldBulk(
 ```
 
 跨多個角色的單次批次寫入，每張卡均套用與 `writeExtensionField` 相同的替換語義。`avatars: null` 或 `[]` 表示作用於所有角色。當 `value` 是 `unset` 哨兵且未提供 `filterPath` 時，自動把 `filterPath` 預設為 `data.extensions.<key>`，從而跳過沒有該欄位的卡片。
+
+HTTP 失敗或網路異常會拒絕 Promise。HTTP 成功時回傳包含 `updated`、`skipped` 與 `failed` 的角色處理結果。僅同步 `updated` 中角色的目前資料。
 
 ### createCharacterData
 

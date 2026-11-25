@@ -8,10 +8,7 @@ See [Build a CardApp from scratch](/features/card-editor/walkthrough/) for a ful
 
 ## How to Open
 
-Two paths take you into Studio:
-
-1. **Extensions Panel → Character Card Editor Assistant → "&lt;/&gt; CardApp Studio" button**
-2. When the current character contains a CardApp, **"Open Editor" also goes straight to Studio** (instead of the [popup](/features/card-editor/popup))
+Open Studio with the **CardApp Studio** button in **Extensions Panel → Character Editor Assistant**. It opens for the current character, whether or not the card already carries a CardApp.
 
 ## Interface Layout
 
@@ -49,7 +46,7 @@ The right panel combines three sections:
 
 - Top — **Code editor** with automatic syntax highlighting per file type (HTML / JS / CSS / JSON, etc.); save and reload buttons in the upper right
 - Middle — **File list** with all CardApp files and their sizes; click to switch the editing target
-- Bottom — **Modification history** — version list, each row showing a version identifier, message, time, and a rollback button
+- Bottom — **Commit history** — Git commit list, each row showing short commit hash, message, time, and a rollback button
 
 ## Supported Operations
 
@@ -101,8 +98,8 @@ Every AI change to a file requires approval. As in the popup, the interface show
 ## Session Management
 
 - Multiple development sessions; create / switch / delete
-- Each character keeps up to **20** sessions
-- Sessions are stored in character state and survive closing Studio
+- Each character retains up to **20** sessions
+- Session content is persisted in character state and survives closing Studio
 
 ## Version History {#version-history-git}
 

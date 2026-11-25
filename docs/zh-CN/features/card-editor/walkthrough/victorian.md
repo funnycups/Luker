@@ -31,8 +31,8 @@
 
 ![Studio 入口](/images/walkthrough/victorian/step-01-studio-entry.png)
 
-::: tip Studio 也适用于未启用 CardApp 的角色卡
-「角色卡编辑助手」对没有 CardApp 的角色卡使用[普通弹窗](/zh-CN/features/card-editor/popup)，包含 CardApp 的角色卡使用 Studio。Studio 按钮可以主动把任何卡引入 Studio，功能完整，涵盖记忆图节点类型、多 Agent 编排覆盖、正则脚本、世界书和角色卡内容；普通弹窗只支持修改角色卡内容和世界书条目。
+::: tip Studio 也能给没启用 CardApp 的卡用
+**「CardApp Studio」按钮可以为任何角色卡打开 Studio**，工具集是完整版，涵盖记忆图 schema、orchestrator override、正则脚本、世界书与卡字段，不像[普通弹窗](/zh-CN/features/card-editor/popup)只够改字段和世界书条目。
 :::
 
 ## 2. 描述题材，由 Studio 提出方案

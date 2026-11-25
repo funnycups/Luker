@@ -109,6 +109,8 @@ await mg.removeCharacterAdvancedOverride(ctx, avatar);
 | `persistCharacterAdvancedOverride(ctx, avatar, advanced)` | `Promise<boolean>` | 把 `advanced` 作為角色級進階設定 override 寫入；寫入前會先過 `normalizeAdvancedSettings`。 |
 | `removeCharacterAdvancedOverride(ctx, avatar)` | `Promise<boolean>` | 刪除進階 override，回退到全域進階設定。 |
 
+角色覆蓋寫入在目標不存在或 HTTP 失敗時回傳 `false`。網路異常會拒絕 Promise。
+
 這些存取器只動角色卡（`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`），從來不修改全域記憶圖設定。
 
 ## 查詢 API

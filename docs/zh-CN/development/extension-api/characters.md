@@ -134,11 +134,24 @@ unshallowGroupMembers(groupId: string): Promise<void>
 writeExtensionField(
     characterId: number | string,
     key: string,
-    value: any,
-): Promise<void>
+    value: any | ((current: any) => any | Promise<any>),
+    options?: {
+        isCurrent?: () => boolean
+        ifMatch?: object
+        onAcknowledged?: (response: Response) => void
+    },
+): Promise<boolean>
 ```
 
 写入角色卡的 `data.extensions[key]` 并持久化。
+
+`isCurrent` 为直接值及回调提供额外的来源校验。在准备写入、发送 HTTP 及发布本地确认前执行校验；返回 `false` 时，不发布写入结果并返回 `false`，但无法撤销服务端已经提交的写入。`ifMatch` 将原始写入版本传入服务端条件更新。`onAcknowledged` 仅在成功响应仍然持有本地发布权时接收响应。
+
+异步回调准备替换值期间始终绑定原角色对象与来源。准备完成前，若角色对象已替换、来源值已修改或同一字段开始直接写入，则回调写入返回 `false`，不会发送请求。回调仅执行一次，不会重试。直接传入的值仍然完整替换字段，不会与待处理回调的结果合并。
+
+读取、修改并写回时，可以传入回调，而非预先计算的替换值。同一角色对象与扩展键的回调写入按照调用顺序执行。回调获得前序回调写入结束后当前值的副本，失败的写入不会成为后续修改的基础。返回完整替换值或删除哨兵。回调异常会拒绝 Promise，不会发送请求。角色对象已替换时，排队写入返回 `false`。不要在回调内部递归调用同一字段的回调写入。
+
+HTTP 成功时返回 `true`，HTTP 失败或角色不存在时返回 `false`。网络异常会拒绝 Promise。请求失败时，不会将传入值写入当前角色数据或编辑器 JSON。请求成功后，若角色对象已替换或扩展值已发生后续修改，则保留当前内容。调用前自行修改当前值的调用方，需要自行恢复失败的修改，并保留后续变更。
 
 **替换语义。** 完整的 `value` 会成为磁盘上新的 `data.extensions[key]`。先前磁盘值中存在的兄弟子键**不会**被保留——需要做局部更新的调用方必须自行读取旧值、展开并叠加变更。`data.extensions.*` 下的其他扩展 key（其他插件的数据）则永远不会被触碰。
 
@@ -173,6 +186,8 @@ writeExtensionFieldBulk(
 ```
 
 跨多个角色的单次批量写入，每张卡均套用与 `writeExtensionField` 相同的替换语义。`avatars: null` 或 `[]` 表示作用于所有角色。当 `value` 是 `unset` 哨兵且未提供 `filterPath` 时，自动将 `filterPath` 默认设为 `data.extensions.<key>`，从而跳过没有该字段的卡片。
+
+HTTP 失败或网络异常会拒绝 Promise。HTTP 成功时返回包含 `updated`、`skipped` 与 `failed` 的角色处理结果。仅同步 `updated` 中角色的当前数据。
 
 ### createCharacterData
 

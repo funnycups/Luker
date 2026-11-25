@@ -82,6 +82,14 @@ Running requests in the inspector list show an **Abort** button. Aborting stops 
 
 Chat, text, image, embedding, and rerank requests can all be aborted.
 
+### Strict Protocol Parse Errors
+
+Responses are parsed according to the wire protocol declared by the request. When a response violates that protocol, contains malformed JSON, or ends prematurely, the inspector marks the request as failed, displays the expected protocol, stage, location, and error message, and keeps the original payload inside a collapsible **Raw Diagnostic Payload** section.
+
+### Plain-Text Function Call Inspection
+
+Requests using plain-text function calling show a **Plain-Text Function Call** badge along with the current parse status. Parsed calls display each function name and formatted argument JSON separately from tool execution results; failed parses show the **Parse Failed** error detail. Both succeeded and failed call regions include a **Show Call Raw Text** toggle that switches only the call region between parsed output and raw text while preserving preceding thinking and reply sections in their original order. Format-correction retries create linked entries showing the attempt number, **Retry Of**, **Retry Attempts**, **Original Error**, and **Final Status**.
+
 ## Record Retention
 
 Request records live in memory, capped at 200 per user. Each user keeps only their most recent records; once the cap is reached, the oldest record is dropped to make room.

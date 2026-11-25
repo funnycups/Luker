@@ -88,7 +88,7 @@ RP 預設預設假設「主模型獨立完成整個回覆」，將其放入 Agen
 
 > 幫我把這個預設改成 Agent 專用預設
 
-![編排器適配模式下的預設助手](/images/recipes/agent-onboarding/step-02-preset-assistant.png)
+![多智能體編排適配模式下的預設助手](/images/recipes/agent-onboarding/step-02-preset-assistant.png)
 
 它預設會**派生一份新預設**（原名加 `-orchestrator` 後綴）——原預設保持不動。它會自動執行以下操作：
 

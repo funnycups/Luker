@@ -311,7 +311,7 @@ Returns the lowercase locale identifier resolved at boot — typically `'en'`, `
 addLocaleData(localeId: string, data: Record<string, string>): void
 ```
 
-Merges plugin-supplied translations into the loaded locale data. Call after the i18n system has booted (e.g., on `APP_READY`). When `localeId` is the primary locale, entries always overwrite; when it's a fallback locale, entries only fill missing keys.
+Merges plugin-supplied translations into the loaded locale data. Call after the i18n system has booted (e.g., on `APP_READY`). When `localeId` is the primary locale, entries always overwrite; when it's a fallback locale, entries only fill missing keys. Merged entries are global: they replace the translation of the same key in the core UI and in every other plugin. To translate only your own plugin's text, use [`createScopedI18n`](#createscopedi18n).
 
 ```js
 const ctx = Luker.getContext();
@@ -326,6 +326,38 @@ ctx.eventSource.on(ctx.eventTypes.APP_READY, () => {
         'Settings saved': 'Settings saved',
     });
 });
+```
+
+### createScopedI18n
+
+```ts
+createScopedI18n(tables: Record<string, Record<string, string>>): {
+    t(strings: TemplateStringsArray, ...values: unknown[]): string;
+    translate(text: string, key?: string | null): string;
+    format(template: string, ...values: unknown[]): string;
+    has(key: string): boolean;
+}
+```
+
+Creates a translator bound to your plugin's own translation tables. `tables` maps locale IDs such as `'zh-cn'` and `'zh-tw'` to key → translation objects. A lookup reads the plugin tables first, merged in the core locale order: entries of the fallback locale first, entries of the active locale replacing them. When the merged entry for the key is missing or empty, the lookup falls back to `translate`. An empty entry in the active-locale table also replaces the fallback-locale entry, so the lookup goes to `translate`, not to the plugin's fallback-locale translation. The tables never enter the global locale data, so the core UI and other plugins keep their own text. Prefer it over `addLocaleData` for new plugins.
+
+- `t` — template tag with the same key format as `t`.
+- `translate(text, key?)` — same signature as `translate`.
+- `format(template, ...values)` — translates `template`, then fills `${0}`, `${1}`, … with `values`.
+- `has(key)` — whether the plugin tables provide a non-empty translation for `key` in the active locale order.
+
+The translator copies `tables` when it is created; later changes to those objects are ignored. Elements with a `data-i18n` attribute are translated by the core from the global locale data, so render plugin text with the translator instead.
+
+```js
+const ctx = Luker.getContext();
+const i18n = ctx.createScopedI18n({
+    'zh-cn': { 'My Plugin': '我的插件', 'Saved ${0} items': '已保存 ${0} 项' },
+    'zh-tw': { 'My Plugin': '我的外掛', 'Saved ${0} items': '已儲存 ${0} 項' },
+});
+
+const title = i18n.translate('My Plugin');
+const status = i18n.t`Saved ${count} items`;
+const sameStatus = i18n.format('Saved ${0} items', count);
 ```
 
 ## Settings & Storage
@@ -359,11 +391,31 @@ Debounced persistence trigger. Call after mutating `extensionSettings` or any se
 
 ### saveSettings
 
+`SETTINGS_UPDATED` receives `{ cardPresetSave }`. The record captures the selected card, slot, runtime-cache entry and intended preset body when the save is invoked. Treat it as read-only. Ordinary saves synchronize that captured body through conditional queued changes. Preset-manager extension writes reserve their captured field operation and synchronize acknowledged non-extension changes in the same card write after their prerequisites succeed. They refresh only the captured runtime-cache entry after card acknowledgement. Changing selection or mutating the caller's options while a save is pending does not retarget synchronization. `cardPresetOwner` is reserved for the preset manager, not an extension opt-out from card synchronization.
+
+Conditional changes compare captured old values and missing keys with the queued current source. Arrays are compared as complete values. Overlapping external changes refuse the card mutation, while disjoint changes remain intact. A nested extension write reserves only its requested path and also synchronizes unrelated acknowledged extension changes. A root extension replacement owns the extension root. Matching desired values are accepted as prior work only for acknowledged writes from the same captured ownership lineage. Lineage identities contain no preset bodies or historical payload chain.
+
+`getPresetManager(...).writePresetExtensionField(...)` rejects when its captured global name, collection or source is replaced during persistence. The error can follow an acknowledged HTTP commit. Earlier settings or preset-file commits remain stored, but the stale operation does not publish an obsolete cache entry or continue to its card stage. Queued field edits compose only with acknowledged predecessors from that field-write queue.
+
+Preset extension writes capture the settings JSON-wire representation for acknowledgement, card continuation and read-cache publication. Undefined object fields are omitted, sparse or undefined array entries become `null`, and non-finite numbers become `null`. Captured source ownership and unrelated fields remain part of the conditional write.
+
 ```ts
-context.saveSettings(loopCounter?: number, options?: object): Promise<void>
+context.saveSettings(loopCounter?: number, options?: object): Promise<SettingsSaveOutcome>
 ```
 
-Awaitable version of `saveSettingsDebounced`. Bypasses the debounce queue and resolves once the network round-trip completes. Use this when subsequent logic depends on settings already being persisted (rare — almost all call sites should prefer the debounced form).
+Captures the current settings at invocation and serializes persistence attempts. Inspect the returned outcome before reporting success:
+
+- `{ ok: true, status: 'saved', payload }` acknowledges that captured JSON payload. An unchanged payload needs no request only when a complete stored baseline is known. Initialization defaults and unsaved supplied settings are not storage acknowledgements. `directSave: true` always sends the full captured payload. The acknowledged snapshot is updated before `SETTINGS_UPDATED`, and the caller resolves after its listeners finish.
+- `{ ok: false, status: 'failed', error }` reports capture, transport or HTTP failure. Other queued attempts still execute and have their own outcomes.
+
+After a failed persistence attempt, the stored baseline and cached settings read are invalidated. Without a fresh complete server read, the next attempt sends a full replacement before acknowledging its payload, including when the desired settings equal the last acknowledged settings.
+
+A server `world_deleted` ownership refusal means conditional world cleanup overtook an auxiliary-reference write. `world_deletion_unknown` means the overlapping deletion's transaction outcome is unconfirmed. Either refusal terminates the captured attempt without retrying a full payload, retains its valid acknowledged snapshot and cached read, and emits no save-success event. Earlier full reads lose permission to replace the live draft even though the stored settings remain unchanged. Reload the world-book list before retrying the reference change.
+- `{ ok: false, status: 'deferred', reason }` schedules a debounced retry because settings are not ready or generation temporarily overrides response length. This does not acknowledge persistence. The retry captures the live state when it executes.
+
+Queued calls retain their own captured payloads and options. A result does not acknowledge later edits or later queued attempts. Mutating a returned payload or exported settings does not change the stored baseline. Event listeners may await another save because event delivery does not hold the persistence lock. Ignoring the result remains safe for fire-and-forget callers. `saveSettingsDebounced` remains scheduling-only and provides no persistence acknowledgement.
+
+A server settings read is not applied when persistence is pending at its start or completion, or settles during the read. The discarded `getSettings()` resolves to `undefined` without changing snapshot authority or live settings and without emitting `SETTINGS_LOADED`. Read again after pending saves settle to load a fresh source.
 
 ### saveMetadataDebounced
 

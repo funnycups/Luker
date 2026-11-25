@@ -61,7 +61,6 @@ Inherited from SillyTavern:
 - `ctx.chat`, `ctx.characters`, `ctx.characterId`, `ctx.groups`, `ctx.groupId`, `ctx.name1`, `ctx.name2`
 - `ctx.eventSource`, `ctx.eventTypes` — runtime event bus
 - `ctx.getExtensionApi(name)` — published APIs of other extensions
-- `ctx.registerOrchestrationTool`, `ctx.bridgeSillyTavernTool`, … — same surface as this doc, mirrored on the context
 
 Mounted by the orchestration runtime (only present inside an active orchestration):
 
@@ -103,37 +102,39 @@ If your extension already uses SillyTavern's `registerFunctionTool` API, the use
 
 Wrapping with `registerOrchestrationTool` instead gives you control over mode and simulate semantics; otherwise the bridge is the zero-effort path. Picker labels and mode pickers are exposed through `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` for callers that want to drive the bridge programmatically.
 
+## collectResolvedSkillsForOrchPreset(payload)
+
+Accepts a portable preset payload with `mode`, `name` and `profile`. Returns `Promise<Map<string, {scope: object, names: string[]}>>`: the skills visible to the preset's agents, grouped by source scope, with sorted unique names. Character-scoped skills are excluded. Invalid payloads return an empty map.
+
 ## Per-character override accessors
 
-Alongside the tool-registration surface, the `'orchestrator'` extension api publishes accessors plus a write helper that other plugins use to read or pin a per-character orchestration override. CardApp's `ctx.getOrchestratorOverride` / `setOrchestratorOverride` / `clearOrchestratorOverride` and the CardApp Studio tools `character_get_orchestrator` / `character_update_orchestrator` / `character_clear_orchestrator` go through this surface.
+Alongside the tool-registration surface, the `'orchestrator'` extension api publishes accessors and write helpers that other plugins use to read or switch a character's orchestration presets. CardApp's `ctx.getOrchestratorOverride` / `setOrchestratorOverride` / `clearOrchestratorOverride` and the CardApp Studio tools `character_get_orchestrator` / `character_update_orchestrator` / `character_clear_orchestrator` go through this surface.
 
 ```js
 const orch = ctx.getExtensionApi('orchestrator');
 if (!orch) { /* orchestrator not installed */ return; }
 
-const override = orch.getCharacterOverrideByAvatar(ctx, avatar);
-const charIndex = orch.getCharacterIndexByAvatar(ctx, avatar);
-const prev = orch.getCharacterExtensionDataByAvatar(ctx, avatar);
-
-const next = orch.normalizeCharacterOverrideMode({ ...override, mode: 'agenda' });
-await orch.persistOrchestratorCharacterExtension(ctx, charIndex, { ...prev, override: next });
-
-// Realign extension_settings.orchestrator.executionMode so the dispatcher
-// picks the override branch on the next generation. Without this an
-// override that switches modes is silently ignored.
-orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrator, avatar);
+const mode = orch.getCharacterSavedExecutionModeByAvatar(ctx, avatar);
+if (mode) {
+    const result = await orch.setCharacterActivePresetForSavedMode(
+        ctx, ctx.extensionSettings?.orchestrator, avatar, 'preset_id_from_the_card_library',
+    );
+    // result: { ok: true, mode } | { ok: false, mode, reason }
+}
 ```
 
 | Method | Purpose |
 | --- | --- |
-| `getCharacterOverrideByAvatar(ctx, avatar)` | Read the raw `character.data.extensions.orchestrator.override` payload for the character with that avatar; `null` when absent. |
+| `getCharacterSavedExecutionModeByAvatar(ctx, avatar)` | Execution mode the card pins: `override.mode` when the card has a preset library for that mode, otherwise the first mode with a library; `''` when the card has none. |
+| `getRuntimePresetScope(ctx, avatar, mode)` | `'character'` when the card's active slot for `mode` points at a preset in its library, otherwise `'global'`. |
+| `getCharacterActivePresetId(ctx, avatar, mode)` | The card's active preset id for `mode`; `''` when the slot is empty or points at a missing preset. |
+| `setCharacterActivePresetForSavedMode(ctx, settings, avatar, presetId)` | Switch the card's active preset for its saved mode, save the card and realign `settings.executionMode`. `presetId` is an id from the card library of that mode, or `''` to run the global active preset while keeping the card library. Resolves `{ ok: true, mode }` or `{ ok: false, mode, reason }`; `reason` is one of `character_not_found`, `no_saved_mode`, `preset_not_found`, `set_failed`, `persist_failed`. |
 | `getCharacterIndexByAvatar(ctx, avatar)` | Resolve the character index needed by `persistOrchestratorCharacterExtension`. Returns `-1` when not found. |
-| `getCharacterExtensionDataByAvatar(ctx, avatar)` | Read the full `character.data.extensions.orchestrator` blob (override + siblings). Spread this when writing so unrelated subkeys survive. |
-| `normalizeCharacterOverrideMode(override)` | Pin `override.mode` from the present sub-payload (`spec` / `agenda` / `loop` / `director`) and the freshest `updatedAt`. Mutates and returns the override. |
+| `getCharacterExtensionDataByAvatar(ctx, avatar)` | Read the full `character.data.extensions.orchestrator` blob. Spread this when writing so unrelated subkeys survive. |
 | `applyCharacterExecutionModeForAvatar(ctx, settings, avatar)` | Re-sync `settings.executionMode` to the per-character saved mode. Returns `true` if it changed. |
-| `persistOrchestratorCharacterExtension(ctx, characterIndex, modulePayload)` | Persist the full `extensions.orchestrator` blob via `ctx.writeExtensionField`. Pass `null` as `modulePayload` to delete the blob. Returns `true` on success. |
+| `persistOrchestratorCharacterExtension(ctx, characterIndex, modulePayload)` | Persist the full `extensions.orchestrator` blob via `ctx.writeExtensionField`. Pass `null` as `modulePayload` to delete the blob. Returns `true` on HTTP success and `false` for a missing character, HTTP failure or network exception. |
 
-These accessors only touch the character card; they never mutate the global orchestration settings.
+Apart from `settings.executionMode`, which `applyCharacterExecutionModeForAvatar` and `setCharacterActivePresetForSavedMode` realign, these accessors only touch the character card.
 
 ## Shared skill tool catalog
 
@@ -147,7 +148,7 @@ These accessors only touch the character card; they never mutate the global orch
 
 Workbench's `preset` target (`public/scripts/workbench/targets/preset-tools.js`) consumes this surface with `{ getWorkingProfile: () => null }` to expose the profile-independent handlers, while `orchestrator/lens/iterate-target.js` supplies `getWorkingProfile: () => live`.
 
-
+## Example — memory-graph
 
 The memory-graph extension ships its read and write tools through this API. The pattern is:
 

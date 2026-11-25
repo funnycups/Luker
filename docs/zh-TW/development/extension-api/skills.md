@@ -100,13 +100,13 @@ readFile(opts: {
 }): Promise<{
   content: string,
   totalLines: number,
-  truncated: boolean,
+  sha256: string,
 }>
 ```
 
 - `path` 預設 `SKILL.md`。傳 `references/checklist.md` 等子路徑以讀其它檔案。
 - `offset` 和 `limit` 按行操作（1-based）。
-- 伺服器強制 50 KB 響應上限。被截斷時 `truncated: true` —— 再呼叫一次帶 `offset` 繼續。
+- `sha256` 是整個檔案的雜湊，`offset` / `limit` 只回傳部分內容時同樣如此。將其作為 `expectedSha256` 傳給 `writeFile`，檔案在讀取後發生變更時寫入失敗。
 
 ### `listFiles(opts)`
 
@@ -166,10 +166,15 @@ writeFile(opts: {
   path: string,
   content: string,
   expectedSha256?: string,  // 樂觀並發控制
+  expectAbsent?: boolean,   // 僅新建
 }): Promise<{ sha256: string }>
 ```
 
-如果傳了 `expectedSha256` 且與當前檔案雜湊不匹配，寫入以 `409` 衝突失敗 —— 適合編輯器式的並發編輯偵測。
+如果傳了 `expectedSha256` 且與當前檔案雜湊不匹配，寫入以 `400` 錯誤失敗 —— 適合編輯器式的並發編輯偵測。
+
+傳入 `expectAbsent: true` 時，檔案已存在則寫入以 `409` 錯誤失敗。
+
+上述拒絕寫入的錯誤將 `err.body.code` 設為 `sha256_mismatch` 或 `file_exists`。
 
 返回的 `sha256` 是新檔案的內容雜湊。
 
@@ -250,13 +255,17 @@ install(opts: {
 - 內容相同（雜湊匹配）→ 靜默 no-op。
 - 內容不同 → 拋錯，除非 `conflictStrategy: 'replace'`。`'skip'` 在衝突時 no-op。
 
-### `delete(scope, name)`
+### `delete(scope, name, opts?)`
 
 ```ts
-delete(scope: SkillScope, name: string): Promise<void>
+delete(scope: SkillScope, name: string, opts?: {
+  expectedInstalledHash?: string,
+}): Promise<void>
 ```
 
-原子移除 Skill 目錄。參照該 Skill 的編排設定仍保留 `skills.visible` 裡的舊名，派遣時該參照不生效。
+如果傳了 `expectedInstalledHash` 且與磁碟上 Skill 檔案的雜湊不匹配，刪除以 `400` 錯誤失敗，`err.body.code` 為 `installed_hash_mismatch`，Skill 保持不變。
+
+原子移除 Skill 目錄。參照該 Skill 的編排器 profile 仍保留 `skills.visible` 裡的舊名 —— 派遣時參照軟失敗。
 
 ### `rename(scope, oldName, newName)`
 

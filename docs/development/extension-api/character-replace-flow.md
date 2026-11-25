@@ -17,7 +17,7 @@ Replace / Update (file or URL)
   → CHARACTER_REPLACED emitted
 ```
 
-These steps run inside `emitCharacterReplacedEvent` before any listener is notified, so writes land before plugins react to the event. The world book step is awaited: an action that opens a long-lived UI (such as the Character Editor Assistant's merge studio) delays the event until that UI closes, and listeners then observe a settled state — either the new book bound, or the previous book restored by rollback.
+These steps run inside `emitCharacterReplacedEvent` before `CHARACTER_REPLACED` is emitted. An action that opens a long-lived UI delays the event until that UI closes. The event describes the completed card replacement, not successful world book binding. If a book was imported but binding failed, the imported file remains saved and the UI reports the partial outcome.
 
 ## Part 1 — Card binding preservation
 
@@ -127,5 +127,5 @@ Rules:
 | `listCardBindingSlots()` | Registered slot descriptors in registration order. |
 | `registerPostReplaceAction(descriptor)` | Register an action; see Part 2. |
 | `listPostReplaceActions()` | Registered action descriptors in registration order. |
-| `importEmbeddedBookForCharacter(characterId)` | Save the character's embedded book as a standalone file and bind it as the primary book. Throws when the character or the import entry point is unavailable. |
-| `rebindPreviousPrimaryBook(characterId, bookName)` | Bind an existing book as the character's primary world book. |
+| `importEmbeddedBookForCharacter(characterId, character?)` | Capture the target at invocation and return the importer's `{ imported, bound, bookName }` result. An optional original live object keeps a delayed action tied to its target. Throws for a missing character argument or unavailable importer. An expired captured object returns an unsuccessful import result. |
+| `rebindPreviousPrimaryBook(characterId, bookName, character?)` | Bind the captured target without changing the selected character. Accepts an optional original live object and rejects failed or superseded binding. |

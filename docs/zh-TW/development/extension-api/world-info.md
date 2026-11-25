@@ -79,6 +79,7 @@ saveWorldInfo(
     immediately?: boolean,
     options?: {
         refreshEditor?: boolean;
+        onSaved?: (response: Response) => void;
     },
 ): Promise<void>
 ```
@@ -93,6 +94,23 @@ saveWorldInfo(
 | `options.refreshEditor` | 預設 `false`。為 `true` 時會在寫入完成後刷新 `name` 對應的世界書抽屜——新書會被加入編輯器下拉，已經打開該書的使用者會看到條目列表被重新渲染。任何「使用者可能正打開抽屜看著這本書」的寫入均該帶上（程式化編輯、工具呼叫、背景按需初始化路徑等）。抽屜內自身的 handler 不需要——它們已經就地更新了 DOM。 |
 
 `name` 或 `data` 為 falsy 時是 no-op。
+
+`onSaved` 要求實際執行完整儲存，並在世界書更新事件前接收成功回應。`X-World-Version` 標識對應寫入，內容相同的儲存也會更新版本。合併佇列中的替換請求不繼承被替換請求的回呼。
+
+### deleteWorldBook
+
+```ts
+deleteWorldBook(name: string, options?: {
+    expectedVersion?: string
+    onlyIfUnbound?: boolean
+}): Promise<boolean>
+```
+
+省略選項時按照名稱刪除，HTTP 失敗傳回 `false`。`expectedVersion` 要求資源仍然屬於原始儲存版本。設定 `onlyIfUnbound: true` 後，已有持久化角色主綁定或輔助引用使用世界書時拒絕刪除。條件刪除按照檢查時確定的資源執行，檔案系統儲存保留實際檔案名稱及副檔名大小寫。目標消失或最初缺失時不會改為刪除其他匹配世界書，包括仍然存在或後續建立的主檔名相同的其他檔案。傳入任意條件選項後，HTTP 失敗會拒絕 Promise，並附帶 `world_changed`、`world_in_use`、`world_missing` 或 `world_delete_failed` 錯誤代碼。`resourceState: 'present' | 'missing' | 'unknown'` 表示檢查目標的已知資源狀態。拒絕刪除或傳輸失敗時保留有效資料快取。回應遺失時無法確認刪除結果，即使伺服器已經提交刪除；請重新載入清單後重試清理。
+
+按照使用者協調條件刪除與現有角色、設定寫入，涵蓋來源讀取至儲存提交的過程。已確認的引用阻止刪除。刪除已經提交或無法確認交易結果時，在修改儲存前拒絕重疊期間引用該世界書的寫入。無法確認交易結果時提示錯誤，不自動重試交易。已確認回退的刪除釋放等待寫入，並保留暫時性錯誤重試。
+
+引用檢查使用刪除前擷取的儲存名稱解析結果，優先比對精確名稱。不同精確名稱的世界書保持獨立，指向被刪除世界書的別名不會在重疊期間指向其他世界書。重疊期間之外的一般未解析名稱與無條件刪除保留現有行為。
 
 ### updateWorldInfoList
 
@@ -113,18 +131,31 @@ createWorldBook(name: string, options?: { interactive?: boolean }): Promise<bool
 ### importEmbeddedWorldInfo
 
 ```ts
-importEmbeddedWorldInfo(skipPopup?: boolean): Promise<void>
+importEmbeddedWorldInfo(skipPopup?: boolean, character?: object, options?: { captureOwnership?: boolean }): Promise<{
+    imported: boolean
+    bound: boolean
+    bookName: string
+    ownership?: object
+}>
 ```
 
-把 V2/V3 PNG 卡內嵌的 `data.character_book` 匯入為獨立的世界書檔案並繫結為該角色的 primary world。要匯入哪張卡透過 `#import_character_info` 元素的 `chid` data 屬性讀取（角色編輯器在開啟含內嵌書的卡時會設定這個值）。`skipPopup: true` 用來跳過確認彈窗直接匯入，適合已經取得過明確確認的工具呼叫。匯入完成後，`characters[chid].data.extensions.world` 指向新檔案，內嵌書不再被提示重新匯入。
+將角色卡的 V2/V3 `data.character_book` 匯入為獨立世界書並綁定為主世界書。傳入原始執行時角色物件可指定目標；省略時，在等待確認前捕獲 `#import_character_info` 指向的角色。設定 `skipPopup: true` 可跳過確認。
+
+`imported` 表示世界書儲存成功，`bound` 表示仍由本次操作持有的角色與來源完成了綁定確認。取消匯入或目標不可用時傳回 `imported: false`。世界書儲存後，綁定失敗或被後續操作取代時傳回 `imported: true, bound: false`，介面提示此部分結果。回應遺失時，本地不確認綁定結果，也不保證伺服器未完成寫入。世界書儲存失敗會拒絕 Promise。
+
+綁定 HTTP 等待期間，替換內嵌物件或修改其巢狀內容會終止結果發布，不會修改執行時資料、JSON、編輯器或表單。伺服器已經提交的綁定屬於獨立結果。設定 `captureOwnership: true` 後，已確認綁定的結果附帶原始世界書、角色寫入及發起操作的 `ownership` 憑據。條件綁定更新需要原樣傳入憑據，不應根據後續讀取建構憑據或序列化憑據。
 
 ### charUpdatePrimaryWorld
 
 ```ts
-charUpdatePrimaryWorld(name: string): Promise<void>
+charUpdatePrimaryWorld(name: string, character?: object, options?: { ownership?: object }): Promise<boolean>
 ```
 
-透過名字繫結角色的主世界書（傳 `''` 解綁）。走角色編輯器的儲存路徑，因此需要當前有活躍的角色上下文。
+透過名稱綁定主世界書，傳入 `''` 可解除綁定。傳入原始執行時角色物件可避免依賴目前選擇；省略時，在呼叫時捕獲目前角色。透過現有的 `world` 擴充欄位佇列執行寫入。請求失敗、目標被替換或操作被後續意圖取代時傳回 `false`；傳輸失敗會拒絕 Promise。隱藏表單僅鏡像原角色仍被選中時已確認的寫入，並觸發 change 事件。彈窗保留後續選擇，直到對應寫入完成；失敗請求不發布其目標值。
+
+建立角色時，省略目標會將值暫存在 `create_save` 並傳回 `true`。此結果不表示已經儲存，提交建立操作後才儲存角色卡。
+
+清理綁定時，`ownership` 校驗原始角色物件、操作、內嵌來源、持久化角色版本及世界書儲存版本。已有持久化角色主綁定或輔助引用使用世界書時拒絕恢復。後續同名綁定操作終止原操作的所有權，即使後續寫入失敗。恢復綁定與刪除世界書分別執行；分別提示已確認的綁定與世界書存在、缺失或刪除結果未知的狀態，不覆蓋後續修改。
 
 ### getCharacterEmbeddedWorld
 

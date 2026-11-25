@@ -79,6 +79,7 @@ saveWorldInfo(
     immediately?: boolean,
     options?: {
         refreshEditor?: boolean;
+        onSaved?: (response: Response) => void;
     },
 ): Promise<void>
 ```
@@ -93,6 +94,23 @@ Persists a World Info file to disk. Cache is updated synchronously; the network 
 | `options.refreshEditor` | Defaults to `false`. When `true`, refreshes the world-info drawer for `name` after the save completes — adds the book to the editor select if new, and re-renders the entry list if the user has that book open. Use this whenever your write may be visible in a drawer the user has open (programmatic edits, tool calls, background-ensure paths). Drawer-internal handlers do not need this — they update their own DOM in place. |
 
 A no-op if `name` or `data` is falsy.
+
+`onSaved` requests an actual full save and observes its successful response before book-update events. `X-World-Version` identifies that write, including same-content saves. A coalesced replacement does not inherit the replaced request's callback.
+
+### deleteWorldBook
+
+```ts
+deleteWorldBook(name: string, options?: {
+    expectedVersion?: string
+    onlyIfUnbound?: boolean
+}): Promise<boolean>
+```
+
+Without options, deletes by name and returns `false` for a non-OK response. `expectedVersion` conditions deletion on the original save version. `onlyIfUnbound: true` refuses deletion while a persisted primary or auxiliary character reference uses the book. Conditional deletion retains the identity selected for inspection, including the physical filename and extension spelling in filesystem storage. Disappearance or initial absence never redirects it to another matching book, even when a same-stem file remains or appears later. Either option enables coded HTTP rejection: `world_changed`, `world_in_use`, `world_missing` or `world_delete_failed`. Errors include the observed `resourceState: 'present' | 'missing' | 'unknown'` of that inspected target. Refusal and transport failure retain valid data cache. A lost response has an unknown outcome even when the server committed deletion; reload the list before retrying cleanup.
+
+Conditional deletion and existing character/settings writers share a per-user in-process ordering boundary from source acquisition through storage commit. An earlier acknowledged reference refuses deletion. An overlapping reference write is refused before mutation when deletion commits or its transaction outcome cannot be confirmed. Unconfirmed completion is reported without automatically retrying the transaction. Confirmed rollback releases waiting writes and retains transient-error retries.
+
+Reference checks use the storage resolver's exact-first identity captured before deletion. Distinct exact books remain independent; an alias to the deleted book cannot retarget to another book during the overlap. Ordinary unresolved-name payloads outside that overlap and unconditional deletion retain their existing behavior.
 
 ### updateWorldInfoList
 
@@ -113,18 +131,31 @@ Create a new empty world book file. Returns `true` on success, `false` on failur
 ### importEmbeddedWorldInfo
 
 ```ts
-importEmbeddedWorldInfo(skipPopup?: boolean): Promise<void>
+importEmbeddedWorldInfo(skipPopup?: boolean, character?: object, options?: { captureOwnership?: boolean }): Promise<{
+    imported: boolean
+    bound: boolean
+    bookName: string
+    ownership?: object
+}>
 ```
 
-Import the V2/V3 `data.character_book` carried inside a third-party PNG card as a real world book file and bind it as the character's primary world. The character to import for is read from the `#import_character_info` element's `chid` data attribute (the character editor sets this when a card with an embedded book is opened). Pass `skipPopup: true` to bypass the confirmation popup and import unconditionally — used by tooling that's already obtained explicit confirmation. After import, `characters[chid].data.extensions.world` points at the new file and the embedded book is no longer offered for re-import.
+Import the card's V2/V3 `data.character_book` as a standalone world book and bind it as the primary world. Pass the original live character object to target it explicitly. Otherwise the importer captures the character identified by `#import_character_info` before awaiting confirmation. `skipPopup: true` bypasses that confirmation.
+
+`imported` acknowledges the book save. `bound` acknowledges binding on the still-current character and source. A cancelled import or unavailable target returns `imported: false`. A saved book remains saved when binding fails or is superseded: the result has `imported: true, bound: false`, and the UI reports this partial outcome. A lost binding response can leave the server changed without local acknowledgement. Book-save failures reject.
+
+Replacing the embedded object or editing its nested content during binding HTTP expires publication before live, JSON, editor and form state change. A server binding commit remains an independent effect. With `captureOwnership: true`, a bound result includes an opaque `ownership` receipt from the original book and character writes and their initiating operation. Pass it unchanged to a conditional binding update; do not construct it from later reads or serialize it.
 
 ### charUpdatePrimaryWorld
 
 ```ts
-charUpdatePrimaryWorld(name: string): Promise<void>
+charUpdatePrimaryWorld(name: string, character?: object, options?: { ownership?: object }): Promise<boolean>
 ```
 
-Bind the character's primary world book by name (or unbind by passing `''`). Persists via the character editor save path, so it requires an active character context.
+Bind the primary world book by name, or unbind with `''`. Pass the original live character object to avoid depending on the current selection. Without it, the function captures the selected character at invocation. Writes use the existing serialized `world` extension writer. A failed request, replaced target or superseded operation returns `false`; transport failures reject. The hidden form mirrors acknowledged writes for the still-selected original character and emits their change. A newer popup selection stays pending until its own write settles. Failed requests never publish their requested value.
+
+In character creation mode, an omitted target buffers the value in `create_save` and returns `true`. This is not a persistence acknowledgement: the card's Create action performs the save.
+
+`ownership` conditions a cleanup binding change on the original live target, operation, embedded source, persisted character version and saved book version. Persisted primary or auxiliary adoption refuses restoration. A later same-name operation expires ownership even if its write fails. Restoration and deletion are separate effects. Report the acknowledged binding alongside the book's confirmed presence, absence or unknown deletion outcome; never compensate over later state.
 
 ### getCharacterEmbeddedWorld
 

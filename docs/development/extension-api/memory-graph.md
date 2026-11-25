@@ -109,6 +109,8 @@ await mg.removeCharacterAdvancedOverride(ctx, avatar);
 | `persistCharacterAdvancedOverride(ctx, avatar, advanced)` | `Promise<boolean>` | Write `advanced` as the per-character advanced-settings override. Sanitized through `normalizeAdvancedSettings`. |
 | `removeCharacterAdvancedOverride(ctx, avatar)` | `Promise<boolean>` | Delete the advanced override and fall back to the global advanced settings. |
 
+Character override writes return `false` for missing targets or HTTP failures. Network failures reject the promise.
+
 These accessors only touch the character card (`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`); they never mutate the global memory-graph settings.
 
 ## Lookup API

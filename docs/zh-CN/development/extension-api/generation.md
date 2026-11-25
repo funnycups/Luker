@@ -44,9 +44,9 @@ context.generateTask({
     apiPresetName?: string = '',                  // 连接配置名(例如 'claude')
     llmPresetName?: string = '',                  // chat completion preset 名(例如 'low-temp')
     tools?: Array | null = null,                  // OpenAI 风格的工具定义
-    toolChoice?: 'auto' | 'none' | object = 'auto',
+    toolChoice?: 'auto' | 'required' | 'none' | object = 'auto',
     jsonSchema?: object | null = null,            // 结构化输出模式(与 tools 互斥)
-    functionCallMode?: 'auto' | 'native' | 'prompt_xml' | 'prompt_json' = 'auto',
+    functionCallMode?: 'auto' | 'native' | 'prompt_xml' = 'auto',
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
     substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};编辑器类流程需关闭
@@ -144,10 +144,9 @@ functionCallOptions: { requiredFunctionName: 'my_fn' },
 
 | 模式 | 何时选用 |
 |------|----------|
-| `'auto'`（默认） | 由运行时根据当前连接配置自动决定。 |
+| `'auto'`（默认） | 遵循解析后连接配置的纯文本函数调用设置（提供 `apiPresetName` 时按对应配置，否则遵循当前连接；开启时使用 `'prompt_xml'`，否则使用 `'native'`）。 |
 | `'native'` | 强制使用原生工具调用（例如 OpenAI tools / Anthropic tool_use）。 |
-| `'prompt_xml'` | 把工具定义嵌入 system prompt 作为 XML —— 适合不支持原生工具调用的模型。 |
-| `'prompt_json'` | 把工具定义作为 JSON 嵌入 prompt。 |
+| `'prompt_xml'` | 强制使用纯文本 XML 工具调用，将工具定义嵌入 system prompt —— 适合不支持原生工具调用的模型。 |
 
 ### 结构化输出 （JSON Schema）
 
@@ -203,6 +202,7 @@ try {
 | `rate_limit` | 触发限流（429）。 |
 | `invalid_input` | 选项不合法（例如同时传了 `tools` 和 `jsonSchema`，或 `worldInfoSource:'custom'` 但未传 `customWorldInfoMessages`）。 |
 | `unsupported_api` | 解析出的请求 API 在运行时不支持。 |
+| `capability_conflict` | 不可重试的服务商或模型能力冲突（例如所解析模型不支持当前参数或功能组合，或发送方返回了 `nonRetryable` 错误）；同时设置 `error.nonRetryable = true`，并在存在时保留 `error.status`。 |
 | `stream_unavailable` | 解析后的请求 API 不支持通过 `generateTaskStream` 流式输出（kobold / koboldhorde / novel / textgenerationwebui）。 |
 | `tool_call_parse` | 模型返回的 tool call `arguments` 无法 `JSON.parse`。 |
 | `json_schema_violation` | `jsonSchema` 模式校验失败。 |
@@ -255,7 +255,7 @@ return {
 
 ### 流式响应
 
-`generateTask` 不管走哪种传输均返回终态结果。如果交互式场景需要在模型生成过程中实时渲染 token，请使用 `context.generateTaskStream`——它返回一对 split-stream：一个用于消费 delta 增量的 `AsyncIterable`，以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。它始终走 OpenAI 族的流式 sender，不再读预设的 `stream_openai` 字段，因为"消费 chunk"本身就是调用方明确表达的诉求。
+`generateTask` 不管走哪种传输均返回终态结果。如果交互式场景需要在模型生成过程中实时渲染 token，请使用 `context.generateTaskStream`——它返回一对 split-stream：一个用于消费 delta 增量的 `AsyncIterable`，以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。它始终走 OpenAI 族的流式 sender，不读取预设的 `stream_openai` 字段，因为「消费 chunk」本身就是调用方明确表达的诉求。
 
 ```js
 const { stream, result } = context.generateTaskStream({
@@ -467,7 +467,7 @@ context.unregisterFunctionTool('my_plugin_tool');
 
 ## 底层参考
 
-下面这些是 `generateTask` 背后的底层原语。除非你的场景 `generateTask` 真的覆盖不了 —— 例如需要流式响应、需要在重试间改写请求、要接非标准管道 —— 否则不建议直接调用。
+下面这些是 `generateTask` 背后的底层原语。除非你的场景 `generateTask` 真的覆盖不了 —— 例如需要在重试间改写请求或接入非标准管道 —— 否则不建议直接调用。
 
 ### 连接配置 （Connection Profile） 解析
 

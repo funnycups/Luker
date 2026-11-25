@@ -90,7 +90,73 @@ Loop 只有一個 Agent 和一個持續成長的會話。工具呼叫與結果�
 - 達到最大輪次。
 - Agent 連續多輪沒有呼叫任何工具，表示它已經不再查詢，只是重複輸出文字。
 
-觸發保護時，Loop 會把 Agent 最後一段自然文字作為編排結果，確保主模型收到內容。
+若你的 agent 需要內建之外的能力，參見[自訂工具](./custom-tools.md)。
+
+## 失控保護（按觸發優先級）
+
+1. **abort signal**：使用者點「終止」 / 上層取消 → 立即中止；trace 記 `cancelled`，**不**注入半成品 capsule。
+2. **wall_clock_budget_ms**：到點立即 break。
+3. **max_rounds**：輪次上限（預設 40）。
+4. **Agent 不呼叫工具**：連續 3 輪沒呼叫任何工具 → 提前 break（防止 agent「光說話不動手」耗光預算）。任意一輪呼叫到工具，streak 歸零。
+
+觸發任一兜底時，loop 會把最後一次 agent 的自然文字作為 capsule 兜底，保證至少有產出送給主模型。
+
+## 看一次 loop 跑
+
+[執行面板](/zh-TW/features/orchestrator/#step-4) 會即時顯示 loop 運行過程。Agent 的推理是一張卡片，展開就能看 agent 當時怎麼想、調了哪些工具。Loop 模式可以重點關注：
+
+- **思考 + 工具呼叫** —— 該輪 agent 的思考，跟著是它派發的工具。工具參數就地展開，不用看 raw JSON。
+- **工具結果反哺下一輪** —— 每個工具的回傳也在這張卡片裡。對照 system prompt 找 agent 跑岔的位置。
+- **`finalize`** —— agent 呼叫 `finalize` 工具時 loop 結束。它的 `capsule_text` 參數就是注入主模型的那段文字。
+- **兜底** —— 任一兜底觸發（`max_rounds` / 牆鐘逾時 / 連續不呼叫工具）時，面板會直接顯示具體原因，loop 會用 agent 上一次的自然文字作為 capsule 兜底。
+
+面板頂部的**匯出**按鈕把整次 run 下載為 JSON（便於回報問題）。
+
+::: warning persistTrace 是實驗性開關
+設定裡的 `persistTrace` 可以讓所有 run 自動落盤到擴展資料目錄。**目前是實驗性的**——沒有跨平台穩定的寫盤 helper，開關預設關。日常用執行面板的按需匯出就夠；只有需要持續追蹤某個 chat 的 loop 行為時才打開。
+:::
+
+## AI 迭代工作台用法
+
+不會寫 system prompt？打開 loop popup → 點 **打開 AI 迭代工作台**，用自然語言描述你想要的 agent，AI 會讀你當前的 profile，用工具呼叫產出 patch（修改 `system_prompt` / 工具開關 / `max_rounds` / 預設路由）。詳見 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio#loop-模式的迭代提示)。
+
+## 角色卡綁定
+
+Loop 現已支援卡覆寫。在角色卡選中狀態打開編排編輯器，會出現 **儲存到角色卡覆寫** / **清除角色卡覆寫** 按鈕——和 Spec / Agenda 的體驗一致。綁定後這套 loop 設定會隨卡匯出，卡作者可以為自己的角色推薦「讀什麼、記什麼、何時 finalize」。
+
+::: info 與 spec / agenda 的差異
+Loop popup 當前沒有 **匯出 Profile** / **匯入 Profile** 按鈕，跨電腦同步先用 AI Iteration Studio 複用工作流。檔案級匯入匯出會等後續。
+:::
+
+## 與 spec / agenda 模式對比
+
+| 維度 | spec / single | agenda | loop |
+|---|---|---|---|
+| 設定成本 | 需畫 DAG + 每節點 prompt | 寫 Planner prompt + worker prompts | 寫一段 system prompt + 勾工具 |
+| Agent 數量 | 多（每 stage / 節點一個） | Planner + 多 worker | 單 agent |
+| Preset 切換 | 多次 | 多次 | 一次 |
+| 流程可變 | 拓撲固定 | Planner 決定調度 | agent 自己決定下一步 |
+| 上下文連續性 | 透過 `previous_outputs` 傳變數 | 同 spec | 工具結果天然在 messages 裡 |
+| 失敗處理 | 節點失敗直接傳播 | worker 失敗由 Planner 重試 | 工具失敗結構化注回，agent 自糾 |
+| 角色卡覆寫 | ✅ | ✅ | ✅ |
+| 檔案級匯入匯出 | ✅ | ✅ | ❌（用 Iteration Studio 複用） |
+| 適合場景 | 流程明確、stage 固定 | 複雜任務需要調度 | 速度與效果平衡；探索性研究、動態決策、prompt cache 重要 |
+
+## Loop 設定參考
+
+<details>
+<summary>Loop 專屬設定</summary>
+
+| 設定 | 說明 |
+|---|---|
+| `max_rounds` | loop 最多跑多少輪（預設 40） |
+| `wall_clock_budget_ms` | 整個 loop 的牆鐘預算（預設 300000 ms / 5 分鐘） |
+| `system_prompt` | loop agent 的 system 指令 |
+| `tools.<namespace>.<verb>` | 每個工具的啟用開關（`finalize` 強制 true） |
+| `apiPresetName` / `promptPresetName` | 單 agent 用的 API 與提示詞預設 |
+| `capsule_inject` | 與 spec 模式一致的位置 / 深度 / 角色 / 自定義指令設定 |
+
+</details>
 
 ## 常見問題
 

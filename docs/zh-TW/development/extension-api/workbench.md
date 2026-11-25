@@ -39,11 +39,18 @@ workbench.open(opts?: {
     subview?: string;  // 工作區子視圖，例如 'run'、'graph'、'schema'
     runKey?: string;   // 例如 'orchestrator:<runId>'，跳轉至特定執行記錄
     scope?: string;    // 例如 'global' | 'character' | 'preset' | 'chat'
+    scopeOwner?: { scope: 'character'; avatar: string };
+    waitForClose?: boolean;
+    onCancelWithoutApply?: () => void | Promise<void>;
     draft?: string;    // 開啟 page: 'ai' 時預填的輸入框文字
 }): Promise<WorkbenchHandle | null>
 ```
 
 在工作台 UI 掛載完成前發起的 `open()` 會自動排隊，待啟動時 `setOpenHandler` 就緒後依序執行。
+
+`scopeOwner` 用於綁定 AI 迭代的角色身分。角色身分變更時，工作台停止自動請求，提示目標變更，並執行取消清理。
+
+在 AI 頁面使用 `waitForClose` 等待工作台摺疊與取消清理完成。尚未儲存評審變更時，執行 `onCancelWithoutApply`。
 
 ## 註冊嵌入式工作區
 

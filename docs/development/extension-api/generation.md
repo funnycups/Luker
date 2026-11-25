@@ -44,9 +44,9 @@ context.generateTask({
     apiPresetName?: string = '',                  // connection profile name (e.g. 'claude')
     llmPresetName?: string = '',                  // chat completion preset name (e.g. 'low-temp')
     tools?: Array | null = null,                  // OpenAI-style tool definitions
-    toolChoice?: 'auto' | 'none' | object = 'auto',
+    toolChoice?: 'auto' | 'required' | 'none' | object = 'auto',
     jsonSchema?: object | null = null,            // for structured-output mode (mutually exclusive with tools)
-    functionCallMode?: 'auto' | 'native' | 'prompt_xml' | 'prompt_json' = 'auto',
+    functionCallMode?: 'auto' | 'native' | 'prompt_xml' = 'auto',
     functionCallOptions?: object | null = null,   // e.g. { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
     substituteMacros?: boolean = true,            // resolve {{...}} in taskMessages.content; opt out for authoring flows
@@ -144,10 +144,9 @@ functionCallOptions: { requiredFunctionName: 'my_fn' },
 
 | Mode | When to pick it |
 |------|-----------------|
-| `'auto'` (default) | Let the runtime decide based on the active connection profile. |
+| `'auto'` (default) | Follow the resolved connection profile's plain-text function calling setting (honoring `apiPresetName` when provided, otherwise the active connection; `'prompt_xml'` when enabled, otherwise `'native'`). |
 | `'native'` | Force native tool-calling (e.g., OpenAI tools / Anthropic tool_use). |
-| `'prompt_xml'` | Embed tool definitions in the system prompt as XML — useful for models without native tool calling. |
-| `'prompt_json'` | Embed tool definitions as JSON in the prompt. |
+| `'prompt_xml'` | Force plain-text XML tool calling by embedding tool definitions in the system prompt — useful for models without native tool calling. |
 
 ### Structured Output (JSON Schema)
 
@@ -203,6 +202,7 @@ try {
 | `rate_limit` | Rate limited (429). |
 | `invalid_input` | The options object is malformed (e.g., `tools` and `jsonSchema` both set, `worldInfoSource:'custom'` without `customWorldInfoMessages`). |
 | `unsupported_api` | The resolved request API isn't supported by the runtime. |
+| `capability_conflict` | Non-retryable provider or model capability conflict (e.g., an unsupported feature combination for the resolved model, or a `nonRetryable` sender error); sets `error.nonRetryable = true` and preserves `error.status` when present. |
 | `stream_unavailable` | The resolved request API does not support streaming through `generateTaskStream` (kobold / koboldhorde / novel / textgenerationwebui). |
 | `tool_call_parse` | Model returned a tool call whose `arguments` failed `JSON.parse`. |
 | `json_schema_violation` | `jsonSchema` mode failed validation. |
@@ -467,7 +467,7 @@ Utility methods:
 
 ## Low-Level Reference
 
-These primitives back `generateTask`. Use them directly only when `generateTask` doesn't fit — for example, when you need streaming responses, custom retry logic that mutates the request between attempts, or integration with a non-standard pipeline.
+These primitives back `generateTask`. Use them directly only when `generateTask` doesn't fit — for example, when you need custom retry logic that mutates the request between attempts, or integration with a non-standard pipeline.
 
 ### Connection Profile Resolution
 

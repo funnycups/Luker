@@ -31,6 +31,7 @@ Configure shared defaults in **Workbench → Settings**, or set extension-level 
 - **Iteration AI prompt preset (params + prompt)** — Prompt preset used by the editor assistant and CardApp Studio; leave empty to follow the shared Workbench setting or the active preset. The actions below the selector import the bundled `plugin-only` example, or open the preset workspace to derive from an existing preset
 - **Iteration AI API preset (Connection profile)** — API connection used by the editor assistant and CardApp Studio
 - **Tool-call retries on invalid/missing tool call (N)** — Number of retries when the AI returns an invalid tool call
+- **Custom System Prompts (advanced)** — Overrides the **Editor iteration prompt** and the **CardApp Studio prompt**
 
 ## Modification History
 

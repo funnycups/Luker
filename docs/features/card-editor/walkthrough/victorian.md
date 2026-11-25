@@ -31,8 +31,8 @@ Then open the Extensions panel → expand "Character Editor Assistant" → click
 
 ![Studio entry](/images/walkthrough/victorian/step-01-studio-entry.png)
 
-::: tip Studio also works on cards without CardApp
-The Character Editor Assistant routes cards without CardApp to the [popup](/features/card-editor/popup) and cards with CardApp to Studio. The Studio button can bring any card into Studio with the full feature set: Memory Graph node types, multi-agent orchestration overrides, regex scripts, world books, and card content. The popup only edits card content and world book entries.
+::: tip Studio works on cards without CardApp too
+**The CardApp Studio button opens Studio for any card** — and Studio's tool surface is the full set, covering memory-graph schema, orchestrator override, regex scripts, world info, and character fields, unlike [popup mode](/features/card-editor/popup) which only covers fields and world-info entries.
 :::
 
 ## 2. Describe the genre and let Studio propose a plan

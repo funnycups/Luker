@@ -94,6 +94,13 @@ The orchestrator can limit which Skills each agent sees. At runtime, the names a
 
 Director's default profile binds the right Skills to each agent. Other modes show every installed Skill by default, and you can narrow that in **Workbench → Orchestration**.
 
+## Writing entries
+
+- **Skill manager subpanel** in the orchestrator config — install, edit, rename, move scope, delete.
+- **Inline skill editor** — file tree + Markdown editor for SKILL.md and sub-files.
+- **Import / export** — bundle a preset's or character's skills when you export it, and install bundled skills on import. See [Skill management](/features/skills/management).
+- **Iter-studio tools** — when you ask the iter-studio AI to "extract this writing rule into a skill," it uses a dedicated tool surface to do the extraction and rewrite the agent's `systemPrompt` accordingly.
+
 ## Bundled Skills
 
 Luker ships a set of roleplay Skills covering anti-formula writing, character voice, output discipline and event summaries. They are installed to the global scope on first start and can be browsed, imported or replaced in the Skill management panel.

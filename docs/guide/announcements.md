@@ -27,7 +27,7 @@ Open the admin panel and switch to the **Announcements** tab. Click **New announ
 A form opens with the following fields:
 
 - **Level**: one of `Info`, `Warning`, `Critical`. The level controls how aggressively the announcement reaches users (see [Levels](#levels) below).
-- **Title**: short headline (up to 200 characters). Shown in the modal header, the banner, and the inbox row.
+- **Announcement title**: short headline (up to 200 characters). Shown in the modal header, the banner, and the inbox row.
 - **Body (Markdown)**: full announcement text in Markdown (up to 10 000 characters). Bold, italic, lists, links, code blocks, and headings are all supported.
 - **Preview**: live render of the Markdown body — exactly what users will see.
 

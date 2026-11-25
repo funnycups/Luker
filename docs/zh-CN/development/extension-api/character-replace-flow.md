@@ -17,7 +17,7 @@
   → 发出 CHARACTER_REPLACED
 ```
 
-这些步骤均在 `emitCharacterReplacedEvent` 内部、任何监听器被通知之前运行，因此写入发生在插件响应事件之前。世界书这一步是 await 的：如果某个动作打开了长时间存在的界面（例如角色卡编辑助手的合并工作台），事件会推迟到界面关闭之后，监听器随后看到的是已定状态——要么新书已绑定，要么回滚已恢复旧书。
+这些步骤均在 `emitCharacterReplacedEvent` 内部执行，完成后发出 `CHARACTER_REPLACED`。动作打开持续存在的界面时，事件延迟至界面关闭。该事件表示角色卡替换完成，不表示世界书绑定成功。世界书已导入但绑定失败时，保留已保存的文件并提示部分结果。
 
 ## 第一部分 —— 卡绑定保护
 
@@ -127,5 +127,5 @@ ctx.registerPostReplaceAction({
 | `listCardBindingSlots()` | 按注册顺序返回槽位描述符列表。 |
 | `registerPostReplaceAction(descriptor)` | 注册动作，见第二部分。 |
 | `listPostReplaceActions()` | 按注册顺序返回动作描述符列表。 |
-| `importEmbeddedBookForCharacter(characterId)` | 把角色卡的内嵌世界书另存为独立文件并绑定为主世界书。角色不存在或导入入口不可用时抛出异常。 |
-| `rebindPreviousPrimaryBook(characterId, bookName)` | 把已有世界书绑定为角色的主世界书。 |
+| `importEmbeddedBookForCharacter(characterId, character?)` | 在调用时捕获目标，返回导入器的 `{ imported, bound, bookName }` 结果。可传入原始运行时对象，保留延迟动作的目标。无法获得角色对象或导入入口不可用时抛出异常；捕获的对象失效时返回未导入结果。 |
+| `rebindPreviousPrimaryBook(characterId, bookName, character?)` | 绑定捕获的目标，不切换当前角色。可传入原始运行时对象；绑定失败或被后续操作取代时拒绝 Promise。 |

@@ -39,11 +39,18 @@ workbench.open(opts?: {
     subview?: string;  // workspace-specific view, e.g. 'run', 'graph', 'schema'
     runKey?: string;   // e.g. 'orchestrator:<runId>' when jumping to a specific run
     scope?: string;    // e.g. 'global' | 'character' | 'preset' | 'chat'
+    scopeOwner?: { scope: 'character'; avatar: string };
+    waitForClose?: boolean;
+    onCancelWithoutApply?: () => void | Promise<void>;
     draft?: string;    // pre-filled prompt when opening page: 'ai'
 }): Promise<WorkbenchHandle | null>
 ```
 
 Calls issued before Workbench mounts its UI are queued automatically and flushed once `setOpenHandler` runs at startup.
+
+Use `scopeOwner` to bind an AI-page launch to a character. If that owner changes during initialization, Workbench stops the automatic request, reports the target change, and performs cancellation cleanup.
+
+On the AI page, `waitForClose` waits for folding and cancellation cleanup. `onCancelWithoutApply` runs if the launch's review has not saved changes.
 
 ## Registering an embedded workspace
 

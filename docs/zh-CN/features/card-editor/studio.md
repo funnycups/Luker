@@ -8,10 +8,7 @@ CardApp Studio 是角色卡编辑助手的完整开发环境，专为内嵌了 [
 
 ## 打开方式
 
-两条路径均会进入 Studio：
-
-1. **扩展面板 → 角色卡编辑助手 → 「&lt;/&gt; CardApp Studio」按钮**
-2. 当前角色含 CardApp 时，**「打开编辑器」会直接进入 Studio**；不含 CardApp 的角色卡进入[普通弹窗](/zh-CN/features/card-editor/popup)
+通过**扩展面板 → 角色卡编辑助手**中的「CardApp Studio」按钮打开 Studio。无论角色卡是否已含 CardApp，Studio 均作用于当前角色。
 
 ## 界面布局
 
@@ -102,7 +99,7 @@ AI 对文件的每次修改均需要审批。与普通弹窗一样，界面会�
 
 - 多个开发会话，可创建 / 切换 / 删除
 - 每个角色最多保留 **20** 个会话
-- 会话保存在角色状态中，关闭 Studio 后重新打开可继续
+- 会话内容持久化保存在角色状态中，关闭 Studio 后重新打开不丢
 
 ## 版本历史 {#version-history-git}
 

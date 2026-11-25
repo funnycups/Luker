@@ -17,15 +17,17 @@ The left pane holds the session drawer, target switcher (**Character card** / **
 The AI can perform the following operations via tool calls:
 
 - **Modify character card fields** — Name, description, personality, scenario, first message, alternate greetings, example dialogue, system prompt, post-history instructions, creator's notes, and tags
-- **Manage World Info entries** — Create, update, patch, or delete entries in bound world books
-- **Query World Info** — List visible books, search entries by keyword or activation condition, and read entry contents
-- **Simulate prompt** — Preview the assembled prompt sent to the model under current settings
+- **Manage World Info entries** — Create, update, patch, or delete entries and book-level settings across any World Info book visible to the character, including primary, additional, chat, and global books
+- **Query World Info** — List visible books, search entries by keyword or activation keys, and read entry contents
+- **Inspect card-bound presets** — List the presets bound to the character card and read their contents
+- **Simulate prompt** — Run a real generation with a test message as the next user turn under the current card, World Info, and preset without writing to the chat, and open a popup to review the output
+- **Web search** — Search the web when [Search Tools](/features/search-tools) is enabled
 
 ## Diff Approval
 
 After the AI stages edits, **Change list** groups the before/after diffs by field and world book entry:
 
-![Pending diffs grouped per field](/images/card-editor-popup/cea-popup-diff-approval.png)
+![Pending diff cards in the AI reply](/images/card-editor-popup/cea-popup-diff-approval.png)
 
 Expand any item to inspect the full line-by-line diff for longer text such as `description` or World Info `content`:
 

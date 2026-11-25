@@ -94,6 +94,15 @@ runtime.catalog -> agent.tools
 
 Director 的預設設定已經為不同 Agent 繫結好各自的 Skill。其他模式預設讓 Agent 看到全部已安裝 Skill，可以在**工作台 → 編排**裡收緊。
 
+## 寫入入口
+
+面向使用者的寫入入口：
+
+- **編排器設定裡的 Skill 管理子面板** —— 安裝、編輯、改名、遷移作用域、刪除。
+- **內嵌 Skill 編輯器** —— 檔案樹 + Markdown 編輯器，編輯 SKILL.md 和子檔案。
+- **匯入 / 匯出** —— 匯出預設或角色卡時附帶其 Skill，匯入時安裝附帶的 Skill。詳見 [Skill 管理](/zh-TW/features/skills/management)。
+- **迭代工作台工具** —— 讓迭代工作台的 AI「把這條寫作規則抽成一個 Skill」時，它透過一組專門的工具完成抽取，並把 agent 的 `systemPrompt` 同步改寫。
+
 ## 出廠 Skill
 
 Luker 自帶一組用於角色扮演的 Skill，涵蓋反制式寫作、角色口吻、輸出紀律、事件摘要等規則。首次啟動時它們會安裝到全域作用域；之後可以在 Skill 管理面板瀏覽、匯入或覆蓋。

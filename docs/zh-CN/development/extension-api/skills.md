@@ -100,13 +100,13 @@ readFile(opts: {
 }): Promise<{
   content: string,
   totalLines: number,
-  truncated: boolean,
+  sha256: string,
 }>
 ```
 
 - `path` 缺省 `SKILL.md`。传 `references/checklist.md` 等子路径以读其它文件。
 - `offset` 和 `limit` 按行操作（1-based）。
-- 服务端强制 50 KB 响应上限。被截断时 `truncated: true` —— 再调一次带 `offset` 继续。
+- `sha256` 是整个文件的哈希，`offset` / `limit` 只返回部分内容时同样如此。将其作为 `expectedSha256` 传给 `writeFile`，文件在读取后发生变更时写入失败。
 
 ### `listFiles(opts)`
 
@@ -166,10 +166,15 @@ writeFile(opts: {
   path: string,
   content: string,
   expectedSha256?: string,  // 乐观并发控制
+  expectAbsent?: boolean,   // 仅新建
 }): Promise<{ sha256: string }>
 ```
 
-如果传了 `expectedSha256` 且与当前文件哈希不匹配，写入以 `409` 冲突失败 —— 适合编辑器式的并发编辑检测。
+如果传了 `expectedSha256` 且与当前文件哈希不匹配，写入以 `400` 错误失败 —— 适合编辑器式的并发编辑检测。
+
+传入 `expectAbsent: true` 时，文件已存在则写入以 `409` 错误失败。
+
+上述拒绝写入的错误将 `err.body.code` 设为 `sha256_mismatch` 或 `file_exists`。
 
 返回的 `sha256` 是新文件的内容哈希。
 
@@ -250,13 +255,17 @@ install(opts: {
 - 内容相同（哈希匹配）→ 静默 no-op。
 - 内容不同 → 抛错，除非 `conflictStrategy: 'replace'`。`'skip'` 在冲突时 no-op。
 
-### `delete(scope, name)`
+### `delete(scope, name, opts?)`
 
 ```ts
-delete(scope: SkillScope, name: string): Promise<void>
+delete(scope: SkillScope, name: string, opts?: {
+  expectedInstalledHash?: string,
+}): Promise<void>
 ```
 
-原子移除 Skill 目录。引用该 Skill 的编排配置仍保留 `skills.visible` 里的旧名，派遣时该引用不生效。
+如果传了 `expectedInstalledHash` 且与磁盘上 Skill 文件的哈希不匹配，删除以 `400` 错误失败，`err.body.code` 为 `installed_hash_mismatch`，Skill 保持不变。
+
+原子移除 Skill 目录。引用该 Skill 的编排器 profile 仍保留 `skills.visible` 里的旧名 —— 派遣时引用软失败。
 
 ### `rename(scope, oldName, newName)`
 

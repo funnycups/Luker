@@ -17,7 +17,7 @@
   → 發出 CHARACTER_REPLACED
 ```
 
-這些步驟均在 `emitCharacterReplacedEvent` 內部、任何監聽器被通知之前執行，因此寫入發生在外掛回應事件之前。世界書這一步是 await 的：如果某個動作開啟了長時間存在的介面（例如角色卡編輯助手的合併工作台），該事件會延後到介面關閉之後，監聽器隨後看到的是已定狀態——要麼新書已繫結，要麼回滾已恢復舊書。
+這些步驟均在 `emitCharacterReplacedEvent` 內部執行，完成後發出 `CHARACTER_REPLACED`。動作開啟持續存在的介面時，事件延遲至介面關閉。該事件表示角色卡替換完成，不表示世界書綁定成功。世界書已匯入但綁定失敗時，保留已儲存的檔案並提示部分結果。
 
 ## 第一部分 —— 卡繫結保護
 
@@ -127,5 +127,5 @@ ctx.registerPostReplaceAction({
 | `listCardBindingSlots()` | 按登錄順序回傳槽位描述元清單。 |
 | `registerPostReplaceAction(descriptor)` | 登錄動作，見第二部分。 |
 | `listPostReplaceActions()` | 按登錄順序回傳動作描述元清單。 |
-| `importEmbeddedBookForCharacter(characterId)` | 把角色卡的內嵌世界書另存為獨立檔案並繫結為主世界書。角色不存在或匯入入口不可用時拋出例外。 |
-| `rebindPreviousPrimaryBook(characterId, bookName)` | 把已有世界書繫結為角色的主世界書。 |
+| `importEmbeddedBookForCharacter(characterId, character?)` | 在呼叫時捕獲目標，傳回匯入器的 `{ imported, bound, bookName }` 結果。可傳入原始執行時物件，保留延遲動作的目標。無法獲得角色物件或匯入入口不可用時拋出例外；捕獲的物件失效時傳回未匯入結果。 |
+| `rebindPreviousPrimaryBook(characterId, bookName, character?)` | 綁定捕獲的目標，不切換目前角色。可傳入原始執行時物件；綁定失敗或被後續操作取代時拒絕 Promise。 |

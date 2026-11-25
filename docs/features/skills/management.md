@@ -10,9 +10,9 @@ Open **Workbench → Orchestration → Setup** and click **Manage skills...** (o
 
 The skill manager has several tabs along the top:
 
-- **Installed** — the skills you have locally. Filter by scope (Global / Preset / Character) or show **All**.
-- **Browse bundled** — the skills Luker ships, with each row showing whether your local copy matches, differs, or is missing.
-- **Import** — entry points for installing from a file, from a URL, or by extracting from a character card / preset.
+- **Installed** — what you have under `data/<user>/skills/<scope>/`. Filter by scope (Global / Preset / Character) or show **All**.
+- **Browse bundled** — the skills shipped under `default/skills/global/`, with each row showing whether your local copy matches, differs, or is missing.
+- **Import** — entry points for installing from a file, from a URL, or from the skills shipped with Luker.
 
 ![Skill manager subpanel, Installed tab](/images/skills/manager-installed-tab.png)
 
@@ -22,7 +22,7 @@ Each row shows:
 
 - `name` — the skill's frontmatter `name`. Click to open the inline editor.
 - `description` — one-line summary from the frontmatter.
-- `scope` — chip (`global` / `preset/<api>/<name>` / `character/<file>`).
+- `scope` — chip (`global` / `preset/<name>` / `orch-preset/<mode>/<name>` / `character/<file>`).
 - `size` — file count + total bytes.
 - **Used by** — chip count of agents in the active orchestrator profile that reference this skill in their visible list.
 
@@ -35,10 +35,6 @@ Row actions (right side):
 | **Move to…** | Atomic move to another scope. References (which use name only) stay valid. |
 | **Rename** | Atomic rename within the current scope. The directory and frontmatter `name` update together. References that pointed at the old name turn grey (see [Stale references](#stale-references)). |
 | **Delete** | Removes the skill directory. References continue to grey out instead of breaking dispatch. |
-
-### Bulk select
-
-Toggle **Multi-select** at the top to get a checkbox per row. With ≥1 row checked, the toolbar gains a **Pack selected into preset…** action — see [Embed export](#embed-export-into-presets-and-cards) below.
 
 ## Browse bundled
 
@@ -78,16 +74,6 @@ The URL importer is intentionally narrow — it fetches one Markdown file. Anyth
 
 The same action as **Import all bundled** under Browse bundled, listed here for convenience.
 
-### Extract from character card / preset
-
-When you import a character card (PNG) or preset (JSON) that has an `embedded_skills_source` field, Luker shows a preview dialog automatically:
-
-![Embed import preview with a conflict](/images/skills/skill-conflict-replace-dialog.png)
-
-The dialog lists every embedded skill with its conflict state. For each conflict, you choose **Skip** (keep your local version) or **Replace** (use the bundled version from the embed). Same-content (`same`) entries are skipped silently. New entries (`new`) install directly.
-
-The embed payload is removed from the character card / preset on disk after extraction — the skills now live in `skills/character/<file>/` or `skills/preset/<api>/<preset>/`. This avoids a "stale embed" trap where the inline payload diverges from the materialized files.
-
 ## Inline editor
 
 Clicking **Edit** on a skill row opens an in-popup editor:
@@ -108,17 +94,37 @@ Writes use the same staging step as installation: the new content is validated f
 
 ## Embed export — into presets and cards
 
-Skills are most useful when they ship with the artifact that depends on them. A character card that needs a specific voice rule, a preset tuned for a particular sub-agent — both can carry the skills inline.
+Skills are most useful when they ship with the artifact that depends on them. Exporting a preset or a character card offers to bundle the matching skills into the exported file. The bundled skills are written into the file's `extensions.luker.embedded_skills_source` field.
 
-### Packing into a preset
+An exported file carries bundled skills only when you choose **Include**. Choosing **Skip**, exporting with no confirm because there are no skills to bundle, or a failed bundling produces a file without bundled skills, even when the preset or card was imported with them. The preset or card stored in Luker is not changed.
 
-In **Workbench → AI iteration → Preset**, [Preset Assistant](/features/preset-assistant) derives an `-orchestrator` preset. You can then open **Extensions → Completion Preset Assistant → Bundle skills with this preset** to launch the skill manager with multi-select enabled. Pick the skills you want, click **Pack selected into preset…**, and choose the target preset.
+### Chat completion preset export
 
-The packer writes the skills into the preset's `extensions.luker.embedded_skills_source` field. On the next preset save the embed rides with the JSON. Other Luker users who import that preset see the embed extraction dialog described above.
+When the exported chat completion preset has skills in its preset scope, Luker asks **Include preset-scope skills in this export?**. **Include** bundles them into the exported JSON; **Skip** exports the preset without them.
 
-### Packing into a character card
+The Completion Preset Assistant's **Bundle skills with this preset** button opens the Skill Manager filtered to the current preset's scope, so you can review or add the skills that this export bundles.
 
-In the character editor, the **Bundled skills** section behaves the same way: select skills, pack, and they're written into `data.extensions.luker.embedded_skills_source`. On PNG export the embed serializes into the card's metadata, so distributing the card distributes the skills.
+### Orchestrator preset export
+
+Exporting an orchestrator preset asks **Include all skills active for this orchestrator preset in the export?** when any agent in the preset can see skills. **Include** bundles every such skill from the global, chat completion preset and orchestrator preset scopes. Character-scope skills are not bundled.
+
+### Character card export
+
+When the character has skills in its character scope, exporting the card through **Export and Download** asks **Include this character's skills in the export?** before the PNG or JSON file downloads. **Include** bundles them into the exported file. Skills bundled inside the card's card-bound chat completion presets are not exported. If the skills cannot be bundled, the card is exported without them and a warning toast appears.
+
+### Installing bundled skills
+
+Luker shows an install dialog when you first open an imported character card that carries bundled skills, and when you import a chat completion preset or orchestrator preset that carries them:
+
+![Embed import preview with a conflict](/images/skills/skill-conflict-replace-dialog.png)
+
+The dialog lists every bundled skill with its conflict state. For a conflicting entry, choose **Skip** to keep your local version or **Replace** to use the version from the file. Entries whose content matches an installed skill are skipped; new entries install directly. **Install** writes the skills into the scope of the card or preset:
+
+- character card → `skills/character/<file>/`, including skills bundled inside the card's card-bound chat completion presets
+- chat completion preset → `skills/preset/<preset>/`
+- orchestrator preset → `skills/orch-preset/<mode>/<preset>/`
+
+The dialog appears once per card or preset.
 
 ::: tip Threshold for inline vs zip
 Small text-only skills use `inline-files-v1` format (Markdown content embedded directly). Larger or binary skills auto-upgrade to `archive-base64-v1` (zip + base64 + sha256). The packer picks per skill; you don't choose.
@@ -150,4 +156,4 @@ A missing skill does not block an agent dispatch, and adding or removing skills 
 - [Authoring skills](/features/skills/authoring) — write your own
 - [Orchestrator integration](/features/skills/orchestrator-integration) — wire skills to a profile
 - [Skills extension API](/development/extension-api/skills) — programmatic management from extensions
-- [Preset Assistant](/features/preset-assistant) — derives `-orchestrator` presets and offers a skill-bundling link
+- [Preset Assistant](/features/preset-assistant) — derives `-orchestrator` presets and opens the Skill Manager on the preset's scope

@@ -311,7 +311,7 @@ getCurrentLocale(): string
 addLocaleData(localeId: string, data: Record<string, string>): void
 ```
 
-把外掛提供的翻譯合併到已載入的語系資料中。在 i18n 系統啟動之後呼叫（例如在 `APP_READY` 上）。當 `localeId` 為主要語系時，條目總是覆寫；為退回語系時，條目只填補缺失鍵。
+把外掛提供的翻譯合併到已載入的語系資料中。在 i18n 系統啟動之後呼叫（例如在 `APP_READY` 上）。當 `localeId` 為主要語系時，條目總是覆寫；為退回語系時，條目只填補缺失鍵。合併的條目屬於全域語系資料，會取代核心介面與其他外掛中同一鍵的譯文；只翻譯外掛自身文字時使用 [`createScopedI18n`](#createscopedi18n)。
 
 ```js
 const ctx = Luker.getContext();
@@ -326,6 +326,38 @@ ctx.eventSource.on(ctx.eventTypes.APP_READY, () => {
         'Settings saved': 'Settings saved',
     });
 });
+```
+
+### createScopedI18n
+
+```ts
+createScopedI18n(tables: Record<string, Record<string, string>>): {
+    t(strings: TemplateStringsArray, ...values: unknown[]): string;
+    translate(text: string, key?: string | null): string;
+    format(template: string, ...values: unknown[]): string;
+    has(key: string): boolean;
+}
+```
+
+建立綁定外掛自身翻譯表的翻譯器。`tables` 的鍵為語系識別碼，例如 `'zh-cn'`、`'zh-tw'`，值為鍵到譯文的物件。查找時先讀取外掛翻譯表，依核心語系資料的順序合併：先合併退回語系的條目，再由目前語系的條目覆寫。合併後該鍵的條目缺失或為空時，退回至 `translate`。目前語系翻譯表中的空條目同樣覆寫退回語系的條目，查找直接退回至 `translate`，不使用外掛退回語系的譯文。外掛翻譯表不寫入全域語系資料，核心介面與其他外掛的文字維持不變。新外掛優先使用它，而非 `addLocaleData`。
+
+- `t`：樣板字串標籤，鍵格式與 `t` 相同。
+- `translate(text, key?)`：簽名與 `translate` 相同。
+- `format(template, ...values)`：翻譯 `template` 後，依序以 `values` 填入 `${0}`、`${1}` 等佔位符。
+- `has(key)`：外掛翻譯表在目前語系順序下是否為 `key` 提供非空譯文。
+
+翻譯器在建立時複製 `tables`，之後對這些物件的修改不會生效。帶有 `data-i18n` 屬性的元素由核心依全域語系資料翻譯，外掛文字應改用翻譯器渲染。
+
+```js
+const ctx = Luker.getContext();
+const i18n = ctx.createScopedI18n({
+    'zh-cn': { 'My Plugin': '我的插件', 'Saved ${0} items': '已保存 ${0} 项' },
+    'zh-tw': { 'My Plugin': '我的外掛', 'Saved ${0} items': '已儲存 ${0} 項' },
+});
+
+const title = i18n.translate('My Plugin');
+const status = i18n.t`Saved ${count} items`;
+const sameStatus = i18n.format('Saved ${0} items', count);
 ```
 
 ## 設定與儲存
@@ -359,11 +391,31 @@ context.saveSettingsDebounced(): void
 
 ### saveSettings
 
+條件修改會比較擷取的舊值、缺失鍵與排隊時的目前來源，並將陣列作為完整值比較。外部修改與目標重疊時拒絕角色卡修改，互不重疊的修改保留。巢狀擴充功能寫入僅保留指定路徑的所有權，同時同步已確認的其他擴充功能修改。替換擴充功能根物件時擁有整個擴充功能根的所有權。僅相同擷取來源中已確認的寫入可以將相同目標值視為先前操作。來源識別不包含預設內容或歷史內容鏈。
+
+`SETTINGS_UPDATED` 接收 `{ cardPresetSave }`，其中記錄呼叫儲存時選取的角色、預設項目、執行時快取項目及預期預設內容。該記錄唯讀。一般儲存透過條件排隊修改同步擷取的內容。預設管理器擴充功能寫入保留其欄位操作的所有權，並在相依儲存成功後，透過同一次角色卡寫入同步已確認的非擴充修改。角色卡確認後，僅更新擷取的快取項目。等待儲存時切換選取或修改呼叫端的選項不會改變同步目標。`cardPresetOwner` 由預設管理器保留使用，不是擴充功能停用角色卡同步的選項。
+
+`getPresetManager(...).writePresetExtensionField(...)` 在持久化期間發現擷取的全域名稱、集合或來源被替換時拒絕 Promise。此時 HTTP 寫入能夠已經成功；先前確認的設定或預設檔案仍然保留，但過時操作不會發布舊快取或繼續寫入角色卡。排隊欄位修改僅與相同欄位寫入佇列中已確認的先前操作組合。
+
+預設擴充功能寫入使用設定的 JSON 傳輸表示，確認儲存內容、繼續角色卡寫入並發布讀取快取。物件中的 `undefined` 欄位省略，陣列中的空缺或 `undefined` 元素轉換為 `null`，非有限數字轉換為 `null`。條件寫入保留擷取來源的所有權與其他欄位。
+
 ```ts
-context.saveSettings(loopCounter?: number, options?: object): Promise<void>
+context.saveSettings(loopCounter?: number, options?: object): Promise<SettingsSaveOutcome>
 ```
 
-`saveSettingsDebounced` 的可 await 版本。繞過防抖佇列，網路往返完成後才解析。僅當後續邏輯依賴「設定已落盤」時才用（少見——絕大多數呼叫點均應優先選防抖版）。
+擷取呼叫時的設定，並依序執行持久化。提示成功前須檢查回傳結果：
+
+- `{ ok: true, status: 'saved', payload }` 確認擷取的 JSON 內容已儲存。僅在完整儲存基線已知且內容未變時省略請求。初始化預設值與呼叫端提供的未儲存設定不代表儲存確認。`directSave: true` 始終提交擷取的完整內容。更新已確認快照後觸發 `SETTINGS_UPDATED`，等待監聽器結束後回傳。
+- `{ ok: false, status: 'failed', error }` 表示擷取、傳輸或 HTTP 失敗。後續排隊請求繼續執行，並回傳各自的結果。
+
+持久化嘗試失敗後，清除儲存基線與設定讀取快取。重新讀取完整儲存內容之前，後續嘗試透過完整替換確認儲存內容，即使目標設定等於上次確認的設定。
+
+伺服器傳回 `world_deleted` 表示條件清理先於輔助引用寫入完成，`world_deletion_unknown` 表示無法確認重疊刪除的交易結果。引用拒絕均終止該次儲存，不再提交完整內容，保留有效的已確認設定快照與讀取快取，不觸發儲存成功事件。即使儲存設定未變，較早開始的完整讀取也不能覆蓋即時草稿。請重新載入世界書清單後重試引用修改。
+- `{ ok: false, status: 'deferred', reason }` 表示設定尚未就緒，或生成過程臨時覆寫了回應長度，已安排防抖重試。這不表示持久化成功。重試執行時擷取即時設定。
+
+排隊呼叫保留各自擷取的內容與選項。回傳結果不確認後續編輯或後續請求。修改回傳內容或匯出的設定不會改變儲存基線。事件分發不占用持久化鎖，監聽器可以等待另一次儲存。忽略結果的呼叫無需處理新增的拒絕例外。`saveSettingsDebounced` 僅安排儲存，不提供持久化確認。
+
+伺服器設定讀取開始或結束時存在尚未結束的儲存，或讀取期間發生儲存完成或失敗時，不套用該讀取結果。此時 `getSettings()` 解析為 `undefined`，不改變快照依據與即時設定，也不觸發 `SETTINGS_LOADED`。儲存佇列結束後可以再次讀取最新內容。
 
 ### saveMetadataDebounced
 

@@ -100,13 +100,13 @@ readFile(opts: {
 }): Promise<{
   content: string,
   totalLines: number,
-  truncated: boolean,
+  sha256: string,
 }>
 ```
 
 - `path` defaults to `SKILL.md`. Pass a sub-path like `references/checklist.md` to read other files.
 - `offset` and `limit` operate on lines (1-based).
-- Server enforces a 50 KB response cap. If the response is capped, `truncated: true` — re-call with `offset` to continue.
+- `sha256` is the hash of the whole file, also when `offset` / `limit` return a slice. Pass it to `writeFile` as `expectedSha256` so the write fails if the file changed after this read.
 
 ### `listFiles(opts)`
 
@@ -166,10 +166,15 @@ writeFile(opts: {
   path: string,
   content: string,
   expectedSha256?: string,  // optimistic concurrency
+  expectAbsent?: boolean,   // create only
 }): Promise<{ sha256: string }>
 ```
 
-If `expectedSha256` is supplied and doesn't match the current file's hash, the write fails with a `409` conflict — useful for editor-style concurrent-edit detection.
+If `expectedSha256` is supplied and doesn't match the current file's hash, the write fails with a `400` error — useful for editor-style concurrent-edit detection.
+
+With `expectAbsent: true` the write fails with a `409` error when the file already exists.
+
+These refusals set `err.body.code` to `sha256_mismatch` or `file_exists`.
 
 The returned `sha256` is the new file's content hash.
 
@@ -250,11 +255,15 @@ If a same-named skill exists in the target scope:
 - Same content (hash matches) → silently no-op.
 - Different content → throws unless `conflictStrategy: 'replace'`. Use `'skip'` to no-op on conflict.
 
-### `delete(scope, name)`
+### `delete(scope, name, opts?)`
 
 ```ts
-delete(scope: SkillScope, name: string): Promise<void>
+delete(scope: SkillScope, name: string, opts?: {
+  expectedInstalledHash?: string,
+}): Promise<void>
 ```
+
+If `expectedInstalledHash` is supplied and doesn't match the hash of the skill's files on disk, the delete fails with a `400` error and `err.body.code` set to `installed_hash_mismatch`; the skill is kept.
 
 Removes the skill directory atomically. Orchestrator profiles that referenced the skill keep their (now-stale) name in `skills.visible` — references soft-fail at dispatch.
 

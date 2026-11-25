@@ -21,6 +21,7 @@ Studio 提供代码编辑器、实时预览与 AI 辅助。需要编写自定义
 
 ## 相关页面
 
-- [角色卡编辑助手](/zh-CN/features/card-editor/) —— 含 CardApp 角色卡的编辑入口
-- [CardApp Studio](/zh-CN/features/card-editor/studio) —— 开发和调试 CardApp 的工作台
-- [状态系统](/zh-CN/features/state-system) —— CardApp 的数据如何随聊天保存
+- [角色卡编辑助手](/zh-CN/features/card-editor/) — CardApp Studio 的入口
+- [CardApp Studio](/zh-CN/features/card-editor/studio) — 开发和调试 CardApp 的完整环境
+- [角色卡开发者指南](/zh-CN/development/card-developers) — 完整的 CardApp API 参考和开发文档
+- [状态系统](/zh-CN/features/state-system) — 角色状态和聊天状态

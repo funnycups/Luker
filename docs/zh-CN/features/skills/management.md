@@ -10,9 +10,9 @@
 
 Skill 管理顶部有多个标签页：
 
-- **已安装** —— 本地安装的 Skill。按作用域筛选，可选全局、预设、角色卡或全部。
-- **浏览出厂** —— Luker 自带的 Skill，每行显示本地副本与内置版本一致、有差异或尚未安装。
-- **导入** —— 从文件、URL、角色卡或预设中提取 Skill。
+- **已安装** —— 你 `data/<user>/skills/<scope>/` 下有什么。按作用域过滤（全局 / 预设 / 角色卡）或选**全部**。
+- **浏览出厂** —— `default/skills/global/` 自带的 Skill，每行显示你本地副本是匹配、有差异，还是没装。
+- **导入** —— 从文件、URL 或 Luker 出厂 Skill 安装的入口。
 
 ![Skill 管理子面板，已安装标签页](/images/skills/manager-installed-tab.png)
 
@@ -22,7 +22,7 @@ Skill 管理顶部有多个标签页：
 
 - `name` —— Skill frontmatter 里的 `name`。点击打开内嵌编辑器。
 - `description` —— frontmatter 里的一行摘要。
-- `scope` —— 作用域标记，取值为 `global`、`preset/<api>/<name>` 或 `character/<file>`。
+- `scope` —— 作用域 chip，取值为 `global`、`preset/<name>`、`orch-preset/<mode>/<name>` 或 `character/<file>`。
 - `size` —— 文件数 + 总字节数。
 - **被引用** —— 当前编排器配置中引用该 Skill 的 agent 数量。
 
@@ -35,10 +35,6 @@ Skill 管理顶部有多个标签页：
 | **迁移到……** | 原子级跨作用域 move。引用（仅按名字）依然有效。 |
 | **改名** | 在当前作用域内原子改名。目录与 frontmatter `name` 同步更新。指向旧名的引用变灰（见 [失效引用](#失效引用)）。 |
 | **删除** | 删除 Skill 目录。引用显示为灰色，派遣照常进行。 |
-
-### 批量选择
-
-顶栏切到**多选**模式后，每行多一个复选框。勾选至少一项后，工具栏会出现一个**把所选打包进预设……**动作 —— 见下文 [嵌入导出](#嵌入导出-到预设和角色卡)。
 
 ## 浏览出厂
 
@@ -78,16 +74,6 @@ URL 导入器的范围有意保持狭窄：它只获取一份 Markdown 文件。
 
 与「浏览出厂」中的**全量导入出厂**是同一操作，此处列出以便查找。
 
-### 从角色卡 / 预设抽取
-
-导入带 `embedded_skills_source` 字段的角色卡（PNG）或预设（JSON）时，Luker 会自动弹出预览对话框：
-
-![嵌入导入预览：冲突处理](/images/skills/skill-conflict-replace-dialog.png)
-
-对话框逐项列出每个嵌入的 Skill 及其冲突状态。对每个冲突，你可选**跳过**（保留本地版本）或**替换**（用嵌入里的版本）。内容相同的项（`相同`）会静默跳过；新条目（`新`）直接安装。
-
-抽取后，角色卡与预设文件中的嵌入载荷被移除，Skill 内容以 `skills/character/<file>/` 或 `skills/preset/<api>/<preset>/` 下的文件为准。
-
 ## 内嵌编辑器
 
 点击 Skill 行的**编辑**会打开弹窗内编辑器：
@@ -108,20 +94,40 @@ URL 导入器的范围有意保持狭窄：它只获取一份 Markdown 文件。
 
 ## 嵌入导出 —— 到预设和角色卡
 
-Skill 在跟它所依赖的产物（角色卡、预设）一起分发时最有用。某张角色卡需要某条口吻规则，某个预设是为特定子代理调出来的 —— 两者均能把 Skill 内联打包。
+Skill 与依赖它的预设或角色卡一同分发时最有价值。导出预设或角色卡时，Luker 询问是否将对应的 Skill 附带进导出文件，附带的 Skill 写入文件的 `extensions.luker.embedded_skills_source` 字段。
 
-### 打包进预设
+仅当选择**包含**时，导出文件才附带 Skill。选择**跳过**、因没有需要附带的 Skill 而未出现询问，或 Skill 附带失败时，导出文件均不附带 Skill，导入时附带 Skill 的预设或角色卡同样如此。Luker 中保存的预设或角色卡保持不变。
 
-在**工作台 → AI 迭代 → 预设**中，[补全预设助手](/zh-CN/features/preset-assistant)会派生出一份 `-orchestrator` 预设。随后打开**扩展 → 聊天补全预设助手 → 将 Skills 打包到此预设**，即可进入 Skill 管理的多选模式。选择需要的 Skill，点击**把所选打包进预设……**，再选择目标预设。
+### 导出聊天补全预设
 
-打包器把这些 Skill 写进预设的 `extensions.luker.embedded_skills_source` 字段。下一次保存预设时，嵌入随 JSON 一起被持久化。其他 Luker 用户导入这份预设时会看到上文描述的嵌入抽取对话框。
+导出的聊天补全预设在其预设作用域中存在 Skill 时，Luker 询问「导出时一并附带此预设作用域的 Skills 吗？」。选择**包含**会将这些 Skill 附带进导出的 JSON；选择**跳过**则导出不含 Skill 的预设。
 
-### 打包进角色卡
+聊天补全预设助手的**将 Skills 打包到此预设**按钮会打开已筛选到当前预设作用域的 Skill 管理器，便于查看或补充此次导出附带的 Skill。
 
-在角色卡编辑器里，**出厂 Skill** 区段也是同样的逻辑：选 Skill、打包，它们写进 `data.extensions.luker.embedded_skills_source`。PNG 导出时嵌入序列化进卡的元数据，分发这张卡也就分发了 Skill。
+### 导出编排预设
 
-::: tip 内联 vs zip 的阈值
-仅含文本的小型 Skill 使用 `inline-files-v1` 格式（Markdown 内容直接内嵌）。较大或包含二进制的 Skill 自动升级到 `archive-base64-v1`（zip + base64 + sha256）。打包器会按每个 Skill 自动决定，无需手动选择。
+导出编排预设时，若预设中任一 agent 可见 Skill，Luker 询问「导出时一并附带此编排预设当前激活的所有 Skills 吗？」。选择**包含**会附带来自全局、聊天补全预设与编排预设作用域的全部可见 Skill；角色作用域的 Skill 不会附带。
+
+### 导出角色卡
+
+角色在其角色作用域中存在 Skill 时，通过**导出并下载**导出角色卡，Luker 会在 PNG 或 JSON 文件下载前询问「导出时一并附带此角色的 Skills 吗？」。选择**包含**会将这些 Skill 附带进导出文件。角色卡绑定预设中附带的 Skill 不会导出。Skill 附带失败时，角色卡照常导出但不含 Skill，并显示警告提示。
+
+### 安装附带的 Skill
+
+首次打开导入的、附带 Skill 的角色卡时，以及导入附带 Skill 的聊天补全预设或编排预设时，Luker 显示安装对话框：
+
+![嵌入导入预览：冲突处理](/images/skills/skill-conflict-replace-dialog.png)
+
+对话框逐项列出附带的 Skill 及其冲突状态。存在冲突的条目可选择**跳过**以保留本地版本，或选择**替换**以采用文件中的版本。与已安装 Skill 内容相同的条目会跳过，新条目直接安装。点击**安装**后，Skill 写入角色卡或预设对应的作用域：
+
+- 角色卡 → `skills/character/<file>/`，包括角色卡绑定预设中附带的 Skill
+- 聊天补全预设 → `skills/preset/<preset>/`
+- 编排预设 → `skills/orch-preset/<mode>/<preset>/`
+
+该对话框对同一角色卡或预设仅显示一次。
+
+::: tip 内联与 zip 的阈值
+小且只含文本的 Skill 采用 `inline-files-v1` 格式，Markdown 内容直接内嵌。较大或包含二进制文件的 Skill 自动改用 `archive-base64-v1` 格式，即 zip、base64 与 sha256 校验。打包器按 Skill 逐一决定，无需手动选择。
 :::
 
 ## 作用域迁移
@@ -150,4 +156,4 @@ Skill 在跟它所依赖的产物（角色卡、预设）一起分发时最有�
 - [创作 Skill](/zh-CN/features/skills/authoring) —— 写自己的
 - [编排器集成](/zh-CN/features/skills/orchestrator-integration) —— 把 Skill 挂到编排配置上
 - [Skill 扩展 API](/zh-CN/development/extension-api/skills) —— 从扩展编程式管理
-- [补全预设助手](/zh-CN/features/preset-assistant) —— 派生 `-orchestrator` 预设并给出打包 Skills 链接
+- [聊天补全预设助手](/zh-CN/features/preset-assistant) —— 派生 `-orchestrator` 预设，并打开该预设作用域的 Skill 管理器
