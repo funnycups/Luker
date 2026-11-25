@@ -5,7 +5,7 @@ import {
     makeStateError,
     makeStateOk,
     STATE_HINT_MAX_LENGTH,
-} from '../../public/scripts/state-errors.js';
+} from '../../public/scripts/lib/state-errors.js';
 
 describe('STATE_ERROR_REASONS', () => {
     test('contains exactly the 9 spec-defined reasons', () => {

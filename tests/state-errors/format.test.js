@@ -5,7 +5,7 @@ import {
     formatConflictHint,
     formatValidationArgsHint,
     formatValidationTargetHint,
-} from '../../public/scripts/state-errors/format.js';
+} from '../../public/scripts/lib/state-errors-format.js';
 
 test('formatHttpErrorHint includes status + body excerpt, no ; in body', () => {
     const hint = formatHttpErrorHint(500, 'Internal Server Error', 'chatId not found');

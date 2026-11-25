@@ -1,6 +1,6 @@
 /**
  * Abort signal helpers — shared infrastructure for any module that needs to
- * compose abort signals or recognize abort / no-tool-call errors.
+ * compose abort signals or recognize abort errors.
  *
  * Pure utilities: no I/O, no module state, no `extension_settings` reads.
  *
@@ -8,11 +8,7 @@
  * tool-call attempts (one per node × retries) each need to honor a caller-
  * provided abort signal and the global "stop" button. `linkAbortSignals`
  * combines those triggers into a single signal so each attempt aborts
- * cleanly when any of them fires. `isNoToolCallExtractionError` lives here
- * because tool-call retry logic uses the same error-shape inspection idiom
- * as abort detection.
- *
- * Re-used by the iteration-studio shell (post-SP-5) for the same reasons.
+ * cleanly when any of them fires.
  */
 
 export function isAbortSignalLike(value) {
@@ -31,6 +27,18 @@ export function isAbortError(error, abortSignal = null) {
     return message.includes('aborted') || message.includes('abort');
 }
 
+/**
+ * Strict abort predicate: an error named `AbortError`, or an aborted
+ * signal. Use where an error whose message merely contains "abort" must
+ * still count as a failure (search-tools agent loop, MG RAG recall).
+ */
+export function isStrictAbortError(error, signal = null) {
+    if (error?.name === 'AbortError') {
+        return true;
+    }
+    return Boolean(signal?.aborted);
+}
+
 export function createAbortError(message = 'Operation aborted.') {
     try {
         return new DOMException(String(message || 'Operation aborted.'), 'AbortError');
@@ -45,17 +53,6 @@ export function throwIfAborted(abortSignal, message = 'Operation aborted.') {
     if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
         throw createAbortError(message);
     }
-}
-
-export function isNoToolCallExtractionError(error) {
-    const message = String(error?.message || error || '').toLowerCase();
-    if (!message) {
-        return false;
-    }
-    return message.includes('did not return any tool call')
-        || message.includes('none matched expected function names')
-        || message.includes('returned empty text response')
-        || message.includes('did not contain parseable function calls json');
 }
 
 export function linkAbortSignals(...signals) {

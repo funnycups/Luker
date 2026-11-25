@@ -15,12 +15,7 @@
  *   { decision: 'manual', edit, newValue }    // newValue overrides edit.newValue / op-specific field
  */
 import { Popup, POPUP_TYPE } from '../../popup.js';
-
-function escapeHtml(s) {
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(String(s ?? '')));
-    return div.innerHTML;
-}
+import { escapeHtml } from '../html-escape.js';
 
 function formatPreviewValue(v) {
     if (typeof v === 'string') return v;

@@ -60,7 +60,7 @@ describe('scripts/check-plugin-imports.js', () => {
         expect(coreViolations.get('orchestrator')).toEqual([
             {
                 file: 'public/scripts/extensions/orchestrator/main.js',
-                line: 3,
+                line: 4,
                 spec: '../../openai.js',
                 target: 'public/scripts/openai.js',
             },
@@ -68,14 +68,14 @@ describe('scripts/check-plugin-imports.js', () => {
         expect(pluginViolations.get('orchestrator')).toEqual([
             {
                 file: 'public/scripts/extensions/orchestrator/main.js',
-                line: 4,
+                line: 5,
                 spec: '../memory-graph/api.js',
                 target: 'public/scripts/extensions/memory-graph/api.js',
                 peer: 'memory-graph',
             },
             {
                 file: 'public/scripts/extensions/orchestrator/main.js',
-                line: 5,
+                line: 6,
                 spec: '../regex/engine.js',
                 target: 'public/scripts/extensions/regex/engine.js',
                 peer: 'regex',
@@ -118,7 +118,7 @@ describe('scripts/check-plugin-imports.js', () => {
         expect(hits).toEqual([
             {
                 file: 'public/script.js',
-                line: 1,
+                line: 2,
                 spec: './scripts/extensions/card-app/main.js',
                 target: 'public/scripts/extensions/card-app/main.js',
             },
@@ -130,7 +130,7 @@ describe('scripts/check-plugin-imports.js', () => {
             },
             {
                 file: 'public/scripts/workbench/model/bad.js',
-                line: 1,
+                line: 2,
                 spec: '/scripts/extensions/orchestrator/main.js',
                 target: 'public/scripts/extensions/orchestrator/main.js',
             },

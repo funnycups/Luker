@@ -19,6 +19,17 @@ export const STATE_ERROR_REASONS = Object.freeze({
     LOG_WRITE_FAILED: 'LOG_WRITE_FAILED',
 });
 
+/**
+ * Structured `conflictError.code` values the proposal bus sets next to
+ * the `reason`, for conflicts whose card summary differs from the
+ * per-target "modified elsewhere" message.
+ */
+export const CONFLICT_CODES = Object.freeze({
+    // Pending entry restored from a session saved before entries carried a
+    // forward patch: the bus has no way to rebuild the proposed state.
+    NOT_RESTORABLE: 'not_restorable',
+});
+
 export const STATE_HINT_MAX_LENGTH = 120;
 
 export function isValidReason(reason) {

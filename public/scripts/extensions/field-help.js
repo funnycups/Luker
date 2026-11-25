@@ -12,20 +12,9 @@
 
 import { escapeHtml } from '../utils.js';
 import { translate } from '../i18n.js';
+import { renderFieldHelpButton } from '../lib/field-help-button.js';
 
-/**
- * @param {object} opts
- * @param {string} opts.title             Popup title (plain text).
- * @param {string} opts.bodyHtml          Popup body (HTML, caller must escape).
- * @param {string} [opts.targetSelectId]  Optional id of the field the help belongs to (for future auto-attach).
- * @returns {string} HTML string
- */
-export function renderFieldHelpButton({ title, bodyHtml, targetSelectId = '' }) {
-    const t = String(title || '');
-    const b = String(bodyHtml || '');
-    const target = targetSelectId ? ` data-luker-field-help-target="${escapeHtml(targetSelectId)}"` : '';
-    return `<button type="button" class="luker-field-help" title="${escapeHtml(t)}" data-luker-field-help-title="${escapeHtml(t)}" data-luker-field-help-body="${escapeHtml(b)}"${target}><i class="fa-solid fa-circle-question"></i></button>`;
-}
+export { renderFieldHelpButton };
 
 // One-shot delegated click handler
 if (typeof jQuery !== 'undefined') {

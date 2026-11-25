@@ -1,4 +1,4 @@
-import { STATE_HINT_MAX_LENGTH } from '../state-errors.js';
+import { STATE_HINT_MAX_LENGTH } from './state-errors.js';
 
 const HTTP_BODY_EXCERPT_MAX = 80;
 

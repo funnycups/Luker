@@ -77,7 +77,7 @@ export function __resetRegexApiCacheForTests() {
  * messages that must skip the dispatcher's cooking pass. Never present
  * on any message returned by {@link applyPluginLaneRegex}.
  */
-export const PLUGIN_FLOOR_PROVENANCE_FIELD = 'sourceFloorIndex';
+const PLUGIN_FLOOR_PROVENANCE_FIELD = 'sourceFloorIndex';
 
 function normalizeRole(role) {
     return String(role ?? '').trim().toLowerCase();
