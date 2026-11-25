@@ -757,6 +757,59 @@ export function createStudioView(app) {
 
     function renderSessionsPane() {
         const ill = getIllSettings();
+        const newBtn = button(i18n('New session'), () => { void startNewSession(); }, {
+            small: true,
+            iconName: 'plus',
+            renderIcon: icon,
+            disabled: busy,
+            title: i18n('New studio session'),
+        });
+        newBtn.dataset.sdRole = 'studio-new-session';
+
+        const sessionListContent = sessions.length > 0
+            ? sessions.map(entry => h('div', {
+                class: `sdlens-session-item ${entry.id === session?.id ? 'is-active' : ''}`.trim(),
+                dataset: { studioSessionId: entry.id },
+                onClick: async (e) => {
+                    if (busy || e.target.closest?.('[data-studio-session-delete]')) return;
+                    const loaded = await createStudioSessionStore(getCtx()).getSession(entry.id);
+                    if (loaded) {
+                        session = loaded;
+                        selectedImageId = session.images.at(-1)?.id || '';
+                        paint();
+                    }
+                },
+            },
+            h('span', {
+                style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12.5px' },
+                text: entry.title || entry.id,
+            }),
+            iconButton('trash', i18n('Delete'), async (e) => {
+                e.stopPropagation();
+                if (busy) return;
+                await createStudioSessionStore(getCtx()).deleteSession(entry.id);
+                await refreshLists();
+                if (session?.id === entry.id) {
+                    session = sessions[0] ? JSON.parse(JSON.stringify(sessions[0])) : createStudioSession({ presetId: ill?.currentPresetId || '' });
+                    selectedImageId = session.images.at(-1)?.id || '';
+                }
+                paint();
+            }, { className: 'is-sm', renderIcon: icon, disabled: busy })))
+            : [h('div', {
+                class: 'sdlens-studio-list-empty',
+                dataset: { sdRole: 'studio-sessions-empty' },
+                text: i18n('No saved Studio sessions yet'),
+            })];
+
+        return h('aside', { class: 'sdlens-studio-sessions' },
+            h('div', { class: 'sdlens-studio-sessions-head' },
+                h('span', { class: 'sdlens-studio-sessions-title', text: i18n('Studio sessions') }),
+                newBtn),
+            h('div', { class: 'sdlens-studio-list' }, ...sessionListContent));
+    }
+
+    function renderCenterPane() {
+        const ill = getIllSettings();
         const presetOpts = (ill?.presets || []).map(p => ({ value: p.id, label: p.name || p.id }));
         const presetSelect = selectInput(
             presetOpts.length > 0 ? presetOpts : [{ value: '', label: '—' }],
@@ -765,6 +818,7 @@ export function createStudioView(app) {
                 if (!ill || busy) return;
                 try {
                     selectPreset(ill, nextId);
+                    getCtx()?.saveSettingsDebounced?.();
                     if (session) session.presetId = nextId;
                     await Promise.all([persistCurrentSession(), refreshCapabilities()]);
                     paint();
@@ -772,53 +826,15 @@ export function createStudioView(app) {
                     app.toast(String(err?.message || err), { error: true });
                 }
             },
-            { ariaLabel: i18n('Preset'), disabled: busy },
+            { ariaLabel: i18n('Prompt preset'), disabled: busy },
         );
         presetSelect.dataset.sdRole = 'studio-preset';
 
-        const newBtn = iconButton('plus', i18n('New studio session'), () => { void startNewSession(); }, {
-            disabled: busy,
-            renderIcon: icon,
-        });
-        newBtn.dataset.sdRole = 'studio-new-session';
-
-        return h('aside', { class: 'sdlens-studio-sessions' },
-            h('div', { style: { display: 'flex', gap: '6px', padding: '10px', borderBottom: '1px solid var(--lw-border)' } },
-                presetSelect,
-                newBtn),
-            h('div', { class: 'sdlens-studio-list' },
-                sessions.map(entry => h('div', {
-                    class: `sdlens-session-item ${entry.id === session?.id ? 'is-active' : ''}`.trim(),
-                    dataset: { studioSessionId: entry.id },
-                    onClick: async (e) => {
-                        if (busy || e.target.closest?.('[data-studio-session-delete]')) return;
-                        const loaded = await createStudioSessionStore(getCtx()).getSession(entry.id);
-                        if (loaded) {
-                            session = loaded;
-                            selectedImageId = session.images.at(-1)?.id || '';
-                            paint();
-                        }
-                    },
-                },
-                h('span', {
-                    style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12.5px' },
-                    text: entry.title || entry.id,
-                }),
-                iconButton('trash', i18n('Delete'), async (e) => {
-                    e.stopPropagation();
-                    if (busy) return;
-                    await createStudioSessionStore(getCtx()).deleteSession(entry.id);
-                    await refreshLists();
-                    if (session?.id === entry.id) {
-                        session = sessions[0] ? JSON.parse(JSON.stringify(sessions[0])) : createStudioSession({ presetId: ill?.currentPresetId || '' });
-                        selectedImageId = session.images.at(-1)?.id || '';
-                    }
-                    paint();
-                }, { className: 'is-sm', renderIcon: icon, disabled: busy })))));
-    }
-
-    function renderCenterPane() {
-        const toolbarItems = [];
+        const toolbarItems = [
+            h('div', { class: 'sdlens-studio-preset-field' },
+                h('span', { class: 'sdlens-studio-preset-label', text: i18n('Prompt preset') }),
+                presetSelect),
+        ];
         if (session) {
             const visualSwitch = switchControl(i18n('Visual review'), Boolean(session.visualReview), (next) => {
                 session.visualReview = next;
@@ -852,6 +868,16 @@ export function createStudioView(app) {
                     text: `${tc.function?.name || tc.name}(${tc.function?.arguments || ''})\n→ ${msg.tool_results?.[tcIdx]?.content || ''}`,
                 })))
             : null));
+
+        const messagesContent = messageNodes.length > 0
+            ? messageNodes
+            : [emptyState(
+                'spark',
+                i18n('Start a Studio conversation'),
+                i18n('Describe an image below to generate it with Studio AI. Images generated in chat appear in chat messages, Show Gallery, or Run Traces instead of here.'),
+                null,
+                { renderIcon: icon },
+            )];
 
         const allowSourceImage = !currentCapabilities || Boolean(currentCapabilities.supportsSourceImage);
         const attachedSource = allowSourceImage
@@ -903,7 +929,7 @@ export function createStudioView(app) {
 
         return h('section', { class: 'sdlens-studio-main' },
             h('div', { class: 'sdlens-studio-toolbar' }, ...toolbarItems),
-            h('div', { class: 'sdlens-studio-messages' }, ...messageNodes),
+            h('div', { class: 'sdlens-studio-messages' }, ...messagesContent),
             attachedBanner,
             h('div', { class: 'sdlens-studio-compose' }, inputEl, sendOrStopBtn));
     }
@@ -915,7 +941,13 @@ export function createStudioView(app) {
         if (images.length === 0) {
             return h('aside', { class: 'sdlens-studio-gallery' },
                 sectionTitle(i18n('Studio gallery')),
-                emptyState('image', i18n('No images generated in this session yet'), '', null, { renderIcon: icon }));
+                emptyState(
+                    'image',
+                    i18n('No images in this Studio session yet'),
+                    i18n('Only images created inside this Studio session appear here. Chat illustrations stay in the chat, Show Gallery, and Run Traces.'),
+                    null,
+                    { renderIcon: icon },
+                ));
         }
 
         const previewBlock = selected

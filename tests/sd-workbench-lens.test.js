@@ -478,6 +478,43 @@ describe('workbench sd studio separation, legacy migration, and free drawing', (
             expect(container.querySelector('[data-sd-role="studio-source-select"]')).toBeNull();
             expect(container.querySelector('[data-sd-role="staged-proposal"]')).toBeNull();
 
+            // New session lives in the session list header; prompt preset lives in the main toolbar; empty states appear before first turn.
+            expect(container.querySelector('.sdlens-studio-sessions-head [data-sd-role="studio-new-session"]')).not.toBeNull();
+            expect(container.querySelector('.sdlens-studio-sessions [data-sd-role="studio-preset"]')).toBeNull();
+            expect(container.querySelector('.sdlens-studio-toolbar [data-sd-role="studio-preset"]')).not.toBeNull();
+            expect(container.querySelector('[data-sd-role="studio-sessions-empty"]')).not.toBeNull();
+            expect(container.querySelector('.sdlens-studio-messages > .lw-empty')).not.toBeNull();
+            expect(container.querySelector('.sdlens-studio-gallery .lw-empty')).not.toBeNull();
+            expect(container.querySelector('.sdlens-studio-gallery .lw-empty-hint')?.textContent?.trim().length).toBeGreaterThan(0);
+
+            // Switching prompt preset in the Studio toolbar updates currentPresetId and persists settings.
+            const saveSettingsDebounced = jest.fn();
+            ctx.saveSettingsDebounced = saveSettingsDebounced;
+            sdSettings.illustration.presets.push({
+                id: 'preset_2',
+                name: 'Natural language style',
+                promptStyle: 'natural',
+                promptDefaultsInitialized: true,
+                illustrationPrompt: 'Natural prompt instructions',
+                studioPrompt: 'Studio instructions',
+                explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+                llm: { apiPresetName: '', llmPresetName: '' },
+                explorationLlm: { apiPresetName: '', llmPresetName: '' },
+                visualInspection: false,
+            });
+            handle.update({ ws: 'sd', subview: 'studio' });
+            await new Promise(r => setTimeout(r, 20));
+            const presetSelect = container.querySelector('.sdlens-studio-toolbar [data-sd-role="studio-preset"]');
+            presetSelect.value = 'preset_2';
+            presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 20));
+            expect(sdSettings.illustration.currentPresetId).toBe('preset_2');
+            expect(saveSettingsDebounced).toHaveBeenCalledTimes(1);
+            presetSelect.value = 'preset_1';
+            presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 20));
+            expect(sdSettings.illustration.currentPresetId).toBe('preset_1');
+
             // Enable Visual review and generate an image.
             const visualSwitch = container.querySelector('.sdlens-studio-toolbar button[role="switch"]');
             expect(visualSwitch).not.toBeNull();

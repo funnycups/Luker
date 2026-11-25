@@ -275,7 +275,7 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 220px 1fr 280px;
+    grid-template-columns: 240px 1fr 280px;
     overflow: hidden;
 }
 
@@ -287,6 +287,31 @@
     min-height: 0;
 }
 
+.sdlens-studio-sessions-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--lw-border);
+}
+
+.sdlens-studio-sessions-title {
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--lw-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sdlens-studio-sessions-head .lw-btn {
+    flex: none;
+    white-space: nowrap;
+}
+
 .sdlens-studio-list {
     flex: 1;
     min-height: 0;
@@ -295,6 +320,13 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.sdlens-studio-list-empty {
+    padding: 12px 10px;
+    font-size: 12px;
+    color: var(--lw-muted);
+    text-align: center;
 }
 
 .sdlens-session-item {
@@ -351,6 +383,28 @@
     max-width: 240px;
 }
 
+.sdlens-studio-preset-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 180px;
+    max-width: 280px;
+}
+
+.sdlens-studio-preset-label {
+    flex: none;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--lw-muted);
+    white-space: nowrap;
+}
+
+.sdlens-studio-preset-field .lw-select {
+    flex: 1 1 120px;
+    max-width: 100%;
+}
+
 .sdlens-studio-source-banner {
     flex: none;
     display: flex;
@@ -379,6 +433,11 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+.sdlens-studio-messages > .lw-empty {
+    margin: auto;
+    max-width: 420px;
 }
 
 .sdlens-msg {
@@ -516,7 +575,8 @@
         border-bottom: 1px solid var(--lw-border);
     }
 
-    .sdlens-studio-toolbar .lw-select {
+    .sdlens-studio-toolbar .lw-select,
+    .sdlens-studio-preset-field {
         max-width: 100%;
     }
 }

@@ -6,6 +6,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Image generation
 
+- Moved the prompt preset selector to the Image Studio toolbar, placed the new session button in the session list header, and added empty-state guidance explaining that Studio sessions are separate from chat illustrations.
 - Fixed regenerating an inline illustration not displaying the activity capsule and Run panel progress.
 - Fixed clicking an inline illustration blocking the action dialog on a backend workflow request.
 - Fixed regenerating an inline illustration interrupting other active regenerations in the same message.

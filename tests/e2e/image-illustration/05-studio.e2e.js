@@ -74,6 +74,14 @@ test.describe('Workbench embedded image studio', () => {
         await expect(studioRoot.locator('[data-sd-role="studio-target-profile"]')).toHaveCount(0);
         await expect(studioRoot.locator('[data-sd-role="studio-source-select"]')).toHaveCount(0);
 
+        // Session creation lives in the session list header, prompt preset lives in the toolbar, and empty states guide new users.
+        await expect(studioRoot.locator('.sdlens-studio-sessions-head [data-sd-role="studio-new-session"]')).toBeVisible();
+        await expect(studioRoot.locator('.sdlens-studio-sessions [data-sd-role="studio-preset"]')).toHaveCount(0);
+        await expect(studioRoot.locator('.sdlens-studio-toolbar [data-sd-role="studio-preset"]')).toBeVisible();
+        await expect(studioRoot.locator('[data-sd-role="studio-sessions-empty"]')).toBeVisible();
+        await expect(studioRoot.locator('.sdlens-studio-messages > .lw-empty')).toBeVisible();
+        await expect(studioRoot.locator('.sdlens-studio-gallery .lw-empty')).toBeVisible();
+
         // First round: the model calls generate_image; output saved under _studio with attribution:none.
         await studioRoot.locator('[data-sd-role="studio-input"]').fill('画一座海边的灯塔');
         await studioRoot.locator('[data-sd-role="studio-send"]').click();
