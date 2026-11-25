@@ -7,10 +7,11 @@ import util from 'node:util';
 import urlJoin from 'url-join';
 import lodash from 'lodash';
 
-import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
+import { getRequestedSecretId, readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
 import { getVertexApiHost } from './vertex-host.js';
 import { GEMINI_SAFETY, VERTEX_SAFETY } from '../constants.js';
 import { delay, getConfigValue, trimTrailingSlash } from '../util.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 import { runLukerDispatch } from '../luker-dispatch/runner.js';
 import { dispatchSdGoogleImage } from '../luker-dispatch/providers/sd/google-image.js';
 
@@ -216,8 +217,33 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
         }
     } else {
         // Google AI Studio
-        const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
-        const apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);
+        const strictSecretId = Boolean(request.body.strict_secret_id);
+        let apiKey = '';
+        if (request.body.proxy_password) {
+            apiKey = request.body.proxy_password;
+        } else if (strictSecretId) {
+            const requestedSecretId = getRequestedSecretId(request);
+            if (requestedSecretId) {
+                apiKey = readSecret(request.user.directories, SECRET_KEYS.MAKERSUITE, requestedSecretId);
+                if (!apiKey) {
+                    const error = /** @type {Error & { status?: number }} */ (
+                        new Error(`API key for connection profile secret_id "${requestedSecretId}" was not found.`)
+                    );
+                    error.status = 400;
+                    throw error;
+                }
+            } else if (!request.body.reverse_proxy && !request.body.base_url) {
+                const error = /** @type {Error & { status?: number }} */ (
+                    new Error('API key for the selected connection profile is missing.')
+                );
+                error.status = 400;
+                throw error;
+            }
+        } else {
+            apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
+        }
+        const rawApiUrl = request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE;
+        const apiUrl = trimTrailingSlash(normalizeProviderBaseUrl('makersuite', rawApiUrl));
         const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
         baseUrl = `${apiUrl}/${apiVersion}`;
         url = `${baseUrl}/models/${model}:${endpoint}`;
@@ -385,7 +411,12 @@ router.post('/generate-native-tts', async (request, response) => {
         if (!result.ok) {
             const errorText = await result.text();
             console.error(`${apiName} TTS API error: ${result.status} ${result.statusText}`, errorText);
-            const errorMessage = JSON.parse(errorText).error?.message || 'TTS generation failed.';
+            let errorMessage = 'TTS generation failed.';
+            try {
+                errorMessage = JSON.parse(errorText).error?.message || errorMessage;
+            } catch {
+                // Non-JSON error body from upstream or proxy
+            }
             return response.status(result.status).json({ error: errorMessage });
         }
 
@@ -421,7 +452,13 @@ router.post('/generate-native-tts', async (request, response) => {
     } catch (error) {
         console.error('Google TTS generation failed:', error);
         if (!response.headersSent) {
-            return response.status(500).json({ error: 'Internal server error during TTS generation' });
+            const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600
+                ? error.status
+                : 500;
+            const message = status < 500 && error?.message
+                ? error.message
+                : 'Internal server error during TTS generation';
+            return response.status(status).json({ error: message });
         }
         return response.end();
     }

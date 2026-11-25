@@ -204,3 +204,9 @@
         display: none;
     }
 }
+
+.google-tts-conn-status {
+    display: block;
+    margin-top: 2px;
+    opacity: 0.8;
+}
