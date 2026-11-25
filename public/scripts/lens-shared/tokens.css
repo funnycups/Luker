@@ -384,6 +384,7 @@
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-backdrop,
 .lw-dialog-backdrop.lw-surface {
     position: absolute; inset: 0; z-index: 30;
+    pointer-events: auto;
     display: flex; justify-content: center; align-items: flex-start;
     padding: min(10%, 96px) 16px 16px;
     background: var(--lw-scrim);

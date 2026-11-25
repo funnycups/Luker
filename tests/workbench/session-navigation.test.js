@@ -469,4 +469,68 @@ describe('Ask page runId isolation across session switch & history cleanup', () 
         await flushMicrotasks();
         expect(page.el.textContent).toContain('Full lazy-loaded answer');
     });
+
+    test('Ask page deletes currently selected session after confirmation and leaves it intact on cancel', async () => {
+        const sessions = createMemorySessionStore();
+        const sessionA = await sessions.create({
+            kind: 'ask',
+            title: 'Session A',
+            turns: [{ role: 'user', text: 'QA', at: 1 }, { role: 'ai', answer: 'Answer A', at: 2 }],
+        });
+        const sessionB = await sessions.create({
+            kind: 'ask',
+            title: 'Session B',
+            turns: [{ role: 'user', text: 'QB', at: 1 }, { role: 'ai', answer: 'Answer B', at: 2 }],
+        });
+
+        const app = {
+            sessions,
+            layer: document.body,
+            snapshot: () => ({ chat: { chatId: 'c1', label: 'Chat 1', floors: 2 }, card: { name: 'Alice', books: [] }, preset: { name: 'P1' }, connection: 'OpenAI' }),
+            settings: () => ({ ask: { sources: {} } }),
+            suggestions: () => [],
+            saveSettings: jest.fn(),
+            go: jest.fn(),
+            toast: jest.fn(),
+            source: { listRequests: async () => [], frontendLogCount: async () => 0, debugLoggingOn: () => true },
+        };
+
+        const page = createAskPage(app);
+        document.body.appendChild(page.el);
+        await page.show();
+        await flushMicrotasks();
+
+        // No session selected -> delete button is absent
+        expect(page.el.querySelector('.wb-chat-del')).toBeNull();
+
+        // Select Session A -> delete button appears
+        const sel = page.el.querySelector('select.wb-chat-hist');
+        sel.value = sessionA.id;
+        sel.dispatchEvent(new Event('change'));
+        await flushMicrotasks();
+        const delBtn = page.el.querySelector('.wb-chat-del');
+        expect(delBtn).not.toBeNull();
+
+        // Cancel confirmation -> keeps Session A
+        delBtn.click();
+        await flushMicrotasks();
+        document.body.querySelector('.lw-dialog-foot .lw-btn.is-ghost').click();
+        await flushMicrotasks();
+        expect(sessions.remove).not.toHaveBeenCalled();
+        expect(page.el.textContent).toContain('Answer A');
+
+        // Confirm deletion -> removes Session A, resets body, preserves Session B in dropdown
+        page.el.querySelector('.wb-chat-del').click();
+        await flushMicrotasks();
+        document.body.querySelector('.lw-dialog-foot .lw-btn.is-danger').click();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        expect(sessions.remove).toHaveBeenCalledWith(sessionA.id, expect.any(Object));
+        expect(page.el.querySelector('.wb-chat-del')).toBeNull();
+        expect(page.el.textContent).not.toContain('Answer A');
+        const remainingOptions = [...page.el.querySelectorAll('select.wb-chat-hist option')].map(o => o.value);
+        expect(remainingOptions).not.toContain(sessionA.id);
+        expect(remainingOptions).toContain(sessionB.id);
+    });
 });

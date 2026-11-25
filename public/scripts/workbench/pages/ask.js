@@ -8,6 +8,7 @@
 
 import { i18n, i18nFormat } from '../i18n.js';
 import { h, put, clear, formatTokens, relativeTime, copyText } from '../../lens-shared/util.js';
+import { confirmDialog } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
 import { button, iconButton, checkRow, msgActions } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
@@ -79,6 +80,7 @@ export function createAskPage(app) {
     let refreshVersion = 0;
     const activeRuns = new Map();
     let sideOpen = false;
+    let deleting = false;
     let counts = null;
 
     function validChatTarget(t) {
@@ -247,6 +249,11 @@ export function createAskPage(app) {
             h('span', { class: 'wb-note wb-chat-tag', text: i18n('Read-only — nothing gets changed') }),
             h('span', { class: 'wb-spacer' }),
             recent.length ? historyMenu(recent) : null,
+            session?.id && store ? iconButton('trash', i18n('Delete conversation'), () => { void deleteCurrentSession(); }, {
+                className: 'wb-chat-del',
+                size: 15,
+                disabled: deleting,
+            }) : null,
             button(i18n('New conversation'), () => {
                 selectionVersion++;
                 session = null;
@@ -254,6 +261,41 @@ export function createAskPage(app) {
                 paintBody();
                 input.focus({ preventScroll: true });
             }, { iconName: 'plus', className: 'is-ghost wb-chat-new', title: i18n('New conversation') }));
+    }
+
+    async function deleteCurrentSession() {
+        const target = session;
+        if (!store || !target?.id || deleting) return;
+        const confirmed = await confirmDialog(app.layer || el, {
+            title: i18n('Delete conversation'),
+            message: i18nFormat('Delete "${0}"? This cannot be undone.', target.title || i18n('New conversation')),
+            okLabel: i18n('Delete'),
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        const id = target.id;
+        const sOpts = scopeOf(target);
+        deleting = true;
+        paintHead();
+        try {
+            activeRunForSession(id)?.abort?.abort();
+            await store.remove(id, sOpts);
+            sessionScopes.delete(id);
+            recentSessions = recentSessions.filter(s => s.id !== id);
+            if (session?.id === id) {
+                selectionVersion++;
+                session = null;
+            }
+            paintHead();
+            paintBody();
+            app.toast(i18n('Conversation deleted'));
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        } finally {
+            deleting = false;
+            paintHead();
+        }
     }
 
     function historyMenu(recent) {

@@ -423,6 +423,42 @@ export function createSessionStore(ctxOrProvider = null) {
             assertOk(delRes, 'remove');
             idToScope.delete(id);
         },
+
+        async removeMany(ids, scopeOpts = {}) {
+            const uniqueIds = [...new Set((Array.isArray(ids) ? ids : []).map(id => String(id || '').trim()).filter(Boolean))];
+            if (!uniqueIds.length) return { removed: [] };
+
+            const adapter = resolveAdapter(getCtx(), scopeOpts);
+            const targetSet = new Set(uniqueIds);
+            const removedIds = [];
+
+            const res = await adapter.update(SESSIONS_NAMESPACE, (current) => {
+                const base = isPlainObject(current) ? current : {};
+                const list = normalizeSessions(base);
+                const nextList = [];
+                for (const item of list) {
+                    if (item?.id && targetSet.has(item.id)) {
+                        removedIds.push(item.id);
+                    } else {
+                        nextList.push(item);
+                    }
+                }
+                if (!removedIds.length) return null;
+                return { ...base, sessions: nextList };
+            });
+            assertOk(res, 'remove');
+            if (res.state) {
+                rememberScopes(scopeOpts, normalizeSessions(res.state));
+            }
+
+            const toDelete = removedIds.length ? removedIds : uniqueIds;
+            for (const id of toDelete) {
+                const delRes = await adapter.del(sessionBodyNamespace(id));
+                assertOk(delRes, 'remove');
+                idToScope.delete(id);
+            }
+            return { removed: removedIds };
+        },
     };
 }
 

@@ -4,14 +4,24 @@
 .wbench .wb-sess-head .wb-btn:first-child { flex: 1; }
 .wbench .wb-sess-list { flex: 1; overflow: auto; padding: 0 6px 10px; }
 .wbench .wb-sess-empty { padding: 10px 8px; }
-.wbench .wb-sess-item { display: flex; gap: 8px; width: 100%; padding: 8px; border: 0; border-radius: var(--wb-r-sm); background: none; text-align: left; cursor: pointer; }
-.wbench .wb-sess-item:hover { background: var(--wb-hover); }
-.wbench .wb-sess-item[aria-current="true"] { background: var(--wb-active); }
+.wbench .wb-sess-row { display: flex; align-items: flex-start; gap: 2px; border-radius: var(--wb-r-sm); }
+.wbench .wb-sess-row:hover { background: var(--wb-hover); }
+.wbench .wb-sess-row:has(.wb-sess-item[aria-current="true"]) { background: var(--wb-active); }
+.wbench .wb-sess-item { flex: 1; min-width: 0; display: flex; gap: 8px; padding: 8px; border: 0; border-radius: var(--wb-r-sm); background: none; text-align: left; cursor: pointer; }
 .wbench .wb-sess-item > .wb-dot { margin-top: 5px; }
 .wbench .wb-sess-main { display: flex; flex-direction: column; min-width: 0; }
 .wbench .wb-sess-t { font-size: 12.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .wbench .wb-sess-m { font-size: 11px; color: var(--wb-faint); margin-top: 2px; }
 .wbench .wb-sess-p { color: var(--wb-amber); }
+.wbench .wb-sess-del { flex: none; width: 26px; height: 26px; margin: 5px 4px 0 0; opacity: 0; color: var(--wb-faint); transition: opacity var(--wb-dur), color var(--wb-dur), background var(--wb-dur); }
+.wbench .wb-sess-row:hover .wb-sess-del,
+.wbench .wb-sess-row:focus-within .wb-sess-del { opacity: 1; }
+.wbench .wb-sess-clear { flex: none; color: var(--wb-faint); }
+.wbench .wb-sess-del:hover,
+.wbench .wb-sess-clear:hover { color: var(--wb-danger); background: var(--wb-danger-soft); }
+.wbench.is-compact .wb-sess-del,
+.wbench.is-drawer-side .wb-sess-del { opacity: 0.78; }
+@media (hover: none) { .wbench .wb-sess-del { opacity: 0.78; } }
 .wbench .wb-ws-seg,
 .wbench .wb-scope-seg { max-width: 100%; flex-wrap: wrap; }
 .wbench .wb-scope-seg .lw-seg-btn span,

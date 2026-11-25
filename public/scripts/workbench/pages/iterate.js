@@ -12,6 +12,7 @@
 
 import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { h, put, clear, relativeTime, copyText } from '../../lens-shared/util.js';
+import { confirmDialog } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
 import { button, iconButton, checkRow, segmented, dot, msgActions } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
@@ -129,6 +130,8 @@ export function createIteratePage(app) {
     let loadedSessionsScopeKey = '';
     const activeRuns = new Map();
     const applying = new Set();
+    const deleting = new Set();
+    let clearing = false;
     const importedScopeTargets = new Set();
 
     // Saved copies per target+scope key: { base, target, title }
@@ -382,16 +385,26 @@ export function createIteratePage(app) {
         clear(sess);
         sess.classList.toggle('is-open', sessOpen);
         const list = recentSessions.filter(s => !ws || s.ws === ws);
+        const canClear = Boolean(store && list.length && !clearing && !list.some(s => applying.has(s.id)));
         put(sess,
             h('div', { class: 'wb-sess-head' },
                 button(i18n('New conversation'), () => newChat(), { iconName: 'plus' }),
+                store && list.length ? iconButton('trash', i18n('Clear conversations'), () => { void clearVisibleSessions(list); }, {
+                    className: 'wb-sess-clear',
+                    size: 15,
+                    disabled: !canClear,
+                }) : null,
                 sessOpen ? iconButton('x', i18n('Off'), () => { sessOpen = false; paintSessions(); }) : null),
             h('div', { class: 'wb-sess-list' },
                 list.length ? groupSessions(list).map(g => [
                     h('div', { class: 'wb-src-group', text: g.label }),
                     g.items.map(s => {
                         const p = pendingOf(s);
-                        return h('button', {
+                        return h('div', {
+                            class: 'wb-sess-row',
+                            dataset: { sessionId: s.id },
+                        },
+                        h('button', {
                             type: 'button',
                             class: 'wb-sess-item',
                             'aria-current': String(s.id === session?.id),
@@ -402,9 +415,112 @@ export function createIteratePage(app) {
                             h('span', { class: 'wb-sess-t', text: s.title }),
                             h('span', { class: 'wb-sess-m' },
                                 `${targetName(s.ws)} · ${s.scopeName || scopeDisplayName(s.scope)} · ${relativeTime(s.updatedAt)}`,
-                                p ? h('span', { class: 'wb-sess-p', text: i18nFormat(' · ${0} to confirm', p) }) : null)));
+                                p ? h('span', { class: 'wb-sess-p', text: i18nFormat(' · ${0} to confirm', p) }) : null))),
+                        store ? iconButton('trash', i18n('Delete conversation'), (event) => {
+                            event.stopPropagation();
+                            void deleteSession(s);
+                        }, {
+                            className: 'wb-sess-del',
+                            size: 14,
+                            disabled: deleting.has(s.id) || applying.has(s.id) || clearing,
+                        }) : null);
                     }),
                 ]) : h('p', { class: 'wb-note wb-sess-empty', text: i18n('No chats yet.') })));
+    }
+
+    async function deleteSession(targetSession) {
+        const id = targetSession?.id;
+        if (!store || !id || deleting.has(id) || applying.has(id) || clearing) return;
+        const confirmed = await confirmDialog(app.layer || el, {
+            title: i18n('Delete conversation'),
+            message: i18nFormat('Delete "${0}"? This cannot be undone.', targetSession.title || i18n('New conversation')),
+            okLabel: i18n('Delete'),
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        deleting.add(id);
+        paintSessions();
+        try {
+            activeRunForSession(id)?.abort?.abort();
+            const isCurrent = session?.id === id;
+            if (isCurrent) {
+                void firePendingCancelHook();
+            }
+            const sOpts = sessionScopes.get(id) || scopeOptsFor(targetSession.scope) || { scope: 'global' };
+            await store.remove(id, sOpts);
+            drafts.delete(id);
+            sessionScopes.delete(id);
+            recentSessions = recentSessions.filter(x => x.id !== id);
+            if (isCurrent) {
+                selectionVersion++;
+                session = null;
+                paintAll();
+            } else {
+                paintSessions();
+            }
+            app.refreshBadges?.();
+            app.toast(i18n('Conversation deleted'));
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        } finally {
+            deleting.delete(id);
+            paintSessions();
+        }
+    }
+
+    async function clearVisibleSessions(visibleList) {
+        if (!store || clearing || !Array.isArray(visibleList) || !visibleList.length) return;
+        if (visibleList.some(s => applying.has(s.id) || deleting.has(s.id))) return;
+        const confirmed = await confirmDialog(app.layer || el, {
+            title: i18n('Clear conversations'),
+            message: i18nFormat('Delete all ${0} conversations under "${1}" (${2})? This cannot be undone.', visibleList.length, targetName(), scopeDisplayName()),
+            okLabel: i18n('Clear all'),
+            danger: true,
+        });
+        if (!confirmed) return;
+
+        clearing = true;
+        paintSessions();
+        try {
+            const ids = visibleList.map(s => s.id).filter(Boolean);
+            const idSet = new Set(ids);
+            for (const id of ids) {
+                activeRunForSession(id)?.abort?.abort();
+            }
+            const clearedCurrent = Boolean(session?.id && idSet.has(session.id));
+            if (clearedCurrent) {
+                void firePendingCancelHook();
+            }
+            const sOpts = scopeOptsFor() || { scope: 'global' };
+            if (typeof store.removeMany === 'function') {
+                await store.removeMany(ids, sOpts);
+            } else {
+                for (const id of ids) {
+                    await store.remove(id, sessionScopes.get(id) || sOpts);
+                }
+            }
+            for (const id of ids) {
+                drafts.delete(id);
+                sessionScopes.delete(id);
+            }
+            recentSessions = recentSessions.filter(x => !idSet.has(x.id));
+            if (clearedCurrent) {
+                selectionVersion++;
+                session = null;
+                paintAll();
+            } else {
+                paintSessions();
+            }
+            app.refreshBadges?.();
+            app.toast(i18nFormat('Deleted ${0} conversations', ids.length));
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+            if (isVisible()) void refreshSessions();
+        } finally {
+            clearing = false;
+            paintSessions();
+        }
     }
 
     function newChat() {

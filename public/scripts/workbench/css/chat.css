@@ -19,6 +19,8 @@
 .wbench .wb-chat-head { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 9px 14px; border-bottom: 1px solid var(--wb-border); }
 .wbench .wb-chat-title { font-weight: 650; }
 .wbench .wb-chat-hist { width: auto; max-width: 200px; }
+.wbench .wb-chat-del { color: var(--wb-faint); }
+.wbench .wb-chat-del:hover { color: var(--wb-danger); background: var(--wb-danger-soft); }
 .wbench .wb-chat-body { flex: 1 1 0%; min-height: 0; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 .wbench .wb-chat-body > * { flex-shrink: 0; }
 .wbench .wb-msg-me { align-self: flex-end; max-width: 78%; padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--wb-accent-soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }

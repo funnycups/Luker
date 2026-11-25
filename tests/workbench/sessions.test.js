@@ -322,4 +322,27 @@ describe('workbench state-backed session store', () => {
         expect(longA).toMatch(/^[a-z0-9_-]+$/);
         expect(longA.length).toBeLessThanOrEqual(96);
     });
+
+    test('removeMany removes matching ids in one index update and deletes each body namespace while keeping other entries', async () => {
+        const { ctx, store } = makeMockStateContext();
+        const sessions = createSessionStore(ctx);
+
+        const a = await sessions.create({ kind: 'iterate', ws: 'card', title: 'Card 1' }, { scope: 'character', avatar: 'alice.png' });
+        const b = await sessions.create({ kind: 'iterate', ws: 'card', title: 'Card 2' }, { scope: 'character', avatar: 'alice.png' });
+        const keep = await sessions.create({ kind: 'iterate', ws: 'memory', title: 'Memory 1' }, { scope: 'character', avatar: 'alice.png' });
+
+        ctx.updateCharacterState.mockClear();
+        ctx.deleteCharacterState.mockClear();
+
+        const res = await sessions.removeMany([a.id, b.id], { scope: 'character', avatar: 'alice.png' });
+        expect(res.removed.sort()).toEqual([a.id, b.id].sort());
+        expect(ctx.updateCharacterState).toHaveBeenCalledTimes(1);
+        expect(ctx.updateCharacterState).toHaveBeenCalledWith('alice.png', SESSIONS_NAMESPACE, expect.any(Function));
+        expect(ctx.deleteCharacterState).toHaveBeenCalledWith('alice.png', sessionBodyNamespace(a.id));
+        expect(ctx.deleteCharacterState).toHaveBeenCalledWith('alice.png', sessionBodyNamespace(b.id));
+        expect(store.character.has(`alice.png::${sessionBodyNamespace(a.id)}`)).toBe(false);
+        expect(store.character.has(`alice.png::${sessionBodyNamespace(b.id)}`)).toBe(false);
+        expect(store.character.has(`alice.png::${sessionBodyNamespace(keep.id)}`)).toBe(true);
+        expect((await sessions.list('iterate', { scope: 'character', avatar: 'alice.png' })).map(s => s.id)).toEqual([keep.id]);
+    });
 });

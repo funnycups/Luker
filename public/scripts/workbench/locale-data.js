@@ -546,6 +546,12 @@ const ZH_CN = {
     '${enabledSources} — Q&A has no local context and can only read your question.': '${enabledSources} —— 问问没有任何本地上下文，只能看到你的提问。',
     'AI & editing behavior summary': 'AI 与编辑行为摘要',
     'Q&A context & privacy summary': '问问上下文与隐私摘要',
+    'Delete conversation': '删除对话',
+    'Delete "${0}"? This cannot be undone.': '删除「${0}」？此操作无法撤销。',
+    'Conversation deleted': '已删除对话',
+    'Clear conversations': '清空对话',
+    'Delete all ${0} conversations under "${1}" (${2})? This cannot be undone.': '删除「${1}」（${2}）下的全部 ${0} 条对话？此操作无法撤销。',
+    'Deleted ${0} conversations': '已删除 ${0} 条对话',
 };
 
 const ZH_TW = {
@@ -1091,6 +1097,12 @@ const ZH_TW = {
     '${enabledSources} — Q&A has no local context and can only read your question.': '${enabledSources} —— 問問沒有任何本機上下文，只能看到你的提問。',
     'AI & editing behavior summary': 'AI 與編輯行為摘要',
     'Q&A context & privacy summary': '問問上下文與隱私摘要',
+    'Delete conversation': '刪除對話',
+    'Delete "${0}"? This cannot be undone.': '刪除「${0}」？此操作無法復原。',
+    'Conversation deleted': '已刪除對話',
+    'Clear conversations': '清空對話',
+    'Delete all ${0} conversations under "${1}" (${2})? This cannot be undone.': '刪除「${1}」（${2}）下的全部 ${0} 條對話？此操作無法復原。',
+    'Deleted ${0} conversations': '已刪除 ${0} 條對話',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {
