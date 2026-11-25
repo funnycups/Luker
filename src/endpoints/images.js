@@ -11,11 +11,42 @@ import { MEDIA_EXTENSIONS, MEDIA_REQUEST_TYPE } from '../constants.js';
 import { appendMediaAttribution } from './media-attribution.js';
 import {
     assertTransientMediaMutation,
+    assertTransientMediaRead,
     deleteTransientImage,
     getTransientSession,
     TRANSIENT_MEDIA_DIRECTORY,
     writeTransientImage,
 } from '../transient-sessions.js';
+
+export const AI_ATTACHMENTS_DIRECTORY = '_ai_attachments';
+
+const HIDDEN_GALLERY_DIRECTORIES = new Set([
+    TRANSIENT_MEDIA_DIRECTORY,
+    AI_ATTACHMENTS_DIRECTORY,
+]);
+
+function normalizeClientRelativePath(rawPath) {
+    if (typeof rawPath !== 'string') return '';
+    const trimmed = rawPath.trim();
+    if (!trimmed || trimmed.includes('\0') || trimmed.includes('\\')) return '';
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) || trimmed.startsWith('//')) return '';
+    const withoutQuery = trimmed.split(/[?#]/, 1)[0];
+    let decoded;
+    try {
+        decoded = decodeURIComponent(withoutQuery);
+    } catch {
+        return '';
+    }
+    return decoded.replace(/^\/+/, '');
+}
+
+async function resolveRealDir(dirPath) {
+    try {
+        return await fs.promises.realpath(dirPath);
+    } catch {
+        return path.resolve(dirPath);
+    }
+}
 
 /**
  * Ensure the directory for the provided file path exists.
@@ -116,8 +147,9 @@ router.post('/list/:folder?', (request, response) => {
         if (!request.body.folder) {
             return response.status(400).send({ error: 'No folder specified' });
         }
-        if (sanitize(String(request.body.folder)).toLowerCase() === TRANSIENT_MEDIA_DIRECTORY) {
-            return response.status(403).send({ error: 'Temporary media cannot be listed in the gallery.' });
+        const normalizedFolder = sanitize(String(request.body.folder)).toLowerCase();
+        if (HIDDEN_GALLERY_DIRECTORIES.has(normalizedFolder)) {
+            return response.status(403).send({ error: 'Internal media folders cannot be listed in the gallery.' });
         }
 
         const directoryPath = path.join(request.user.directories.userImages, sanitize(request.body.folder));
@@ -148,7 +180,7 @@ router.post('/folders', (request, response) => {
         }
 
         const folders = fs.readdirSync(directoryPath, { withFileTypes: true })
-            .filter(dirent => dirent.isDirectory() && dirent.name.toLowerCase() !== TRANSIENT_MEDIA_DIRECTORY)
+            .filter(dirent => dirent.isDirectory() && !HIDDEN_GALLERY_DIRECTORIES.has(dirent.name.toLowerCase()))
             .map(dirent => dirent.name);
 
         return response.send(folders);
@@ -184,5 +216,132 @@ router.post('/delete', async (request, response) => {
     } catch (error) {
         console.error(error);
         return response.status(error.status || 500).send({ error: error.message });
+    }
+});
+
+router.post('/copy', async (request, response) => {
+    try {
+        const rawPaths = request.body?.paths;
+        if (!Array.isArray(rawPaths)) {
+            return response.status(400).json({ error: 'paths must be an array.' });
+        }
+        const uniquePaths = [...new Set(rawPaths.map(p => (typeof p === 'string' ? p.trim() : '')).filter(Boolean))];
+        if (uniquePaths.length === 0) {
+            return response.json({ copies: {}, missing: [] });
+        }
+
+        const userRoot = path.resolve(request.user.directories.root);
+        const userImagesDir = path.resolve(request.user.directories.userImages);
+        const realUserImagesDir = await resolveRealDir(userImagesDir);
+        const targetDir = path.join(userImagesDir, AI_ATTACHMENTS_DIRECTORY);
+        await fs.promises.mkdir(targetDir, { recursive: true });
+
+        const copies = {};
+        const missing = [];
+        for (const rawPath of uniquePaths) {
+            const rel = normalizeClientRelativePath(rawPath);
+            if (!rel) {
+                return response.status(400).json({ error: `Invalid image path: ${rawPath}` });
+            }
+            const sourceAbs = path.resolve(userRoot, rel);
+            if (!isPathUnderParent(userImagesDir, sourceAbs)) {
+                return response.status(400).json({ error: `Path is outside user images directory: ${rawPath}` });
+            }
+            assertTransientMediaRead(request, rawPath);
+
+            let stat;
+            try {
+                stat = await fs.promises.stat(sourceAbs);
+            } catch (err) {
+                if (err?.code === 'ENOENT') {
+                    missing.push(rawPath);
+                    continue;
+                }
+                throw err;
+            }
+            if (!stat.isFile()) {
+                return response.status(400).json({ error: `Path is not a regular file: ${rawPath}` });
+            }
+            const realSource = await fs.promises.realpath(sourceAbs);
+            if (!isPathUnderParent(realUserImagesDir, realSource)) {
+                return response.status(400).json({ error: `Symlink target escapes user images directory: ${rawPath}` });
+            }
+
+            const ext = path.extname(realSource).toLowerCase().replace(/^\./, '');
+            const safeExt = MEDIA_EXTENSIONS.includes(ext) ? ext : 'png';
+            const destPath = path.join(targetDir, `${randomUUID()}.${safeExt}`);
+            await fs.promises.copyFile(realSource, destPath);
+            copies[rawPath] = clientRelativePath(userRoot, destPath);
+        }
+
+        return response.json({ copies, missing });
+    } catch (error) {
+        console.error('Image copy failed:', error);
+        return response.status(error?.status || 500).json({ error: error?.message || 'Failed to copy images.' });
+    }
+});
+
+router.post('/delete-batch', async (request, response) => {
+    try {
+        const rawPaths = request.body?.paths;
+        if (!Array.isArray(rawPaths)) {
+            return response.status(400).json({ error: 'paths must be an array.' });
+        }
+        const uniquePaths = [...new Set(rawPaths.map(p => (typeof p === 'string' ? p.trim() : '')).filter(Boolean))];
+        if (uniquePaths.length === 0) {
+            return response.json({ deleted: [], missing: [], failed: [] });
+        }
+
+        const userRoot = path.resolve(request.user.directories.root);
+        const attachmentsDir = path.resolve(request.user.directories.userImages, AI_ATTACHMENTS_DIRECTORY);
+        const realAttachmentsDir = await resolveRealDir(attachmentsDir);
+
+        const deleted = [];
+        const missing = [];
+        const failed = [];
+        for (const rawPath of uniquePaths) {
+            const rel = normalizeClientRelativePath(rawPath);
+            if (!rel) {
+                return response.status(400).json({ error: `Invalid attachment path: ${rawPath}` });
+            }
+            const targetAbs = path.resolve(userRoot, rel);
+            if (!isPathUnderParent(attachmentsDir, targetAbs)) {
+                return response.status(400).json({ error: `Batch deletion is restricted to ${AI_ATTACHMENTS_DIRECTORY}: ${rawPath}` });
+            }
+
+            let lstat;
+            try {
+                lstat = await fs.promises.lstat(targetAbs);
+            } catch (err) {
+                if (err?.code === 'ENOENT') {
+                    missing.push(rawPath);
+                    continue;
+                }
+                failed.push({ path: rawPath, error: String(err?.message || err) });
+                continue;
+            }
+            if (lstat.isSymbolicLink() || !lstat.isFile()) {
+                return response.status(400).json({ error: `Attachment path must be a regular file: ${rawPath}` });
+            }
+            const realTarget = await fs.promises.realpath(targetAbs);
+            if (!isPathUnderParent(realAttachmentsDir, realTarget)) {
+                return response.status(400).json({ error: `Path escapes ${AI_ATTACHMENTS_DIRECTORY}: ${rawPath}` });
+            }
+            try {
+                await fs.promises.unlink(realTarget);
+                deleted.push(rawPath);
+            } catch (err) {
+                if (err?.code === 'ENOENT') {
+                    missing.push(rawPath);
+                } else {
+                    failed.push({ path: rawPath, error: String(err?.message || err) });
+                }
+            }
+        }
+
+        return response.json({ deleted, missing, failed });
+    } catch (error) {
+        console.error('Batch image deletion failed:', error);
+        return response.status(error?.status || 500).json({ error: error?.message || 'Failed to delete attachment images.' });
     }
 });

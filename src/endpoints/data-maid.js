@@ -8,7 +8,8 @@ import { CHAT_BACKUPS_PREFIX } from './chats.js';
 import { isPathUnderParent, tryParse } from '../util.js';
 import { extractLocalMediaPaths, resolveUserImagePath } from '../media-references.js';
 import { SETTINGS_FILE } from '../constants.js';
-import { getNamedDocRepo, getSettingsRepo, isStorageInitialized } from '../storage/index.js';
+import { getChatRepo, getNamedDocRepo, getPresetRepo, getSettingsRepo, isStorageInitialized } from '../storage/index.js';
+import { PRESET_FOLDER_BY_API_ID } from '../storage/repositories/preset-repo.js';
 
 const sha256 = str => crypto.createHash('sha256').update(str).digest('hex');
 
@@ -679,10 +680,12 @@ export class DataMaidService {
             }
         };
 
+        const isStateSidecarFile = (name) => typeof name === 'string' && name.includes('.state.') && name.endsWith('.json');
+
         try {
             const groupChats = await fs.promises.readdir(this.directories.groupChats, { withFileTypes: true });
             for (const file of groupChats) {
-                if (file.isFile() && path.parse(file.name).ext === '.jsonl') {
+                if (file.isFile() && (path.parse(file.name).ext === '.jsonl' || file.name.endsWith('.json'))) {
                     await scanFile(path.join(this.directories.groupChats, file.name));
                 }
             }
@@ -695,8 +698,32 @@ export class DataMaidService {
                 const directoryPath = path.join(this.directories.chats, directory.name);
                 const chatFiles = await fs.promises.readdir(directoryPath, { withFileTypes: true });
                 for (const file of chatFiles) {
-                    if (file.isFile() && path.parse(file.name).ext === '.jsonl') {
+                    if (file.isFile() && (path.parse(file.name).ext === '.jsonl' || file.name.endsWith('.json'))) {
                         await scanFile(path.join(directoryPath, file.name));
+                    }
+                }
+            }
+
+            if (this.directories.characters && fs.existsSync(this.directories.characters)) {
+                const characterEntries = await fs.promises.readdir(this.directories.characters, { withFileTypes: true });
+                for (const entry of characterEntries) {
+                    if (entry.isFile() && isStateSidecarFile(entry.name)) {
+                        await scanFile(path.join(this.directories.characters, entry.name));
+                    }
+                }
+            }
+
+            const scannedPresetDirs = new Set();
+            for (const dirKey of Object.values(PRESET_FOLDER_BY_API_ID)) {
+                const presetDir = this.directories[dirKey];
+                if (!presetDir || scannedPresetDirs.has(presetDir) || !fs.existsSync(presetDir)) {
+                    continue;
+                }
+                scannedPresetDirs.add(presetDir);
+                const presetEntries = await fs.promises.readdir(presetDir, { withFileTypes: true });
+                for (const entry of presetEntries) {
+                    if (entry.isFile() && isStateSidecarFile(entry.name)) {
+                        await scanFile(path.join(presetDir, entry.name));
                     }
                 }
             }
@@ -727,6 +754,40 @@ export class DataMaidService {
                         for (const item of globalStateDocs) {
                             if (item?.doc) {
                                 collectFromText(JSON.stringify(item.doc));
+                            }
+                        }
+                    }
+                    const chatRepo = getChatRepo();
+                    const chatEntries = await chatRepo.listAll(this.handle);
+                    if (Array.isArray(chatEntries)) {
+                        for (const entry of chatEntries) {
+                            const key = entry?.key;
+                            if (!key?.name) continue;
+                            const opts = { isGroup: Boolean(key.isGroup), groupId: key.groupId };
+                            const namespaces = await chatRepo.listStateNamespaces(this.handle, key.charDir, key.name, opts);
+                            for (const ns of Array.isArray(namespaces) ? namespaces : []) {
+                                const stateDoc = await chatRepo.getState(this.handle, key.charDir, key.name, ns, opts);
+                                if (stateDoc) {
+                                    collectFromText(JSON.stringify(stateDoc));
+                                }
+                            }
+                        }
+                    }
+                    const presetRepo = getPresetRepo();
+                    const seenDirKeys = new Set();
+                    for (const [apiId, dirKey] of Object.entries(PRESET_FOLDER_BY_API_ID)) {
+                        if (seenDirKeys.has(dirKey)) continue;
+                        seenDirKeys.add(dirKey);
+                        const presetEntries = await presetRepo.list(this.handle, apiId);
+                        for (const entry of Array.isArray(presetEntries) ? presetEntries : []) {
+                            const name = entry?.key?.name;
+                            if (!name) continue;
+                            const namespaces = await presetRepo.listStateNamespaces(this.handle, apiId, name);
+                            for (const ns of Array.isArray(namespaces) ? namespaces : []) {
+                                const stateDoc = await presetRepo.getState(this.handle, apiId, name, ns);
+                                if (stateDoc) {
+                                    collectFromText(JSON.stringify(stateDoc));
+                                }
                             }
                         }
                     }
