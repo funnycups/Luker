@@ -652,8 +652,8 @@
     z-index: 3010 !important;
     border-radius: 0 0 12px 12px;
     background-color: var(--SmartThemeBlurTintColor);
-    backdrop-filter: blur(calc(var(--SmartThemeBlurStrength)));
-    -webkit-backdrop-filter: blur(calc(var(--SmartThemeBlurStrength)));
+    backdrop-filter: var(--SmartThemeBackdropFilter);
+    -webkit-backdrop-filter: var(--SmartThemeBackdropFilter);
 }
 
 #prompt-manager-export-format-popup {

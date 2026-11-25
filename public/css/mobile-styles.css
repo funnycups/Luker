@@ -370,7 +370,7 @@
     #character_popup,
     #send_form {
         border: 1px solid var(--SmartThemeBorderColor);
-        backdrop-filter: blur(calc(var(--SmartThemeBlurStrength) * 2));
+        backdrop-filter: var(--SmartThemeBackdropFilter2x);
         max-width: 100dvw;
     }
 
@@ -417,7 +417,7 @@
         border-radius: 0 0 20px 20px;
         top: var(--topBarBlockSize) !important;
         left: 0 !important;
-        backdrop-filter: blur(calc(var(--SmartThemeBlurStrength) * 2));
+        backdrop-filter: var(--SmartThemeBackdropFilter2x);
 
         @starting-style {
             height: 0;
@@ -710,7 +710,7 @@
         max-width: unset;
         min-height: unset;
         max-height: unset;
-        backdrop-filter: blur(calc(var(--SmartThemeBlurStrength) * 2));
+        backdrop-filter: var(--SmartThemeBackdropFilter2x);
         left: 0;
         right: 0;
         top: 0;

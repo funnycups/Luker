@@ -116,6 +116,14 @@ input.extension_missing[type="checkbox"] {
     flex-direction: column;
 }
 
+/* Keep scrollable textareas in a positive stacking context so Chromium does not
+   promote following drawer siblings into overlapping composited layers. */
+#extensions_settings textarea,
+#extensions_settings2 textarea {
+    position: relative;
+    z-index: 1;
+}
+
 /* Fixes order of settings for extensions */
 .extension_container {
     display: contents;

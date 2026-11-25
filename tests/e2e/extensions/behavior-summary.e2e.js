@@ -66,6 +66,63 @@ async function ensureOrchestratorPipelineMode(lens) {
     return nodeRoundsInput;
 }
 
+async function ensureEditableDarkLiteTheme(page) {
+    const themeSelect = page.locator('#themes');
+    await themeSelect.selectOption('Dark Lite');
+    const customCssInput = page.locator('#customCSS');
+    if (await customCssInput.isDisabled()) {
+        await page.locator('#ui_preset_derive_button').click();
+        await expect(customCssInput).toBeEnabled({ timeout: 5000 });
+    }
+    return customCssInput;
+}
+
+async function openProfileAgentDrawer(page) {
+    const content = page.locator('#sd_illustration_profile_agent_drawer > .inline-drawer-content').first();
+    await content.waitFor({ state: 'attached', timeout: 5000 });
+    const isHidden = await content.evaluate((el) => getComputedStyle(el).display === 'none');
+    if (isHidden) {
+        await page.locator('#sd_illustration_profile_agent_drawer > .inline-drawer-toggle').first().click();
+        await content.waitFor({ state: 'visible', timeout: 5000 });
+    }
+}
+
+async function findLargeSiblingOverlapLayers(page) {
+    const cdp = await page.context().newCDPSession(page);
+    let latestLayers = [];
+    const onLayerTreeChange = (ev) => {
+        if (ev.layers) latestLayers = ev.layers;
+    };
+    try {
+        cdp.on('LayerTree.layerTreeDidChange', onLayerTreeChange);
+        await cdp.send('LayerTree.enable');
+        await page.evaluate(() => {
+            const ext = document.getElementById('rm_extensions_block');
+            if (ext) ext.scrollTop = 1200;
+            return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        });
+
+        const overlapLayers = [];
+        for (const layer of latestLayers) {
+            if (!layer.drawsContent || !layer.backendNodeId || layer.height < 400) continue;
+            const desc = await cdp.send('DOM.describeNode', { backendNodeId: layer.backendNodeId }).catch(() => null);
+            const attrs = desc?.node?.attributes || [];
+            const attrMap = {};
+            for (let i = 0; i < attrs.length; i += 2) attrMap[attrs[i]] = attrs[i + 1];
+            const cls = attrMap.class || '';
+            const tag = desc?.node?.localName || '';
+            if (cls.includes('sd_illustration_row') || tag === 'hr') {
+                overlapLayers.push({ tag, cls, width: layer.width, height: layer.height });
+            }
+        }
+        return overlapLayers;
+    } finally {
+        cdp.off('LayerTree.layerTreeDidChange', onLayerTreeChange);
+        await cdp.send('LayerTree.disable').catch(() => {});
+        await cdp.detach().catch(() => {});
+    }
+}
+
 async function assertMobileRowStackingAndNoOverflow(page, cardSelector, containerSelector) {
     const metrics = await page.evaluate(({ cardSel, containerSel }) => {
         const cards = Array.from(document.querySelectorAll(cardSel)).filter((el) => el.offsetParent !== null);
@@ -351,5 +408,68 @@ test.describe('live behavior summary UI', () => {
             '.wbench .ml-settings',
         );
         await closeWorkbench(page);
+    });
+
+    test('Mobile extensions drawer isolates scrollable textareas and skips zero-blur backdrop-filter without overriding custom CSS', async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await awaitMainUI(page, server.baseURL);
+
+        // Open Extensions drawer and expand Image Generation + AI Illustration + Character Profile Agent.
+        await openExtensionsDrawer(page);
+        await openInlineDrawer(page, 'sd_container');
+        await openInlineDrawer(page, 'sd_illustration_container');
+        await openProfileAgentDrawer(page);
+
+        // Scrollable textareas inside extensions settings establish a positive stacking context.
+        const textareaStyles = await page.evaluate(() => {
+            const ids = [
+                'sd_illustration_prompt',
+                'sd_illustration_studio_prompt',
+                'sd_illustration_exploration_prompt',
+            ];
+            return ids.map((id) => {
+                const el = document.getElementById(id);
+                const cs = el ? getComputedStyle(el) : null;
+                return { id, position: cs?.position, zIndex: cs?.zIndex };
+            });
+        });
+        for (const item of textareaStyles) {
+            expect(item.position).toBe('relative');
+            expect(Number(item.zIndex)).toBeGreaterThanOrEqual(1);
+        }
+
+        // Verify Chromium's compositor does not promote following siblings into giant overlap layers.
+        const siblingOverlapLayers = await findLargeSiblingOverlapLayers(page);
+        expect(siblingOverlapLayers).toEqual([]);
+
+        // Verify blur_strength=0 turns off built-in backdrop-filter while preserving custom CSS overrides.
+        await closeExtensionsDrawer(page);
+        await openTopDrawer(page, 'user-settings-button');
+        const customCssInput = await ensureEditableDarkLiteTheme(page);
+        await ensureCheckboxUnchecked(page.locator('#fast_ui_mode'));
+
+        const blurSlider = page.locator('#blur_strength');
+        await blurSlider.fill('8');
+        await expect.poll(() => page.evaluate(() => getComputedStyle(document.getElementById('rm_extensions_block')).backdropFilter))
+            .toContain('blur(');
+
+        const originalCustomCss = await customCssInput.inputValue();
+        await customCssInput.fill(`${originalCustomCss}\n#chat { backdrop-filter: blur(5px); }`);
+        await blurSlider.fill('0');
+
+        await expect.poll(() => page.evaluate(() => ({
+            extBackdrop: getComputedStyle(document.getElementById('rm_extensions_block')).backdropFilter,
+            chatBackdrop: getComputedStyle(document.getElementById('chat')).backdropFilter,
+            backdropVar: getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBackdropFilter').trim(),
+            backdrop2xVar: getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBackdropFilter2x').trim(),
+        }))).toEqual({
+            extBackdrop: 'none',
+            chatBackdrop: 'blur(5px)',
+            backdropVar: 'none',
+            backdrop2xVar: 'none',
+        });
+
+        await customCssInput.fill(originalCustomCss);
+        await closeTopDrawer(page, 'user-settings-button');
     });
 });

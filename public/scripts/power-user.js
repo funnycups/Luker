@@ -2212,7 +2212,11 @@ function applyCustomCSS() {
 }
 
 function applyBlurStrength() {
+    const blurStrength = Number(power_user.blur_strength);
+    const hasBlur = Number.isFinite(blurStrength) && blurStrength > 0;
     document.documentElement.style.setProperty('--blurStrength', String(power_user.blur_strength));
+    document.documentElement.style.setProperty('--SmartThemeBackdropFilter', hasBlur ? 'blur(var(--SmartThemeBlurStrength))' : 'none');
+    document.documentElement.style.setProperty('--SmartThemeBackdropFilter2x', hasBlur ? 'blur(calc(var(--SmartThemeBlurStrength) * 2))' : 'none');
     $('#blur_strength_counter').val(power_user.blur_strength);
     $('#blur_strength').val(power_user.blur_strength);
 }

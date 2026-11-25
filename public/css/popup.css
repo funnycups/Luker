@@ -124,8 +124,8 @@ dialog {
 }
 
 .popup[open]::backdrop {
-    backdrop-filter: blur(calc(var(--SmartThemeBlurStrength) * 2));
-    -webkit-backdrop-filter: blur(calc(var(--SmartThemeBlurStrength) * 2));
+    backdrop-filter: var(--SmartThemeBackdropFilter2x);
+    -webkit-backdrop-filter: var(--SmartThemeBackdropFilter2x);
     background-color: var(--black30a);
 }
 
