@@ -12,7 +12,7 @@ import { i18n, i18nFormat } from './i18n.js';
 import { askSystemPrompt } from './model/ask.js';
 import { buildBudget } from './model/budget.js';
 import { SourceError } from './model/errors.js';
-import { searchLukerDocs } from './model/luker-docs.js';
+import { listLukerDocs, readLukerDoc } from '../iteration-library/tools/ctx-and-docs-discovery.js';
 import { attribute, describeRequest, finishOverview, redactReaders } from './model/requests.js';
 import { resolveAiRow } from './model/ai-source.js';
 import { createSessionStore } from './model/sessions.js';
@@ -1212,7 +1212,6 @@ function extractInspectorReplyToolCalls(detail) {
 /** Reader functions keyed by tool name (see model/ask.js), gated by `sources`. */
 export function askReaders({ redactText = true, suggestions = () => [], sources = null, registry = defaultRegistry } = {}) {
     const on = (key) => !sources || sources[key] !== false;
-    const anySourceOn = on('inspector') || on('frontLogs') || on('serverLogs') || on('content') || on('plugins');
     const readers = {};
 
     if (on('inspector')) {
@@ -1370,11 +1369,14 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
         }
     }
 
-    if (anySourceOn && (!sources || sources.docs !== false)) {
-        readers.wb_search_luker_docs = async (args) => searchLukerDocs(args);
-    }
-
-    return redactReaders(readers, redactText);
+    const redacted = redactReaders(readers, redactText);
+    // Built-in product docs come from Luker's docs/ tree and contain no user secrets;
+    // keep them available regardless of local-data source toggles and do not mangle doc URLs.
+    redacted.wb_list_luker_docs = async ({ filter = '', include_translations = false } = {}) =>
+        listLukerDocs({ filter, includeTranslations: Boolean(include_translations) });
+    redacted.wb_read_luker_doc = async ({ path = '' } = {}) =>
+        readLukerDoc({ path });
+    return redacted;
 }
 
 /** Compact overview sent with every question, filtered by `sources` & redaction. */

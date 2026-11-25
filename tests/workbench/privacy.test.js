@@ -157,7 +157,11 @@ describe('workbench privacy and redaction', () => {
 
     test('askTools, askReaders, and runAsk enforce sources gating on read tools', async () => {
         const disabledSources = { content: false, plugins: false, frontLogs: false, serverLogs: false, inspector: false };
-        expect(askTools(disabledSources).map(t => t.function.name)).toEqual(['wb_answer']);
+        expect(askTools(disabledSources).map(t => t.function.name)).toEqual([
+            'wb_list_luker_docs',
+            'wb_read_luker_doc',
+            'wb_answer',
+        ]);
 
         globalThis.Luker = {
             getContext: () => ({
@@ -180,7 +184,8 @@ describe('workbench privacy and redaction', () => {
         expect(gatedReaders.wb_read_frontend_logs).toBeUndefined();
         expect(gatedReaders.wb_read_luker_env).toBeUndefined();
         expect(gatedReaders.wb_read_suggestions).toBeUndefined();
-        expect(gatedReaders.wb_search_luker_docs).toBeUndefined();
+        expect(typeof gatedReaders.wb_list_luker_docs).toBe('function');
+        expect(typeof gatedReaders.wb_read_luker_doc).toBe('function');
 
         // Even if someone passes a reader directly to runAsk while sources.content is false, runAsk refuses to invoke it.
         const chatSpy = jest.fn(async () => ({ messages: [{ text: 'Leaked!' }] }));

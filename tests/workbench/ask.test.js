@@ -2,7 +2,6 @@
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { MAX_ROUNDS, askSystemPrompt, askUserMessage, askTools, runAsk, readsSummary, readLabel, clip, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
-import { searchLukerDocs, listLukerDocTopics } from '../../public/scripts/workbench/model/luker-docs.js';
 import { attribute, groupByGeneration, describeRequest } from '../../public/scripts/workbench/model/requests.js';
 import { SourceError, aiRequest, askOverview, askReaders, listAiChoices, loadSnapshot } from '../../public/scripts/workbench/source-luker.js';
 import { createMemoryAskProvider } from '../../public/scripts/extensions/memory-graph/lens/providers.js';
@@ -368,7 +367,8 @@ describe('workbench Ask model & source readers', () => {
         expect(readLabel('wb_read_world_info_trace')).toBe('World book trace');
         expect(readLabel('wb_read_connections')).toBe('Connection profile');
         expect(readLabel('wb_read_skills')).toBe('Skills');
-        expect(readLabel('wb_search_luker_docs')).toBe('Luker docs');
+        expect(readLabel('wb_list_luker_docs')).toBe('Luker docs');
+        expect(readLabel('wb_read_luker_doc')).toBe('Luker docs');
     });
 
     test('runAsk preserves raw reasoning, unified signature, and extra_content across tool rounds; buildAskHistory keeps requestIds', async () => {
@@ -519,8 +519,7 @@ describe('workbench Ask model & source readers', () => {
         });
         expect(roundCount).toBe(MAX_ROUNDS);
         expect(lastRoundTools).toEqual(['wb_answer']);
-        expect(lastRoundMessages.at(-1).role).toBe('user');
-        expect(lastRoundMessages.at(-1).content).toContain('wb_answer');
+        expect(lastRoundMessages.at(-1).role).toBe('tool');
         expect(degraded.answer).toBe('Partial finding before limit');
         expect(degraded.reads).toHaveLength(MAX_ROUNDS - 1);
 
@@ -1431,35 +1430,54 @@ describe('workbench Ask model & source readers', () => {
         expect(previews[4]).toContain('Draft without tool');
     });
 
-    test('searchLukerDocs accurately ranks tricky colloquial queries and enforces word boundaries for short ASCII tokens', () => {
-        const docsDir = searchLukerDocs({});
-        expect(docsDir.mode).toBe('directory');
-        expect(docsDir.items.length).toBe(listLukerDocTopics().length);
+    test('wb_list_luker_docs and wb_read_luker_doc query /api/docs without redacting documentation URLs', async () => {
+        globalThis.Luker = {
+            getContext: () => ({
+                getRequestHeaders: () => ({ 'X-CSRF-Token': 'tok' }),
+            }),
+        };
+        globalThis.fetch = jest.fn(async (url) => {
+            const target = String(url);
+            if (target === '/api/docs/list') {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        files: [
+                            { path: 'features/memory-graph.md', size: 1200 },
+                            { path: 'zh-CN/features/memory-graph.md', size: 1300 },
+                            { path: 'features/orchestrator/index.md', size: 800 },
+                        ],
+                    }),
+                };
+            }
+            if (target === '/api/docs/file?path=features%2Fmemory-graph.md') {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        path: 'features/memory-graph.md',
+                        size: 64,
+                        content: '# Memory Graph\nSee https://luker.cups.moe/features/memory-graph',
+                    }),
+                };
+            }
+            return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+        });
 
-        expect(searchLukerDocs({ query: '逐楼层变量' }).items[0].id).toBe('variable-op-log');
-        expect(searchLukerDocs({ query: 'AI 怎么记住以前的事' }).items[0].id).toBe('memory-graph');
+        const readers = askReaders({ redactText: true });
+        const filtered = await readers.wb_list_luker_docs({ filter: 'memory' });
+        expect(filtered.ok).toBe(true);
+        expect(filtered.files.map(f => f.path)).toEqual(['features/memory-graph.md']);
+        expect(filtered.hiddenTranslations).toBe(1);
 
-        const embedHits = searchLukerDocs({ query: 'embedding 在哪设置' }).items.map(i => i.id);
-        expect(embedHits[0]).toBe('connections-and-generation');
-        expect(embedHits).toContain('memory-graph');
-        expect(embedHits[0]).not.toBe('user-settings-and-clients');
+        const withTranslations = await readers.wb_list_luker_docs({ filter: 'memory', include_translations: true });
+        expect(withTranslations.files.map(f => f.path)).toEqual([
+            'features/memory-graph.md',
+            'zh-CN/features/memory-graph.md',
+        ]);
 
-        expect(searchLukerDocs({ query: '仅保留破限是什么' }).items[0].id).toBe('preset-assistant');
-        expect(searchLukerDocs({ query: '画中画保活在哪开' }).items[0].id).toBe('user-settings-and-clients');
-
-        // Short ASCII tokens must use word boundaries (no false substring matches)
-        const wiIds = searchLukerDocs({ query: 'wi', limit: 10 }).items.map(i => i.id);
-        expect(wiIds[0]).toBe('world-info-and-trace');
-        expect(wiIds).not.toContain('chat-management');
-        expect(wiIds).not.toContain('variable-op-log');
-
-        const lanIds = searchLukerDocs({ query: 'lan', limit: 10 }).items.map(i => i.id);
-        expect(lanIds[0]).toBe('sync');
-        expect(lanIds).not.toContain('regex-scope-provider');
-
-        const ragIds = searchLukerDocs({ query: 'rag', limit: 10 }).items.map(i => i.id);
-        expect(ragIds[0]).toBe('memory-graph');
-        expect(ragIds).not.toContain('state-and-storage');
+        const doc = await readers.wb_read_luker_doc({ path: 'features/memory-graph.md' });
+        expect(doc.ok).toBe(true);
+        expect(doc.content).toContain('https://luker.cups.moe/features/memory-graph');
     });
 
     test('wb_answer.suggest includes memory_graph and memory, and ask page renders distinct jump labels plus clickable requestIds chips', async () => {

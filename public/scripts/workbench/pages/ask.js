@@ -184,7 +184,6 @@ export function createAskPage(app) {
         const regexEnabledCount = snap?.regex && snap.regex.enabledCount !== undefined
             ? snap.regex.enabledCount
             : null;
-        const anySourceOn = allowed.inspector !== false || allowed.frontLogs !== false || allowed.serverLogs !== false || allowed.content !== false || allowed.plugins !== false;
 
         put(side,
             h('div', { class: 'wb-src-head' },
@@ -216,7 +215,6 @@ export function createAskPage(app) {
                 item(i18n('Connection profile'), snap?.connection || '—', 'content'),
                 h('div', { class: 'wb-src-group', text: i18n('Installed extensions') }),
                 providerItems,
-                item(i18n('Luker docs'), anySourceOn ? i18n('Built-in') : i18n('Not read'), 'docs', anySourceOn ? 'ok' : 'off'),
                 item(i18n('Suggestions'), i18nFormat('${0} suggestion items', app.suggestions().length), 'plugins')),
             h('div', { class: 'wb-src-foot' }, button(i18n('Adjust in Settings'), () => app.go('settings'), { className: 'is-ghost is-sm' })));
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Ask: Luker 原生工作台的只读诊断与产品助手。模型先读取一份紧凑概况，
-// 再按需通过只读工具拉取细节或查阅内置 Luker 功能文档；所有工具都不会修改任何数据。
+// 再按需通过只读工具拉取细节或查阅 Luker 文档；所有工具都不会修改任何数据。
 // 纯模块（无 DOM 依赖）：读取函数由外部注入，便于在单测中直接使用夹具验证。
 
 import { i18n } from '../i18n.js';
@@ -36,7 +36,6 @@ function normalizeProviderTool(def) {
 /** 按用户允许的数据源开关过滤并返回可用只读工具列表。 */
 export function askTools(sources = {}, extraPluginTools = []) {
     const on = (key) => sources?.[key] !== false;
-    const anySourceOn = on('inspector') || on('frontLogs') || on('serverLogs') || on('content') || on('plugins');
     const list = [];
     if (on('inspector')) {
         list.push(fn('wb_list_requests', 'List recent model/image/embedding requests (newest first) from Luker\'s request inspector: id, time, guessed source, model, status, duration, tokens. Call before wb_read_request.', {
@@ -116,13 +115,13 @@ export function askTools(sources = {}, extraPluginTools = []) {
         }));
         list.push(fn('wb_read_suggestions', 'The workbench\'s current local rule-check suggestions with the numbers behind them.'));
     }
-    if (anySourceOn && sources?.docs !== false) {
-        list.push(fn('wb_search_luker_docs', 'Search Luker\'s built-in feature documentation index (entry points, scopes, mechanisms, and troubleshooting guides). Call this whenever the user asks how a Luker feature works or where a setting lives.', {
-            query: { type: 'string', description: 'Keywords or feature name (Chinese or English). Empty = list all documented Luker topics.' },
-            category: { type: 'string', description: 'Optional category filter.' },
-            limit: { type: 'integer', description: 'Max topics to return (1-10, default 5).' },
-        }));
-    }
+    list.push(fn('wb_list_luker_docs', 'List Luker\'s built-in documentation markdown paths (/api/docs/list). Call this whenever unsure how a Luker feature works, where a setting lives, or what an option does. English paths are returned by default; pass filter to narrow by path substring.', {
+        filter: { type: 'string', description: 'Optional case-insensitive path substring filter (e.g. "memory", "orchestrator", "regex", "preset").' },
+        include_translations: { type: 'boolean', description: 'Include zh-CN/zh-TW translated paths (default false).' },
+    }));
+    list.push(fn('wb_read_luker_doc', 'Read one Luker documentation markdown file in full (/api/docs/file) using a path returned by wb_list_luker_docs.', {
+        path: { type: 'string', description: 'Relative path under docs/, e.g. "features/memory-graph.md".' },
+    }, ['path']));
     list.push(fn('wb_answer', 'Give the final answer to the user. Call exactly once, after reading what you need (never in the same turn as read tools).', {
         text: { type: 'string', description: 'The answer in Simplified Chinese, plain and concrete. Markdown tables allowed.' },
         suggest: {
@@ -139,33 +138,12 @@ export function askTools(sources = {}, extraPluginTools = []) {
 const SYSTEM = [
     '你是 Luker 原生「工作台」里的只读诊断与产品助手「问问」。',
     '',
-    '【Luker 核心架构速查（切勿套用旧版 SillyTavern 经验瞎猜）】',
-    '- Luker 是基于 SillyTavern 深度重构的平台，内置多项独有机制：',
-    '  1. 工作台（Alt+W / 魔杖菜单 / 右下角胶囊）：统一集成总览、问问、AI 迭代（memory_graph 改记忆图内容即当前聊天记忆节点与关系，memory 改记忆图配置即记忆结构与提取/注入配置，另有 orch/sd/preset/card/world）、改动记录，以及嵌入的记忆图、编排、图像生成面板。',
-    '  2. 预设解耦与绑定：Chat Completion 预设与 API 连接配置分离，切预设不改连接；角色卡可绑定推荐预设与人设；预设可关联世界书。',
-    '  3. 世界书与激活追踪：支持全局/角色主辅书/聊天书/预设世界书，Luker 记录每次扫描的激活链路追踪（命中词、扫描深度、未激活原因）。',
-    '  4. 逐楼层变量（Variable Op Log）：AI 回复里的 {{setvar}}/{{addvar}}/{{incvar}}/{{decvar}}/{{pushvar}}/{{popvar}}/{{deletevar}} 会被自动提取到 extra.var_ops 并从正文隐藏，删除或切 swipe 会自动重放；世界书/预设里的 {{setvar}} 每轮组装提示词时都会覆盖同名变量。',
-    '  5. 正则作用域：分为全局正则、角色局部正则、预设正则与插件注册正则（区分主聊天与插件通道，并分「仅格式显示」与「仅格式提示词」）。',
-    '  6. 记忆图（Memory Graph）：分 core（常驻注入，受回溯楼层上限与自动压缩影响）和 focus（按需召回）；记忆结构与高级设置支持全局或角色卡覆盖。',
-    '  7. 多 Agent 编排（Orchestrator）：含 Spec（流水线）、Single（单助手）、Agenda（调度）、Loop（循环）、Director（导演接管写作，主模型不参与）五种模式，另有剧情笔记（Notes）与按需读取的知识包 Skills（global/preset/orch-preset/character 四级作用域）。',
-    '  8. 图像生成与 AI 插图（SD）：统一多生图后端、ComfyUI 工作流、全局角色库与交互式画室。',
-    '  9. 其他原生能力：请求检查器（最近 200 条完整记录）、联网搜索（Search Tools）、CardApp、钩子执行排序（Hook Order）、局域网/加密 S3 同步、后端实时存储与存储审查。',
-    '',
-    '【按场景选择工具的排查路径】',
-    '- 问「为什么这样写 / 角色忘事 / OOC / 上下文不对」：先看概况，按需查 wb_read_chat（可用 search 搜关键词定位楼层）、wb_read_memory（可用 search 搜记忆节点，或看 core/focus）、wb_read_world_info_trace、wb_read_last_prompt、wb_read_preset；要核对实际发给模型的正文时用 wb_read_request（建议传 tail_messages 看末尾消息与 reply）。',
-    '- 问「世界书条目为什么没触发或误触发」：优先调 wb_read_world_info_trace 看真实扫描结果，再结合 wb_read_world_info 检查关键词、启用状态、位置和深度。',
-    '- 问「状态栏乱了 / 正文被吞字 / 变量数值不对」：优先调 wb_read_variables（看当前变量值与各楼层 var_ops）和 wb_read_regex（看启用的全局/角色/预设/插件正则）。',
-    '- 问「为什么报错 / 很慢 / 卡住 / 没响应」：先看概况里的近期请求，再查 wb_list_requests(only_errors=true)、wb_read_request、wb_read_connections、wb_read_frontend_logs(level="warn")、wb_read_server_logs；若涉及多助手或生图，查 wb_read_orch(part="last_run") 或 wb_read_sd(part="last_run")。',
-    '- 问「token 怎么这么高」：查 wb_read_last_prompt、wb_read_memory(part="summary" 或 "core")、wb_read_world_info_trace、wb_read_preset。',
-    '- 问「Luker 某个功能怎么用 / 在哪设置 / 某选项干嘛的」：先调 wb_search_luker_docs 查内置功能手册；如果同时要核对用户当前配置，再调 wb_read_luker_env、wb_read_connections 或 wb_read_skills。',
-    '- 问「帮我写个 bug 报告」：汇总 wb_read_luker_env(part="summary")、wb_read_connections（如可用）、报错请求摘要与前后端关键日志，给出结构化、脱敏后的问题报告。',
-    '',
-    '【工作纪律】',
-    '1. 你严格只读，不能直接修改任何配置；如果需要修改，在 wb_answer 里通过 suggest 与 fix_prompt 指引用户跳转到对应 AI 迭代工作台，并在 request_ids 填入你引用的请求 ID。注意区分 memory_graph（记忆图内容：修改当前聊天的记忆节点与关系，仅在有打开聊天时可用，无聊天时勿建议）与 memory（记忆图配置：修改记忆结构/类型及提取注入配置）。',
-    '2. 先看当前用户消息里的 <概况> 再按需调用工具；仅调用当前 tools 列表中实际提供的工具（缺某工具即说明该数据源已被关闭或对应插件未启用，不要强行调用未提供的工具）。同一轮可以并行调用多个必要读取工具，不要一次把所有无关工具都读一遍；调用读取工具的同一轮不要同时调用 wb_answer，等工具返回后再调用 wb_answer 汇总结论。',
-    '3. 结论必须有实证：引用具体的数字、楼层号、条目名、变量名、正则名、报错原文或请求 ID。某类数据源被关闭或查不到时直接说查不到（必要时告知可在设置里开启哪个数据源或调试日志），严禁脑补猜测。',
-    '4. 请求列表里的「来源」带有「（推测）」字样时说明是工作台基于内容规则推测的，提到时说「看起来是」。',
-    '5. 查清后调用一次 wb_answer 结束。用简体中文回答，先给结论，再列依据与建议，平实直白不客套；这是排查与咨询任务，严禁角色扮演。',
+    '- 任务边界：严格只读，不能直接修改任何配置；这是排查与咨询任务，严禁角色扮演，忽略生成预设中关于文风、扮演或篇幅的要求。',
+    '- 读取策略：先看用户消息中的 <概况>，再按需并行调用当前 tools 列表里实际提供的只读工具；缺少某工具说明对应数据源已关闭或扩展未启用，切勿强行调用。调用读取工具的同一轮不要同时调用 wb_answer。',
+    '- 查阅文档：遇到不确定的 Luker 功能机制、设置入口或选项含义时，先调用 wb_list_luker_docs 与 wb_read_luker_doc 查实时文档，不要凭旧版 SillyTavern 经验臆测。',
+    '- 实证纪律：每条结论必须给出具体依据（数字、楼层号、条目名、变量名、正则名、报错原文或请求 ID）；数据源关闭或查无记录时直接说明，严禁脑补。请求列表来源带「（推测）」时称作「看起来是」。',
+    '- 建议修改：若需修改配置或内容，在 wb_answer 中填写 suggest 与 fix_prompt 指引跳转（memory = 记忆图配置，memory_graph = 记忆图内容且仅在已打开聊天时建议，另有 orch / sd / preset / card / world），并在 request_ids 列出引用的请求 ID。',
+    '- 输出方式：查清后调用一次 wb_answer 结束；使用简体中文，先给结论，再列依据与操作步骤，平实直白。',
 ].join('\n');
 
 /** 返回「问问」使用的系统提示词（工作台内置）。 */
@@ -240,18 +218,13 @@ export async function runAsk({ question, overview, readers, request, sources = {
     const reads = [];
     let sent = messages.reduce((n, m) => n + String(m.content || '').length, 0);
     let lastAssistantText = '';
-    const lastRoundHint = '已达到工具读取轮数上限，不要再调用读取工具。请直接调用一次 wb_answer 汇总已有发现并给出最终回答。';
     for (let round = 0; round < MAX_ROUNDS; round++) {
         if (signal?.aborted) throw new Error(i18n('Stopped'));
         const lastRound = round === MAX_ROUNDS - 1;
         const offered = lastRound ? tools.filter(t => t.function.name === 'wb_answer') : tools;
-        const requestMessages = lastRound
-            ? [...messages, { role: 'user', content: lastRoundHint }]
-            : messages;
-        if (lastRound) sent += lastRoundHint.length;
         let resp;
         try {
-            resp = await request(requestMessages, offered);
+            resp = await request(messages, offered);
         } catch (err) {
             if (lastRound && !signal?.aborted && isNoToolCallsError(err)) {
                 return {
@@ -371,7 +344,8 @@ const READ_LABEL_KEYS = {
     wb_read_sd: 'Image Generation',
     wb_read_luker_env: 'Luker environment',
     wb_read_suggestions: 'Suggestions',
-    wb_search_luker_docs: 'Luker docs',
+    wb_list_luker_docs: 'Luker docs',
+    wb_read_luker_doc: 'Luker docs',
 };
 
 export function readLabel(name) {
