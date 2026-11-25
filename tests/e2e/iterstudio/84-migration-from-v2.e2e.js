@@ -29,6 +29,7 @@ let server;
 
 const CPA_SIDECAR_PATH_SEGMENTS = ['default-user', 'OpenAI Settings', 'Default.luker-state.completion_preset_assistant_session.json'];
 const WB_SIDECAR_PATH_SEGMENTS = ['default-user', 'OpenAI Settings', 'Default.luker-state.workbench_sessions.json'];
+const WB_BODY_SIDECAR_PATH_SEGMENTS = ['default-user', 'OpenAI Settings', 'Default.luker-state.workbench_session_legacy_preset_legacy-s1.json'];
 
 function cpaSidecarPath(dataRoot) {
     return resolve(dataRoot, ...CPA_SIDECAR_PATH_SEGMENTS);
@@ -36,6 +37,10 @@ function cpaSidecarPath(dataRoot) {
 
 function wbSidecarPath(dataRoot) {
     return resolve(dataRoot, ...WB_SIDECAR_PATH_SEGMENTS);
+}
+
+function wbBodySidecarPath(dataRoot) {
+    return resolve(dataRoot, ...WB_BODY_SIDECAR_PATH_SEGMENTS);
 }
 
 function plantLegacySidecar(dataRoot) {
@@ -131,13 +136,23 @@ test.describe('#84 — iter-studio v2 session auto-migrates to v3 on first read'
         }, { timeout: 10_000 }).toBe(true);
 
         const after = JSON.parse(readFileSync(wbPath, 'utf8'));
+        expect(after.version).toBe(2);
         const imported = (after.sessions || []).find((s) => s.legacyId === 'legacy-s1');
         expect(imported).toBeTruthy();
         expect(imported.ws).toBe('preset');
         expect(imported.scope).toBe('preset');
         expect(imported.importedFromLegacy).toBe(true);
-        expect(imported.turns).toHaveLength(2);
-        expect(imported.turns[1].toolCalls?.[0]?.name).toBe('preset_set_field');
+        expect(imported.turns).toBeUndefined();
+        expect(imported.messages).toBeUndefined();
+
+        const body = JSON.parse(readFileSync(wbBodySidecarPath(server.dataRoot), 'utf8'));
+        expect(body.legacyId).toBe('legacy-s1');
+        expect(body.turns).toHaveLength(2);
+        expect(body.turns[1].toolCalls?.[0]?.name).toBe('preset_set_field');
+
+        // Clicking the migrated session lazily loads its body in the UI
+        await win.locator('.wb-sess-item', { hasText: 'Migrated legacy session' }).first().click();
+        await expect(win.locator('.wb-chat-body')).toContainText('Lowered temperature from 1.0 to 0.5', { timeout: 10_000 });
         await closeIterStudio(page);
     });
 });

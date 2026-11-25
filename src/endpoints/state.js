@@ -75,10 +75,19 @@ router.get('/get', async function (request, response) {
         });
     }
     try {
-        const data = await getNamedDocRepo().get(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace);
+        const result = await getNamedDocRepo().read(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace);
+        if (result.exists && result.valid === false) {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource,
+                detail: result.detail || 'Global state document is not valid JSON.',
+                status: 422,
+            });
+        }
         return sendJsonResource(request, response, {
             resource,
-            value: { ok: true, data: data ?? null },
+            value: { ok: true, data: result.exists ? (result.value ?? null) : null },
+            cacheEntry: result.cacheEntry ?? null,
         });
     } catch (error) {
         console.error('Error reading global state:', error);

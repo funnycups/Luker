@@ -6,6 +6,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Workbench
 
+- Split Workbench conversation bodies into per-session state with lazy loading and automatic cleanup of migrated legacy global session data.
 - Renamed the Memory Graph AI iteration targets to Memory graph config and Memory graph content across Workbench, and added settings source resolution and Change history filtering for Memory graph content.
 
 ### Update Notice

@@ -13,7 +13,7 @@ import { button, iconButton, checkRow, msgActions } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
 import { runAsk, readsSummary, buildAskHistory } from '../model/ask.js';
 import { finishOverview } from '../model/requests.js';
-import { titleFrom } from '../model/sessions.js';
+import { titleFrom, toSessionSummary } from '../model/sessions.js';
 import { withActivityLease } from '../../activity-guard.js';
 
 const CHIP_KEYS = [
@@ -271,7 +271,7 @@ export function createAskPage(app) {
                 return;
             }
             const cached = recentSessions.find(s => s.id === pickedId) || null;
-            if (cached) {
+            if (cached && Array.isArray(cached.turns)) {
                 session = cached;
                 paintBody();
             }
@@ -279,7 +279,8 @@ export function createAskPage(app) {
             try {
                 const loaded = await store.get(pickedId, sessionScopes.get(pickedId) || currentScope());
                 if (version !== selectionVersion) return;
-                session = loaded || cached;
+                session = loaded || (Array.isArray(cached?.turns) ? cached : null);
+                paintHead();
                 paintBody();
             } catch (err) {
                 if (version === selectionVersion) app.toast(String(err?.message || err), { error: true });
@@ -487,9 +488,10 @@ export function createAskPage(app) {
                 if (updated) {
                     if (session?.id === ownerId) session = updated;
                     if (scopeKey(ownerScope) === activeScopeKey) {
+                        const summary = toSessionSummary(updated);
                         const idx = recentSessions.findIndex(r => r.id === ownerId);
-                        if (idx >= 0) recentSessions[idx] = updated;
-                        else recentSessions = [updated, ...recentSessions];
+                        if (idx >= 0) recentSessions[idx] = summary;
+                        else recentSessions = [summary, ...recentSessions];
                     }
                 }
                 return updated;
@@ -562,7 +564,9 @@ export function createAskPage(app) {
         }
     }
 
-    async function syncScopeChange() {
+    const isVisible = () => Boolean(el.isConnected && app.isOpen?.() !== false);
+
+    async function syncScopeChange({ fetchRecent = true } = {}) {
         const nextScope = currentScope();
         const nextKey = scopeKey(nextScope);
         if (nextKey === activeScopeKey) return;
@@ -570,9 +574,10 @@ export function createAskPage(app) {
         if (session && scopeKey(scopeOf(session)) !== nextKey) {
             selectionVersion++;
             session = null;
-            paintBody();
+            if (fetchRecent) paintBody();
         }
         recentSessions = [];
+        if (!fetchRecent) return;
         paintHead();
         await refreshRecent();
         if (activeScopeKey === nextKey) paintHead();
@@ -594,8 +599,12 @@ export function createAskPage(app) {
             requestAnimationFrame(() => input.focus({ preventScroll: true }));
         },
         onSnapshot() {
+            if (!isVisible()) {
+                void syncScopeChange({ fetchRecent: false });
+                return;
+            }
             paintSide();
-            void syncScopeChange();
+            void syncScopeChange({ fetchRecent: true });
         },
         onEscape() {
             if (sideOpen) { sideOpen = false; paintSide(); return true; }

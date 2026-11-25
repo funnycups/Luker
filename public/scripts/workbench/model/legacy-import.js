@@ -3,15 +3,26 @@
 // Best-effort lazy importer for legacy iter-studio conversation histories.
 // Reads readable { id, title, updatedAt, messages } from legacy character,
 // chat, preset sidecars and global settings buckets once per (targetId, scope),
-// preserving existing workbench sessions and ignoring corrupt/missing blobs
-// and stale draft state (proposalBus, pendingApproval, edits, live, etc.).
+// writing per-session bodies into `workbench_session_<id>` and lightweight
+// summaries into `workbench_sessions`, preserving existing workbench sessions
+// and cleaning up migrated legacy global buckets from `extension_settings`.
 
 import { i18n } from '../i18n.js';
 import { SourceError } from './errors.js';
-import { SESSIONS_NAMESPACE, titleFrom } from './sessions.js';
+import {
+    SESSIONS_NAMESPACE,
+    SESSIONS_INDEX_VERSION,
+    sessionBodyNamespace,
+    toSessionSummary,
+    titleFrom,
+} from './sessions.js';
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
 
 const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));
+
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
 const LEGACY_NAMESPACES = {
     memory: {
@@ -157,6 +168,7 @@ export function normalizeLegacySession(raw, { targetId, scope, scopeName = '' } 
         title,
         createdAt,
         updatedAt,
+        pendingCount: 0,
         messages,
         turns,
         importedFromLegacy: true,
@@ -238,8 +250,8 @@ function resolveStateBucketAccess(ctx, scopeOpts = {}) {
     if (scope === 'global') {
         if (typeof ctx.getGlobalState !== 'function' || typeof ctx.updateGlobalState !== 'function') return null;
         return {
-            read: () => ctx.getGlobalState(SESSIONS_NAMESPACE),
-            update: (updater) => ctx.updateGlobalState(SESSIONS_NAMESPACE, updater),
+            read: (ns = SESSIONS_NAMESPACE) => ctx.getGlobalState(ns),
+            update: (ns, updater) => ctx.updateGlobalState(ns, updater),
         };
     }
     if (scope === 'character') {
@@ -247,8 +259,8 @@ function resolveStateBucketAccess(ctx, scopeOpts = {}) {
         if (!avatar || typeof ctx.getCharacterState !== 'function' || typeof ctx.updateCharacterState !== 'function') return null;
         return {
             avatar,
-            read: () => ctx.getCharacterState(avatar, SESSIONS_NAMESPACE),
-            update: (updater) => ctx.updateCharacterState(avatar, SESSIONS_NAMESPACE, updater),
+            read: (ns = SESSIONS_NAMESPACE) => ctx.getCharacterState(avatar, ns),
+            update: (ns, updater) => ctx.updateCharacterState(avatar, ns, updater),
         };
     }
     if (scope === 'preset') {
@@ -257,8 +269,8 @@ function resolveStateBucketAccess(ctx, scopeOpts = {}) {
         const opts = target ? { target } : { collection: scopeOpts?.collection ?? 'openai' };
         return {
             target,
-            read: () => ctx.presets.state.get(SESSIONS_NAMESPACE, opts),
-            update: (updater) => ctx.presets.state.update(SESSIONS_NAMESPACE, updater, opts),
+            read: (ns = SESSIONS_NAMESPACE) => ctx.presets.state.get(ns, opts),
+            update: (ns, updater) => ctx.presets.state.update(ns, updater, opts),
         };
     }
     if (scope === 'chat') {
@@ -267,18 +279,53 @@ function resolveStateBucketAccess(ctx, scopeOpts = {}) {
         const opts = target ? { target } : {};
         return {
             target,
-            read: () => ctx.getChatState(SESSIONS_NAMESPACE, opts),
-            update: (updater) => ctx.updateChatState(SESSIONS_NAMESPACE, updater, opts),
+            read: (ns = SESSIONS_NAMESPACE) => ctx.getChatState(ns, opts),
+            update: (ns, updater) => ctx.updateChatState(ns, updater, opts),
         };
     }
     return null;
 }
 
 /**
+ * Removes an already-migrated legacy global session bucket from extensionSettings
+ * so settings.json stops carrying multi-MB legacy iteration histories across reloads.
+ */
+function purgeLegacyGlobalBucket(ctx, targetId) {
+    const spec = LEGACY_NAMESPACES[targetId]?.global;
+    if (!spec) return false;
+    const pluginRoot = ctx?.extensionSettings?.[spec.plugin];
+    if (!isPlainObject(pluginRoot) || !Object.hasOwn(pluginRoot, spec.key)) {
+        return false;
+    }
+    delete pluginRoot[spec.key];
+    try {
+        ctx.saveSettingsDebounced?.();
+    } catch (err) {
+        console.warn('[workbench/legacy-import] saveSettingsDebounced failed after purging legacy bucket:', err);
+    }
+    return true;
+}
+
+/** Checks whether any legacy global iteration session bucket still sits in extensionSettings. */
+export function hasLegacyGlobalSettingsSessions(ctx, targetId = null) {
+    const targets = targetId ? [targetId] : ['memory', 'orch'];
+    for (const id of targets) {
+        const spec = LEGACY_NAMESPACES[id]?.global;
+        if (!spec) continue;
+        const pluginRoot = ctx?.extensionSettings?.[spec.plugin];
+        if (isPlainObject(pluginRoot) && Object.hasOwn(pluginRoot, spec.key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Lazily imports legacy iter-studio sessions for (targetId, scope) at most once,
- * marking `legacyImported[targetId]` on the scope's workbench_sessions state.
- * Existing workbench sessions are never overwritten, and corrupt/missing legacy
- * blobs are ignored gracefully.
+ * storing full session bodies in `workbench_session_<id>` and lightweight
+ * summaries plus `legacyImported[targetId]` in `workbench_sessions`.
+ * For global scope, deletes the migrated bucket from `extensionSettings` once
+ * persistence in GlobalState is confirmed.
  */
 export async function importLegacySessionsOnce({
     ctx,
@@ -287,6 +334,7 @@ export async function importLegacySessionsOnce({
     scopeOpts = null,
     scopeName = '',
     mode = null,
+    prefetchedState = undefined,
 } = {}) {
     const effectiveOpts = scopeOpts || { scope: scope || 'global' };
     const effectiveScope = String(effectiveOpts.scope || scope || 'global').toLowerCase();
@@ -295,23 +343,29 @@ export async function importLegacySessionsOnce({
         return { imported: [], alreadyImported: false };
     }
 
-    let currentRes;
-    try {
-        currentRes = await access.read();
-    } catch (err) {
-        console.warn('[workbench/legacy-import] workbench_sessions read failed:', err);
-        throw err;
-    }
-    if (!currentRes?.ok) {
-        const detail = currentRes?.hint || currentRes?.reason || 'workbench_sessions read failed';
-        console.warn('[workbench/legacy-import] workbench_sessions read failed:', detail);
-        throw new SourceError('storage-error', String(detail));
+    let currentState;
+    if (prefetchedState !== undefined) {
+        currentState = isPlainObject(prefetchedState) ? prefetchedState : {};
+    } else {
+        let currentRes;
+        try {
+            currentRes = await access.read(SESSIONS_NAMESPACE);
+        } catch (err) {
+            console.warn('[workbench/legacy-import] workbench_sessions read failed:', err);
+            throw err;
+        }
+        if (!currentRes?.ok) {
+            const detail = currentRes?.hint || currentRes?.reason || 'workbench_sessions read failed';
+            console.warn('[workbench/legacy-import] workbench_sessions read failed:', detail);
+            throw new SourceError('storage-error', String(detail));
+        }
+        currentState = isPlainObject(currentRes.state) ? currentRes.state : {};
     }
 
-    const currentState = currentRes.state && typeof currentRes.state === 'object' && !Array.isArray(currentRes.state)
-        ? currentRes.state
-        : {};
     if (currentState.legacyImported?.[targetId]) {
+        if (effectiveScope === 'global') {
+            purgeLegacyGlobalBucket(ctx, targetId);
+        }
         return { imported: [], alreadyImported: true };
     }
 
@@ -328,16 +382,48 @@ export async function importLegacySessionsOnce({
         .map(raw => normalizeLegacySession(raw, { targetId, scope: effectiveScope, scopeName }))
         .filter(Boolean);
 
+    const existingBefore = Array.isArray(currentState.sessions) ? currentState.sessions : [];
+    const preSeenIds = new Set(existingBefore.map(s => s?.id).filter(Boolean));
+    const preSeenScoped = new Set(
+        existingBefore.filter(s => s?.ws && s?.legacyId).map(s => `${s.ws}:${s.legacyId}`),
+    );
+    const deduped = [];
+    for (const s of normalized) {
+        const scopedKey = s?.ws && s?.legacyId ? `${s.ws}:${s.legacyId}` : '';
+        if ((s?.id && preSeenIds.has(s.id)) || (scopedKey && preSeenScoped.has(scopedKey))) {
+            continue;
+        }
+        if (s?.id) preSeenIds.add(s.id);
+        if (scopedKey) preSeenScoped.add(scopedKey);
+        deduped.push(s);
+    }
+
+    // Persist full session bodies first so the index never references a missing body.
+    for (const session of deduped) {
+        const bodyNs = sessionBodyNamespace(session.id);
+        const bodyRes = await access.update(bodyNs, (existing) => {
+            if (isPlainObject(existing) && existing.id === session.id && Array.isArray(existing.turns)) {
+                return null;
+            }
+            return session;
+        });
+        if (!bodyRes?.ok) {
+            const detail = bodyRes?.hint || bodyRes?.reason || 'workbench_session body write failed';
+            console.warn('[workbench/legacy-import] session body write failed:', detail);
+            throw new SourceError('storage-error', String(detail));
+        }
+    }
+
     let added = [];
-    const writeRes = await access.update((current) => {
-        const base = current && typeof current === 'object' && !Array.isArray(current) ? clone(current) : {};
+    const writeRes = await access.update(SESSIONS_NAMESPACE, (current) => {
+        const base = isPlainObject(current) ? clone(current) : {};
         if (base.legacyImported?.[targetId]) return null;
         const existing = Array.isArray(base.sessions) ? base.sessions : [];
         const seenIds = new Set(existing.map(s => s?.id).filter(Boolean));
         const seenScopedLegacy = new Set(
             existing.filter(s => s?.ws && s?.legacyId).map(s => `${s.ws}:${s.legacyId}`),
         );
-        const fresh = normalized.filter((s) => {
+        const fresh = deduped.filter((s) => {
             const scopedKey = s?.ws && s?.legacyId ? `${s.ws}:${s.legacyId}` : '';
             if ((s?.id && seenIds.has(s.id)) || (scopedKey && seenScopedLegacy.has(scopedKey))) {
                 return false;
@@ -349,9 +435,10 @@ export async function importLegacySessionsOnce({
         added = fresh;
         return {
             ...base,
-            sessions: [...existing, ...fresh],
+            version: SESSIONS_INDEX_VERSION,
+            sessions: [...existing, ...fresh.map(toSessionSummary)],
             legacyImported: {
-                ...(base.legacyImported && typeof base.legacyImported === 'object' ? base.legacyImported : {}),
+                ...(isPlainObject(base.legacyImported) ? base.legacyImported : {}),
                 [targetId]: Date.now(),
             },
         };
@@ -362,5 +449,37 @@ export async function importLegacySessionsOnce({
         throw new SourceError('storage-error', String(detail));
     }
 
+    if (effectiveScope === 'global') {
+        purgeLegacyGlobalBucket(ctx, targetId);
+    }
+
     return { imported: added, alreadyImported: false };
+}
+
+/**
+ * One-shot startup migration for users who still have legacy global iteration
+ * sessions inside extensionSettings (settings.json). Does zero async I/O when
+ * neither legacy key exists.
+ */
+export async function cleanupLegacyGlobalSettingsSessions(ctx) {
+    if (!ctx || !hasLegacyGlobalSettingsSessions(ctx)) {
+        return { cleaned: [] };
+    }
+    const cleaned = [];
+    for (const targetId of ['memory', 'orch']) {
+        if (!hasLegacyGlobalSettingsSessions(ctx, targetId)) continue;
+        try {
+            await importLegacySessionsOnce({
+                ctx,
+                targetId,
+                scope: 'global',
+                scopeOpts: { scope: 'global' },
+                scopeName: i18n('Global'),
+            });
+            cleaned.push(targetId);
+        } catch (err) {
+            console.warn(`[workbench/legacy-import] startup global cleanup failed for ${targetId}:`, err);
+        }
+    }
+    return { cleaned };
 }

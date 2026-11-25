@@ -5,8 +5,9 @@ import {
     readLegacySessions,
     normalizeLegacySession,
     importLegacySessionsOnce,
+    cleanupLegacyGlobalSettingsSessions,
 } from '../../public/scripts/workbench/model/legacy-import.js';
-import { SESSIONS_NAMESPACE } from '../../public/scripts/workbench/model/sessions.js';
+import { SESSIONS_NAMESPACE, SESSIONS_INDEX_VERSION, sessionBodyNamespace } from '../../public/scripts/workbench/model/sessions.js';
 
 function makeMockCtx({
     characterStates = {},
@@ -32,13 +33,14 @@ function makeMockCtx({
 
     const ctx = {
         extensionSettings: clone(extensionSettings),
+        saveSettingsDebounced: jest.fn(),
         characters: [{ avatar: 'alice.png', name: 'Alice' }],
         characterId: 0,
         getCurrentChatId: () => 'chat1.jsonl',
         getGlobalState: jest.fn(async (ns) => ({ ok: true, state: clone(wbGlobal.get(ns) ?? null) })),
         updateGlobalState: jest.fn(async (ns, updater) => runUpdate(wbGlobal, ns, updater)),
         getCharacterState: jest.fn(async (avatar, ns) => {
-            if (ns === SESSIONS_NAMESPACE) {
+            if (ns === SESSIONS_NAMESPACE || ns.startsWith('workbench_session_')) {
                 return { ok: true, state: clone(wbChar.get(`${avatar}::${ns}`) ?? null) };
             }
             const key = `${avatar}::${ns}`;
@@ -48,7 +50,7 @@ function makeMockCtx({
         }),
         updateCharacterState: jest.fn(async (avatar, ns, updater) => runUpdate(wbChar, `${avatar}::${ns}`, updater)),
         getChatState: jest.fn(async (ns, opts = {}) => {
-            if (ns === SESSIONS_NAMESPACE) {
+            if (ns === SESSIONS_NAMESPACE || ns.startsWith('workbench_session_')) {
                 const k = `${JSON.stringify(opts?.target ?? 'active')}::${ns}`;
                 return { ok: true, state: clone(wbChat.get(k) ?? null) };
             }
@@ -63,7 +65,7 @@ function makeMockCtx({
         presets: {
             state: {
                 get: jest.fn(async (ns, opts = {}) => {
-                    if (ns === SESSIONS_NAMESPACE) {
+                    if (ns === SESSIONS_NAMESPACE || ns.startsWith('workbench_session_')) {
                         const k = `${JSON.stringify(opts?.target ?? 'selected')}::${ns}`;
                         return { ok: true, state: clone(wbPreset.get(k) ?? null) };
                     }
@@ -186,9 +188,18 @@ describe('workbench legacy iter-studio import', () => {
         expect(importedCard.messages[1].edits).toBeUndefined();
 
         const charState = wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`);
+        expect(charState.version).toBe(SESSIONS_INDEX_VERSION);
         expect(charState.legacyImported.card).toBeTruthy();
         expect(charState.sessions.some(s => s.id === 'existing_wb')).toBe(true);
-        expect(charState.sessions.some(s => s.legacyId === 's1')).toBe(true);
+        const importedSummary = charState.sessions.find(s => s.legacyId === 's1');
+        expect(importedSummary).toBeTruthy();
+        expect(importedSummary.turns).toBeUndefined();
+        expect(importedSummary.messages).toBeUndefined();
+
+        const importedBody = wbChar.get(`alice.png::${sessionBodyNamespace(importedCard.id)}`);
+        expect(importedBody).toBeTruthy();
+        expect(importedBody.turns).toHaveLength(2);
+        expect(importedBody.messages).toHaveLength(2);
 
         // Second call is skipped (does not re-read legacy sidecar)
         ctx.getCharacterState.mockClear();
@@ -330,7 +341,7 @@ describe('workbench legacy iter-studio import', () => {
         expect(mgRes.imported[0].title).toBe('Graph chat');
         expect(wbChat.get(`${JSON.stringify(chatTarget)}::${SESSIONS_NAMESPACE}`).legacyImported.memory_graph).toBeTruthy();
 
-        // 2) orchestrator mode-nested global bucket
+        // 2) orchestrator mode-nested global bucket — migrated to GlobalState AND purged from extensionSettings
         const orchRes = await importLegacySessionsOnce({
             ctx,
             targetId: 'orch',
@@ -339,6 +350,11 @@ describe('workbench legacy iter-studio import', () => {
         });
         expect(orchRes.imported.map(s => s.title).sort()).toEqual(['Orch loop', 'Orch spec']);
         expect(wbGlobal.get(SESSIONS_NAMESPACE).legacyImported.orch).toBeTruthy();
+        expect(ctx.extensionSettings.orchestrator.iter_studio_global_sessions).toBeUndefined();
+        expect(ctx.saveSettingsDebounced).toHaveBeenCalled();
+        for (const s of orchRes.imported) {
+            expect(wbGlobal.get(sessionBodyNamespace(s.id))?.turns).toHaveLength(1);
+        }
 
         // 3) same legacyId 's1' in both card and memory under same character scope does NOT collide
         const cardRes = await importLegacySessionsOnce({
@@ -400,5 +416,43 @@ describe('workbench legacy iter-studio import', () => {
         expect(res.imported.map(s => s.id)).toEqual(['legacy_card_dup_s1', 'legacy_card_uniq_s2']);
         const storedIds = wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions.map(s => s.id);
         expect(storedIds).toEqual(['legacy_card_dup_s1', 'legacy_card_uniq_s2']);
+    });
+
+    test('cleanupLegacyGlobalSettingsSessions skips all I/O when absent, migrates and purges legacy global buckets when present, and purges already-imported leftovers', async () => {
+        // 1) No legacy keys -> zero GlobalState I/O
+        const cleanMock = makeMockCtx({ extensionSettings: { memory_graph: {}, orchestrator: {} } });
+        const noop = await cleanupLegacyGlobalSettingsSessions(cleanMock.ctx);
+        expect(noop.cleaned).toEqual([]);
+        expect(cleanMock.ctx.getGlobalState).not.toHaveBeenCalled();
+        expect(cleanMock.ctx.saveSettingsDebounced).not.toHaveBeenCalled();
+
+        // 2) Legacy memory_graph global bucket present + orchestrator already marked imported from an earlier version -> both purged from settings
+        const dirtyMock = makeMockCtx({
+            extensionSettings: {
+                memory_graph: {
+                    schema_iter_global_sessions: {
+                        m1: { id: 'm1', title: 'MG Global', messages: [{ role: 'user', content: 'Tune schema' }] },
+                    },
+                },
+                orchestrator: {
+                    iter_studio_global_sessions: {
+                        spec: { o1: { id: 'o1', title: 'Already Imported', messages: [{ role: 'user', content: 'Old' }] } },
+                    },
+                },
+            },
+        });
+        dirtyMock.wbGlobal.set(SESSIONS_NAMESPACE, {
+            version: SESSIONS_INDEX_VERSION,
+            sessions: [],
+            legacyImported: { orch: 1700000000000 },
+        });
+
+        const cleanedRes = await cleanupLegacyGlobalSettingsSessions(dirtyMock.ctx);
+        expect(cleanedRes.cleaned.sort()).toEqual(['memory', 'orch']);
+        expect(dirtyMock.ctx.extensionSettings.memory_graph.schema_iter_global_sessions).toBeUndefined();
+        expect(dirtyMock.ctx.extensionSettings.orchestrator.iter_studio_global_sessions).toBeUndefined();
+        expect(dirtyMock.ctx.saveSettingsDebounced).toHaveBeenCalled();
+        expect(dirtyMock.wbGlobal.get(SESSIONS_NAMESPACE).sessions.map(s => s.id)).toEqual(['legacy_memory_m1']);
+        expect(dirtyMock.wbGlobal.get(sessionBodyNamespace('legacy_memory_m1'))?.turns).toHaveLength(1);
     });
 });

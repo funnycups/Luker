@@ -10,6 +10,7 @@ import { registerWorkbenchLocaleData } from './locale-data.js';
 import { setOpenHandler } from './registry.js';
 import { ensureWorkbenchStyles, mountWorkbench } from './app.js';
 import { registerBuiltinTargets } from './targets/index.js';
+import { cleanupLegacyGlobalSettingsSessions } from './model/legacy-import.js';
 
 const MENU_ID = 'luker_workbench_wand_item';
 
@@ -20,6 +21,7 @@ let initialized = false;
 let boundAppReady = null;
 let keydownBound = false;
 let unregisterBuiltinTargets = null;
+let cleanupTimer = null;
 
 function workbenchSettings() {
     const ext = getContext()?.extensionSettings || {};
@@ -98,6 +100,13 @@ function onKeydown(event) {
 
 function mountPill() {
     addMenuItem();
+    if (cleanupTimer !== null) {
+        clearTimeout(cleanupTimer);
+    }
+    cleanupTimer = setTimeout(() => {
+        cleanupTimer = null;
+        void cleanupLegacyGlobalSettingsSessions(getContext());
+    }, 0);
     if (workbenchSettings()?.pill === false) return;
     if (!handle) mount({ collapsed: true });
 }
@@ -144,6 +153,10 @@ export function resetWorkbenchForTest() {
     }
     if (typeof document !== 'undefined') {
         document.getElementById(MENU_ID)?.remove();
+    }
+    if (cleanupTimer !== null) {
+        clearTimeout(cleanupTimer);
+        cleanupTimer = null;
     }
     setOpenHandler(null);
     unregisterBuiltinTargets?.();

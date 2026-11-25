@@ -149,6 +149,7 @@ export function mountWorkbench({
         suggestions: () => suggestions,
         loadError: () => loadError,
         isCompact: () => win.isCompact(),
+        isOpen: () => !win.isCollapsed(),
         workspaces: () => registry.getWorkspaces({ enabledOnly: true }),
         iterateTargets: () => registry.getIterateTargets(),
         askProviders: () => registry.getAskProviders(),

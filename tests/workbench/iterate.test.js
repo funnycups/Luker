@@ -1487,4 +1487,90 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
 
         wb.close();
     });
+
+    test('lazy-loads sessions only when AI iteration is opened, skipping reads while collapsed or on another tab', async () => {
+        const sessions = createMemorySessionStore();
+        await sessions.create({
+            kind: 'iterate',
+            ws: 'card',
+            scope: 'character',
+            title: 'Saved Card Session',
+            turns: [{ role: 'user', text: 'Q', at: 1 }, { role: 'ai', text: 'A', at: 2 }],
+        }, { scope: 'character', avatar: 'alice.png' });
+        sessions.list.mockClear();
+        sessions.get.mockClear();
+
+        const registry = createWorkbenchRegistry();
+        const listeners = new Set();
+        let activeChar = { avatar: 'alice.png', name: 'Alice' };
+
+        registry.registerIterateTarget({
+            id: 'card',
+            label: 'Character card',
+            tone: 'card',
+            scopes: async () => ({ character: Boolean(activeChar) }),
+            load: async () => ({ live: { description: 'Init' }, target: { scope: 'character', avatar: activeChar.avatar }, title: activeChar.name }),
+            prompt: async () => 'sys',
+            tools: async () => [],
+            isRead: () => true,
+            runRead: async () => ({}),
+            runEdit: async (_c, l) => l,
+            units: () => new Map(),
+            rebuild: (_b, a) => a,
+            commit: async () => ({ applied: [], skipped: [], failure: '' }),
+        });
+
+        const source = {
+            readSettings: () => ({ builtinPrompt: false, reviewChanges: true, pill: true }),
+            writeSettings: () => {},
+            loadSnapshot: async () => ({
+                chat: activeChar ? { label: 'Chat 1', character: activeChar } : null,
+                card: activeChar,
+            }),
+            subscribe: (fn) => {
+                listeners.add(fn);
+                return () => listeners.delete(fn);
+            },
+            createSessions: () => sessions,
+            historyStorage: () => null,
+            runRules: () => [],
+            lastReply: async () => '',
+            aiRequest: jest.fn(async () => ({ text: 'ok', calls: [] })),
+        };
+
+        // Mounted collapsed (startup pill mode) -> must NOT read sessions on mount or snapshot events
+        const wb = mountWorkbench({ source, registry, startCollapsed: true });
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(sessions.list).not.toHaveBeenCalled();
+        expect(sessions.get).not.toHaveBeenCalled();
+
+        for (const fn of listeners) fn();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(sessions.list).not.toHaveBeenCalled();
+
+        // Opening Overview tab still must NOT read AI iteration sessions
+        await wb.open({ page: 'home' });
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(sessions.list).not.toHaveBeenCalled();
+
+        // Switching to AI iteration lazily reads session index (not body)
+        await wb.open({ page: 'ai', ws: 'card' });
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(sessions.list).toHaveBeenCalledTimes(1);
+        expect(sessions.get).not.toHaveBeenCalled();
+        expect(document.body.textContent).toContain('Saved Card Session');
+
+        // Clicking the session lazily fetches its body
+        const openBtn = [...document.querySelectorAll('.wb-sess-item')].find(b => b.textContent.includes('Saved Card Session'));
+        openBtn.click();
+        await flushMicrotasks();
+        expect(sessions.get).toHaveBeenCalledTimes(1);
+        expect(document.body.textContent).toContain('A');
+
+        wb.close();
+    });
 });

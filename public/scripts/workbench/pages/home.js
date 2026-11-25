@@ -199,7 +199,13 @@ export function createHomePage(app) {
     return {
         el,
         show: () => paint({ force: true }),
-        onSnapshot: () => paint({ force: false }),
-        onRegistryUpdate: () => paint({ force: true }),
+        onSnapshot: () => {
+            if (!el.isConnected || app.isOpen?.() === false) return;
+            paint({ force: false });
+        },
+        onRegistryUpdate: () => {
+            if (!el.isConnected || app.isOpen?.() === false) return;
+            paint({ force: true });
+        },
     };
 }
