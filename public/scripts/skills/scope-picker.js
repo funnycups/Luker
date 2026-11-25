@@ -19,15 +19,7 @@
  * attribute when the user picks a different kind on the radio.
  */
 
-import { ensureSkillI18n } from './i18n.js';
-
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    '\'': '&#39;',
-})[c]);
+import { escapeHtml as esc } from '../lib/html-escape.js';
 
 /**
  * Collect every chat-completion preset known to any preset manager. Each
@@ -259,7 +251,6 @@ export function buildScopePickerHtml({
  */
 export async function pickTargetScope(context, t = (s) => s, title = '', suggestScope = null) {
     if (!context) return null;
-    ensureSkillI18n();
     const Popup = context.Popup;
     const POPUP_RESULT = context.POPUP_RESULT;
     const POPUP_TYPE = context.POPUP_TYPE;

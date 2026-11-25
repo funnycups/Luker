@@ -171,11 +171,4 @@ async function walkSkillFiles(skillDir) {
     return out;
 }
 
-function hashFiles(files) {
-    const h = createHash('sha256');
-    for (const f of files) {
-        h.update(f.relPath); h.update('\0');
-        h.update(f.sha256); h.update('\0');
-    }
-    return h.digest('hex');
-}
+import { hashFiles } from './file-hash.js';

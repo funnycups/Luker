@@ -34,7 +34,7 @@
  * never considered missing.
  */
 
-import { ensureSkillI18n } from './i18n.js';
+import { escapeHtml } from '../lib/html-escape.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -193,16 +193,6 @@ export function applyChipAdd(value, name) {
 
 // ── HTML rendering ───────────────────────────────────────────────────────
 
-function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    })[c]);
-}
-
 /**
  * Render a single chip's HTML. The chip body carries the chip name as
  * data-skill-chip-name and `data-skill-chip-action="toggle"`. A nested
@@ -334,7 +324,6 @@ export function renderSkillChipsHtml({ value, inheritFrom, availableSkills, t = 
  * @returns {{ rerender: () => void, getValue: () => object }}
  */
 export function mountSkillChips(host, opts = {}) {
-    ensureSkillI18n();
     const t = typeof opts.t === 'function' ? opts.t : (s) => s;
     let current = {
         visible: Array.isArray(opts.value?.visible) ? opts.value.visible.slice() : [],

@@ -8,7 +8,10 @@ import {
 } from '../skills/embed.js';
 import { importBundledSkills, buildBundledManifest } from '../skills/bundled.js';
 import { importFromUrl } from '../skills/url-import.js';
+import { SKILL_REFUSAL_CODES } from '../skills/repository.js';
 import { runGatedWrite } from '../sync/in-progress-gate.js';
+
+const REFUSAL_CODES = new Set(Object.values(SKILL_REFUSAL_CODES));
 
 /**
  * REST router for Skill management.
@@ -77,6 +80,7 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
     // ("rename collision: target xxx exists" matches both 404-flavored
     // wording and 409-flavored "exists/collision" — collision wins).
     function httpStatusForError(err) {
+        if (REFUSAL_CODES.has(err?.code)) return 409;
         const msg = String(err && err.message || '');
 
         // 413 Payload Too Large: explicit size/count violations.
@@ -98,14 +102,15 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         // ("SKILL.md must start with...", "must include name", "must include description").
         // `frontmatter` and `file is binary` cover the same parser + readFile
         // user-input failures that previously fell through to 500.
-        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|sha256 mismatch|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed|cannot (?:delete|rename|overwrite) SKILL\.md/i.test(msg)) return 400;
+        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed|cannot (?:delete|rename|overwrite) SKILL\.md/i.test(msg)) return 400;
 
         return 500;
     }
 
     function handleError(err, res) {
         const status = httpStatusForError(err);
-        res.status(status).json({ error: err.message });
+        const code = REFUSAL_CODES.has(err?.code) ? { code: err.code } : {};
+        res.status(status).json({ error: err.message, ...code });
     }
 
     async function invalidateIndex(req) {
@@ -386,13 +391,14 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         try {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
-            const { path, content, expectedSha256 } = req.body || {};
+            const { path, content, expectedSha256, expectAbsent } = req.body || {};
             const result = await repo.writeFile({
                 scope,
                 name: req.params.name,
                 path,
                 content,
                 expectedSha256,
+                expectAbsent: expectAbsent === true,
             });
             await invalidateIndex(req);
             res.json(result);
@@ -432,7 +438,10 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         try {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
-            await repo.delete(req.params.name, scope);
+            const { expectedInstalledHash } = req.query;
+            await repo.delete(req.params.name, scope, {
+                expectedInstalledHash: typeof expectedInstalledHash === 'string' ? expectedInstalledHash : undefined,
+            });
             await invalidateIndex(req);
             res.status(204).end();
         } catch (e) { handleError(e, res); }

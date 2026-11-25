@@ -152,8 +152,9 @@ export const skillsApi = {
     // ==================== Write ====================
 
     /**
-     * Replace an entire file inside a skill.
-     * @param {{scope: object, name: string, path: string, content: string, expectedSha256?: string}} opts
+     * Replace an entire file inside a skill. `expectAbsent` refuses the
+     * write when the file already exists.
+     * @param {{scope: object, name: string, path: string, content: string, expectedSha256?: string, expectAbsent?: boolean}} opts
      */
     writeFile(opts) {
         return jsonFetch(
@@ -216,12 +217,17 @@ export const skillsApi = {
     },
 
     /**
-     * Delete a skill.
+     * Delete a skill. With `expectedInstalledHash` the server refuses when
+     * the skill's files no longer hash to that value.
      * @param {object} scope
      * @param {string} name
+     * @param {{expectedInstalledHash?: string}} [opts]
      */
-    delete(scope, name) {
-        return jsonFetch(`/api/skills/${encodeURIComponent(scopeToUrl(scope))}/${encodeURIComponent(name)}`, {
+    delete(scope, name, opts = {}) {
+        const qs = opts.expectedInstalledHash
+            ? `?${new URLSearchParams({ expectedInstalledHash: opts.expectedInstalledHash })}`
+            : '';
+        return jsonFetch(`/api/skills/${encodeURIComponent(scopeToUrl(scope))}/${encodeURIComponent(name)}${qs}`, {
             method: 'DELETE',
         });
     },

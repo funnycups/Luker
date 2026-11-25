@@ -4,9 +4,9 @@
  * Pack the relevant scope's skills into an `embedded_skills_source` payload
  * suitable for sticking onto a character card or preset before download.
  *
- * Used by:
- *   - Character export ("Include skills" checkbox in the card export flow)
- *   - Preset export ("Include skills" checkbox in the OAI preset export flow)
+ * Used by the chat completion and orchestrator preset export hooks after
+ * the user chooses Include in the export confirm. Character card export
+ * packs server-side instead.
  *
  * The actual payload packing happens server-side via the existing
  * `packForEmbed` route (which round-trips through the SkillRepository for
@@ -17,9 +17,8 @@
  *   4. Return the payload object — the caller is responsible for merging
  *      it into the export JSON at `extensions.luker.embedded_skills_source`.
  *
- * Convention chosen to mirror the regex/world-info embedded-script pattern:
- * the asset author opts in via a checkbox; an empty scope yields a null
- * payload so the asset JSON doesn't get bloated with an empty `items: []`.
+ * An empty scope yields a null payload so the asset JSON doesn't get
+ * bloated with an empty `items: []`.
  */
 
 /**
@@ -80,7 +79,24 @@ export function attachEmbeddedSkillsSource(target, payload) {
 }
 
 /**
- * Convenience wrapper used by the character/preset export hooks. Packs the
+ * Remove the bundled skills payload from an export copy. Exported files
+ * carry bundled skills only when the user chooses Include, so every export
+ * hook calls this before deciding whether to attach a fresh payload.
+ *
+ * @template {object} T
+ * @param {T} target - the object that owns `extensions` (mutates in place)
+ * @returns {T}
+ */
+export function removeEmbeddedSkillsSource(target) {
+    const luker = target?.extensions?.luker;
+    if (luker && typeof luker === 'object') {
+        delete luker.embedded_skills_source;
+    }
+    return target;
+}
+
+/**
+ * Convenience wrapper used by the preset export hooks. Packs the
  * target scope and (if non-empty) attaches the payload to the target object.
  * No-op when the scope is empty.
  *

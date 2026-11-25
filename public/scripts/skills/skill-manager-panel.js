@@ -23,8 +23,8 @@
 
 import { openSkillEditor, openCreateNewSkillFlow } from './skill-editor.js';
 import { renderBundledBrowser, describeBundledImportResult } from './bundled-browser.js';
-import { ensureSkillI18n } from './i18n.js';
 import { pickTargetScope as pickTargetScopeImpl } from './scope-picker.js';
+import { escapeHtml as esc } from '../lib/html-escape.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -444,18 +444,6 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
     if (!context || !context.skills) {
         throw new Error('openSkillManagerPanel: context.skills missing');
     }
-    // Self-register Skills UI translations so any caller (orchestrator,
-    // completion-preset-assistant, future extensions) gets zh-CN / zh-TW
-    // strings without having to copy our locale table into their own setup.
-    ensureSkillI18n();
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    })[c]);
-
     const state = {
         skills: [],
         filterKey: initialScope ? scopeKey(initialScope) : 'all',

@@ -7,11 +7,13 @@
  * public/scripts/extensions/regex/index.js — `checkCharEmbeddedRegexScripts`,
  * `checkPresetEmbeddedRegexScripts`, `purgeEmbeddedRegexScripts`).
  *
- * Hooks installed (idempotent — guarded against double-registration):
+ * Hooks installed (idempotent per event bus):
  *
  *   - CHAT_CHANGED → check the active character for embedded skills payload;
  *     if present and not previously seen, surface the import dialog. Default
  *     targetScope is the character's own scope.
+ *   - OAI_PRESET_EXPORT_READY → offer to bundle preset-scope skills into
+ *     the exported preset body.
  *   - OAI_PRESET_IMPORT_READY → check the freshly-loaded preset body for an
  *     embedded payload; if present, surface the import dialog with preset
  *     scope (keyed by preset name only — preset-scope skills are decoupled
@@ -21,7 +23,7 @@
  *   - PRESET_DELETED → cascade-delete every preset-scope skill keyed on the
  *     deleted preset's `name`.
  *
- * Card-bound preset materialization to character scope (spec §3.3): if a
+ * Card-bound preset materialization to character scope: if a
  * character card embeds BOTH its own skills payload AND a card-bound preset
  * with its own payload, both go into character scope (they share the
  * character's lifecycle). Implemented in `extractCharacterPayloads`.
@@ -36,22 +38,21 @@
  */
 
 import { runEmbedImportFlow, getEmbeddedSkillsSource } from './embed-import-dialog.js';
+import { maybeAttachSkillsToPresetExport } from './embed-export-hook.js';
 
 const CHARACTER_PROMPT_KEY = (avatar) => `AlertSkills_${avatar}`;
 const PRESET_PROMPT_KEY = (name) => `AlertSkills_preset_${name}`;
 const ORCH_PRESET_PROMPT_KEY = (mode, name) => `AlertSkills_orch_preset_${mode}_${name}`;
 
 /**
- * Pluck the embedded_skills_source payloads from a character object. Returns
- * 0, 1, or 2 entries:
+ * Pluck the embedded_skills_source payloads from a character object:
  *   - The character's own payload at `character.data.extensions.luker.embedded_skills_source`
- *   - The card-bound preset's payload at `character.data.extensions.luker.bound_preset?.extensions.luker.embedded_skills_source`
- *     (per spec §3.3 the bound-preset payload materializes to character scope
- *     because it shares the character's lifecycle)
- *
- * The bound-preset path is a best-effort read — Luker's card-bound preset
- * shape isn't part of the v2/v3 card spec, so we accept either of two
- * plausible locations and skip silently if neither matches.
+ *   - Each card-bound chat completion preset's payload at
+ *     `character.data.extensions.luker.chat_completion_preset.presets[].preset`
+ *     (these materialize to character scope because they share the
+ *     character's lifecycle)
+ *   - The legacy single-binding `chat_completion_preset.preset` payload
+ *   - Hand-authored `bound_preset` / `preset` compatibility fields
  *
  * @param {object} character - characters[chid] entry
  * @returns {Array<object>} payloads to materialize
@@ -61,11 +62,15 @@ export function extractCharacterPayloads(character) {
     const cardData = character?.data;
     const own = getEmbeddedSkillsSource(cardData);
     if (own) out.push(own);
-    // Card-bound preset (a Luker-specific concept) may live under a few
-    // plausible paths; we try the canonical one first then a fallback.
+    const luker = cardData?.extensions?.luker;
+    const boundPresets = Array.isArray(luker?.chat_completion_preset?.presets)
+        ? luker.chat_completion_preset.presets
+        : [];
     const candidates = [
-        cardData?.extensions?.luker?.bound_preset,
-        cardData?.extensions?.luker?.preset,
+        ...boundPresets.map(entry => entry?.preset),
+        luker?.chat_completion_preset?.preset,
+        luker?.bound_preset,
+        luker?.preset,
     ];
     for (const candidate of candidates) {
         const sub = getEmbeddedSkillsSource(candidate);
@@ -315,11 +320,13 @@ export async function checkOrchPresetEmbeddedSkills(event, { context, t = (s) =>
     }
 }
 
-const REGISTERED = Symbol.for('luker_skill_embed_lifecycle_registered');
+// Keyed on the event bus, not on the context object: getContext() returns a
+// new object per call, while every caller shares the same eventSource.
+const registeredEventSources = new WeakSet();
 
 /**
- * Install all four event handlers on the supplied context's eventSource.
- * Idempotent: subsequent calls are no-ops (guarded by a Symbol on context).
+ * Install the embed lifecycle handlers on the supplied context's eventSource.
+ * Idempotent per event bus: subsequent calls are no-ops.
  *
  * @param {object} opts
  * @param {object} opts.context - SillyTavern context (eventSource + eventTypes)
@@ -327,8 +334,8 @@ const REGISTERED = Symbol.for('luker_skill_embed_lifecycle_registered');
  */
 export function registerSkillEmbedLifecycle({ context, t = (s) => s } = {}) {
     if (!context || !context.eventSource || !context.eventTypes) return;
-    if (context[REGISTERED]) return;
-    Object.defineProperty(context, REGISTERED, { value: true, configurable: true });
+    if (registeredEventSources.has(context.eventSource)) return;
+    registeredEventSources.add(context.eventSource);
 
     const ev = context.eventSource;
     const et = context.eventTypes;
@@ -341,6 +348,21 @@ export function registerSkillEmbedLifecycle({ context, t = (s) => s } = {}) {
     if (et.OAI_PRESET_IMPORT_READY) {
         ev.on(et.OAI_PRESET_IMPORT_READY, (event) => {
             void checkPresetEmbeddedSkills(event, { context, t });
+        });
+    }
+    if (et.OAI_PRESET_EXPORT_READY) {
+        // `presetName` is the real slot name, so card-bound selections
+        // resolve their own preset scope.
+        ev.on(et.OAI_PRESET_EXPORT_READY, async ({ data, presetName } = {}) => {
+            try {
+                await maybeAttachSkillsToPresetExport({ context, data, presetName, t });
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error('[skill-embed-lifecycle] preset export skills attachment failed:', err);
+                if (typeof toastr !== 'undefined') {
+                    toastr.error(t('Failed to bundle skills with preset: ${0}').replace('${0}', err?.message || String(err)));
+                }
+            }
         });
     }
     if (et.CHARACTER_DELETED) {

@@ -28,7 +28,7 @@
  * route avoids divergence between two install paths.
  */
 
-import { ensureSkillI18n } from './i18n.js';
+import { escapeHtml as esc } from '../lib/html-escape.js';
 
 /**
  * Format the `{installed, replaced, alreadyInstalled}` result from
@@ -237,15 +237,6 @@ export async function renderBundledBrowser({ context, mount, t = (s) => s } = {}
     if (!mount || typeof mount !== 'object') {
         throw new Error('renderBundledBrowser: mount element missing');
     }
-    ensureSkillI18n();
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    })[c]);
-
     async function refresh() {
         let bundled = [];
         let installed = [];

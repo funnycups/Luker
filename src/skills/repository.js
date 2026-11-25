@@ -35,14 +35,23 @@ function isBinaryBuffer(buf, sampleSize = 512) {
     return false;
 }
 
-function hashFiles(files) {
-    const h = createHash('sha256');
-    for (const f of files) {
-        h.update(f.relPath); h.update('\0');
-        h.update(f.sha256); h.update('\0');
-    }
-    return h.digest('hex');
+/**
+ * Codes on errors that refuse a write or delete because the skill on disk
+ * no longer matches what the caller expected. The REST layer forwards them
+ * as `code` in the error body.
+ */
+export const SKILL_REFUSAL_CODES = Object.freeze({
+    SHA256_MISMATCH: 'sha256_mismatch',
+    INSTALLED_HASH_MISMATCH: 'installed_hash_mismatch',
+    FILE_EXISTS: 'file_exists',
+    SKILL_EXISTS: 'skill_exists',
+});
+
+function refusal(message, code) {
+    return Object.assign(new Error(message), { code });
 }
+
+import { hashFiles } from './file-hash.js';
 
 export function createSkillRepository(dataRoot) {
     const skillsRoot = join(dataRoot, 'skills');
@@ -271,7 +280,7 @@ export function createSkillRepository(dataRoot) {
         if (preview.conflict === 'same') return { action: 'already_installed', name: preview.name };
         if (preview.conflict === 'different' && conflictStrategy !== 'replace') {
             if (conflictStrategy === 'skip') return { action: 'skipped', name: preview.name };
-            throw new Error(`skill ${preview.name} exists with different content; pass conflictStrategy: 'skip' | 'replace'`);
+            throw refusal(`skill ${preview.name} exists with different content; pass conflictStrategy: 'skip' | 'replace'`, SKILL_REFUSAL_CODES.SKILL_EXISTS);
         }
 
         const targetDir = join(skillsRoot, encodeScopePath(scope), preview.name);
@@ -302,9 +311,16 @@ export function createSkillRepository(dataRoot) {
 
     // ──────────────────────────── delete / rename / moveScope ────────────────────────────
 
-    async function deleteSkill(name, scope) {
+    async function deleteSkill(name, scope, { expectedInstalledHash } = {}) {
         assertSafeSkillName(name);
         const dir = join(skillsRoot, encodeScopePath(scope), name);
+        if (expectedInstalledHash) {
+            const isDir = await fs.stat(dir).then(s => s.isDirectory()).catch(() => false);
+            const currentHash = isDir ? hashFiles(await walkSkillFiles(dir)) : null;
+            if (currentHash && currentHash !== expectedInstalledHash) {
+                throw refusal(`installedHash mismatch (expected ${expectedInstalledHash}, got ${currentHash})`, SKILL_REFUSAL_CODES.INSTALLED_HASH_MISMATCH);
+            }
+        }
         await fs.rm(dir, { recursive: true, force: true });
     }
 
@@ -348,7 +364,7 @@ export function createSkillRepository(dataRoot) {
 
     // ──────────────────────────── writeFile / editFile ────────────────────────────
 
-    async function writeFile({ scope, name, path: filePath, content, expectedSha256 }) {
+    async function writeFile({ scope, name, path: filePath, content, expectedSha256, expectAbsent = false }) {
         assertSafeSkillName(name);
         assertSafeFilePath(filePath);
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
@@ -356,11 +372,14 @@ export function createSkillRepository(dataRoot) {
         if (!exists) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
         const absFile = join(skillDir, filePath);
 
+        if (expectAbsent && await fs.stat(absFile).then(() => true).catch(() => false)) {
+            throw refusal(`file already exists: ${filePath}`, SKILL_REFUSAL_CODES.FILE_EXISTS);
+        }
         if (expectedSha256) {
             const current = await fs.readFile(absFile).catch(() => null);
             const currentHash = current ? sha256(current) : null;
             if (currentHash !== expectedSha256) {
-                throw new Error(`sha256 mismatch (expected ${expectedSha256}, got ${currentHash || 'missing'})`);
+                throw refusal(`sha256 mismatch (expected ${expectedSha256}, got ${currentHash || 'missing'})`, SKILL_REFUSAL_CODES.SHA256_MISMATCH);
             }
         }
 
@@ -581,7 +600,7 @@ export function createSkillRepository(dataRoot) {
             slice = allLines.slice(start, end);
         }
         const content = slice.join('\n');
-        return { content, totalLines };
+        return { content, totalLines, sha256: sha256(buf) };
     }
 
     // ──────────────────────────── scope-level ops ────────────────────────────

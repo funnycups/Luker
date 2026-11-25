@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, join as pjoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, 'fixtures', 'repo-root');
@@ -156,6 +157,21 @@ describe('SkillRepository - delete / rename / moveScope', () => {
         expect(await repo.get('target', { kind: 'global' })).toBeNull();
     });
 
+    test('delete with a matching expectedInstalledHash removes the skill', async () => {
+        const { installedHash } = await repo.get('target', { kind: 'global' });
+        await repo.delete('target', { kind: 'global' }, { expectedInstalledHash: installedHash });
+        expect(await repo.get('target', { kind: 'global' })).toBeNull();
+    });
+
+    test('delete refuses when the skill files changed, also when the frontmatter no longer parses', async () => {
+        const { installedHash } = await repo.get('target', { kind: 'global' });
+        const md = pjoin(tmpRoot, 'skills/global/target/SKILL.md');
+        await fs.writeFile(md, 'no frontmatter any more\n');
+        await expect(repo.delete('target', { kind: 'global' }, { expectedInstalledHash: installedHash }))
+            .rejects.toThrow(/installedHash mismatch/);
+        expect(await fs.readFile(md, 'utf8')).toBe('no frontmatter any more\n');
+    });
+
     test('renames within scope and updates frontmatter name', async () => {
         await repo.rename({ scope: { kind: 'global' }, fromName: 'target', toName: 'renamed' });
         expect(await repo.get('target', { kind: 'global' })).toBeNull();
@@ -229,6 +245,15 @@ describe('SkillRepository - writeFile / editFile', () => {
         expect(out.sha256).toBeTruthy();
         const got = await fs.readFile(pjoin(tmpRoot, 'skills/global/edit-target/references/new.md'), 'utf8');
         expect(got).toBe('hello\n');
+    });
+
+    test('writeFile with expectAbsent refuses an existing file and creates a missing one', async () => {
+        const scope = { kind: 'global' };
+        await expect(repo.writeFile({ scope, name: 'edit-target', path: 'SKILL.md', content: 'x', expectAbsent: true }))
+            .rejects.toThrow(/file already exists: SKILL\.md/);
+        expect(await fs.readFile(pjoin(tmpRoot, 'skills/global/edit-target/SKILL.md'), 'utf8')).toContain('Line one');
+        await repo.writeFile({ scope, name: 'edit-target', path: 'references/fresh.md', content: 'new\n', expectAbsent: true });
+        expect(await fs.readFile(pjoin(tmpRoot, 'skills/global/edit-target/references/fresh.md'), 'utf8')).toBe('new\n');
     });
 
     test('writeFile honors expectedSha256 optimistic lock', async () => {
@@ -432,6 +457,21 @@ describe('SkillRepository - readFile', () => {
         expect(out.content).toContain('Line 10');
         expect(out.content).toContain('Line 12');
         expect(out.content).not.toContain('Line 13');
+    });
+
+    test('sha256 covers the whole file even for a line range and pins writeFile', async () => {
+        const scope = { kind: 'global' };
+        const abs = pjoin(tmpRoot, 'skills/global/rr/references/numbered.md');
+        const full = await repo.readFile({ scope, name: 'rr', path: 'references/numbered.md' });
+        const ranged = await repo.readFile({ scope, name: 'rr', path: 'references/numbered.md', offset: 10, limit: 3 });
+        const expected = createHash('sha256').update(await fs.readFile(abs)).digest('hex');
+        expect(full.sha256).toBe(expected);
+        expect(ranged.sha256).toBe(expected);
+
+        await fs.writeFile(abs, 'external\n');
+        await expect(repo.writeFile({ scope, name: 'rr', path: 'references/numbered.md', content: 'mine\n', expectedSha256: full.sha256 }))
+            .rejects.toThrow(/sha256 mismatch/);
+        expect(await fs.readFile(abs, 'utf8')).toBe('external\n');
     });
 
     test('returns full file content even when large (no arbitrary character cap)', async () => {

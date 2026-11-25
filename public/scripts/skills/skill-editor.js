@@ -31,8 +31,8 @@
  * HTML strings into stub elements).
  */
 
-import { ensureSkillI18n } from './i18n.js';
 import { pickTargetScope as pickTargetScopeShared } from './scope-picker.js';
+import { escapeHtml as esc } from '../lib/html-escape.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -225,10 +225,6 @@ export function buildEditorHtml({ content, path, sha256, t, esc }) {
 
 // ── Interactive entry points ──────────────────────────────────────────────
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
-})[c]);
-
 function toast(message, level) {
     if (typeof toastr === 'undefined') {
         console.warn('[skill-editor]', message);
@@ -270,7 +266,6 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
     if (!context || !context.skills) {
         throw new Error('openSkillEditor: context.skills missing');
     }
-    ensureSkillI18n();
 
     const state = {
         files: [],
@@ -387,6 +382,7 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
                 name,
                 path: check.path,
                 content: '',
+                expectAbsent: true,
             });
             toast(t('Created ${0}').replace('${0}', check.path), 'success');
             await refreshFiles();
@@ -586,7 +582,6 @@ export async function openCreateNewSkillFlow({ context, t = (s) => s, onChange }
     if (!context || !context.skills) {
         throw new Error('openCreateNewSkillFlow: context.skills missing');
     }
-    ensureSkillI18n();
 
     const nameInput = await context.callGenericPopup(
         t('Skill name (lowercase letters/digits/_/-):'),

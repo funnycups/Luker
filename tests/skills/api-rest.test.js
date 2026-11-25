@@ -6,6 +6,7 @@ import { createSkillRepository } from '../../src/skills/repository.js';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 /**
  * Build a minimal Express app with no auth so we can drive the router
@@ -82,6 +83,8 @@ describe('REST /api/skills', () => {
             expect(res.status).toBe(200);
             expect(res.body.content).toContain('body line');
             expect(res.body.totalLines).toBeGreaterThan(0);
+            const onDisk = await fs.readFile(join(tmpRoot, 'skills/global/api-test/SKILL.md'));
+            expect(res.body.sha256).toBe(createHash('sha256').update(onDisk).digest('hex'));
         });
 
         test('GET file honors offset and limit', async () => {
@@ -91,6 +94,49 @@ describe('REST /api/skills', () => {
             expect(res.status).toBe(200);
             expect(res.body.content).toContain('l1');
             expect(res.body.content).toContain('l2');
+        });
+
+        test('DELETE with a stale expectedInstalledHash returns 409 and keeps the skill', async () => {
+            await installSimpleSkill(app, 'global', 'api-test');
+            const [{ installedHash }] = (await request(app).get('/api/skills?scope=global')).body;
+            await fs.writeFile(join(tmpRoot, 'skills/global/api-test/notes.md'), 'external\n');
+            const res = await request(app).delete('/api/skills/global/api-test').query({ expectedInstalledHash: installedHash });
+            expect(res.status).toBe(409);
+            expect(res.body.error).toMatch(/installedHash mismatch/);
+            expect(res.body.code).toBe('installed_hash_mismatch');
+            expect(await fs.readFile(join(tmpRoot, 'skills/global/api-test/notes.md'), 'utf8')).toBe('external\n');
+        });
+
+        test('POST file/write with expectAbsent returns 409 for an existing file', async () => {
+            await installSimpleSkill(app, 'global', 'api-test', 'body\n');
+            const res = await request(app).post('/api/skills/global/api-test/file/write')
+                .send({ path: 'SKILL.md', content: 'x', expectAbsent: true });
+            expect(res.status).toBe(409);
+            expect(res.body.error).toMatch(/file already exists/);
+            expect(res.body.code).toBe('file_exists');
+        });
+
+        test('POST file/write with a stale expectedSha256 returns 409 with the sha256_mismatch code', async () => {
+            await installSimpleSkill(app, 'global', 'api-test', 'body\n');
+            const res = await request(app).post('/api/skills/global/api-test/file/write')
+                .send({ path: 'SKILL.md', content: 'x', expectedSha256: 'stale' });
+            expect(res.status).toBe(409);
+            expect(res.body.error).toMatch(/sha256 mismatch/);
+            expect(res.body.code).toBe('sha256_mismatch');
+        });
+
+        test('install over a different same-name skill returns 409 with the skill_exists code', async () => {
+            await installSimpleSkill(app, 'global', 'api-test', 'body\n');
+            const res = await installSimpleSkill(app, 'global', 'api-test', 'other body\n');
+            expect(res.status).toBe(409);
+            expect(res.body.error).toMatch(/exists with different content/);
+            expect(res.body.code).toBe('skill_exists');
+        });
+
+        test('errors without a refusal code carry no code field', async () => {
+            const res = await request(app).get('/api/skills/global/missing-skill/file');
+            expect(res.status).toBe(404);
+            expect(res.body).not.toHaveProperty('code');
         });
 
         test('DELETE removes', async () => {

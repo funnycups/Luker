@@ -27,7 +27,7 @@
  * preset-manager hooks) invoke.
  */
 
-import { ensureSkillI18n } from './i18n.js';
+import { escapeHtml as esc } from '../lib/html-escape.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -236,7 +236,6 @@ export function collectConflictStrategies(root, previewItems) {
  * @returns {Promise<{installed?:Array, skipped?:Array, aborted?:boolean, error?:string}>}
  */
 export async function runEmbedImportFlow({ context, payload, targetScope, t = (s) => s } = {}) {
-    ensureSkillI18n();
     if (!context || !context.skills) {
         throw new Error('runEmbedImportFlow: context.skills missing');
     }
@@ -246,14 +245,6 @@ export async function runEmbedImportFlow({ context, payload, targetScope, t = (s
     if (!targetScope || typeof targetScope !== 'object') {
         throw new Error('runEmbedImportFlow: targetScope missing');
     }
-
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    })[c]);
 
     // 1) Preview
     let preview;

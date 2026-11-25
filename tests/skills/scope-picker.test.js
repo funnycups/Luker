@@ -1,8 +1,4 @@
-import { describe, test, expect, jest } from '@jest/globals';
-
-jest.unstable_mockModule('../../public/scripts/skills/i18n.js', () => ({
-    ensureSkillI18n: () => {},
-}));
+import { describe, test, expect } from '@jest/globals';
 
 describe('scope-picker: listAllOrchPresetScopes', () => {
     test('returns empty array when orchestrator plugin is not loaded', async () => {

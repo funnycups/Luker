@@ -1,35 +1,98 @@
 /**
  * Skill embed lifecycle (character/preset import + delete).
  *
- * Tests the four lifecycle hooks:
- *   - checkCharEmbeddedSkills (CHAT_CHANGED → import dialog)
- *   - checkPresetEmbeddedSkills (OAI_PRESET_IMPORT_READY → import dialog)
- *   - onCharacterDeletedCascade (CHARACTER_DELETED → skill cleanup)
- *   - onPresetDeletedCascade (PRESET_DELETED → skill cleanup)
+ * Pure composition tests cover `extractCharacterPayloads`, `mergePayloads`, and
+ * `registerSkillEmbedLifecycle` subscription idempotence.
  *
- * Plus the pure helpers extractCharacterPayloads / mergePayloads /
- * cascadeDeleteSkillsInScope.
+ * Lifecycle cascade-delete and import-flow tests execute against a real
+ * `SkillRepository` and real `embed.js` preview/materialization on managed
+ * directories rather than fake list/delete/extract stubs. Genuine browser popup
+ * DOM flows are covered separately in `character/38`, `character/39`,
+ * `character/48`, `preset/66`, and `regression/123`.
  */
 
 import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
+import { createSkillRepository } from '../../src/skills/repository.js';
+import { computeEmbedItemHash, materializeFromEmbed, parseEmbedPayload } from '../../src/skills/embed.js';
+import { currentScopeForResources } from '../harness/storage-scope.js';
+
+function skillMd(name, body = `Body for ${name}.`) {
+    return ['---', `name: ${name}`, `description: "Description for ${name}"`, '---', '', body, ''].join('\n');
+}
 
 function makePayload(items) {
-    return { version: 1, items: items.map(name => ({ name, bundleFormat: 'inline-files-v1', files: [] })) };
+    return {
+        version: 1,
+        items: items.map(name => ({
+            name,
+            bundleFormat: 'inline-files-v1',
+            files: [{ path: 'SKILL.md', encoding: 'utf8', content: skillMd(name) }],
+        })),
+    };
+}
+
+async function createRealSkillsAdapter({ deleteOverride } = {}) {
+    const dir = (await currentScopeForResources().directory('embed-lifecycle-skills')).path;
+    const repo = createSkillRepository(dir);
+
+    const api = {
+        list: jest.fn(({ scope }) => repo.list({ scope })),
+        delete: jest.fn(async (scope, name) => {
+            if (deleteOverride) return deleteOverride(scope, name, () => repo.delete(name, scope));
+            return repo.delete(name, scope);
+        }),
+        deleteScope: jest.fn((scope) => repo.deleteScope(scope)),
+        previewExtractEmbed: jest.fn(async ({ payload, targetScope }) => {
+            const items = await parseEmbedPayload(payload);
+            const existing = await repo.list({ scope: targetScope });
+            const byName = new Map(existing.map(entry => [entry.name, entry]));
+            const result = [];
+            for (const item of items) {
+                const hash = await computeEmbedItemHash(item);
+                const cur = byName.get(item.name);
+                const conflict = !cur ? 'new' : (cur.installedHash === hash ? 'same' : 'different');
+                result.push({ name: item.name, conflict });
+            }
+            return { items: result };
+        }),
+        executeExtractEmbed: jest.fn(({ payload, targetScope, conflictStrategies }) =>
+            materializeFromEmbed({ repository: repo, payload, targetScope, conflictStrategies }),
+        ),
+    };
+
+    const seed = async (scope, names) => {
+        for (const name of names) {
+            await repo.install({
+                scope,
+                payload: { files: [{ path: 'SKILL.md', encoding: 'utf8', content: skillMd(name) }] },
+            });
+        }
+    };
+
+    return { dir, repo, api, seed };
+}
+
+async function waitUntil(predicate, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await predicate()) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    throw new Error('Timed out waiting for async lifecycle condition');
 }
 
 function makeContext({
-    skills = {},
+    skills,
     extensionSettings = {},
     characters = [],
     characterId = undefined,
 } = {}) {
     return {
-        skills: {
+        skills: skills || {
             list: jest.fn(async () => []),
             delete: jest.fn(async () => null),
             previewExtractEmbed: jest.fn(async () => ({ items: [] })),
             executeExtractEmbed: jest.fn(async () => ({ installed: [], skipped: [] })),
-            ...skills,
         },
         characters,
         characterId,
@@ -41,11 +104,7 @@ function makeContext({
             constructor(html, type, _val, opts) {
                 this.html = html; this.type = type; this.opts = opts;
                 this.dlg = {
-                    querySelectorAll: () => {
-                        const arr = [];
-                        arr.forEach = function (cb) { for (const e of this) cb(e); };
-                        return arr;
-                    },
+                    querySelectorAll: () => [],
                 };
             }
             async show() {
@@ -81,7 +140,7 @@ function makeContext({
     };
 }
 
-describe('embed-lifecycle — pure helpers', () => {
+describe('embed-lifecycle — pure helpers and real repository cascade', () => {
     let mod;
 
     beforeEach(async () => {
@@ -106,14 +165,47 @@ describe('embed-lifecycle — pure helpers', () => {
         expect(out[0]).toBe(payload);
     });
 
-    test('extractCharacterPayloads returns both own + bound-preset payloads', () => {
+    test('extractCharacterPayloads returns own + every card-bound preset payload', () => {
         const ownPayload = makePayload(['own']);
-        const boundPayload = makePayload(['bound']);
+        const firstPreset = makePayload(['first']);
+        const secondPreset = makePayload(['second']);
         const character = {
             data: {
                 extensions: {
                     luker: {
                         embedded_skills_source: ownPayload,
+                        chat_completion_preset: {
+                            presets: [
+                                { name: 'A', preset: { extensions: { luker: { embedded_skills_source: firstPreset } } } },
+                                { name: 'B', preset: { temperature: 1 } },
+                                { name: 'C', preset: { extensions: { luker: { embedded_skills_source: secondPreset } } } },
+                            ],
+                            defaultPresetName: 'A',
+                        },
+                    },
+                },
+            },
+        };
+        const out = mod.extractCharacterPayloads(character);
+        expect(out).toHaveLength(3);
+        expect(out[0]).toBe(ownPayload);
+        expect(out[1]).toBe(firstPreset);
+        expect(out[2]).toBe(secondPreset);
+    });
+
+    test('extractCharacterPayloads reads the legacy single-binding chat completion preset', () => {
+        const payload = makePayload(['legacy']);
+        expect(mod.extractCharacterPayloads({ data: { extensions: { luker: {
+            chat_completion_preset: { preset: { extensions: { luker: { embedded_skills_source: payload } } } },
+        } } } })).toEqual([payload]);
+    });
+
+    test('extractCharacterPayloads still reads the hand-authored bound_preset field', () => {
+        const boundPayload = makePayload(['bound']);
+        const character = {
+            data: {
+                extensions: {
+                    luker: {
                         bound_preset: {
                             extensions: { luker: { embedded_skills_source: boundPayload } },
                         },
@@ -122,9 +214,7 @@ describe('embed-lifecycle — pure helpers', () => {
             },
         };
         const out = mod.extractCharacterPayloads(character);
-        expect(out).toHaveLength(2);
-        expect(out[0]).toBe(ownPayload);
-        expect(out[1]).toBe(boundPayload);
+        expect(out).toEqual([boundPayload]);
     });
 
     test('mergePayloads concatenates item arrays', () => {
@@ -146,56 +236,40 @@ describe('embed-lifecycle — pure helpers', () => {
         expect(mod.mergePayloads([a])).toBe(a);
     });
 
-    test('cascadeDeleteSkillsInScope deletes each listed skill', async () => {
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 'a' }, { name: 'b' }, { name: 'c' }]),
-                delete: jest.fn(async () => null),
-            },
-        });
-        const out = await mod.cascadeDeleteSkillsInScope({
-            context: ctx,
-            scope: { kind: 'character', characterFile: 'A.png' },
-        });
-        expect(out.deleted).toBe(3);
-        expect(out.failed).toBe(0);
-        expect(ctx.skills.delete).toHaveBeenCalledTimes(3);
-        expect(ctx.skills.delete).toHaveBeenCalledWith({ kind: 'character', characterFile: 'A.png' }, 'a');
-        expect(ctx.skills.delete).toHaveBeenCalledWith({ kind: 'character', characterFile: 'A.png' }, 'b');
-        expect(ctx.skills.delete).toHaveBeenCalledWith({ kind: 'character', characterFile: 'A.png' }, 'c');
+    test('cascadeDeleteSkillsInScope deletes each installed skill from the real repository', async () => {
+        const { repo, api, seed } = await createRealSkillsAdapter();
+        const scope = { kind: 'character', characterFile: 'A.png' };
+        await seed(scope, ['a', 'b', 'c']);
+        const ctx = makeContext({ skills: api });
+        const out = await mod.cascadeDeleteSkillsInScope({ context: ctx, scope });
+        expect(out).toEqual({ deleted: 3, failed: 0 });
+        expect(await repo.list({ scope })).toEqual([]);
     });
 
-    test('cascadeDeleteSkillsInScope swallows per-skill failures', async () => {
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 'a' }, { name: 'b' }]),
-                delete: jest.fn(async (_scope, name) => {
-                    if (name === 'b') throw new Error('nope');
-                    return null;
-                }),
+    test('cascadeDeleteSkillsInScope continues deleting sibling skills when one delete fails', async () => {
+        const { repo, api, seed } = await createRealSkillsAdapter({
+            deleteOverride: async (_scope, name, proceed) => {
+                if (name === 'b') throw new Error('nope');
+                return proceed();
             },
         });
-        const out = await mod.cascadeDeleteSkillsInScope({
-            context: ctx,
-            scope: { kind: 'global' },
-        });
-        expect(out.deleted).toBe(1);
-        expect(out.failed).toBe(1);
+        const scope = { kind: 'character', characterFile: 'Partial.png' };
+        await seed(scope, ['a', 'b']);
+        const ctx = makeContext({ skills: api });
+        const out = await mod.cascadeDeleteSkillsInScope({ context: ctx, scope });
+        expect(out).toEqual({ deleted: 1, failed: 1 });
+        expect((await repo.list({ scope })).map(skill => skill.name)).toEqual(['b']);
     });
 
-    test('cascadeDeleteSkillsInScope handles empty list', async () => {
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => []),
-                delete: jest.fn(),
-            },
-        });
+    test('cascadeDeleteSkillsInScope handles empty scope without deleting', async () => {
+        const { api } = await createRealSkillsAdapter();
+        const ctx = makeContext({ skills: api });
         const out = await mod.cascadeDeleteSkillsInScope({
             context: ctx,
-            scope: { kind: 'global' },
+            scope: { kind: 'character', characterFile: 'Empty.png' },
         });
-        expect(out.deleted).toBe(0);
-        expect(ctx.skills.delete).not.toHaveBeenCalled();
+        expect(out).toEqual({ deleted: 0, failed: 0 });
+        expect(api.delete).not.toHaveBeenCalled();
     });
 });
 
@@ -215,23 +289,27 @@ describe('embed-lifecycle — character handlers', () => {
 
     test('checkCharEmbeddedSkills: no character → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({});
+        const { api } = await createRealSkillsAdapter();
+        const ctx = makeContext({ skills: api });
         await mod.checkCharEmbeddedSkills({ context: ctx });
-        expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
+        expect(api.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
     test('checkCharEmbeddedSkills: character without payload → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { api } = await createRealSkillsAdapter();
         const ctx = makeContext({
+            skills: api,
             characters: [{ avatar: 'A.png', data: {} }],
             characterId: 0,
         });
         await mod.checkCharEmbeddedSkills({ context: ctx });
-        expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
+        expect(api.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
-    test('checkCharEmbeddedSkills: character with payload → preview + execute', async () => {
+    test('checkCharEmbeddedSkills: character with payload → previews and materializes into real character scope', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { repo, api } = await createRealSkillsAdapter();
         const payload = makePayload(['s1', 's2']);
         const ctx = makeContext({
             characters: [{
@@ -241,25 +319,19 @@ describe('embed-lifecycle — character handlers', () => {
                 },
             }],
             characterId: 0,
-            skills: {
-                previewExtractEmbed: jest.fn(async () => ({ items: [
-                    { name: 's1', conflict: 'new' },
-                    { name: 's2', conflict: 'new' },
-                ] })),
-                executeExtractEmbed: jest.fn(async () => ({ installed: ['s1', 's2'], skipped: [] })),
-            },
+            skills: api,
         });
         await mod.checkCharEmbeddedSkills({ context: ctx });
-        expect(ctx.skills.previewExtractEmbed).toHaveBeenCalledTimes(1);
-        const args = ctx.skills.previewExtractEmbed.mock.calls[0][0];
-        expect(args.targetScope).toEqual({ kind: 'character', characterFile: 'A.png' });
-        expect(ctx.skills.executeExtractEmbed).toHaveBeenCalledTimes(1);
+        const installed = await repo.list({ scope: { kind: 'character', characterFile: 'A.png' } });
+        expect(installed.map(skill => skill.name)).toEqual(['s1', 's2']);
     });
 
     test('checkCharEmbeddedSkills: already prompted (accountStorage flag) → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { api } = await createRealSkillsAdapter();
         const payload = makePayload(['s1']);
         const ctx = makeContext({
+            skills: api,
             characters: [{
                 avatar: 'A.png',
                 data: { extensions: { luker: { embedded_skills_source: payload } } },
@@ -268,38 +340,30 @@ describe('embed-lifecycle — character handlers', () => {
         });
         ctx.accountStorage.setItem('AlertSkills_A.png', 'true');
         await mod.checkCharEmbeddedSkills({ context: ctx });
-        expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
+        expect(api.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
-    test('onCharacterDeletedCascade: removes character-scope skills', async () => {
+    test('onCharacterDeletedCascade: removes character-scope skills from real repository and clears prompt flag', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 's1' }, { name: 's2' }]),
-                delete: jest.fn(async () => null),
-            },
-        });
+        const { repo, api, seed } = await createRealSkillsAdapter();
+        const scope = { kind: 'character', characterFile: 'A.png' };
+        await seed(scope, ['s1', 's2']);
+        const ctx = makeContext({ skills: api });
         ctx.accountStorage.setItem('AlertSkills_A.png', 'true');
         await mod.onCharacterDeletedCascade(
             { id: 0, character: { avatar: 'A.png' } },
             { context: ctx },
         );
-        expect(ctx.skills.delete).toHaveBeenCalledTimes(2);
-        expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'character', characterFile: 'A.png' },
-            's1',
-        );
-        // accountStorage flag should be cleared.
+        expect(await repo.list({ scope })).toEqual([]);
         expect(ctx.accountStorage.getItem('AlertSkills_A.png')).toBeNull();
     });
 
     test('onCharacterDeletedCascade: missing avatar → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: { list: jest.fn(), delete: jest.fn() },
-        });
+        const { api } = await createRealSkillsAdapter();
+        const ctx = makeContext({ skills: api });
         await mod.onCharacterDeletedCascade({ character: {} }, { context: ctx });
-        expect(ctx.skills.list).not.toHaveBeenCalled();
+        expect(api.list).not.toHaveBeenCalled();
     });
 });
 
@@ -319,95 +383,81 @@ describe('embed-lifecycle — preset handlers', () => {
 
     test('checkPresetEmbeddedSkills: no payload → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({});
+        const { api } = await createRealSkillsAdapter();
+        const ctx = makeContext({ skills: api });
         await mod.checkPresetEmbeddedSkills({ data: {}, presetName: 'rp4' }, { context: ctx });
-        expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
+        expect(api.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
-    test('checkPresetEmbeddedSkills: with payload → opens dialog with preset name as scope', async () => {
+    test('checkPresetEmbeddedSkills: with payload → materializes into preset name scope', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { repo, api } = await createRealSkillsAdapter();
         const payload = makePayload(['s1']);
-        const ctx = makeContext({
-            skills: {
-                previewExtractEmbed: jest.fn(async () => ({ items: [{ name: 's1', conflict: 'new' }] })),
-            },
-        });
+        const ctx = makeContext({ skills: api });
         await mod.checkPresetEmbeddedSkills({
             data: { extensions: { luker: { embedded_skills_source: payload } } },
             presetName: 'pj-romance',
         }, { context: ctx });
-        const args = ctx.skills.previewExtractEmbed.mock.calls[0][0];
-        expect(args.targetScope).toEqual({
-            kind: 'preset',
-            name: 'pj-romance',
-        });
+        const installed = await repo.list({ scope: { kind: 'preset', name: 'pj-romance' } });
+        expect(installed.map(skill => skill.name)).toEqual(['s1']);
     });
 
     test('checkPresetEmbeddedSkills: scope uses preset name regardless of active connection profile', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { repo, api } = await createRealSkillsAdapter();
         const payload = makePayload(['s1']);
         const ctx = makeContext({
-            // Even if a connection profile is selected, the scope should not
-            // pick up its name — preset-scope skills are decoupled from
-            // connection profiles.
             extensionSettings: {
                 connectionManager: {
                     selectedProfile: 'p1',
                     profiles: [{ id: 'p1', name: 'RP4-claude4' }],
                 },
             },
-            skills: {
-                previewExtractEmbed: jest.fn(async () => ({ items: [] })),
-            },
+            skills: api,
         });
         await mod.checkPresetEmbeddedSkills({
             data: { extensions: { luker: { embedded_skills_source: payload } } },
             presetName: 'foo',
         }, { context: ctx });
-        const args = ctx.skills.previewExtractEmbed.mock.calls[0][0];
-        expect(args.targetScope).toEqual({ kind: 'preset', name: 'foo' });
+        expect((await repo.list({ scope: { kind: 'preset', name: 'foo' } })).map(skill => skill.name)).toEqual(['s1']);
+        expect(await repo.list({ scope: { kind: 'preset', name: 'RP4-claude4' } })).toEqual([]);
     });
 
     test('checkPresetEmbeddedSkills: already prompted → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { api } = await createRealSkillsAdapter();
         const payload = makePayload(['s1']);
-        const ctx = makeContext({});
+        const ctx = makeContext({ skills: api });
         ctx.accountStorage.setItem('AlertSkills_preset_rp4', 'true');
         await mod.checkPresetEmbeddedSkills({
             data: { extensions: { luker: { embedded_skills_source: payload } } },
             presetName: 'rp4',
         }, { context: ctx });
-        expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
+        expect(api.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
-    test('onPresetDeletedCascade: removes preset-scope skills', async () => {
+    test('onPresetDeletedCascade: removes preset-scope skills from real repository and clears prompt flag', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 'rp-pal' }]),
-                delete: jest.fn(async () => null),
-            },
-        });
+        const { repo, api, seed } = await createRealSkillsAdapter();
+        const scope = { kind: 'preset', name: 'rp4' };
+        await seed(scope, ['rp-pal']);
+        const ctx = makeContext({ skills: api });
         ctx.accountStorage.setItem('AlertSkills_preset_rp4', 'true');
         await mod.onPresetDeletedCascade(
             { name: 'rp4' },
             { context: ctx },
         );
-        expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'preset', name: 'rp4' },
-            'rp-pal',
-        );
+        expect(await repo.list({ scope })).toEqual([]);
         expect(ctx.accountStorage.getItem('AlertSkills_preset_rp4')).toBeNull();
     });
 
     test('onPresetDeletedCascade: missing name → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: { list: jest.fn(), delete: jest.fn() },
-        });
+        const { api } = await createRealSkillsAdapter();
+        const ctx = makeContext({ skills: api });
         await mod.onPresetDeletedCascade({}, { context: ctx });
         await mod.onPresetDeletedCascade({ apiId: 'openai' /* ignored */ }, { context: ctx });
-        expect(ctx.skills.list).not.toHaveBeenCalled();
+        expect(api.list).not.toHaveBeenCalled();
     });
 });
 
@@ -429,7 +479,6 @@ describe('embed-lifecycle — registerSkillEmbedLifecycle', () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
         const ctx = makeContext({});
         mod.registerSkillEmbedLifecycle({ context: ctx });
-        // Verify each event has at least one listener.
         expect(ctx.eventSource._listeners.get('chat_id_changed')).toBeTruthy();
         expect(ctx.eventSource._listeners.get('oai_preset_import_ready')).toBeTruthy();
         expect(ctx.eventSource._listeners.get('characterDeleted')).toBeTruthy();
@@ -445,38 +494,40 @@ describe('embed-lifecycle — registerSkillEmbedLifecycle', () => {
         expect(ctx.eventSource._listeners.get('characterDeleted')).toHaveLength(1);
     });
 
-    test('PRESET_DELETED event triggers cascade delete', async () => {
+    test('idempotent across fresh context objects that share one event bus', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 'pumpernickel' }]),
-                delete: jest.fn(async () => null),
-            },
-        });
-        mod.registerSkillEmbedLifecycle({ context: ctx });
-        await ctx.eventSource.emit('preset_deleted', { name: 'rp4' });
-        // Listener is fire-and-forget (void Promise) — allow the async chain to flush.
-        await new Promise(resolve => setTimeout(resolve, 10));
-        expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'preset', name: 'rp4' },
-            'pumpernickel',
-        );
+        const first = makeContext({});
+        first.eventTypes.OAI_PRESET_EXPORT_READY = 'oai_preset_export_ready';
+        const second = { ...makeContext({}), eventSource: first.eventSource, eventTypes: first.eventTypes };
+        mod.registerSkillEmbedLifecycle({ context: first });
+        mod.registerSkillEmbedLifecycle({ context: second });
+        for (const listeners of first.eventSource._listeners.values()) {
+            expect(listeners).toHaveLength(1);
+        }
+        expect(first.eventSource._listeners.get('oai_preset_export_ready')).toHaveLength(1);
     });
 
-    test('CHARACTER_DELETED event triggers character-scope cascade delete', async () => {
+    test('PRESET_DELETED event triggers real repository cascade delete', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
-        const ctx = makeContext({
-            skills: {
-                list: jest.fn(async () => [{ name: 'char-rule' }]),
-                delete: jest.fn(async () => null),
-            },
-        });
+        const { repo, api, seed } = await createRealSkillsAdapter();
+        const scope = { kind: 'preset', name: 'rp4' };
+        await seed(scope, ['pumpernickel']);
+        const ctx = makeContext({ skills: api });
+        mod.registerSkillEmbedLifecycle({ context: ctx });
+        await ctx.eventSource.emit('preset_deleted', { name: 'rp4' });
+        await waitUntil(async () => (await repo.list({ scope })).length === 0);
+        expect(await repo.list({ scope })).toEqual([]);
+    });
+
+    test('CHARACTER_DELETED event triggers real character-scope cascade delete', async () => {
+        const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
+        const { repo, api, seed } = await createRealSkillsAdapter();
+        const scope = { kind: 'character', characterFile: 'B.png' };
+        await seed(scope, ['char-rule']);
+        const ctx = makeContext({ skills: api });
         mod.registerSkillEmbedLifecycle({ context: ctx });
         await ctx.eventSource.emit('characterDeleted', { id: 0, character: { avatar: 'B.png' } });
-        await new Promise(resolve => setTimeout(resolve, 10));
-        expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'character', characterFile: 'B.png' },
-            'char-rule',
-        );
+        await waitUntil(async () => (await repo.list({ scope })).length === 0);
+        expect(await repo.list({ scope })).toEqual([]);
     });
 });

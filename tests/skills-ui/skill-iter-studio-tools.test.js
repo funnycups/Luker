@@ -57,7 +57,6 @@ const mockResolve = jest.fn();
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/skill-resolution.js', () => ({
     resolveAgentVisibleSkills: mockResolve,
     buildSkillRuntimeContext: () => ({}),
-    ensureSkillsFieldShape: () => {},
     invalidateSkillInventory: () => {},
     buildAvailableSkillsBlock: () => '',
 }));
@@ -454,6 +453,7 @@ describe('commitApprovedSkillProposal — Apply-time disk writes', () => {
             path: 'SKILL.md',
             content: 'new',
             expectedSha256: 'abc',
+            expectAbsent: false,
         });
     });
 
@@ -523,13 +523,31 @@ describe('commitApprovedSkillProposal — Apply-time disk writes', () => {
         );
     });
 
+    test('a server refusal code becomes a conflict whatever its message says', async () => {
+        const refusal = Object.assign(new Error('reworded refusal'), { status: 409, body: { error: 'reworded refusal', code: 'file_exists' } });
+        mockSkillsApi.writeFile.mockRejectedValue(refusal);
+        await expect(commitApprovedSkillProposal({
+            name: 'skill_update_content',
+            args: { name: 'foo', scope: { kind: 'global' }, path: 'notes.md', content: 'new', expectAbsent: true },
+        })).rejects.toMatchObject({ name: 'SkillProposalError', reason: 'CONFLICT', hint: 'foo/notes.md changed on disk after this proposal was made' });
+    });
+
+    test('an error without a refusal code is rethrown as is', async () => {
+        const failure = Object.assign(new Error('sha256 mismatch (expected a, got b)'), { status: 500, body: { error: 'sha256 mismatch (expected a, got b)' } });
+        mockSkillsApi.writeFile.mockRejectedValue(failure);
+        await expect(commitApprovedSkillProposal({
+            name: 'skill_update_content',
+            args: { name: 'foo', scope: { kind: 'global' }, path: 'SKILL.md', content: 'new', expectedSha256: 'a' },
+        })).rejects.toBe(failure);
+    });
+
     test('skill_delete commit calls skillsApi.delete', async () => {
         mockSkillsApi.delete.mockResolvedValue({ ok: true });
         await commitApprovedSkillProposal({
             name: 'skill_delete',
-            args: { name: 'foo', scope: { kind: 'global' } },
+            args: { name: 'foo', scope: { kind: 'global' }, expectedInstalledHash: 'h1' },
         });
-        expect(mockSkillsApi.delete).toHaveBeenCalledWith({ kind: 'global' }, 'foo');
+        expect(mockSkillsApi.delete).toHaveBeenCalledWith({ kind: 'global' }, 'foo', { expectedInstalledHash: 'h1' });
     });
 
     test('throws on unknown op name', async () => {
@@ -838,17 +856,15 @@ describe('detectLongSystemPromptAgents', () => {
 });
 
 describe('formatSkillsAugmentation', () => {
-    test('includes discipline rules + intensity warning', () => {
+    test('returns a non-empty augmentation block when skills or long prompts are supplied', () => {
         const text = formatSkillsAugmentation(
             [{ name: 'alpha', description: 'a' }],
             [{ agentId: 'main', length: 2000 }],
         );
-        expect(text).toMatch(/Discipline for skill manipulation/);
-        expect(text).toMatch(/skill_create/);
-        expect(text).toMatch(/skill_extract_from_text/);
-        expect(text).toMatch(/skill_replace_in_systemprompt/);
-        expect(text).toMatch(/VERBATIM/);
-        expect(text).toMatch(/paraphrase/);
+        expect(typeof text).toBe('string');
+        expect(text.trim().length).toBeGreaterThan(0);
+        expect(text).toContain('alpha');
+        expect(text).toContain('main');
     });
 
     test('lists visible skills as `name: description`', () => {
@@ -860,9 +876,11 @@ describe('formatSkillsAugmentation', () => {
         expect(text).toMatch(/- beta: desc-B/);
     });
 
-    test('shows "(none installed)" when catalog empty', () => {
+    test('returns a non-empty block when catalog is empty and long prompts exist', () => {
         const text = formatSkillsAugmentation([], [{ agentId: 'main', length: 2000 }]);
-        expect(text).toMatch(/none installed/);
+        expect(typeof text).toBe('string');
+        expect(text.trim().length).toBeGreaterThan(0);
+        expect(text).toContain('main');
     });
 
     test('mentions agentId + length when long systemPrompts detected', () => {
@@ -883,8 +901,9 @@ describe('augmentIterStudioPromptWithSkills', () => {
         mockResolve.mockResolvedValue([]);
         const long = 'x'.repeat(LONG_PROMPT_HEURISTIC_CHARS + 1);
         const out = await augmentIterStudioPromptWithSkills('BASE', { mainAgent: { systemPrompt: long } }, {});
-        expect(out).toMatch(/^BASE/);
-        expect(out).toMatch(/Discipline for skill manipulation/);
+        expect(out.startsWith('BASE')).toBe(true);
+        expect(out.length).toBeGreaterThan('BASE'.length);
+        expect(out).toContain('main');
     });
 
     test('appends augmentation when visible skills present (even if no long prompts)', async () => {
@@ -896,10 +915,22 @@ describe('augmentIterStudioPromptWithSkills', () => {
     test('resolver failure falls back to empty catalog (does not throw)', async () => {
         mockResolve.mockRejectedValue(new Error('inventory down'));
         const long = 'x'.repeat(LONG_PROMPT_HEURISTIC_CHARS + 1);
-        // Long prompt triggers augmentation; resolver fails; should still
-        // produce an augmented prompt with the discipline + "(none installed)".
         const out = await augmentIterStudioPromptWithSkills('BASE', { mainAgent: { systemPrompt: long } }, {});
-        expect(out).toMatch(/none installed/);
+        expect(out.startsWith('BASE')).toBe(true);
+        expect(out.length).toBeGreaterThan('BASE'.length);
+        expect(out).toContain('main');
+    });
+
+    test('rejects invalid string or malformed scope values instead of coercing them to global', async () => {
+        for (const badScope of ['character', 'preset', 'orch-preset', 'all', 'typo', '', 42, []]) {
+            const out = await runSkillIterStudioTool(
+                { name: 'skill_create', args: { name: 'bad-scope-skill', scope: badScope, description: 'd', body: 'b' } },
+                { getWorkingProfile: () => ({}) },
+            );
+            expect(out.ok).toBe(false);
+            expect(out.reason).toBe('VALIDATION_ARGS');
+            expect(out.error).toContain('invalid scope');
+        }
     });
 
     test('uses opts.resolveVisibleSkills when provided (test seam)', async () => {

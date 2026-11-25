@@ -9,21 +9,24 @@
  *
  * UX: if the active preset has any preset-scope skills, surface a yes/no
  * confirm popup asking whether to include them. On yes, attach
- * `extensions.luker.embedded_skills_source`. If no skills exist for the
- * scope, this hook is a no-op (no spurious dialog).
+ * `extensions.luker.embedded_skills_source`. The exported copy carries
+ * bundled skills only on yes: any payload the stored preset kept from its
+ * own import is removed first. No skills in the scope means no popup.
  *
- * Character export goes through Luker's image-card serialization, which
- * doesn't currently emit a similar event. Until a CHARACTER_EXPORT_READY
- * hook lands, character-scope skills export piggybacks on the manual
- * "Pack to embed" path in the skill manager subpanel.
+ * Character card export asks through `confirmCharacterSkillsExport` and
+ * sends `includeSkills` to `/api/characters/export`, which packs the
+ * character scope into the exported copy server-side.
  */
 
-import { attachEmbeddedSkillsSource, packAndAttachSkillsForExport } from './embed-export-helper.js';
+import { attachEmbeddedSkillsSource, packAndAttachSkillsForExport, removeEmbeddedSkillsSource } from './embed-export-helper.js';
+import { mergePackedSkillItems } from './packed-skill-items.js';
+import { escapeHtml as escHtml } from '../lib/html-escape.js';
 
 /**
  * Confirm-then-attach for preset export. Resolves to true if the user opted
- * in and the payload was attached, false otherwise. Errors are swallowed
- * (logged) so the download still proceeds with the original preset body.
+ * in and the payload was attached, false otherwise. Listing failures reject so
+ * callers can surface the error loudly rather than exporting silently without
+ * skills.
  *
  * @param {object} opts
  * @param {object} opts.context - SillyTavern context
@@ -40,8 +43,9 @@ import { attachEmbeddedSkillsSource, packAndAttachSkillsForExport } from './embe
  * @returns {Promise<boolean>}
  */
 export async function maybeAttachSkillsToPresetExport({ context, data, presetName, t = (s) => s } = {}) {
-    if (!context || !context.skills) return false;
     if (!data || typeof data !== 'object') return false;
+    removeEmbeddedSkillsSource(data);
+    if (!context || !context.skills) return false;
     const trimmedName = String(presetName || '').trim();
     if (!trimmedName) return false;
 
@@ -50,14 +54,7 @@ export async function maybeAttachSkillsToPresetExport({ context, data, presetNam
     // Bail early if the scope has no skills — no popup, no payload, just
     // pass through. This is the dominant case for users who don't bind
     // skills to presets.
-    let list;
-    try {
-        list = await context.skills.list({ scope: targetScope });
-    } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[embed-export-hook] preset list failed:', e?.message || e);
-        return false;
-    }
+    const list = await context.skills.list({ scope: targetScope });
     if (!Array.isArray(list) || list.length === 0) return false;
 
     // Ask the user. callGenericPopup returns POPUP_RESULT-shaped values;
@@ -76,6 +73,8 @@ export async function maybeAttachSkillsToPresetExport({ context, data, presetNam
             return true;
         }
     } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('[embed-export-hook] preset skills pack failed:', e);
         toast(t('Failed to bundle skills with preset: ${0}').replace('${0}', e?.message || String(e)), 'error');
     }
     return false;
@@ -108,8 +107,9 @@ export async function maybeAttachSkillsToPresetExport({ context, data, presetNam
  * @returns {Promise<boolean>}
  */
 export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t = (s) => s } = {}) {
-    if (!context || !context.skills) return false;
     if (!payload || typeof payload !== 'object') return false;
+    removeEmbeddedSkillsSource(payload);
+    if (!context || !context.skills) return false;
 
     const mode = String(payload.mode || '').trim();
     const name = String(payload.name || payload.profile?.name || '').trim();
@@ -121,23 +121,22 @@ export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t 
     // plugin (via the extension-api boundary — core never imports from a
     // plugin). Returns Map<scopeKey, {scope, names[]}>. Empty = no active
     // skills / orchestrator plugin unavailable.
-    let byScope;
-    try {
-        const orchApi = context.getExtensionApi
-            ? context.getExtensionApi('orchestrator')
-            : null;
-        if (!orchApi || typeof orchApi.collectResolvedSkillsForOrchPreset !== 'function') {
-            // Orchestrator plugin not loaded — fall back to the prior
-            // scope-local behavior so the export still bundles any skill
-            // that happens to live in orch-preset scope. This keeps the
-            // hook viable in dev/test contexts where the plugin isn't
-            // wired.
-            const legacyList = await context.skills.list({ scope: targetScope });
-            if (!Array.isArray(legacyList) || legacyList.length === 0) return false;
-            const ok = await confirmIncludeOrchPresetSkills({
-                context, t, list: legacyList, targetScope,
-            });
-            if (!ok) return false;
+    const orchApi = context.getExtensionApi
+        ? context.getExtensionApi('orchestrator')
+        : null;
+    if (!orchApi || typeof orchApi.collectResolvedSkillsForOrchPreset !== 'function') {
+        // Orchestrator plugin not loaded — fall back to the prior
+        // scope-local behavior so the export still bundles any skill
+        // that happens to live in orch-preset scope. This keeps the
+        // hook viable in dev/test contexts where the plugin isn't
+        // wired.
+        const legacyList = await context.skills.list({ scope: targetScope });
+        if (!Array.isArray(legacyList) || legacyList.length === 0) return false;
+        const ok = await confirmIncludeOrchPresetSkills({
+            context, t, list: legacyList, targetScope,
+        });
+        if (!ok) return false;
+        try {
             const attached = await packAndAttachSkillsForExport({
                 context, targetScope, attachTo: payload,
             });
@@ -148,14 +147,14 @@ export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t 
                 );
                 return true;
             }
-            return false;
+        } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error('[embed-export-hook] orchestrator preset skills pack failed:', e);
+            toast(t('Failed to bundle skills with preset: ${0}').replace('${0}', e?.message || String(e)), 'error');
         }
-        byScope = await orchApi.collectResolvedSkillsForOrchPreset(payload);
-    } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[embed-export-hook] resolve active skills failed:', e?.message || e);
         return false;
     }
+    const byScope = await orchApi.collectResolvedSkillsForOrchPreset(payload);
     if (!byScope || byScope.size === 0) return false;
 
     // Flatten for the confirm popup (dedup by name across scopes for
@@ -184,71 +183,71 @@ export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t 
     //   orch-preset > preset > global
     // (specialized > generic — matches runtime scope-merge semantics).
     try {
-        const precedence = { global: 0, preset: 1, 'orch-preset': 2 };
-        // name -> {kindRank, item}
-        const dedup = new Map();
+        const packedScopes = [];
+        let failedScopeCount = 0;
         for (const { scope, names } of byScope.values()) {
             if (!Array.isArray(names) || names.length === 0) continue;
-            const kindRank = precedence[scope.kind];
-            if (kindRank === undefined) continue;
+            if (!['global', 'preset', 'orch-preset'].includes(scope.kind)) continue;
             let sub;
             try {
                 sub = await context.skills.packForEmbed({ scope, names, mode: 'auto' });
             } catch (e) {
                 // Missing / concurrently-deleted skills in a single scope
-                // shouldn't block the whole export — log and continue so
+                // shouldn't block the whole export — log loudly and continue so
                 // the remaining scopes still travel.
+                failedScopeCount += 1;
                 // eslint-disable-next-line no-console
-                console.warn('[embed-export-hook] pack scope failed:',
+                console.error('[embed-export-hook] pack scope failed:',
                     `${scope.kind}/${scope.name || scope.mode || ''}`,
-                    e?.message || e);
+                    e);
                 continue;
             }
-            if (!sub || !Array.isArray(sub.items)) continue;
-            for (const item of sub.items) {
-                if (!item || typeof item !== 'object' || !item.name) continue;
-                const prev = dedup.get(item.name);
-                if (!prev || prev.kindRank < kindRank) {
-                    dedup.set(item.name, { kindRank, item });
-                }
-            }
+            packedScopes.push({ scope, payload: sub });
         }
-        if (dedup.size === 0) {
+        const finalItems = mergePackedSkillItems(packedScopes);
+        if (finalItems.length === 0) {
             toast(t('No skills could be bundled with this preset.'), 'error');
             return false;
         }
-        const finalItems = [...dedup.values()].map(v => v.item);
         const embedPayload = { version: 1, items: finalItems };
         attachEmbeddedSkillsSource(payload, embedPayload);
-        toast(
-            t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(finalItems.length)),
-            'success',
-        );
+        if (failedScopeCount > 0) {
+            toast(
+                t('Bundled ${0} skill(s) with this preset, but ${1} scope(s) failed to bundle.')
+                    .replace('${0}', String(finalItems.length))
+                    .replace('${1}', String(failedScopeCount)),
+                'warning',
+            );
+        } else {
+            toast(
+                t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(finalItems.length)),
+                'success',
+            );
+        }
         return true;
     } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('[embed-export-hook] orchestrator preset skills pack failed:', e);
         toast(t('Failed to bundle skills with preset: ${0}').replace('${0}', e?.message || String(e)), 'error');
     }
     return false;
 }
 
-// NOTE: `confirmIncludeOrchPresetSkills` is a near-duplicate of
-// `confirmIncludeSkills` below — they differ only in the scope_label
-// prefix and header text. Kept as a near-clone to keep the diff
-// surgical; a future DRY pass can extract a shared
-// `confirmIncludeSkillsForScope({header, scopeLabelPrefix, ...})` helper.
-async function confirmIncludeOrchPresetSkills({ context, t, list, targetScope }) {
+// One confirm popup for every export path: preset, orchestrator preset and
+// character card. Callers supply the question, an optional hint and the
+// scope label shown above the skill list.
+async function confirmIncludeSkillsForScope({ context, t, list, question, hint = '', scopeLabel }) {
     if (!context.callGenericPopup || !context.POPUP_TYPE) return false;
     const names = list.map(s => s?.name).filter(Boolean);
-    const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
-    })[c]);
     const list_html = names.map(n => `<li>${escHtml(n)}</li>`).join('');
-    const scope_label = `orchestrator preset (${escHtml(targetScope.mode)}): ${escHtml(targetScope.name)}`;
+    const hint_html = hint
+        ? `<div class="luker_skill_export_confirm_hint">${escHtml(hint)}</div>`
+        : '';
     const html = `
 <div class="luker_skill_export_confirm">
-    <div>${escHtml(t('Include all skills active for this orchestrator preset in the export?'))}</div>
-    <div class="luker_skill_export_confirm_hint">${escHtml(t('Bundled skills will install into this preset\u2019s scope on import.'))}</div>
-    <div class="luker_skill_export_confirm_scope"><b>${scope_label}</b></div>
+    <div>${escHtml(question)}</div>
+    ${hint_html}
+    <div class="luker_skill_export_confirm_scope"><b>${escHtml(scopeLabel)}</b></div>
     <ul class="luker_skill_export_confirm_list">${list_html}</ul>
 </div>
     `;
@@ -259,26 +258,52 @@ async function confirmIncludeOrchPresetSkills({ context, t, list, targetScope })
     return isAffirmative(result);
 }
 
-async function confirmIncludeSkills({ context, t, list, targetScope }) {
-    if (!context.callGenericPopup || !context.POPUP_TYPE) return false;
-    const names = list.map(s => s?.name).filter(Boolean);
-    const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
-    })[c]);
-    const list_html = names.map(n => `<li>${escHtml(n)}</li>`).join('');
-    const scope_label = `preset: ${escHtml(targetScope.name)}`;
-    const html = `
-<div class="luker_skill_export_confirm">
-    <div>${escHtml(t('Include preset-scope skills in this export?'))}</div>
-    <div class="luker_skill_export_confirm_scope"><b>${scope_label}</b></div>
-    <ul class="luker_skill_export_confirm_list">${list_html}</ul>
-</div>
-    `;
-    const result = await context.callGenericPopup(html, context.POPUP_TYPE.CONFIRM, '', {
-        okButton: t('Include'),
-        cancelButton: t('Skip'),
+function confirmIncludeOrchPresetSkills({ context, t, list, targetScope }) {
+    return confirmIncludeSkillsForScope({
+        context,
+        t,
+        list,
+        question: t('Include all skills active for this orchestrator preset in the export?'),
+        hint: t('Bundled skills will install into this preset\u2019s scope on import.'),
+        scopeLabel: t('Orchestrator preset ${0}: ${1}').replace('${0}', targetScope.mode).replace('${1}', targetScope.name),
     });
-    return isAffirmative(result);
+}
+
+function confirmIncludeSkills({ context, t, list, targetScope }) {
+    return confirmIncludeSkillsForScope({
+        context,
+        t,
+        list,
+        question: t('Include preset-scope skills in this export?'),
+        scopeLabel: t('Preset: ${0}').replace('${0}', targetScope.name),
+    });
+}
+
+/**
+ * Ask whether a character card export should bundle the character-scope
+ * skills. Resolves false without a popup when the scope has no skills; listing
+ * failures reject so the caller can surface the error loudly. The server packs
+ * the skills when this resolves true.
+ *
+ * @param {object} opts
+ * @param {object} opts.context - SillyTavern context
+ * @param {string} opts.characterFile - the character's avatar file name
+ * @param {(s:string)=>string} [opts.t]
+ * @returns {Promise<boolean>}
+ */
+export async function confirmCharacterSkillsExport({ context, characterFile, t = (s) => s } = {}) {
+    if (!context || !context.skills) return false;
+    const trimmed = String(characterFile || '').trim();
+    if (!trimmed) return false;
+    const list = await context.skills.list({ scope: { kind: 'character', characterFile: trimmed } });
+    if (!Array.isArray(list) || list.length === 0) return false;
+    return confirmIncludeSkillsForScope({
+        context,
+        t,
+        list,
+        question: t('Include this character\'s skills in the export?'),
+        scopeLabel: t('Character: ${0}').replace('${0}', context.characters?.find(character => character.avatar === trimmed)?.name || trimmed),
+    });
 }
 
 function isAffirmative(result) {
@@ -292,6 +317,7 @@ function toast(message, level) {
         return;
     }
     if (level === 'error') toastr.error(String(message));
+    else if (level === 'warning') toastr.warning(String(message));
     else if (level === 'success') toastr.success(String(message));
     else toastr.info(String(message));
 }
