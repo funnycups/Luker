@@ -9,7 +9,7 @@ import { resolvePathWithinParent } from '../util.js';
 export const router = express.Router();
 
 const DOCS_ROOT = path.join(serverDirectory, 'docs');
-const SKIP_DIRS = new Set(['node_modules', '.vitepress', 'dist', 'cache']);
+const SKIP_DIRS = new Set(['node_modules', '.vitepress', 'dist', 'cache', 'superpowers']);
 const MAX_FILE_BYTES = 1024 * 1024;
 
 function listMarkdownFiles(rootDir) {
@@ -62,6 +62,12 @@ router.get('/file', (request, response) => {
         }
         if (!/\.md$/i.test(requested)) {
             return response.status(400).send({ error: 'Only .md files are accessible via this endpoint' });
+        }
+
+        const normalized = requested.replace(/\\/g, '/');
+        const segments = normalized.split('/').filter(Boolean);
+        if (segments.some(seg => SKIP_DIRS.has(seg) || seg.startsWith('.'))) {
+            return response.status(404).send({ error: 'File not found' });
         }
 
         const resolved = resolvePathWithinParent(DOCS_ROOT, requested);

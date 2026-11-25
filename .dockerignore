@@ -36,9 +36,18 @@
 # --- Documentation ---
 readme*
 *.md
-!/docs/changelog.md
-!/docs/zh-CN/changelog.md
-!/docs/zh-TW/changelog.md
+!/docs/*.md
+!/docs/**/*.md
+/docs/public
+/docs/.vitepress
+/docs/node_modules
+/docs/dist
+/docs/cache
+/docs/superpowers
+/docs/scripts
+/docs/package.json
+/docs/package-lock.json
+/docs/.gitignore
 Update-Instructions.txt
 
 # --- OS & System Junk ---

@@ -96,10 +96,17 @@ describe('stage-mobile-runtime', () => {
         fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-CN'), { recursive: true });
         fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-TW'), { recursive: true });
         fs.mkdirSync(path.join(repoRoot, 'docs', 'guide'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'public'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', '.vitepress', 'dist'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'superpowers'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'docs', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'public', 'shot.png'), 'png');
+        fs.writeFileSync(path.join(repoRoot, 'docs', '.vitepress', 'config.ts'), 'export default {};\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', '.vitepress', 'dist', 'out.md'), '# built\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'superpowers', 'draft.md'), '# draft\n');
 
         fs.mkdirSync(path.join(repoRoot, 'dist'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'dist', 'lib.core.bundle.js'), '// core\n');
@@ -130,6 +137,18 @@ describe('stage-mobile-runtime', () => {
             if (target === 'public') return 'public/scripts/app.js\0';
             if (target === 'default') return 'default/config.yaml\0';
             if (target === 'plugins') return 'plugins/keep.txt\0';
+            if (target === 'docs') {
+                return [
+                    'docs/changelog.md',
+                    'docs/zh-CN/changelog.md',
+                    'docs/zh-TW/changelog.md',
+                    'docs/guide/getting-started.md',
+                    'docs/public/shot.png',
+                    'docs/.vitepress/config.ts',
+                    'docs/.vitepress/dist/out.md',
+                    'docs/superpowers/draft.md',
+                ].join('\0') + '\0';
+            }
             return '';
         };
 
@@ -151,7 +170,11 @@ describe('stage-mobile-runtime', () => {
         expect(fs.existsSync(path.join(outputDir, 'docs', 'changelog.md'))).toBe(true);
         expect(fs.existsSync(path.join(outputDir, 'docs', 'zh-CN', 'changelog.md'))).toBe(true);
         expect(fs.existsSync(path.join(outputDir, 'docs', 'zh-TW', 'changelog.md'))).toBe(true);
-        expect(fs.existsSync(path.join(outputDir, 'docs', 'guide', 'getting-started.md'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'guide', 'getting-started.md'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'public', 'shot.png'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'docs', '.vitepress', 'config.ts'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'docs', '.vitepress', 'dist', 'out.md'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'superpowers', 'draft.md'))).toBe(false);
 
         // prod-pkg kept, pruned artifacts removed, LICENSE.md kept, dev-pkg excluded
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'index.js'))).toBe(true);
@@ -186,10 +209,17 @@ describe('stage-mobile-runtime', () => {
         fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-CN'), { recursive: true });
         fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-TW'), { recursive: true });
         fs.mkdirSync(path.join(repoRoot, 'docs', 'guide'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'public'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', '.vitepress', 'dist'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'superpowers'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'docs', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
         fs.writeFileSync(path.join(repoRoot, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'public', 'shot.png'), 'png');
+        fs.writeFileSync(path.join(repoRoot, 'docs', '.vitepress', 'config.ts'), 'export default {};\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', '.vitepress', 'dist', 'out.md'), '# built\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'superpowers', 'draft.md'), '# draft\n');
         fs.mkdirSync(path.join(repoRoot, 'dist'), { recursive: true });
         for (const bundle of ['lib.core.bundle.js', 'lib.optional.bundle.js', 'codemirror.bundle.js']) {
             fs.writeFileSync(path.join(repoRoot, 'dist', bundle), `// ${bundle}\n`);
@@ -201,6 +231,7 @@ describe('stage-mobile-runtime', () => {
             if (target === 'public') return 'public/scripts/app.js\0';
             if (target === 'default') return 'default/config.yaml\0';
             if (target === 'plugins') return 'plugins/keep.txt\0';
+            if (target === 'docs') return 'docs/changelog.md\0docs/zh-CN/changelog.md\0docs/zh-TW/changelog.md\0docs/guide/getting-started.md\0';
             return '';
         };
 
