@@ -99,13 +99,14 @@ export function registerSkillOrchestrationTools() {
         exec: async (args, ctx) => {
             const visible = requireVisibleSet(ctx, 'skill_read');
             const target = resolveVisibleSkill(args.name, visible, 'skill_read');
-            return await skillsApi.readFile({
+            const { sha256: _sha256, ...file } = await skillsApi.readFile({
                 scope: target.scope,
                 name: args.name,
                 path: args.path,
                 offset: args.offset,
                 limit: args.limit,
             });
+            return file;
         },
     });
 

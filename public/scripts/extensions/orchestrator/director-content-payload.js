@@ -14,8 +14,8 @@
  * GENERATE_TAKEOVER_DISPATCH listener runs (the order is forced by the
  * takeover protocol — core can only know a takeover happened by emitting
  * dispatch first), and a chat-completion hook firing in that emit may
- * replace `generate_data.prompt` with a new array (e.g. ST-Prompt-Template
- * with `inject_loader_enabled` splices @INJECT entries into a fresh array).
+ * replace `generate_data.prompt` with a new array (a prompt-injection loader
+ * may splice its entries into a fresh array).
  * Lazy resolution makes the cache always return the latest array reference,
  * including any post-dispatch hook substitutions.
  */

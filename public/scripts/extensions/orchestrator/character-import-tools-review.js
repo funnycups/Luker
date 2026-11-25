@@ -19,7 +19,7 @@ const __ctx = Luker.getContext();
 const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 const POPUP_RESULT = __ctx.POPUP_RESULT;
-import { escapeHtml as esc } from './html-escape.js';
+import { escapeHtml as esc } from '../../lib/html-escape.js';
 
 const RESULT_WITH = POPUP_RESULT.AFFIRMATIVE;       // 1
 const RESULT_WITHOUT = POPUP_RESULT?.CUSTOM1 ?? 1001;

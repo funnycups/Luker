@@ -126,7 +126,11 @@ describe('editor-persist — character writes land in the card active slot', () 
             // persistOrchestratorCharacterExtension calls ctx.writeExtensionField
             // (passed through context). The extensions.js mock above is here
             // for any transitive imports; the real write happens via ctx.
-            writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
+            writeExtensionField: async (id, key, value) => {
+                const resolved = typeof value === 'function' ? value(character.data.extensions[key]) : value;
+                character.data.extensions[key] = resolved;
+                writes.push({ id, key, value: resolved });
+            },
         };
         await persist.persistCharacterLoopEditor(ctx, extensionSettings.orchestrator, 'alice.png', {
             editor: { mode: 'loop', system_prompt: 'NEW-CARD-LOOP', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000 },
@@ -152,7 +156,11 @@ describe('editor-persist — character writes land in the card active slot', () 
         };
         const ctx = {
             characters: [character],
-            writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
+            writeExtensionField: async (id, key, value) => {
+                const resolved = typeof value === 'function' ? value(character.data.extensions[key]) : value;
+                character.data.extensions[key] = resolved;
+                writes.push({ id, key, value: resolved });
+            },
         };
         await persist.persistCharacterLoopEditor(ctx, extensionSettings.orchestrator, 'bob.png', {
             editor: { mode: 'loop', system_prompt: 'X', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000, enabled: true },
@@ -161,5 +169,73 @@ describe('editor-persist — character writes land in the card active slot', () 
         // The enabled flag no longer exists — the payload must not carry it.
         expect(writes[0].value.overrideEnabled).toBeUndefined();
         expect(writes[0].value.activePresetIds.loop).toBeTruthy();
+    });
+
+    test('persistCharacterLoopEditor passes an updater so concurrent sibling mode edits survive', async () => {
+        const character = {
+            avatar: 'carol.png',
+            name: 'Carol',
+            data: { extensions: { orchestrator: {} } },
+        };
+        let passedFunction = false;
+        const ctx = {
+            characters: [character],
+            writeExtensionField: async (id, key, value) => {
+                passedFunction = typeof value === 'function';
+                const concurrentState = {
+                    presetLibraries: { director: { d1: { name: 'Director 1' } } },
+                    activePresetIds: { director: 'd1' },
+                };
+                const resolved = typeof value === 'function' ? value(concurrentState) : value;
+                character.data.extensions[key] = resolved;
+                writes.push({ id, key, value: resolved });
+            },
+        };
+        await persist.persistCharacterLoopEditor(ctx, extensionSettings.orchestrator, 'carol.png', {
+            editor: { mode: 'loop', system_prompt: 'CONCURRENT-LOOP', tools: {}, max_rounds: 6, wall_clock_budget_ms: 60000 },
+        });
+        expect(passedFunction).toBe(true);
+        expect(writes[0].value.presetLibraries.director.d1).toEqual({ name: 'Director 1' });
+        expect(writes[0].value.activePresetIds.director).toBe('d1');
+        expect(writes[0].value.presetLibraries.loop.default.system_prompt).toBe('CONCURRENT-LOOP');
+    });
+
+    test('persistOrchestratorCharacterExtension maps null updater return to UNSET_VALUE instead of literal null', async () => {
+        const unsetSentinel = Symbol('test-unset');
+        const character = {
+            avatar: 'dana.png',
+            name: 'Dana',
+            data: { extensions: { orchestrator: { override: { mode: 'loop' } } } },
+        };
+        const recorded = [];
+        const ctx = {
+            constants: { unset: unsetSentinel },
+            characters: [character],
+            writeExtensionField: async (id, key, value) => {
+                const resolved = typeof value === 'function'
+                    ? await value(structuredClone(character.data.extensions[key]))
+                    : value;
+                recorded.push({ id, key, value: resolved });
+                if (resolved === unsetSentinel) {
+                    delete character.data.extensions[key];
+                } else {
+                    character.data.extensions[key] = resolved;
+                }
+                return true;
+            },
+        };
+
+        const syncOk = await persist.persistOrchestratorCharacterExtension(ctx, 0, () => null);
+        expect(syncOk).toBe(true);
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0].value).toBe(unsetSentinel);
+        expect(Object.prototype.hasOwnProperty.call(character.data.extensions, 'orchestrator')).toBe(false);
+
+        character.data.extensions.orchestrator = { override: { mode: 'spec' } };
+        const asyncOk = await persist.persistOrchestratorCharacterExtension(ctx, 0, async () => null);
+        expect(asyncOk).toBe(true);
+        expect(recorded).toHaveLength(2);
+        expect(recorded[1].value).toBe(unsetSentinel);
+        expect(Object.prototype.hasOwnProperty.call(character.data.extensions, 'orchestrator')).toBe(false);
     });
 });

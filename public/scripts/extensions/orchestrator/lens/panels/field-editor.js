@@ -77,10 +77,10 @@ export function textField({ app, title, value, original, editable, onChange, ful
             area.style.height = 'auto';
             area.style.height = `${Math.min(Math.max(area.scrollHeight + 2, 140), 560)}px`; // cap-ok: viewport inspector textarea height
         });
+        area.focus({ preventScroll: true });
+        area.setSelectionRange(area.value.length, area.value.length);
         requestAnimationFrame(() => {
             area.style.height = `${Math.min(Math.max(area.scrollHeight + 2, 140), 560)}px`; // cap-ok: viewport inspector textarea height
-            area.focus({ preventScroll: true });
-            area.setSelectionRange(area.value.length, area.value.length);
         });
     }
 

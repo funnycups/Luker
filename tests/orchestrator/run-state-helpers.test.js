@@ -5,7 +5,7 @@ globalThis.Luker = globalThis.Luker || {
 };
 
 const store = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
-const { withRound, withStreamingSection } = await import('../../public/scripts/extensions/orchestrator/run-state/helpers.js');
+const { withRound, withStreamingSection } = await import('../../public/scripts/run-panel/helpers.js');
 
 describe('helpers — withRound', () => {
     beforeEach(() => store.clearCurrentRun());

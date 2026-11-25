@@ -30,6 +30,7 @@
 
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
 import { isAbortError, isAbortSignalLike, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import { normalizeToolCallRetryMax } from '../../lib/iter-tool-calling.js';
 import { resolveAgentToolFlags } from './persistence.js';
 // Resolved lazily inside `handleDirectorDispatch` so test environments
 // can import this module without first installing a SillyTavern global —
@@ -366,24 +367,6 @@ export { readOpenNotes as readOpenNotesFromContextForNotes, renderOpenNotesBlock
 import { readOpenNotes as readOpenNotesFromContextForNotesImpl, renderOpenNotesBlock as renderOpenNotesBlockImpl } from './open-notes-injection.js';
 
 /**
- * Back-compat wrapper kept for tests that still target the prior
- * "concat into systemPrompt" shape. New call sites should use
- * `renderOpenNotesBlock` and place the block in a trailing
- * `<runtime_state>` user message instead — see `buildAgentTaskMessages`.
- *
- * @internal exported for tests.
- *
- * @param {string} systemPrompt - the bare instruction string
- * @param {Array<{id: string, text: string}>|null|undefined} openNotes
- * @returns {string}
- */
-export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes) {
-    const block = renderOpenNotesBlockImpl(openNotes);
-    if (!block) return systemPrompt;
-    return systemPrompt ? `${systemPrompt}\n\n${block}` : block;
-}
-
-/**
  * Production main-agent loop. Tests inject a stub via `deps.runMainLoop`.
  *
  * Tools:
@@ -423,7 +406,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // Same range/parsing as tool-calling.js so user-facing semantics of
     // "Tool-call retries (on invalid/missing)" are uniform across
     // orchestrator modes. 0 = no retry (one shot, then throw).
-    const maxNoToolRetries = Math.max(0, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0));
+    const maxNoToolRetries = normalizeToolCallRetryMax(deps?.settings?.toolCallRetryMax, 0);
     // Empty systemPrompt sends an empty instruction — defaults are
     // materialized into the profile at creation/reset time (see
     // `createDefaultDirectorProfile` in director-defaults.js and the
@@ -652,7 +635,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             // that wrapper (it needs onChunk for live UI), so we replicate
             // the retry semantics inline. User-initiated aborts re-throw
             // without retry.
-            const transportRetries = Math.max(0, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0));
+            const transportRetries = normalizeToolCallRetryMax(deps?.settings?.toolCallRetryMax, 0);
             let transportAttempt = 0;
             while (true) {
                 try {
@@ -761,23 +744,39 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         //   "unexpected tool_use_id found in tool_result blocks: <name>"
         // (the runtime had fallen back to using the tool name as the id,
         // which doesn't match the assistant turn's generated tool_use id).
-        const assistantToolCallEntries = toolCalls.map(tc => ({
-            id: String(tc?.raw?.id || tc?.id || makeDirectorToolCallId()),
-            type: 'function',
-            function: {
-                name: String(tc?.name || ''),
-                arguments: safeStringifyArgs(tc?.args),
-            },
-            source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
-        }));
+        const assistantToolCallEntries = toolCalls.map(tc => {
+            const callSig = typeof tc?.signature === 'string' && tc.signature.length > 0
+                ? tc.signature
+                : (typeof tc?.raw?.signature === 'string' && tc.raw.signature.length > 0
+                    ? tc.raw.signature
+                    : (typeof tc?.raw?.thoughtSignature === 'string' && tc.raw.thoughtSignature.length > 0 ? tc.raw.thoughtSignature : null));
+            const callExtra = tc?.extra_content && typeof tc.extra_content === 'object'
+                ? structuredClone(tc.extra_content)
+                : (tc?.raw?.extra_content && typeof tc.raw.extra_content === 'object' ? structuredClone(tc.raw.extra_content) : null);
+            return {
+                id: String(tc?.raw?.id || tc?.id || makeDirectorToolCallId()),
+                type: 'function',
+                function: {
+                    name: String(tc?.name || ''),
+                    arguments: safeStringifyArgs(tc?.args),
+                },
+                ...(callSig ? { signature: callSig } : {}),
+                ...(callExtra ? { extra_content: callExtra } : {}),
+                source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
+            };
+        });
         // Push assistant turn with reshaped tool-call records so the
         // next round's history is well-formed.
         messages.push({
             role: 'assistant',
             content: result.assistantText || null,
             reasoning: reasoningAccum || String(result?.reasoning || ''),
+            ...(typeof result?.signature === 'string' && result.signature.length > 0 ? { signature: result.signature } : {}),
             ...(Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0 ? { reasoning_blocks: result.reasoningBlocks } : {}),
             ...(Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0 ? { reasoning_details: result.reasoningDetails } : {}),
+            ...(Array.isArray(result?.nativeParts) && result.nativeParts.length > 0 ? { native_parts: result.nativeParts } : {}),
+            ...(Array.isArray(result?.nativeContentBlocks) && result.nativeContentBlocks.length > 0 ? { native_content_blocks: result.nativeContentBlocks } : {}),
+            ...(Array.isArray(result?.responsesOutputItems) && result.responsesOutputItems.length > 0 ? { responses_output_items: result.responsesOutputItems } : {}),
             tool_calls: assistantToolCallEntries,
             _round: round,
         });

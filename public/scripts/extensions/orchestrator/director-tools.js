@@ -43,6 +43,7 @@ import {
 } from './editor-ops.js';
 import { gatherGrepMatches } from './grep-tool.js';
 import { createAbortError, isAbortError, isAbortSignalLike, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import { normalizeToolCallRetryMax } from '../../lib/iter-tool-calling.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
@@ -116,7 +117,7 @@ function loopToolSchemasFor(tools, customToolRegistry = null) {
 
 // ── Tool schemas ──
 
-export const DISPATCH_SUBAGENT_TOOL = {
+const DISPATCH_SUBAGENT_TOOL = {
     type: 'function',
     function: {
         name: 'dispatch_subagent',
@@ -132,7 +133,7 @@ export const DISPATCH_SUBAGENT_TOOL = {
     },
 };
 
-export const DISPATCH_INLINE_SUBAGENT_TOOL = {
+const DISPATCH_INLINE_SUBAGENT_TOOL = {
     type: 'function',
     function: {
         name: 'dispatch_inline_subagent',
@@ -150,7 +151,7 @@ export const DISPATCH_INLINE_SUBAGENT_TOOL = {
     },
 };
 
-export const AWAIT_SUBAGENTS_TOOL = {
+const AWAIT_SUBAGENTS_TOOL = {
     type: 'function',
     function: {
         name: 'await_subagents',
@@ -165,7 +166,7 @@ export const AWAIT_SUBAGENTS_TOOL = {
     },
 };
 
-export const WRITE_MESSAGE_TOOL = {
+const WRITE_MESSAGE_TOOL = {
     type: 'function',
     function: {
         name: 'write_message',
@@ -181,7 +182,7 @@ export const WRITE_MESSAGE_TOOL = {
     },
 };
 
-export const APPLY_MESSAGE_PATCHES_TOOL = {
+const APPLY_MESSAGE_PATCHES_TOOL = {
     type: 'function',
     function: {
         name: 'apply_message_patches',
@@ -207,7 +208,7 @@ export const APPLY_MESSAGE_PATCHES_TOOL = {
     },
 };
 
-export const FINALIZE_TOOL = {
+const FINALIZE_TOOL = {
     type: 'function',
     function: {
         name: 'finalize',
@@ -216,7 +217,7 @@ export const FINALIZE_TOOL = {
     },
 };
 
-export const GET_DRAFT_TOOL = {
+const GET_DRAFT_TOOL = {
     type: 'function',
     function: {
         name: 'get_draft',
@@ -248,7 +249,7 @@ export const DRAFT_SEARCH_TOOL = {
     },
 };
 
-export const CANCEL_SUBAGENT_TOOL = {
+const CANCEL_SUBAGENT_TOOL = {
     type: 'function',
     function: {
         name: 'cancel_subagent',
@@ -726,7 +727,7 @@ export function createSubagentDispatcher({
         // Transport-error retry honors `settings.toolCallRetryMax` —
         // same convention as `requestToolCallsWithRetry` (loop / agenda /
         // spec). User-initiated aborts re-throw without retry.
-        const transportRetries = Math.max(0, Math.floor(Number(settings?.toolCallRetryMax) || 0));
+        const transportRetries = normalizeToolCallRetryMax(settings?.toolCallRetryMax, 0);
         let transportAttempt = 0;
         while (true) {
             let roundText = '';
@@ -801,13 +802,35 @@ export function createSubagentDispatcher({
                 : [];
             const roundAssistantText = String(roundResult?.assistantText ?? roundText);
             const roundReasoningText = roundReasoning || String(roundResult?.reasoning ?? '');
+            const roundSignature = typeof roundResult?.signature === 'string' && roundResult.signature.length > 0
+                ? roundResult.signature
+                : null;
             const roundReasoningBlocks = Array.isArray(roundResult?.reasoningBlocks) && roundResult.reasoningBlocks.length > 0
                 ? roundResult.reasoningBlocks
                 : null;
             const roundReasoningDetails = Array.isArray(roundResult?.reasoningDetails) && roundResult.reasoningDetails.length > 0
                 ? roundResult.reasoningDetails
                 : null;
-            return { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails };
+            const roundNativeParts = Array.isArray(roundResult?.nativeParts) && roundResult.nativeParts.length > 0
+                ? roundResult.nativeParts
+                : null;
+            const roundNativeContentBlocks = Array.isArray(roundResult?.nativeContentBlocks) && roundResult.nativeContentBlocks.length > 0
+                ? roundResult.nativeContentBlocks
+                : null;
+            const roundResponsesOutputItems = Array.isArray(roundResult?.responsesOutputItems) && roundResult.responsesOutputItems.length > 0
+                ? roundResult.responsesOutputItems
+                : null;
+            return {
+                roundAssistantText,
+                roundToolCalls,
+                roundReasoningText,
+                roundSignature,
+                roundReasoningBlocks,
+                roundReasoningDetails,
+                roundNativeParts,
+                roundNativeContentBlocks,
+                roundResponsesOutputItems,
+            };
         }
     }
 
@@ -1145,7 +1168,17 @@ export function createSubagentDispatcher({
                     const onFirstChunk = r === 0 && barrierSlot.role === 'lead'
                         ? barrierSlot.signalFirstChunk
                         : null;
-                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas, onFirstChunk);
+                    const {
+                        roundAssistantText,
+                        roundToolCalls,
+                        roundReasoningText,
+                        roundSignature,
+                        roundReasoningBlocks,
+                        roundReasoningDetails,
+                        roundNativeParts,
+                        roundNativeContentBlocks,
+                        roundResponsesOutputItems,
+                    } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas, onFirstChunk);
                     if (roundToolCalls.length === 0) {
                         // The sub-agent's terminal text is already cooked:
                         // `generateTask`/`generateTaskStream` apply the
@@ -1172,8 +1205,12 @@ export function createSubagentDispatcher({
                             role: 'assistant',
                             content: roundAssistantText || '',
                             reasoning: roundReasoningText || '',
+                            ...(roundSignature ? { signature: roundSignature } : {}),
                             ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
                             ...(roundReasoningDetails ? { reasoning_details: roundReasoningDetails } : {}),
+                            ...(roundNativeParts ? { native_parts: roundNativeParts } : {}),
+                            ...(roundNativeContentBlocks ? { native_content_blocks: roundNativeContentBlocks } : {}),
+                            ...(roundResponsesOutputItems ? { responses_output_items: roundResponsesOutputItems } : {}),
                             _round: r,
                         });
                         break;
@@ -1190,21 +1227,37 @@ export function createSubagentDispatcher({
                     // `source` tags each call with the dispatch layer so
                     // the simulation-review popup can render a layer chip
                     // (builtin / extension / profile / st-bridge).
-                    const assistantToolCallEntries = roundToolCalls.map(tc => ({
-                        id: String(tc?.raw?.id || tc?.id || makeSubagentToolCallId()),
-                        type: 'function',
-                        function: {
-                            name: String(tc?.name || ''),
-                            arguments: safeStringifyArgs(tc?.args),
-                        },
-                        source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
-                    }));
+                    const assistantToolCallEntries = roundToolCalls.map(tc => {
+                        const callSig = typeof tc?.signature === 'string' && tc.signature.length > 0
+                            ? tc.signature
+                            : (typeof tc?.raw?.signature === 'string' && tc.raw.signature.length > 0
+                                ? tc.raw.signature
+                                : (typeof tc?.raw?.thoughtSignature === 'string' && tc.raw.thoughtSignature.length > 0 ? tc.raw.thoughtSignature : null));
+                        const callExtra = tc?.extra_content && typeof tc.extra_content === 'object'
+                            ? structuredClone(tc.extra_content)
+                            : (tc?.raw?.extra_content && typeof tc.raw.extra_content === 'object' ? structuredClone(tc.raw.extra_content) : null);
+                        return {
+                            id: String(tc?.raw?.id || tc?.id || makeSubagentToolCallId()),
+                            type: 'function',
+                            function: {
+                                name: String(tc?.name || ''),
+                                arguments: safeStringifyArgs(tc?.args),
+                            },
+                            ...(callSig ? { signature: callSig } : {}),
+                            ...(callExtra ? { extra_content: callExtra } : {}),
+                            source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
+                        };
+                    });
                     subMessages.push({
                         role: 'assistant',
                         content: roundAssistantText || null,
                         reasoning: roundReasoningText || '',
+                        ...(roundSignature ? { signature: roundSignature } : {}),
                         ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
                         ...(roundReasoningDetails ? { reasoning_details: roundReasoningDetails } : {}),
+                        ...(roundNativeParts ? { native_parts: roundNativeParts } : {}),
+                        ...(roundNativeContentBlocks ? { native_content_blocks: roundNativeContentBlocks } : {}),
+                        ...(roundResponsesOutputItems ? { responses_output_items: roundResponsesOutputItems } : {}),
                         tool_calls: assistantToolCallEntries,
                         _round: r,
                     });
@@ -1487,21 +1540,6 @@ export async function loadSubAgentOpenNotesBlock(contextForNotes) {
     // four orchestration modes render an identical Open Notes block.
     // Kept as a named export because tests import this symbol directly.
     return loadOpenNotesBlock(contextForNotes);
-}
-
-/**
- * Back-compat wrapper around `loadSubAgentOpenNotesBlock` kept for tests
- * that still target the prior "concat into systemPrompt" shape. New call
- * sites should use `loadSubAgentOpenNotesBlock` and place the block in a
- * trailing `<runtime_state>` user message instead.
- *
- * @internal exported for tests; consumers should call through the
- *           dispatcher's runtime-state assembly path.
- */
-export async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
-    const block = await loadSubAgentOpenNotesBlock(contextForNotes);
-    if (!block) return systemPrompt;
-    return `${systemPrompt}\n\n${block}`;
 }
 
 /**

@@ -7,9 +7,8 @@
  *            (where ctx is the SillyTavern context returned by getContext()).
  * All three resolve to identical references.
  */
-import { getBuiltinToolRegistry } from './loop-tools.js';
-
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+import { isBuiltinToolName } from './loop-tools.js';
+import { isValidCustomToolName } from './custom-tools-sanitize.js';
 
 const EXTENSION_REGISTRY = new Map();
 
@@ -18,7 +17,7 @@ function validateSpec(spec) {
         throw new TypeError('registerOrchestrationTool: spec must be an object.');
     }
     const name = String(spec.name || '');
-    if (!NAME_PATTERN.test(name)) {
+    if (!isValidCustomToolName(name)) {
         throw new Error(`registerOrchestrationTool: invalid name '${name}'.`);
     }
     if (typeof spec.exec !== 'function') {
@@ -35,8 +34,7 @@ function validateSpec(spec) {
 export function registerOrchestrationTool(spec) {
     validateSpec(spec);
     const name = String(spec.name);
-    const builtin = getBuiltinToolRegistry();
-    if (builtin.has(name)) {
+    if (isBuiltinToolName(name)) {
         throw new Error(`registerOrchestrationTool: name '${name}' conflicts with a builtin tool. Pick a different name.`);
     }
     if (EXTENSION_REGISTRY.has(name)) {

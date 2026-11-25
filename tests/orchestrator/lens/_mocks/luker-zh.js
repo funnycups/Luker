@@ -29,6 +29,22 @@ globalThis.Luker = {
         addLocaleData: collect,
         getCurrentLocale: () => 'zh-cn',
         translate: (text) => table[text] ?? text,
+        createScopedI18n: (tables) => {
+            const tr = (text, key = null) => {
+                const loc = globalThis.Luker?.getContext?.()?.getCurrentLocale?.() || '';
+                const lookupKey = key || text;
+                const own = loc && tables?.[loc] && Object.hasOwn(tables[loc], lookupKey) ? tables[loc][lookupKey] : '';
+                if (own) return own;
+                const fallbackFn = globalThis.Luker?.getContext?.()?.translate;
+                return typeof fallbackFn === 'function' ? fallbackFn(text) : (text ?? '');
+            };
+            return {
+                t: (strings, ...values) => tr(strings.reduce((r, s, i) => r + s + (values[i] !== undefined ? `\${${i}}` : ''), '')).replace(/\$\{(\d+)\}/g, (_, idx) => values[Number(idx)]),
+                translate: tr,
+                format: (template, ...values) => tr(String(template || '')).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? '')),
+                has: (key) => { const loc = globalThis.Luker?.getContext?.()?.getCurrentLocale?.() || ''; return Boolean(loc && tables?.[loc]?.[key]); },
+            };
+        },
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
             wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },

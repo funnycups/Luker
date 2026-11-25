@@ -66,7 +66,8 @@ import {
 } from './agenda-profile.js';
 import {
     createAgendaPlannerDraft,
-    sanitizeIdentifierToken,
+    normalizeIdToken,
+    resolveStoredIdReference,
 } from './editable-spec.js';
 import { toReadableYamlText } from './output-formatting.js';
 import { buildAutoInjectedNodePromptPrelude } from './review-feedback.js';
@@ -312,19 +313,19 @@ function finishRuntimeNodeAttempt(trace, attempt, details = {}) {
     });
 }
 
-export const AGENDA_TODO_STATUSES = Object.freeze(['todo', 'doing', 'done', 'blocked', 'dropped']);
+const AGENDA_TODO_STATUSES = Object.freeze(['todo', 'doing', 'done', 'blocked', 'dropped']);
 
-export function normalizeAgendaTodoStatus(value) {
+function normalizeAgendaTodoStatus(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return AGENDA_TODO_STATUSES.includes(normalized) ? normalized : 'todo';
 }
 
-export function createAgendaRunId() {
+function createAgendaRunId() {
     return `agenda_run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function createAgendaTodo({ id = '', goal = '', status = 'todo' } = {}) {
-    const todoId = sanitizeIdentifierToken(id, '');
+function createAgendaTodo({ id = '', goal = '', status = 'todo' } = {}) {
+    const todoId = normalizeIdToken(id, '');
     const goalText = String(goal || '').trim();
     if (!todoId || !goalText) {
         return null;
@@ -336,7 +337,7 @@ export function createAgendaTodo({ id = '', goal = '', status = 'todo' } = {}) {
     };
 }
 
-export function buildAgendaRecentChatText(messages, settings = extension_settings[MODULE_NAME]) {
+function buildAgendaRecentChatText(messages, settings = extension_settings[MODULE_NAME]) {
     const source = Array.isArray(messages) ? messages : [];
     // All three roles: getRecentMessages slices keep interleaved system
     // floors, and their text used to surface in recent_chat verbatim.
@@ -360,7 +361,7 @@ export function buildAgendaRecentChatText(messages, settings = extension_setting
         .join('\n');
 }
 
-export function buildAgendaLastUserText(messages) {
+function buildAgendaLastUserText(messages) {
     const source = Array.isArray(messages) ? messages : [];
     const { index, message } = extractLastUserMessage(source);
     if (index < 0 || !message) return '';
@@ -369,7 +370,7 @@ export function buildAgendaLastUserText(messages) {
     return record?.mesCooked ?? String(message?.mes ?? '');
 }
 
-export function selectAgendaRuns(runs = [], selectedRunIds = null) {
+function selectAgendaRuns(runs = [], selectedRunIds = null) {
     const selected = selectedRunIds instanceof Set ? selectedRunIds : null;
     return (Array.isArray(runs) ? runs : []).filter((run) => {
         if (!selected) {
@@ -379,7 +380,7 @@ export function selectAgendaRuns(runs = [], selectedRunIds = null) {
     });
 }
 
-export function buildAgendaSelectedRunOutputsText(runs = [], selectedRunIds = null) {
+function buildAgendaSelectedRunOutputsText(runs = [], selectedRunIds = null) {
     const source = selectAgendaRuns(runs, selectedRunIds);
     if (source.length === 0) {
         return '(none)';
@@ -390,7 +391,7 @@ export function buildAgendaSelectedRunOutputsText(runs = [], selectedRunIds = nu
     ].join('\n')).join('\n\n');
 }
 
-export function buildAgendaDistillerOutputText(runs = [], selectedRunIds = null) {
+function buildAgendaDistillerOutputText(runs = [], selectedRunIds = null) {
     const selectedSource = selectAgendaRuns(runs, selectedRunIds);
     const selectedDistiller = selectedSource.filter(run => String(run?.agent || '') === 'distiller' && String(run?.outputText || '').trim());
     if (selectedDistiller.length > 0) {
@@ -400,7 +401,7 @@ export function buildAgendaDistillerOutputText(runs = [], selectedRunIds = null)
     return allDistiller.length > 0 ? String(allDistiller[allDistiller.length - 1]?.outputText || '') : '(none)';
 }
 
-export function upsertAgendaTodo(state, nextTodo) {
+function upsertAgendaTodo(state, nextTodo) {
     if (!state || !Array.isArray(state.todos) || !nextTodo) {
         return;
     }
@@ -469,7 +470,7 @@ export function buildAgendaSharedContextText(context, payload, messages, profile
     ].join('\n');
 }
 
-export function buildAgendaTodosText(todos = []) {
+function buildAgendaTodosText(todos = []) {
     return [
         '## todo_board',
         '```yaml',
@@ -485,7 +486,7 @@ export function buildAgendaTodosText(todos = []) {
     ].join('\n');
 }
 
-export function buildAgendaRunsText(runs = [], selectedRunIds = null) {
+function buildAgendaRunsText(runs = [], selectedRunIds = null) {
     const source = selectAgendaRuns(runs, selectedRunIds);
     if (source.length === 0) {
         return [
@@ -514,7 +515,7 @@ export function buildAgendaRunsText(runs = [], selectedRunIds = null) {
     ].join('\n\n');
 }
 
-export function syncAgendaTrace(trace, state) {
+function syncAgendaTrace(trace, state) {
     if (!trace || typeof trace !== 'object' || !state || typeof state !== 'object') {
         return;
     }
@@ -533,7 +534,7 @@ export function applyAgendaPlannerOps(state, plannerStep = {}) {
     }
     for (const rawOp of Array.isArray(plannerStep?.todo_ops) ? plannerStep.todo_ops : []) {
         const op = String(rawOp?.op || '').trim().toLowerCase();
-        const todoId = sanitizeIdentifierToken(rawOp?.todo_id, '');
+        const todoId = normalizeIdToken(rawOp?.todo_id, '');
         if (!todoId) {
             continue;
         }
@@ -565,8 +566,8 @@ export function normalizeAgendaDispatches(state, plannerStep = {}, profile = {},
     const agents = profile?.agents && typeof profile.agents === 'object' ? profile.agents : {};
     const knownRunIds = new Set((Array.isArray(state?.runs) ? state.runs : []).map(run => String(run?.runId || '')).filter(Boolean));
     for (const rawDispatch of Array.isArray(plannerStep?.dispatches) ? plannerStep.dispatches : []) {
-        const todoId = sanitizeIdentifierToken(rawDispatch?.todo_id, '');
-        const agent = sanitizeIdentifierToken(rawDispatch?.agent, '');
+        const todoId = normalizeIdToken(rawDispatch?.todo_id, '');
+        const agent = resolveStoredIdReference(agents, rawDispatch?.agent);
         const taskBrief = String(rawDispatch?.task_brief || '').trim();
         if (!todoId || !agent || !taskBrief || !agents[agent]) {
             continue;
@@ -609,17 +610,6 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
         buildAgendaAvailableAgentsText(profile),
         buildAgendaTodosText(state?.todos),
         buildAgendaRunsText(state?.runs),
-        [
-            '## planner_contract',
-            '- Maintain the todo board explicitly through todo_ops.',
-            '- Dispatch only agent ids listed in available_agents.',
-            '- Dispatch only the next useful agent calls. Parallelize only truly independent work.',
-            '- Read complete prior run outputs before adding new work.',
-            '- Normal planner steps should include dispatches. todo_ops is optional.',
-            '- Only the final planner step should include finalize.',
-            '- finalize must be a concise reason/summary string.',
-            '- Do not include dispatches in the same step that includes finalize.',
-        ].join('\n'),
     ].filter(Boolean).join('\n\n');
     const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
         worldInfoMessages: messages,
@@ -1017,6 +1007,14 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         // refine on the next round.
         const assistantToolCallEntries = calls.map(tc => {
             const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+            const callSig = typeof tc?.signature === 'string' && tc.signature.length > 0
+                ? tc.signature
+                : (typeof tc?.raw?.signature === 'string' && tc.raw.signature.length > 0
+                    ? tc.raw.signature
+                    : (typeof tc?.raw?.thoughtSignature === 'string' && tc.raw.thoughtSignature.length > 0 ? tc.raw.thoughtSignature : null));
+            const callExtra = tc?.extra_content && typeof tc.extra_content === 'object'
+                ? structuredClone(tc.extra_content)
+                : (tc?.raw?.extra_content && typeof tc.raw.extra_content === 'object' ? structuredClone(tc.raw.extra_content) : null);
             return {
                 id: String(tc?.id || makeRuntimeToolCallId()),
                 type: 'function',
@@ -1024,6 +1022,8 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                     name: normalizedName,
                     arguments: canonicalStringifyArgs(tc?.args),
                 },
+                ...(callSig ? { signature: callSig } : {}),
+                ...(callExtra ? { extra_content: callExtra } : {}),
                 source: resolveToolSource(normalizedName, toolContext),
             };
         });
@@ -1031,8 +1031,12 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             role: 'assistant',
             content: String(detailed?.assistantText || ''),
             ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
+            ...(typeof detailed?.signature === 'string' && detailed.signature.length > 0 ? { signature: detailed.signature } : {}),
             ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
             ...(Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0 ? { reasoning_details: detailed.reasoningDetails } : {}),
+            ...(Array.isArray(detailed?.nativeParts) && detailed.nativeParts.length > 0 ? { native_parts: detailed.nativeParts } : {}),
+            ...(Array.isArray(detailed?.nativeContentBlocks) && detailed.nativeContentBlocks.length > 0 ? { native_content_blocks: detailed.nativeContentBlocks } : {}),
+            ...(Array.isArray(detailed?.responsesOutputItems) && detailed.responsesOutputItems.length > 0 ? { responses_output_items: detailed.responsesOutputItems } : {}),
             tool_calls: assistantToolCallEntries,
         });
         conversation.messages.push({
@@ -1298,7 +1302,8 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             }
         }
 
-        const finalAgentId = sanitizeIdentifierToken(profile?.finalAgentId, Object.keys(profile?.agents || {})[0] || 'finalizer');
+        const finalAgentId = resolveStoredIdReference(profile?.agents, profile?.finalAgentId)
+            || Object.keys(profile?.agents || {})[0] || 'finalizer';
         if (!profile?.agents?.[finalAgentId]) {
             throw new Error(`Agenda final agent '${finalAgentId}' is not configured.`);
         }
@@ -1374,7 +1379,9 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     } catch (error) {
         finalizeRuntimeTrace(trace, 'failed', { error: String(error?.message || error) });
         try {
-            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+            // A stop from the run panel or an aborted generation aborts the
+            // run's signal; report that as aborted rather than as a failure.
+            finishRun({ runId, status: payload?.signal?.aborted ? 'aborted' : 'error', error: String(error?.message || error) });
         } catch (_) { /* run may already be cleared */ }
         throw error;
     }

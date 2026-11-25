@@ -62,6 +62,8 @@ import {
     createFullDirectorProfile as _createFullDirectorProfile,
     createMinimalDirectorProfile as _createMinimalDirectorProfile,
 } from './director-defaults.js';
+import { makeModeMap } from './preset-modes.js';
+import { LOOP_PROFILE_DEFAULTS } from './persistence.js';
 export const ORCH_EXECUTION_MODES = Object.freeze([
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_EXECUTION_MODE_SINGLE,
@@ -110,11 +112,10 @@ export const DEFAULT_AGENDA_PLANNER_PROMPT = [
     '- Finalization should happen only once, at the end. When you are done, return finalize with a concise reason/summary.',
     '- Do not include dispatches in the same step that includes finalize.',
 ].join('\n');
-export const TEMPLATE_PLACEHOLDER_VARS = ['recent_chat', 'last_user', 'previous_outputs', 'distiller'];
-export const AUTO_INJECTED_CONTEXT_VARS = ['previous_orchestration'];
-export const LEGACY_REMOVED_CONTEXT_VARS = ['previous_snapshot'];
-export const ALLOWED_TEMPLATE_VARS = [...TEMPLATE_PLACEHOLDER_VARS, ...AUTO_INJECTED_CONTEXT_VARS, ...LEGACY_REMOVED_CONTEXT_VARS];
-export const AI_VISIBLE_TEMPLATE_VARS = [...TEMPLATE_PLACEHOLDER_VARS];
+const TEMPLATE_PLACEHOLDER_VARS = ['recent_chat', 'last_user', 'previous_outputs', 'distiller'];
+const AUTO_INJECTED_CONTEXT_VARS = ['previous_orchestration'];
+const LEGACY_REMOVED_CONTEXT_VARS = ['previous_snapshot'];
+const AI_VISIBLE_TEMPLATE_VARS = [...TEMPLATE_PLACEHOLDER_VARS];
 export const AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE = '(auto-injected above)';
 export const AUTO_INJECTED_PLACEHOLDER_AI_NOTE = '(auto-injected by runtime before this template)';
 export const AUTO_INJECTED_PLACEHOLDER_REGEX = new RegExp(`{{\\s*(${AUTO_INJECTED_CONTEXT_VARS.join('|')})\\s*}}`, 'gi');
@@ -135,23 +136,11 @@ export const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
     world_info_position.EMBottom,
     world_info_position.atDepth,
 ]);
-export const REQUIRED_AI_BUILD_NODE_IDS = ['lorebook_reader', 'anti_data_guard'];
-export const ANTI_DATA_BLOCKED_LEXICON = [
+const ANTI_DATA_BLOCKED_LEXICON = [
     '观察', '分析', '评估', '统计', '监测', '检测', '实验', '推测', '记录', '汇报',
     'observation', 'analyze', 'analysis', 'evaluate', 'metric', 'kpi', 'ratio', 'probability',
 ];
-export const ORCH_AI_QUALITY_AXES = {
-    user_intent: 'Analyze user intent, emotional expectation, and implicit goals.',
-    character_traits: 'Use character traits and card constraints without restating full biographies in every node.',
-    lorebook_compliance: 'Read and obey active lorebook/world-info constraints as hard writing constraints.',
-    character_independence: 'Preserve multi-character independence and avoid voice/agency collapse.',
-    anti_ooc: 'Detect and prevent OOC behavior and persona drift.',
-    anti_datafication: 'Treat data-like prose as a hard violation (quantification, pseudo-analytics, report-style phrasing).',
-    latent_behavior: 'Infer plausible latent behavior, motivations, and next-step actions.',
-    human_realism: 'Increase human-like behavior through natural uncertainty, bounded knowledge, and believable pacing.',
-    world_autonomy: 'Keep the world autonomous; events should not always orbit the user.',
-};
-export const ORCH_CRITIC_REQUIRED_GATES = Object.freeze([
+const ORCH_CRITIC_REQUIRED_GATES = Object.freeze([
     'continuity and timeline coherence',
     'causality and action-consequence coherence',
     'character/role consistency and anti-OOC drift',
@@ -161,14 +150,14 @@ export const ORCH_CRITIC_REQUIRED_GATES = Object.freeze([
     'human realism and situational plausibility',
     'world autonomy and avoiding user-centric collapse',
 ]);
-export const ORCH_CRITIC_PROMPT_AUTHORING_RULE = 'The critic/review preset itself must hardcode the review checklist and decision gate. Do not assume node.type, stage position, or preset name alone will make the model audit outputs.';
-export const ORCH_CRITIC_CONSTRAINT_RESTATEMENT_RULE = 'Because critics do not see upstream worker prompt text at runtime, every critic/review preset must explicitly restate the audited layer\'s concrete pass/fail requirements, including worker-specific hard constraints, banned patterns, required preserved facts, and output obligations.';
-export const ORCH_REVIEW_LAYERING_RULE = 'Treat orchestration as explicit hierarchical layers. A critic/review node audits only the immediately preceding worker layer, not the full earlier pipeline.';
-export const ORCH_REVIEW_VISIBILITY_RULE = 'Critic visibility is local: do not make a critic depend on or audit non-adjacent earlier-stage nodes. If an older layer also needs review, add another critic immediately after that layer.';
-export const ORCH_REVIEW_RERUN_SCOPE_RULE = 'A critic may request rerun only for the minimal specific worker node ids in the directly adjacent previous layer it audits.';
-export const ORCH_REVIEW_MULTI_CRITIC_RULE = 'If multiple layers need review gates, insert critics after those specific layers as needed. Multiple critics are valid; do not collapse all review into one final critic.';
-export const ORCH_REVIEW_REDUNDANCY_RULE = 'Do not place two critic/review stages or nodes back-to-back with no worker layer between them; adjacent critics are redundant and meaningless.';
-export const ORCH_CRITIC_DECISION_RULE = `Approve only when every required gate passes. If any material issue exists, request rerun of the minimal specific worker node ids from the directly adjacent previous layer only. Every approve/rerun tool call must include mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\`. Never emit synthesis, replacement guidance, or silent approval.`;
+const ORCH_CRITIC_PROMPT_AUTHORING_RULE = 'The critic/review preset itself must hardcode the review checklist and decision gate. Do not assume node.type, stage position, or preset name alone will make the model audit outputs.';
+const ORCH_CRITIC_CONSTRAINT_RESTATEMENT_RULE = 'Because critics do not see upstream worker prompt text at runtime, every critic/review preset must explicitly restate the audited layer\'s concrete pass/fail requirements, including worker-specific hard constraints, banned patterns, required preserved facts, and output obligations.';
+const ORCH_REVIEW_LAYERING_RULE = 'Treat orchestration as explicit hierarchical layers. A critic/review node audits only the immediately preceding worker layer, not the full earlier pipeline.';
+const ORCH_REVIEW_VISIBILITY_RULE = 'Critic visibility is local: do not make a critic depend on or audit non-adjacent earlier-stage nodes. If an older layer also needs review, add another critic immediately after that layer.';
+const ORCH_REVIEW_RERUN_SCOPE_RULE = 'A critic may request rerun only for the minimal specific worker node ids in the directly adjacent previous layer it audits.';
+const ORCH_REVIEW_MULTI_CRITIC_RULE = 'If multiple layers need review gates, insert critics after those specific layers as needed. Multiple critics are valid; do not collapse all review into one final critic.';
+const ORCH_REVIEW_REDUNDANCY_RULE = 'Do not place two critic/review stages or nodes back-to-back with no worker layer between them; adjacent critics are redundant and meaningless.';
+const ORCH_CRITIC_DECISION_RULE = `Approve only when every required gate passes. If any material issue exists, request rerun of the minimal specific worker node ids from the directly adjacent previous layer only. Every approve/rerun tool call must include mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\`. Never emit synthesis, replacement guidance, or silent approval.`;
 
 export function getCriticPromptReminderLines() {
     return [
@@ -182,30 +171,6 @@ export function getCriticPromptReminderLines() {
         `For every critic/review preset, explicitly hardcode these checks in prompt text: ${ORCH_CRITIC_REQUIRED_GATES.join(', ')}.`,
         ORCH_CRITIC_DECISION_RULE,
     ];
-}
-
-export function getCriticReviewNodeContractShape() {
-    return {
-        prompt_authoring_rule: ORCH_CRITIC_PROMPT_AUTHORING_RULE,
-        constraint_restatement_rule: ORCH_CRITIC_CONSTRAINT_RESTATEMENT_RULE,
-        layering_rule: ORCH_REVIEW_LAYERING_RULE,
-        visibility_scope: ORCH_REVIEW_VISIBILITY_RULE,
-        rerun_scope: ORCH_REVIEW_RERUN_SCOPE_RULE,
-        multi_critic_policy: ORCH_REVIEW_MULTI_CRITIC_RULE,
-        redundancy_rule: ORCH_REVIEW_REDUNDANCY_RULE,
-        required_checks: ORCH_CRITIC_REQUIRED_GATES,
-        decision_rule: ORCH_CRITIC_DECISION_RULE,
-        tool_payload_contract: {
-            approve: {
-                [ORCH_REVIEW_FEEDBACK_FIELD]: 'required string',
-            },
-            rerun: {
-                target_node_ids: ['required string'],
-                [ORCH_REVIEW_FEEDBACK_FIELD]: 'required string',
-            },
-        },
-        feedback_runtime_behavior: `Approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` is auto-injected into later nodes. Rerun \`${ORCH_REVIEW_FEEDBACK_FIELD}\` is auto-injected into the targeted rerun nodes.`,
-    };
 }
 
 export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
@@ -302,9 +267,9 @@ export function getDefaultRequestSystemPrompt() {
         '- Do not delete, restructure, or rewrite parts of the profile the user did not name. When existing content already covers a topic the user just refined, keep its surroundings and edit in place.',
         '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
         'Each preset / agent may optionally set apiPresetName to route through a specific Connection Manager profile. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration API preset.',
-        'If you set apiPresetName, use only names from available_connection_profiles.',
+        'Before setting apiPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_connection_profiles.',
         'Each preset / agent may optionally set promptPresetName to route through a specific chat completion preset. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration chat completion preset.',
-        'If you set promptPresetName, use only names from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are safe to reference from any card. Prefer local-global names for portable profiles; use a card-bound name only when the profile is meant to ship with the same card.',
+        'Before setting promptPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are safe to reference from any card. Prefer local-global names for portable profiles; use a card-bound name only when the profile is meant to ship with the same card.',
         'Do NOT hardcode any fixed narrator persona / identity / roleplay character in system prompts.',
         'Do NOT mirror long single-prompt identity blocks; focus on process quality and constraints.',
         'Runtime context guarantee: orchestration agents and final generation already see assembled preset / character card / world-info context.',
@@ -538,51 +503,9 @@ export const defaultAgendaPlanner = {
 };
 
 // Default loop profile system prompt — shipped as a starting point for
-// users who switch to loop mode. The runtime sanitizer in
-// `persistence.js::sanitizeLoopProfile` fills in the rest of the V3 shape
-// (tool flags default-on, max_rounds=40, wall_clock=300000ms, finalize
-// forced true). Keeping the default text terse and action-oriented matches
-// the project's prompt-writing convention.
-export const DEFAULT_LOOP_SYSTEM_PROMPT = [
-    'You are a single-agent orchestration loop for roleplay generation.',
-    'Use the available tools to gather only the context you actually need to draft compact orchestration guidance for the next reply.',
-    'Prefer fewer, targeted tool calls over exhaustive exploration.',
-    'Call finalize(capsule_text) with the final guidance text when you have enough — do NOT keep gathering once you can write a good capsule.',
-    'Preserve continuity, character consistency, anti-OOC discipline, and active world-info constraints in the capsule.',
-].join('\n');
-
-export const defaultLoopProfile = {
-    mode: ORCH_EXECUTION_MODE_LOOP,
-    apiPresetName: '',
-    promptPresetName: '',
-    system_prompt: DEFAULT_LOOP_SYSTEM_PROMPT,
-    tools: {
-        note: { add: true },
-        chat: { read_range: true, search: true },
-        lorebook: { world_book_list: true, list: true, search: true, get: true },
-        memory: {
-            schema: true,
-            list_candidates: true,
-            edge_summary: true,
-            node_brief: true,
-            expand_seeds: true,
-            keyword_search: true,
-            vector_search: true,
-            find_by_name: true,
-            compaction_candidates: true,
-            node_create: true,
-            node_edit: true,
-            node_delete: true,
-            link_upsert: true,
-            link_delete: true,
-            compact_nodes: true,
-        },
-        search: { search: true, visit: true },
-        finalize: true,
-    },
-    max_rounds: 40,
-    wall_clock_budget_ms: 300000,
-};
+// Canonical V3 loop-mode default profile owned by persistence.js alongside
+// sanitizeLoopProfile and DEFAULT_LOOP_SYSTEM_PROMPT.
+export const defaultLoopProfile = LOOP_PROFILE_DEFAULTS;
 
 export const defaultSettings = {
     enabled: false,
@@ -604,8 +527,8 @@ export const defaultSettings = {
     // NEW: per-mode preset libraries + active pointers. Initial Default
     // entries are seeded lazily by preset-library.js on first read so the
     // factory data isn't duplicated across this constant.
-    presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} },
-    activePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+    presetLibraries: makeModeMap(() => ({})),
+    activePresetIds: makeModeMap(() => ''),
     presetLibrariesMigrationDone: 0,
     chatOverrides: {},
     requestApiPresetName: '',
@@ -624,7 +547,7 @@ export const defaultSettings = {
  */
 export function createFactoryPresetForMode(mode) {
     if (mode === ORCH_EXECUTION_MODE_LOOP) {
-        return { name: 'Default', ...defaultLoopProfile };
+        return { name: 'Default', ...structuredClone(defaultLoopProfile) };
     }
     if (mode === _ORCH_EXECUTION_MODE_DIRECTOR) {
         return [

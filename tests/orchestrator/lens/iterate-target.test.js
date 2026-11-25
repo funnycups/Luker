@@ -196,6 +196,13 @@ function makeHarness({
                 : s;
             return owner?.activePresetIds?.[m] || '';
         },
+        getPreset: (s, m, sc, id, opts = {}) => {
+            const owner = sc === 'character'
+                ? opts.context?.characters?.find(ch => ch.avatar === opts.avatar)?.data?.extensions?.orchestrator
+                : s;
+            const entry = owner?.presetLibraries?.[m]?.[id];
+            return entry ? clone(entry) : null;
+        },
         writeActivePreset: (s, m, sc, payload, opts = {}) => {
             const owner = sc === 'character'
                 ? opts.context?.characters?.find(ch => ch.avatar === opts.avatar)?.data?.extensions?.orchestrator
@@ -272,12 +279,12 @@ describe('orchestrator/lens/iterate-target.js', () => {
         expect(info.text).toContain('Spec mode block');
     });
 
-    test('character scope exposes lorebook writes and reset tools gated by hasOverride; global omits them', async () => {
+    test('global and character scopes expose lorebook writes while reset tools follow override ownership', async () => {
         const gHarness = makeHarness({ hasCharOverride: false });
         const gTools = (await gHarness.target.tools(makeSpecProfile(), 'global', gHarness.ctx)).map(t => t.function.name);
         expect(gTools).toContain(LOREBOOK_READ_TOOL_NAMES[0]);
         expect(gTools).toContain('inspect_bound_preset');
-        expect(gTools).not.toContain(LOREBOOK_WRITE_TOOL_NAMES[0]);
+        expect(gTools).toEqual(expect.arrayContaining(LOREBOOK_WRITE_TOOL_NAMES));
         expect(gTools).not.toContain('luker_orch_reset_live_to_blank');
         expect(gTools).not.toContain('luker_orch_reset_live_to_global');
 

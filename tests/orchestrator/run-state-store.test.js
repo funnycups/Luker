@@ -48,7 +48,7 @@ describe('RunStateStore — startRun / getCurrentRun', () => {
     });
 });
 
-import * as evt from '../../public/scripts/extensions/orchestrator/run-state/events.js';
+import * as evt from '../../public/scripts/run-panel/events.js';
 
 describe('RunStateStore — subscribe / unsubscribe', () => {
     beforeEach(() => clearCurrentRun());

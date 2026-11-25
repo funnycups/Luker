@@ -32,7 +32,7 @@ jest.unstable_mockModule(
 
 const skillsApi = {
     list: jest.fn(async () => []),
-    readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
+    readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, sha256: 'a'.repeat(64) })),
     listFiles: jest.fn(async () => ({ files: [{ path: 'SKILL.md', size: 4, isBinary: false }] })),
 };
 
@@ -102,7 +102,7 @@ describe('skill-orchestration-tools', () => {
             { name: 'foo-skill' },
             { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'preset', name: 'rp' } }] },
         );
-        expect(result.content).toBe('body');
+        expect(result).toEqual({ content: 'body', totalLines: 1 });
         const lastCall = skillsApi.readFile.mock.calls[skillsApi.readFile.mock.calls.length - 1];
         expect(lastCall[0].scope).toEqual({ kind: 'preset', name: 'rp' });
     });

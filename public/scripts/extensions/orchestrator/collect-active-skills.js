@@ -16,11 +16,12 @@
  *
  * Character scope is deliberately omitted from `runtimeContext` so
  * character-scope skills never leak into an orchestrator-preset export.
- * They stay on the character card and export with it via the character
- * card export path.
+ * They are bundled by the character card export instead, which packs the
+ * character scope server-side when the user chooses Include.
  */
 
 import { resolveAgentVisibleSkills, invalidateSkillInventory } from './skill-resolution.js';
+import { resolveStoredIdReference } from './editable-spec.js';
 
 /**
  * Enumerate every per-agent config inside a portable orchestrator payload
@@ -85,7 +86,7 @@ function enumerateAgents(mode, profile) {
             for (const node of stage.nodes) {
                 if (!node) continue;
                 const presetName = typeof node === 'string' ? node : String(node?.preset || node?.id || '').trim();
-                const presetConfig = presetName ? presetMap[presetName] : null;
+                const presetConfig = presetName ? presetMap[resolveStoredIdReference(presetMap, presetName)] : null;
                 // Synthesize an agentConfig: node.skills wins over preset.skills;
                 // promptPresetName comes from the preset entry.
                 const nodeSkills = (typeof node === 'object' && node?.skills) || null;

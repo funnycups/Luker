@@ -198,6 +198,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agenda-pr
     cloneAgendaWorkingProfileFromEditor: (v) => v,
     ensureAgendaEditorIntegrity: (v) => v,
     sanitizeAgendaWorkingProfile: (v) => v,
+    setAgendaEditorFinalAgent: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agenda-runtime.js', () => ({
     runAgendaOrchestration: async () => ({}),
@@ -227,7 +228,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-tool
     executeLoopTool: async () => null,
     beginSimulation: () => {},
     endSimulation: () => {},
-    getBuiltinToolRegistry: () => ({}),
+    isBuiltinToolName: () => false,
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/register-custom-tool.js', () => ({
     registerOrchestrationTool: () => {},
@@ -269,16 +270,12 @@ jest.unstable_mockModule('../../public/scripts/skills/skill-chips.js', () => ({
     mountSkillChips: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/skills/embed-lifecycle.js', () => ({
-    registerSkillEmbedLifecycle: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/skills/embed-export-hook.js', () => ({
-    maybeAttachSkillsToPresetExport: () => {},
     maybeAttachSkillsToOrchPresetExport: () => {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/profile-projection.js', () => ({
-    sanitizeProfileForAiPrompt: (v) => v,
-}));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-state.js', () => ({
+    copyAgendaAgentsIntoSpecEditor: () => {},
     createNewStage: () => ({}),
     ensureDirectorEditorIntegrity: (v) => v,
     ensureEditorIntegrity: (v) => v,
@@ -289,12 +286,11 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-st
     loadCharacterDirectorEditorState: () => ({}),
     loadCharacterEditorState: () => ({}),
     loadCharacterLoopEditorState: () => ({}),
-    loadGlobalAgendaEditorState: () => ({}),
-    loadGlobalDirectorEditorState: () => ({}),
-    loadGlobalEditorState: () => ({}),
-    loadGlobalLoopEditorState: () => ({}),
     pickDefaultPreset: () => '',
+    refreshUiStateFromHost: () => {},
+    reloadPresetDraft: () => {},
     setDisplayedScopeForMode: () => {},
+    setEditorNodePreset: () => {},
     syncCharacterEditorWithActiveAvatar: () => {},
     uiState: {},
 }));
@@ -322,13 +318,15 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-pe
     persistCharacterDirectorEditor: async () => {},
     persistCharacterEditor: async () => {},
     persistCharacterLoopEditor: async () => {},
-    persistCustomToolsPatch: async () => {},
+    persistCustomToolsKeepingDrafts: async () => {},
     persistGlobalAgendaEditorFrom: async () => {},
     persistGlobalDirectorEditorFrom: async () => {},
     persistGlobalEditorFrom: async () => {},
     persistGlobalLoopEditorFrom: async () => {},
+    persistGlobalPresetWrite: async () => {},
     persistOrchestratorCharacterExtension: async () => {},
-    persistRuntimeLimitsPatch: async () => {},
+    persistRuntimeLimitsKeepingDrafts: async () => {},
+    setCharacterActivePresetForSavedMode: async () => ({ ok: false, mode: '', reason: 'no_saved_mode' }),
     setCharacterAgendaOverrideEnabled: async () => {},
     setCharacterDirectorOverrideEnabled: async () => {},
     setCharacterLoopOverrideEnabled: async () => {},

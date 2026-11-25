@@ -22,7 +22,7 @@ import {
     unbridgeSillyTavernTool,
     listExtensionTools,
 } from './register-custom-tool.js';
-import { escapeHtml as esc } from './html-escape.js';
+import { escapeHtml as esc } from '../../lib/html-escape.js';
 
 const ST_BRIDGE_PREFIX = 'st_';
 

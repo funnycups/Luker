@@ -2,7 +2,6 @@ import { describe, expect, test, jest } from '@jest/globals';
 import {
     buildAgentTaskMessages,
     readOpenNotesFromContextForNotes,
-    renderMainAgentSystemPromptWithOpenNotes,
     runMainAgentLoop,
 } from '../../../public/scripts/extensions/orchestrator/director-runtime.js';
 
@@ -131,30 +130,6 @@ describe('readOpenNotesFromContextForNotes', () => {
             },
         };
         expect(await readOpenNotesFromContextForNotes(ctx)).toEqual([]);
-    });
-});
-
-describe('renderMainAgentSystemPromptWithOpenNotes', () => {
-    test('returns the systemPrompt unchanged when no open notes', () => {
-        expect(renderMainAgentSystemPromptWithOpenNotes('You are a director.', [])).toBe('You are a director.');
-        expect(renderMainAgentSystemPromptWithOpenNotes('You are a director.', null)).toBe('You are a director.');
-        expect(renderMainAgentSystemPromptWithOpenNotes('You are a director.', undefined)).toBe('You are a director.');
-    });
-
-    test('appends "## Open Notes" block with id prefix and double newline separator', () => {
-        const out = renderMainAgentSystemPromptWithOpenNotes(
-            'You are a director.',
-            [{ id: 'o_a3f2', text: 'planted key' }, { id: 'o_b8c1', text: 'sanctum oath' }],
-        );
-        expect(out).toContain('You are a director.\n\n## Open Notes');
-        expect(out).toContain('- [o_a3f2] planted key');
-        expect(out).toContain('- [o_b8c1] sanctum oath');
-    });
-
-    test('renders block as-is when systemPrompt is empty', () => {
-        const out = renderMainAgentSystemPromptWithOpenNotes('', [{ id: 'x', text: 'thread' }]);
-        expect(out.startsWith('## Open Notes')).toBe(true);
-        expect(out).toContain('- [x] thread');
     });
 });
 

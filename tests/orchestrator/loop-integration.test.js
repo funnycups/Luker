@@ -22,7 +22,12 @@
  * exec finds a stub session without hitting the real Layer-1 store.
  */
 
-import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, jest, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    loadOrchestratorToolRegistryApi,
+} from '../util/browser-module-context.js';
 
 import {
     runLoopOrchestration,
@@ -153,6 +158,15 @@ function eventTypes(trace) {
 }
 
 describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
+    let browserEnv;
+    beforeAll(async () => {
+        const orchestrator = await loadOrchestratorToolRegistryApi();
+        const registry = createExtensionRegistry({ orchestrator });
+        browserEnv = installBrowserModuleContext({ getExtensionApi: registry.getExtensionApi });
+    });
+    afterAll(() => {
+        browserEnv?.restore();
+    });
     beforeEach(async () => {
         // memory_* tools live in memory-graph's Layer-2 module now.
         // Register them once per test so executeLoopTool can dispatch

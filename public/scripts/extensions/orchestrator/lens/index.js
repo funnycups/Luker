@@ -6,8 +6,8 @@
 //   - attaches the orchestrator's RunStore to the shared Run Panel Dock
 //   - wand-menu item for toggling the shared Run Panel Dock
 
-import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
 import { sanitizeDirectorProfile } from '../defaults.js';
+import { readAgentPresetRouting } from '../agent-resolution.js';
 import { sanitizeAgendaWorkingProfile } from '../agenda-profile.js';
 import {
     clearCharacterExtensionForMode,
@@ -19,8 +19,8 @@ import {
 } from '../character-overrides.js';
 import { sanitizePresetMap } from '../editable-spec.js';
 import { getIterationDefaultScope } from '../editor-display.js';
-import { persistOrchestratorCharacterExtension } from '../editor-persist.js';
-import { initializeUiState } from '../editor-state.js';
+import { persistGlobalPresetWrite, persistOrchestratorCharacterExtension } from '../editor-persist.js';
+import { refreshUiStateFromHost } from '../editor-state.js';
 import {
     ITERATION_MODE_PROMPT_DEFAULTS,
     buildAiIterationSystemPrompt,
@@ -33,6 +33,7 @@ import { sanitizeLoopProfile } from '../persistence.js';
 import {
     getActivePreset,
     getActivePresetId,
+    getPreset,
     sanitizePresetEntry,
     writeActivePreset,
 } from '../preset-library.js';
@@ -40,7 +41,6 @@ import { promptEmbedUnembeddedPresetsForCharacterApply } from '../prompt-embed-u
 import { getLatestOrchestrationEntry } from '../snapshot-cache.js';
 import { sanitizeSpec } from '../spec-schema.js';
 import { buildDiagnoseDraft } from './app.js';
-import { registerLocaleData } from '../i18n.js';
 import { i18n } from './i18n.js';
 import { createOrchIterateTarget } from './iterate-target.js';
 import { buildFlow } from './model/profile.js';
@@ -101,11 +101,7 @@ async function toggleDock(ctx = getContext()) {
 
 export function initOrchestraLens() {
     const ctx = getContext();
-    const { addLocaleData, workbench, runPanel } = ctx || {};
-    if (typeof addLocaleData === 'function') {
-        registerLensSharedLocaleData(addLocaleData);
-        registerLocaleData(addLocaleData);
-    }
+    const { workbench, runPanel } = ctx || {};
 
     for (const unreg of unregisters.splice(0)) unreg?.();
 
@@ -116,8 +112,10 @@ export function initOrchestraLens() {
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
         executeAiIterationToolCalls,
+        readAgentPresetRouting,
         getIterationDefaultScope,
-        initializeUiState,
+        refreshUiStateFromHost,
+        persistGlobalPresetWrite,
         persistOrchestratorCharacterExtension,
         clearCharacterExtensionForMode,
         getCharacterActivePresetId,
@@ -127,6 +125,7 @@ export function initOrchestraLens() {
         getRuntimePresetScope,
         getActivePreset,
         getActivePresetId,
+        getPreset,
         sanitizePresetEntry,
         writeActivePreset,
         sanitizeLoopProfile,

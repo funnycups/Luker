@@ -31,31 +31,16 @@
  * proposal time so the AI gets a real SyntaxError back, not a silent ok.
  */
 
-import { sanitizeCustomTools } from './custom-tools-sanitize.js';
+import { compileCustomToolBody, isValidCustomToolName, sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { applyStringPatch } from '../../iteration-library/system-prompt-patch.js';
-import { getBuiltinToolRegistry } from './loop-tools.js';
+import { isBuiltinToolName } from './loop-tools.js';
 import {
     listCtxKeys,
     describeCtxPath,
     listLukerDocs,
     readLukerDoc,
 } from '../../iteration-library/tools/ctx-and-docs-discovery.js';
-
-function getStateErrors() {
-    const se = globalThis.Luker?.getContext?.()?.stateErrors;
-    if (!se) {
-        throw new Error('Luker.getContext().stateErrors is unavailable');
-    }
-    return se;
-}
-const STATE_ERROR_REASONS = new Proxy({}, {
-    get(_target, prop) {
-        return getStateErrors().STATE_ERROR_REASONS[prop];
-    },
-});
-function makeStateError(reason, hint) {
-    return getStateErrors().makeStateError(reason, hint);
-}
+import { STATE_ERROR_REASONS, makeStateError } from '../../lib/state-errors.js';
 
 /**
  * Structured error thrown by the apply-time commit helper
@@ -74,7 +59,6 @@ export class CustomToolCommitError extends Error {
 }
 
 const AsyncFunction = (async () => {}).constructor;
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 const DRY_RUN_TIMEOUT_MS = 3000;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -303,19 +287,10 @@ function summarizeSchema(parameters) {
 
 function validateBodyCompiles(body) {
     try {
-        // eslint-disable-next-line no-new
-        new AsyncFunction('args', 'ctx', String(body || ''));
+        compileCustomToolBody(body);
         return { ok: true };
     } catch (err) {
         return { ok: false, error: `syntax: ${err?.message || err}` };
-    }
-}
-
-function nameConflictsBuiltin(name) {
-    try {
-        return getBuiltinToolRegistry().has(name);
-    } catch {
-        return false;
     }
 }
 
@@ -470,7 +445,7 @@ export async function executeCustomToolIterStudioCall(call, { profile, ctxFactor
         }
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.GET: {
             const targetName = String(args.name || '');
-            if (!NAME_PATTERN.test(targetName)) {
+            if (!isValidCustomToolName(targetName)) {
                 return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${targetName}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)`);
             }
             const tool = findToolByName(profile, targetName);
@@ -545,10 +520,10 @@ function buildProposalAck({ kind, name }) {
 
 function handleSet(profile, args) {
     const name = String(args.name || '');
-    if (!NAME_PATTERN.test(name)) {
+    if (!isValidCustomToolName(name)) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)`);
     }
-    if (nameConflictsBuiltin(name)) {
+    if (isBuiltinToolName(name)) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `name "${name}" conflicts with a Layer-1 builtin tool; pick a different name`);
     }
     const mode = args.mode === 'read' ? 'read' : (args.mode === 'write' ? 'write' : null);
@@ -603,7 +578,7 @@ function handleSet(profile, args) {
 
 function handlePatchBody(profile, args) {
     const name = String(args.name || '');
-    if (!NAME_PATTERN.test(name)) {
+    if (!isValidCustomToolName(name)) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);
@@ -644,7 +619,7 @@ function handlePatchBody(profile, args) {
 
 function handlePatchSchema(profile, args) {
     const name = String(args.name || '');
-    if (!NAME_PATTERN.test(name)) {
+    if (!isValidCustomToolName(name)) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);
@@ -673,7 +648,7 @@ function handlePatchSchema(profile, args) {
 
 function handleRemove(profile, args) {
     const name = String(args.name || '');
-    if (!NAME_PATTERN.test(name)) {
+    if (!isValidCustomToolName(name)) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);

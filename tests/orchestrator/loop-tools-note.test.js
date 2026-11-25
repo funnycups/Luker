@@ -35,7 +35,6 @@ import { describe, test, expect } from '@jest/globals';
 import {
     execNoteOpen,
     execNoteClose,
-    loadAllNotes,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/note.js';
 import {
     executeLoopTool,
@@ -229,28 +228,6 @@ describe('execNoteOpen', () => {
         const { ctx: ctx2, fs } = makeContext({ floor: 0 });
         await execNoteOpen({ text: atByteLimit }, ctx2);
         expect(fs.stored).toHaveLength(1);
-    });
-});
-
-describe('loadAllNotes', () => {
-    test('returns the in-order list of notes from listAcrossFloors', async () => {
-        const { ctx, fs } = makeContext({ floor: 0 });
-        await execNoteOpen({ text: 'first' }, ctx);
-        await execNoteOpen({ text: 'second' }, ctx);
-        await execNoteOpen({ text: 'third' }, ctx);
-        const all = await loadAllNotes(ctx);
-        expect(all).toEqual([
-            expect.objectContaining({ text: 'first' }),
-            expect.objectContaining({ text: 'second' }),
-            expect.objectContaining({ text: 'third' }),
-        ]);
-        expect(fs.stored.map(s => s.text)).toEqual(all.map(n => n.text));
-    });
-
-    test('returns [] when floor-state is unavailable (graceful)', async () => {
-        const ctx = {}; // no __floorStateForNotes
-        const all = await loadAllNotes(ctx);
-        expect(all).toEqual([]);
     });
 });
 

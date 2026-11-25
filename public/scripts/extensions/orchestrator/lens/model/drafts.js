@@ -11,80 +11,162 @@ const keyOf = (agentId, field) => `${agentId}.${field}`;
 export const targetKey = (t) => (t ? [t.mode, t.scope, t.presetId, t.scope === 'character' ? t.avatar : '', t.scope === 'chat' ? t.chatKey : ''].join('|') : '');
 
 export function createDrafts() {
-    let target = null;
-    let base = null; // stored profile for `target`
-    const changes = new Map(); // key → { id, agentId, field, before, after, by: 'hand'|'ai' }
+    const slots = new Map(); // targetKey → { target, base, changes: Map<key, change> }
+    let currentKey = '';
     const listeners = new Set();
     const emit = () => listeners.forEach(fn => fn());
 
-    function put(agentId, field, value, by) {
+    const current = () => (currentKey ? slots.get(currentKey) || null : null);
+
+    function ensureSlot(t, profile = null) {
+        const k = targetKey(t);
+        let slot = slots.get(k);
+        if (!slot) {
+            slot = { target: t, base: profile, changes: new Map() };
+            slots.set(k, slot);
+        } else {
+            slot.target = t;
+            if (profile !== null) slot.base = profile;
+        }
+        return slot;
+    }
+
+    function putIn(slot, agentId, field, value, by) {
         const key = keyOf(agentId, field);
-        const before = changes.get(key)?.before ?? getField(target.mode, base, agentId, field);
-        if (String(value) === before) changes.delete(key);
-        else changes.set(key, { id: key, agentId, field, before, after: String(value), by });
+        const before = slot.changes.get(key)?.before ?? getField(slot.target.mode, slot.base, agentId, field);
+        if (String(value) === before) slot.changes.delete(key);
+        else slot.changes.set(key, { id: key, agentId, field, before, after: String(value), by });
+    }
+
+    function pruneEmptyNonCurrent() {
+        for (const [k, slot] of [...slots]) {
+            if (k !== currentKey && slot.changes.size === 0) slots.delete(k);
+        }
     }
 
     return {
-        /** New stored profile from a reload. Changes for another target are kept (see isCurrent). */
+        /** New stored profile from a reload. Each target keeps its own unsaved changes. */
         setBase(nextTarget, profile) {
-            if (!changes.size || targetKey(nextTarget) === targetKey(target)) {
-                target = nextTarget;
-                base = profile;
-                // Drop changes the stored profile already has (saved, or made the same elsewhere).
-                const withSlots = applyChanges(target.mode, base, [...changes.values()].filter(c => c.agentId === PROFILE));
-                for (const [key, c] of [...changes]) {
-                    if (!canHold(target.mode, withSlots, c.agentId, c.field)) { changes.delete(key); continue; }
-                    const now = getField(target.mode, base, c.agentId, c.field);
-                    if (now === c.after) changes.delete(key);
-                }
+            if (!nextTarget) {
+                currentKey = '';
+                pruneEmptyNonCurrent();
                 emit();
+                return;
             }
+            const k = targetKey(nextTarget);
+            currentKey = k;
+            const slot = ensureSlot(nextTarget, profile);
+            // Drop changes the stored profile already has (saved, or made the same elsewhere).
+            const withSlots = applyChanges(slot.target.mode, slot.base, [...slot.changes.values()].filter(c => c.agentId === PROFILE));
+            for (const [key, c] of [...slot.changes]) {
+                if (!canHold(slot.target.mode, withSlots, c.agentId, c.field)) { slot.changes.delete(key); continue; }
+                const now = getField(slot.target.mode, slot.base, c.agentId, c.field);
+                if (now === c.after) slot.changes.delete(key);
+            }
+            pruneEmptyNonCurrent();
+            emit();
         },
-        target: () => target,
-        isCurrent: (t) => targetKey(t) === targetKey(target),
+        target: () => current()?.target || null,
+        isCurrent: (t) => Boolean(currentKey) && targetKey(t) === currentKey,
         /** Stored profile with the unsaved changes on top. */
-        profile: () => (target && changes.size ? applyChanges(target.mode, base, [...changes.values()]) : base),
-        base: () => base,
-        get(agentId, field) {
-            const c = changes.get(keyOf(agentId, field));
-            return c ? c.after : getField(target?.mode, this.profile(), agentId, field);
+        profile() {
+            const slot = current();
+            if (!slot) return null;
+            return slot.changes.size ? applyChanges(slot.target.mode, slot.base, [...slot.changes.values()]) : slot.base;
         },
-        changeFor: (agentId, field) => changes.get(keyOf(agentId, field)) || null,
+        base: () => current()?.base ?? null,
+        get(agentId, field) {
+            const slot = current();
+            if (!slot) return '';
+            const c = slot.changes.get(keyOf(agentId, field));
+            return c ? c.after : getField(slot.target.mode, this.profile(), agentId, field);
+        },
+        changeFor: (agentId, field) => current()?.changes.get(keyOf(agentId, field)) || null,
         set(agentId, field, value, { by = 'hand' } = {}) {
-            if (!target) return;
-            put(agentId, field, value, by);
+            const slot = current();
+            if (!slot) return;
+            putIn(slot, agentId, field, value, by);
             emit();
         },
         /** Makes the draft equal `next` (a whole profile from a structural operation). */
         setProfile(next, { by = 'hand' } = {}) {
-            if (!target) return;
-            const previous = new Map(changes);
-            changes.clear();
-            for (const c of diffProfiles(target.mode, base, next)) {
+            const slot = current();
+            if (!slot) return;
+            const previous = new Map(slot.changes);
+            slot.changes.clear();
+            for (const c of diffProfiles(slot.target.mode, slot.base, next)) {
                 const key = keyOf(c.agentId, c.field);
                 const prior = previous.get(key);
-                changes.set(key, { ...c, before: prior?.before ?? c.before, by: prior?.by || by });
+                slot.changes.set(key, { ...c, before: prior?.before ?? c.before, by: prior?.by || by });
             }
             emit();
         },
         /** Several changes at once ({agentId, field, after}). Returns a snapshot to undo with restore(). */
         applyMany(list, { by = 'ai' } = {}) {
+            const slot = current();
             const snap = this.snapshot();
-            for (const c of list) put(c.agentId, c.field, c.after, by);
+            if (!slot) return snap;
+            for (const c of list) putIn(slot, c.agentId, c.field, c.after, by);
             emit();
             return snap;
         },
-        list: () => [...changes.values()],
-        count: () => changes.size,
-        touched: () => new Set([...changes.values()].filter(c => c.by === 'hand').map(c => c.id)),
-        snapshot: () => [...changes.entries()].map(([k, v]) => [k, { ...v }]),
+        /** Clears only changes matching the saved payload, preserving later edits made while saving. */
+        acknowledgeSaved(savedTarget, savedChanges = []) {
+            const k = targetKey(savedTarget);
+            const slot = k ? slots.get(k) : null;
+            if (!slot) return;
+            for (const saved of savedChanges) {
+                const key = saved.id || keyOf(saved.agentId, saved.field);
+                const existing = slot.changes.get(key);
+                if (!existing) continue;
+                if (existing.after === saved.after) {
+                    slot.changes.delete(key);
+                } else {
+                    slot.changes.set(key, { ...existing, before: saved.after });
+                }
+            }
+            pruneEmptyNonCurrent();
+            emit();
+        },
+        list: () => [...(current()?.changes.values() || [])],
+        count: () => current()?.changes.size || 0,
+        foreignCount() {
+            let total = 0;
+            for (const [k, slot] of slots) {
+                if (k !== currentKey) total += slot.changes.size;
+            }
+            return total;
+        },
+        totalCount() {
+            return this.count() + this.foreignCount();
+        },
+        touched: () => new Set([...(current()?.changes.values() || [])].filter(c => c.by === 'hand').map(c => c.id)),
+        snapshot: () => [...(current()?.changes.entries() || [])].map(([k, v]) => [k, { ...v }]),
         restore(snap) {
-            changes.clear();
-            for (const [k, v] of snap || []) changes.set(k, { ...v });
+            const slot = current();
+            if (!slot) return;
+            slot.changes.clear();
+            for (const [k, v] of snap || []) slot.changes.set(k, { ...v });
             emit();
         },
         discard() {
-            changes.clear();
+            const slot = current();
+            if (!slot) return;
+            slot.changes.clear();
+            emit();
+        },
+        discardTarget(t) {
+            const k = targetKey(t);
+            const slot = k ? slots.get(k) : null;
+            if (!slot) return;
+            slot.changes.clear();
+            pruneEmptyNonCurrent();
+            emit();
+        },
+        discardForeign() {
+            for (const k of [...slots.keys()]) {
+                if (k !== currentKey) slots.delete(k);
+            }
             emit();
         },
         subscribe(fn) {

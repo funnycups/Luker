@@ -487,3 +487,13 @@ describe('preset-library — single-scope model (slot empty = global)', () => {
         expect(lib.setActivePresetId(settings, 'spec', 'global', '')).toBe(false);
     });
 });
+
+describe('preset-library — mode list', () => {
+    test('allModes follows ORCH_PRESET_MODES, which is ORCH_EXECUTION_MODES without single', async () => {
+        const { ORCH_PRESET_MODES } = await import('../../public/scripts/extensions/orchestrator/preset-modes.js');
+        const { ORCH_EXECUTION_MODES } = await import('../../public/scripts/extensions/orchestrator/defaults.js');
+        expect(lib.allModes()).toEqual([...ORCH_PRESET_MODES]);
+        expect(lib.allModes()).not.toBe(lib.allModes());
+        expect(ORCH_EXECUTION_MODES.filter((mode) => mode !== 'single')).toEqual([...ORCH_PRESET_MODES]);
+    });
+});

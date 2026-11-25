@@ -21,7 +21,6 @@ import {
     readOpenNotes,
     renderOpenNotesBlock,
     loadOpenNotesBlock,
-    buildOpenNotesRuntimeStateMessage,
 } from '../../public/scripts/extensions/orchestrator/open-notes-injection.js';
 
 describe('readOpenNotes', () => {
@@ -136,32 +135,5 @@ describe('loadOpenNotesBlock', () => {
             },
         };
         expect(await loadOpenNotesBlock(ctx)).toBe('');
-    });
-});
-
-describe('buildOpenNotesRuntimeStateMessage', () => {
-    test('returns null when there is nothing to inject', async () => {
-        expect(await buildOpenNotesRuntimeStateMessage(null)).toBeNull();
-        expect(await buildOpenNotesRuntimeStateMessage({})).toBeNull();
-        expect(await buildOpenNotesRuntimeStateMessage({
-            __floorStateForNotes: {
-                listAcrossFloors: async () => ([{ id: 'c', text: 'x', status: 'closed' }]),
-            },
-        })).toBeNull();
-    });
-
-    test('wraps the block into a user-role <runtime_state> message', async () => {
-        const ctx = {
-            __floorStateForNotes: {
-                listAcrossFloors: async () => ([{ id: 'a', text: 'live thread', status: 'open' }]),
-            },
-        };
-        const msg = await buildOpenNotesRuntimeStateMessage(ctx);
-        expect(msg).not.toBeNull();
-        expect(msg.role).toBe('user');
-        expect(msg.content.startsWith('<runtime_state>')).toBe(true);
-        expect(msg.content.endsWith('</runtime_state>')).toBe(true);
-        expect(msg.content).toContain('## Open Notes');
-        expect(msg.content).toContain('- [a] live thread');
     });
 });

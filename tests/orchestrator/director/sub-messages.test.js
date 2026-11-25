@@ -1,7 +1,6 @@
 import { describe, expect, test, jest } from '@jest/globals';
 import {
     createSubagentDispatcher,
-    renderSubSystemPromptWithNotes,
     loadSubAgentOpenNotesBlock,
 } from '../../../public/scripts/extensions/orchestrator/director-tools.js';
 
@@ -292,18 +291,6 @@ describe('director-tools — sub-agent message assembly', () => {
         expect(result).not.toContain('done');
     });
 
-    test('renderSubSystemPromptWithNotes (back-compat) still concatenates Open Notes into the prompt', async () => {
-        const fs = {
-            listAcrossFloors: async () => [
-                { id: 'a', text: 'open one', status: 'open' },
-            ],
-        };
-        const result = await renderSubSystemPromptWithNotes('You are a scout.', { __floorStateForNotes: fs });
-        expect(result).toContain('You are a scout.');
-        expect(result).toContain('## Open Notes');
-        expect(result).toContain('[a] open one');
-    });
-
     test('dispatch injects <current_draft> into runtime_state when handle has draft text', async () => {
         const handle = { getText: () => 'PROSE BODY snapshot at dispatch' };
         const { dispatcher, capturedSubMessages } = makeDispatcherFixture({ handle });
@@ -346,5 +333,70 @@ describe('director-tools — sub-agent message assembly', () => {
         const h2 = await emptyHandle.dispatcher.dispatch({ subagentId: 'brainstormer', task: 'pre-draft scout', __parentMessages: null });
         await emptyHandle.dispatcher.awaitAll([h2]);
         expect(emptyHandle.capturedSubMessages[0].every(m => !String(m.content || '').includes('<current_draft'))).toBe(true);
+    });
+
+    test('multi-round subagent preserves native replay fields and call thought signatures on assistant tool turn', async () => {
+        const captured = [];
+        const nativeParts = [
+            { thought: true, text: 'inspect', thoughtSignature: 'sig-g-1' },
+            { functionCall: { name: 'get_draft', args: {} }, thoughtSignature: 'sig-g-call' },
+        ];
+        const nativeContentBlocks = [
+            { type: 'thinking', thinking: 'inspect', signature: 'sig-c-1' },
+            { type: 'tool_use', id: 'tc_sub_1', name: 'get_draft', input: {} },
+        ];
+        const responsesOutputItems = [
+            { type: 'reasoning', id: 'rs_sub', encrypted_content: 'enc_sub' },
+            { type: 'function_call', call_id: 'tc_sub_1', name: 'get_draft', arguments: '{}' },
+        ];
+        const generateTask = jest.fn(async ({ taskMessages }) => {
+            captured.push(structuredClone(taskMessages));
+            if (captured.length === 1) {
+                return {
+                    assistantText: 'Reading draft',
+                    reasoning: 'inspect',
+                    signature: 'sig-c-1',
+                    reasoningBlocks: [{ type: 'thinking', thinking: 'inspect', signature: 'sig-c-1' }],
+                    nativeParts,
+                    nativeContentBlocks,
+                    responsesOutputItems,
+                    toolCalls: [{
+                        id: 'tc_sub_1',
+                        name: 'get_draft',
+                        args: {},
+                        signature: 'sig-g-call',
+                        extra_content: { google: { thought_signature: 'sig-g-call' } },
+                    }],
+                    finishReason: 'tool_calls',
+                };
+            }
+            return { assistantText: 'Final report', toolCalls: [], finishReason: 'stop' };
+        });
+
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.', tools: { draft: true } }],
+            limits: { maxConcurrentSubagents: 4, maxTotalSubagentRuns: 10 },
+            generateTask,
+            getContentPayload: () => ({ messages: [] }),
+            abortSignal: new AbortController().signal,
+            handle: { getText: () => 'Draft body' },
+        });
+
+        const h = await dispatcher.dispatch({ subagentId: 'brainstormer', task: 'check draft' });
+        await dispatcher.awaitAll([h]);
+
+        expect(captured).toHaveLength(2);
+        const replayedAssistant = captured[1].find(m => m.role === 'assistant' && Array.isArray(m.tool_calls));
+        expect(replayedAssistant).toMatchObject({
+            signature: 'sig-c-1',
+            native_parts: nativeParts,
+            native_content_blocks: nativeContentBlocks,
+            responses_output_items: responsesOutputItems,
+        });
+        expect(replayedAssistant.tool_calls[0]).toMatchObject({
+            id: 'tc_sub_1',
+            signature: 'sig-g-call',
+            extra_content: { google: { thought_signature: 'sig-g-call' } },
+        });
     });
 });

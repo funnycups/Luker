@@ -14,19 +14,17 @@
  * Three layers of helpers live here:
  *
  *   1. Character lookup — `getCharacterByAvatar`, `getCharacterIndexByAvatar`,
- *      `getCharacterDisplayName`, `getCharacterDisplayNameByAvatar`.
+ *      `getCharacterDisplayNameByAvatar`.
  *   2. Preset state reads — `getCharacterExtensionDataByAvatar`,
  *      `getCharacterActivePresetId`, `getRuntimePresetScope`,
- *      `hasCharacterSpecOverride`, `hasCharacterAgendaOverride`,
- *      `hasCharacterLoopOverride`, `hasCharacterDirectorOverride`,
- *      `hasCharacterOverride`, `hasCharacterSpecPresetLibrary`,
- *      `hasCharacterAgendaPresetLibrary`, `hasCharacterLoopPresetLibrary`,
- *      `hasCharacterDirectorPresetLibrary`, `getCharacterCardSnapshot`.
- *      The two predicate families are NOT interchangeable: `has*Override`
- *      means "the card library runs for this mode right now" (active slot
- *      non-empty), while `has*PresetLibrary` means "a library is saved on
- *      the card regardless of which preset is active" and is only for UI
- *      plumbing (library visibility, profile-title rendering, the saved
+ *      `hasCharacterSpecPresetLibrary`, `hasCharacterAgendaPresetLibrary`,
+ *      `hasCharacterLoopPresetLibrary`, `hasCharacterDirectorPresetLibrary`.
+ *      The two questions are NOT interchangeable:
+ *      `getRuntimePresetScope(...) === 'character'` means "the card
+ *      library runs for this mode right now" (active slot non-empty),
+ *      while `has*PresetLibrary` means "a library is saved on the card
+ *      regardless of which preset is active" and is only for UI plumbing
+ *      (library visibility, profile-title rendering, the saved
  *      execution-mode pin walk).
  *   3. Execution-mode resolution — `normalizeExecutionMode`,
  *      `getExecutionMode`, `getCharacterSavedExecutionModeByAvatar`,
@@ -51,8 +49,7 @@ import {
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_SPEC,
 } from './defaults.js';
-import { i18n } from './i18n.js';
-import { getCurrentAvatar } from './snapshot-cache.js';
+import { ORCH_PRESET_MODES, makeModeMap } from './preset-modes.js';
 import { migrateAndPersistLegacyCardOverrideForMode } from './preset-library.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -66,10 +63,6 @@ export function getExecutionMode(settings = extension_settings[MODULE_NAME]) {
     return normalizeExecutionMode(settings?.executionMode);
 }
 
-export function getCharacterDisplayName(context) {
-    return getCharacterDisplayNameByAvatar(context, getCurrentAvatar(context)) || i18n('(No character selected)');
-}
-
 export function getCharacterDisplayNameByAvatar(context, avatar) {
     const target = String(avatar || '');
     if (!target) {
@@ -79,7 +72,7 @@ export function getCharacterDisplayNameByAvatar(context, avatar) {
     return String(character?.name || '').trim() || target;
 }
 
-export function getCharacterByAvatar(context, avatar) {
+function getCharacterByAvatar(context, avatar) {
     const target = String(avatar || '');
     if (!target) {
         return null;
@@ -132,14 +125,14 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
 }
 
 /**
- * Two per-mode predicates:
+ * Two per-mode questions:
  *
- *   `hasCharacter<Mode>Override`         — "the card's preset is
- *       actively taking effect right now". True iff the card's active
- *       slot is non-empty (single-scope model). This is the predicate
- *       for anything that decides which profile/scope to use (displayed
- *       scope, runtime skill filter, iter-studio's exposed reset tool,
- *       etc.).
+ *   `getRuntimePresetScope(context, avatar, mode) === 'character'` —
+ *       "the card's preset is actively taking effect right now". True
+ *       iff the card's active slot is non-empty (single-scope model).
+ *       This is the check for anything that decides which profile/scope
+ *       to use (displayed scope, runtime skill filter, iter-studio's
+ *       exposed reset tool, etc.).
  *
  *   `hasCharacter<Mode>PresetLibrary`    — "the card has a saved
  *       library for this mode". This is the predicate for UI plumbing
@@ -153,26 +146,6 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
  * preset dropdown while the workspace, active preset, and skill scope
  * silently stayed pinned to the card.
  */
-export function hasCharacterSpecOverride(context, avatar) {
-    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_SPEC) === 'character';
-}
-
-export function hasCharacterAgendaOverride(context, avatar) {
-    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_AGENDA) === 'character';
-}
-
-export function hasCharacterLoopOverride(context, avatar) {
-    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_LOOP) === 'character';
-}
-
-export function hasCharacterDirectorOverride(context, avatar) {
-    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR) === 'character';
-}
-
-export function hasCharacterOverride(context, avatar) {
-    return hasCharacterSpecOverride(context, avatar);
-}
-
 export function hasCharacterSpecPresetLibrary(context, avatar) {
     return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_SPEC);
 }
@@ -230,9 +203,9 @@ export function migrateCardOverrideEnabledFlags(context, avatar) {
     const flags = ext?.overrideEnabled;
     if (!flags || typeof flags !== 'object') return false;
     if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
-        ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+        ext.activePresetIds = makeModeMap(() => '');
     }
-    for (const mode of ['spec', 'agenda', 'loop', 'director']) {
+    for (const mode of ORCH_PRESET_MODES) {
         if (typeof flags[mode] !== 'boolean') continue;
         if (flags[mode]) {
             const lib = ext.presetLibraries?.[mode];
@@ -294,8 +267,8 @@ function hasLegacyOverridePayload(ext, mode) {
  * from this card" click for the given execution mode. Strips
  * `presetLibraries.<mode>` and `activePresetIds.<mode>` (plus any
  * stale `overrideEnabled.<mode>` flag from pre-migration cards),
- * dropping empty containers so the `hasCharacter*Override` probe reads
- * false afterwards. Also drops the `override.mode` pin when it was
+ * dropping empty containers so `getRuntimePresetScope` reads `'global'`
+ * afterwards. Also drops the `override.mode` pin when it was
  * pointing at the cleared mode so the dispatcher does not keep that
  * mode active after the data is gone.
  * Pure (no I/O) so it can be unit-tested independent of the click
@@ -367,30 +340,4 @@ export function clearCharacterExtensionForMode(previous, mode) {
         delete next.override;
     }
     return next;
-}
-
-export function getCharacterCardSnapshot(context, avatar) {
-    const character = getCharacterByAvatar(context, avatar) || {};
-    const fromCardFields = (avatar && avatar === getCurrentAvatar(context) && typeof context.getCharacterCardFields === 'function')
-        ? (context.getCharacterCardFields() || {})
-        : {};
-
-    const readField = (field) => {
-        const value = character?.[field]
-            ?? character?.data?.[field]
-            ?? fromCardFields?.[field];
-        return String(value || '').trim();
-    };
-
-    return {
-        avatar: String(avatar || ''),
-        name: String(character?.name || fromCardFields?.name || '').trim(),
-        description: readField('description'),
-        personality: readField('personality'),
-        scenario: readField('scenario'),
-        system: readField('system'),
-        first_mes: readField('first_mes'),
-        mes_example: readField('mes_example'),
-        creator_notes: readField('creator_notes'),
-    };
 }

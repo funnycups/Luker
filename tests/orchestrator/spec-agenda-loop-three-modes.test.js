@@ -35,7 +35,9 @@
 // scope per mode), the dispatcher's mode-selection contract is fully
 // covered without spinning a browser.
 
-import { describe, test, expect, jest, beforeAll } from '@jest/globals';
+import { describe, test, expect, jest, beforeAll, afterAll } from '@jest/globals';
+import yaml from 'yaml';
+import { installBrowserModuleContext } from '../util/browser-module-context.js';
 
 // `agenda-profile.js` transitively imports `connection-manager/profile-resolver.js`
 // which pulls in `public/script.js` + `public/scripts/openai.js` + textgen
@@ -67,7 +69,16 @@ let sanitizeSpec;
 let runLoopOrchestration;
 let clearCurrentRun;
 
+let browserEnv;
+
 beforeAll(async () => {
+    browserEnv = installBrowserModuleContext({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        },
+        lib: { yaml },
+    });
     ({
         createFactoryPresetForMode,
         ORCH_EXECUTION_MODE_AGENDA,
@@ -80,6 +91,10 @@ beforeAll(async () => {
     ({ sanitizeSpec } = await import('../../public/scripts/extensions/orchestrator/spec-schema.js'));
     ({ runLoopOrchestration } = await import('../../public/scripts/extensions/orchestrator/loop-runtime.js'));
     ({ clearCurrentRun } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js'));
+});
+
+afterAll(() => {
+    browserEnv?.restore();
 });
 
 describe('#70 — Spec / agenda / loop are three independent executionMode values', () => {

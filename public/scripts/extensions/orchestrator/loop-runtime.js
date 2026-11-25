@@ -546,7 +546,7 @@ function makeNotesAdapter(fs) {
             if (!getResult || getResult.ok === false) {
                 // Reads degrade to empty so the prompt-builder never throws.
                 // Surfacing reason here would force every consumer (note.js
-                // loadOpenNotes, director-runtime, director-tools, panel) to
+                // readOpenNotes, director-runtime, director-tools, panel) to
                 // unwrap envelopes for a path they already treat as soft-fail.
                 console.warn(`[orchestrator/notes] list failed: ${getResult?.reason || 'unknown'} ${getResult?.hint || ''}`);
                 return [];
@@ -570,7 +570,7 @@ function makeNotesAdapter(fs) {
             }
             // Return the full entry shape (id, text, status, closure_reason)
             // so the UI panel can render closure metadata. The open-notes
-            // prompt filter in `loadOpenNotes` projects to its narrower shape.
+            // prompt filter in `readOpenNotes` projects to its narrower shape.
             return entries.map(e => {
                 const out = { id: e.id, text: e.text };
                 if (typeof e.status === 'string') out.status = e.status;
@@ -1078,6 +1078,14 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             // trace popup can render a layer chip next to the tool name.
             const assistantToolCallEntries = toolCalls.map(tc => {
                 const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+                const callSig = typeof tc?.signature === 'string' && tc.signature.length > 0
+                    ? tc.signature
+                    : (typeof tc?.raw?.signature === 'string' && tc.raw.signature.length > 0
+                        ? tc.raw.signature
+                        : (typeof tc?.raw?.thoughtSignature === 'string' && tc.raw.thoughtSignature.length > 0 ? tc.raw.thoughtSignature : null));
+                const callExtra = tc?.extra_content && typeof tc.extra_content === 'object'
+                    ? structuredClone(tc.extra_content)
+                    : (tc?.raw?.extra_content && typeof tc.raw.extra_content === 'object' ? structuredClone(tc.raw.extra_content) : null);
                 return {
                     id: String(tc?.id || makeToolCallId()),
                     type: 'function',
@@ -1085,6 +1093,8 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                         name: normalizedName,
                         arguments: safeStringifyArgs(tc?.args),
                     },
+                    ...(callSig ? { signature: callSig } : {}),
+                    ...(callExtra ? { extra_content: callExtra } : {}),
                     source: resolveToolSource(normalizedName, toolContext),
                 };
             });
@@ -1092,8 +1102,12 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 role: 'assistant',
                 content: assistantText,
                 reasoning,
+                ...(typeof response?.signature === 'string' && response.signature.length > 0 ? { signature: response.signature } : {}),
                 ...(Array.isArray(response?.reasoningBlocks) && response.reasoningBlocks.length > 0 ? { reasoning_blocks: response.reasoningBlocks } : {}),
                 ...(Array.isArray(response?.reasoningDetails) && response.reasoningDetails.length > 0 ? { reasoning_details: response.reasoningDetails } : {}),
+                ...(Array.isArray(response?.nativeParts) && response.nativeParts.length > 0 ? { native_parts: response.nativeParts } : {}),
+                ...(Array.isArray(response?.nativeContentBlocks) && response.nativeContentBlocks.length > 0 ? { native_content_blocks: response.nativeContentBlocks } : {}),
+                ...(Array.isArray(response?.responsesOutputItems) && response.responsesOutputItems.length > 0 ? { responses_output_items: response.responsesOutputItems } : {}),
                 tool_calls: assistantToolCallEntries,
                 _round: round,
             });
@@ -1216,7 +1230,9 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             error: String(error?.message || error),
         });
         try {
-            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+            // A stop from the run panel or an aborted generation aborts the
+            // run's signal; report that as aborted rather than as a failure.
+            finishRun({ runId, status: payload?.signal?.aborted ? 'aborted' : 'error', error: String(error?.message || error) });
         } catch (_) { /* run may already be cleared */ }
         throw error;
     }

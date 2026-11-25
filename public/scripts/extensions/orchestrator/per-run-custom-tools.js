@@ -13,7 +13,7 @@
  * `recordRuntimeEvent` (or equivalent) here.
  */
 
-const AsyncFunction = (async () => {}).constructor;
+import { compileCustomToolBody } from './custom-tools-sanitize.js';
 
 export function buildPerRunCustomToolRegistry(profile, trace, recordEvent = null) {
     const out = new Map();
@@ -21,10 +21,10 @@ export function buildPerRunCustomToolRegistry(profile, trace, recordEvent = null
     for (const entry of entries) {
         if (!entry || typeof entry !== 'object') continue;
         try {
-            const exec = new AsyncFunction('args', 'ctx', String(entry.body || ''));
+            const exec = compileCustomToolBody(entry.body);
             const simulateSource = String(entry.simulateBody || '');
             const simulate = simulateSource
-                ? new AsyncFunction('args', 'ctx', simulateSource)
+                ? compileCustomToolBody(simulateSource)
                 : null;
             out.set(entry.name, {
                 exec,

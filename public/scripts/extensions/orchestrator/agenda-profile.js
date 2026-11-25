@@ -20,9 +20,7 @@
  *      clones over `defaultAgendaAgents.finalizer` when no agents are
  *      defined, and clamps each limit to the same bounds the budget
  *      readers enforce.
- *   4. `cloneAgendaWorkingProfileFromSettings` / `cloneAgendaWorkingProfileFromEditor`
- *      — the two factories that bridge persistence-shape and editor-shape
- *      respectively into a runtime profile.
+ *   4. `cloneAgendaWorkingProfileFromEditor` — bridges the editor shape into a runtime profile.
  *   5. `buildAgendaProfileForRuntime` — wraps a sanitized profile in the
  *      runtime envelope (`{ source: 'agenda', mode: ORCH_EXECUTION_MODE_AGENDA, … }`)
  *      that runtime callers expect alongside spec-mode profiles.
@@ -38,7 +36,7 @@ import {
 } from './defaults.js';
 import {
     createAgendaPlannerDraft,
-    sanitizeIdentifierToken,
+    resolveStoredIdReference,
     sanitizePresetMap,
 } from './editable-spec.js';
 import { sanitizeAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
@@ -98,16 +96,12 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
     if (Object.keys(agents).length === 0) {
         agents.finalizer = structuredClone(defaultAgendaAgents.finalizer);
     }
-    const finalAgentId = sanitizeIdentifierToken(
-        source?.finalAgentId,
-        agents.finalizer ? 'finalizer' : (Object.keys(agents)[0] || 'finalizer'),
-    );
+    const fallbackFinalAgentId = agents.finalizer ? 'finalizer' : (Object.keys(agents)[0] || 'finalizer');
+    const finalAgentId = resolveStoredIdReference(agents, source?.finalAgentId);
     return {
         planner,
         agents,
-        finalAgentId: agents[finalAgentId]
-            ? finalAgentId
-            : (agents.finalizer ? 'finalizer' : (Object.keys(agents)[0] || 'finalizer')),
+        finalAgentId: finalAgentId && agents[finalAgentId] ? finalAgentId : fallbackFinalAgentId,
         limits: {
             plannerMaxRounds: Math.max(1, Math.floor(Number(limitsSource?.plannerMaxRounds) || 6)),
             maxConcurrentAgents: Math.max(1, Math.floor(Number(limitsSource?.maxConcurrentAgents) || 3)),
@@ -189,19 +183,12 @@ export function ensureAgendaEditorIntegrity(editor) {
     }
 }
 
-export function cloneAgendaWorkingProfileFromSettings(settings) {
-    return sanitizeAgendaWorkingProfile({
-        planner: settings?.agendaPlanner || {
-            userPromptTemplate: settings?.agendaPlannerPrompt,
-        },
-        agents: sanitizePresetMap(settings?.agendaAgents),
-        finalAgentId: sanitizeIdentifierToken(settings?.agendaFinalAgentId, 'finalizer'),
-        limits: {
-            plannerMaxRounds: Number(settings?.agendaPlannerMaxRounds || 6),
-            maxConcurrentAgents: Number(settings?.agendaMaxConcurrentAgents || 3),
-            maxTotalRuns: Number(settings?.agendaMaxTotalRuns || 24),
-        },
-    });
+/**
+ * Point an agenda editor draft's final agent at the agent `value`
+ * resolves to; an empty value keeps the current final agent.
+ */
+export function setAgendaEditorFinalAgent(editor, value) {
+    editor.finalAgentId = resolveStoredIdReference(editor.agents, value) || editor.finalAgentId || 'finalizer';
 }
 
 export function cloneAgendaWorkingProfileFromEditor(editor) {

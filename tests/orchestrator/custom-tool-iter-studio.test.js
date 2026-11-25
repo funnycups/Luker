@@ -13,12 +13,12 @@
  *   - commit: upsert (create + overwrite) flips enable flag; patch_body re-applies; remove deletes
  *   - resanitize round-trip
  *
- * Mocks are minimal: getBuiltinToolRegistry (to test conflict),
+ * Mocks are minimal: builtin-name membership (to test conflict),
  * fetch (for docs tools — covered in the ctx-and-docs-discovery test).
  */
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
-import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../public/scripts/state-errors.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../public/scripts/lib/state-errors.js';
 
 // Minimal Luker shim for the discovery executors that import getContext.
 globalThis.Luker = {
@@ -35,13 +35,13 @@ globalThis.Luker = {
 };
 globalThis.performance = globalThis.performance || { now: () => Date.now() };
 
-// loop-tools.js's getBuiltinToolRegistry is the source of truth for
+// loop-tools.js's isBuiltinToolName is the source of truth for
 // "shadows a Layer-1 builtin" — mock it before importing the module
 // under test so we control which names collide.
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-tools.js', () => {
     const builtins = new Set(['chat_search', 'lorebook_get', 'note_open']);
     return {
-        getBuiltinToolRegistry: () => builtins,
+        isBuiltinToolName: (name) => builtins.has(name),
     };
 });
 

@@ -19,7 +19,7 @@ import {
 } from './defaults.js';
 import { sanitizeSpec } from './spec-schema.js';
 import { normalizeExecutionMode } from './character-overrides.js';
-import { sanitizeIdentifierToken, sanitizePresetMap } from './editable-spec.js';
+import { normalizeIdToken, sanitizePresetMap } from './editable-spec.js';
 import { ensureAgendaEditorIntegrity, sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { ensureEditorIntegrity } from './editor-state.js';
@@ -150,7 +150,7 @@ export function copyAgendaAgentsIntoSpecEditor(agendaEditor, specEditor) {
     const copiedPresets = sanitizePresetMap(agendaEditor.agents);
     const fallbackFinalAgentId = Object.keys(copiedPresets)[0] || 'finalizer';
     const finalAgentId = copiedPresets[agendaEditor.finalAgentId]
-        ? sanitizeIdentifierToken(agendaEditor.finalAgentId, fallbackFinalAgentId)
+        ? normalizeIdToken(agendaEditor.finalAgentId, fallbackFinalAgentId)
         : fallbackFinalAgentId;
     specEditor.presets = copiedPresets;
     specEditor.spec = buildBestEffortSpecFromAgendaAgents(copiedPresets, finalAgentId);

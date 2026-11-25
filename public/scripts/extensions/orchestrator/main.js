@@ -8,16 +8,16 @@ const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
-const { STATE_ERROR_REASONS } = __ctx.stateErrors;
 import {
     buildLastUserAnchor,
     compactStageOutputs,
     normalizeNodeOutputForSnapshot,
     normalizeOrchestrationSnapshot,
 } from './anchors.js';
-import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
+import { i18n, i18nFormat } from './i18n.js';
 import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { ensureStyles } from './styles.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 import {
     CAPSULE_INJECT_POSITION_SCHEMA_VERSION,
     DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,
@@ -53,14 +53,9 @@ import {
     makeRuntimeToolCallId,
     serializeToolResultContent,
 } from './tool-calling.js';
-import {
-    normalizeTemplateForAiPrompt,
-    normalizeTemplateForRuntime,
-} from './template-vars.js';
+import { normalizeTemplateForAiPrompt } from './template-vars.js';
 import {
     cloneDefault,
-    normalizeNodeSpec,
-    normalizeNodeType,
     sanitizeSpec,
 } from './spec-schema.js';
 import {
@@ -120,20 +115,22 @@ import {
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
+import { PRESET_ROUTING_TOOL_DEF, migratePresetRoutingPromptLines } from './preset-routing-tool.js';
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterActivePresetId,
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
+    getCharacterSavedExecutionModeByAvatar,
     getExecutionMode,
     getRuntimePresetScope,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import { registerOrchestratorCardBindingSlot } from './card-binding-slot.js';
+import { normalizeToolCallRetryMax } from '../../lib/iter-tool-calling.js';
 import {
     createAgendaPlannerDraft,
-    createPresetDraft,
-    sanitizeIdentifierToken,
+    normalizeIdToken,
     sanitizePresetMap,
 } from './editable-spec.js';
 import {
@@ -175,8 +172,7 @@ import {
 } from './card-import-custom-tools.js';
 const skillsApi = __ctx.skills;
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
-import { registerSkillEmbedLifecycle } from '../../skills/embed-lifecycle.js';
-import { maybeAttachSkillsToOrchPresetExport, maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
+import { maybeAttachSkillsToOrchPresetExport } from '../../skills/embed-export-hook.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -209,10 +205,13 @@ import {
 } from './editor-state.js';
 import {
     persistOrchestratorCharacterExtension,
+    setCharacterActivePresetForSavedMode,
 } from './editor-persist.js';
 import { collectResolvedSkillsForOrchPreset } from './collect-active-skills.js';
 import { dispatchReadFields } from './iter-studio/read-fields-dispatcher.js';
-import { diagnoseAnchorMiss } from '../../iteration-library/anchor-diagnostic.js';
+import { SPEC_STRUCTURE_TOOL_NAMES, createSpecStructureToolExecutor } from './iter-studio/spec-structure-tools.js';
+import { buildPatchFailureEnvelope } from './iter-studio/tool-failures.js';
+import { AGENDA_AGENT_TOOL_NAMES, executeAgendaAgentTool } from './iter-studio/agenda-agent-tools.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
 import { captureDryRunPayload } from '../../iteration-library/simulation-review/dry-run-capture.js';
@@ -252,11 +251,23 @@ registerExtensionApi(MODULE_NAME, {
     getCharacterActivePresetId,
     getCharacterIndexByAvatar,
     getCharacterExtensionDataByAvatar,
+    getCharacterSavedExecutionModeByAvatar,
     applyCharacterExecutionModeForAvatar,
+    // Card preset switch for the saved execution mode: validates the id
+    // against the card library, persists the card, realigns the mode.
+    setCharacterActivePresetForSavedMode: async (...args) => {
+        const result = await setCharacterActivePresetForSavedMode(...args);
+        if (result.ok) ensureUi();
+        return result;
+    },
     // Character-card extension write path (editor-persist.js). Pair with
     // the override accessors above when persisting an override edited by
     // a sibling plugin.
-    persistOrchestratorCharacterExtension,
+    persistOrchestratorCharacterExtension: async (...args) => {
+        const ok = await persistOrchestratorCharacterExtension(...args);
+        if (ok) ensureUi();
+        return ok;
+    },
     // Skill-export bridge: walks a portable orchestrator payload's agent
     // surface and returns the union of skills any agent in the preset
     // can see, grouped by source scope. Used by the skills embed-export
@@ -289,7 +300,6 @@ const directorContentCache = createContentPayloadCache();
 
 const DIRECTOR_TAKEOVER_GEN_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 let orchInFlight = false;
-let activeRunInfoToast = null;
 let activeOrchRunAbortController = null;
 
 export function ensureSettings() {
@@ -406,9 +416,16 @@ export function ensureSettings() {
         iterModePromptAgenda: DEFAULT_AGENDA_ITERATION_MODE_BLOCK,
         iterModePromptSpec: DEFAULT_SPEC_ITERATION_MODE_BLOCK,
     })) saveSettingsDebounced();
-    extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
+    // Stored prompts shadow the code defaults: rewrite the routing lines that
+    // still name the removed up-front routing dump so the AI is pointed at
+    // luker_orch_list_preset_routing. Runs after the legacy
+    // requestSystemPrompt match above, which needs the stored text untouched.
+    for (const key of ['requestSystemPrompt', 'iterModePromptLoop', 'iterModePromptDirector', 'iterModePromptAgenda', 'iterModePromptSpec']) {
+        extension_settings[MODULE_NAME][key] = migratePresetRoutingPromptLines(extension_settings[MODULE_NAME][key]);
+    }
+    extension_settings[MODULE_NAME].toolCallRetryMax = normalizeToolCallRetryMax(
+        extension_settings[MODULE_NAME].toolCallRetryMax,
         0,
-        Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0),
     );
     extension_settings[MODULE_NAME].rpmLimit = Math.max(
         0,
@@ -428,8 +445,12 @@ export function ensureSettings() {
 }
 
 /**
- * Persist initialized prompts and migrated preset libraries in their scope.
- * Global changes use the settings saver; card changes use checked writes.
+ * Wire the preset-library migration persist hook so that whenever a
+ * card's legacy `override.<mode>` payload is migrated into the new
+ * preset-library shape on first read, the new shape is written back to
+ * the card on disk. Without this, the migration is recomputed on every
+ * reload and `customTools[]` / preset bodies keep living under the
+ * legacy keys forever even though the runtime now ignores them.
  *
  * Coalesces multiple per-mode migrations on the same card into a single
  * writeExtensionField call via a microtask flush — boot-time path that
@@ -458,10 +479,15 @@ function wirePresetLibraryMigrationPersist() {
                     if (idx < 0) continue;
                     const ext = getCharacterExtensionDataByAvatar(context, a);
                     if (!ext || typeof ext !== 'object') continue;
-                    await context.writeExtensionField(idx, MODULE_NAME, { ...ext }, { requireSaved: true });
+                    await context.writeExtensionField(
+                        idx,
+                        MODULE_NAME,
+                        current => (current && typeof current === 'object' ? { ...current } : { ...ext }),
+                        { requireSaved: true },
+                    );
                 } catch (err) {
                     console.error(`[${MODULE_NAME}] failed to persist migrated card settings for ${a}:`, err);
-                    toastr.error(`${i18n('Failed to initialize character prompt defaults.')} ${a}: ${err.message}`);
+                    toastr.error(`${i18n('Failed to persist migrated orchestrator card settings.')} ${a}: ${err.message}`);
                 }
             }
         });
@@ -646,7 +672,6 @@ function abortActiveOrchestratorRun() {
     if (activeOrchRunAbortController && !activeOrchRunAbortController.signal.aborted) {
         activeOrchRunAbortController.abort();
     }
-    clearRunInfoToast();
 }
 
 export function getEffectiveProfile(context) {
@@ -1006,11 +1031,10 @@ async function onWorldInfoFinalized(payload) {
     // Thread `resolveStopRequest` through the payload so the runtime
     // that eventually calls `startRun()` (loop-runtime / spec-runtime /
     // agenda-runtime / director dispatch) can register it as the run's
-    // `stopFn`. The run panel's Stop button then takes the same fast
-    // unwind path the toast Stop button already uses (Promise.race in
-    // main.js short-circuits with 'cancelled by user' immediately),
-    // instead of waiting for the LLM sender to reject and the runtime
-    // catch block to reach `finishRun`.
+    // `stopFn`. The run panel's Stop button then takes the fast unwind
+    // path (the Promise.race below short-circuits with 'cancelled by
+    // user' immediately) instead of waiting for the LLM sender to reject
+    // and the runtime catch block to reach `finishRun`.
     orchestrationPayload.__lukerResolveStopRequest = resolveStopRequest;
 
     try {
@@ -1073,17 +1097,10 @@ async function onWorldInfoFinalized(payload) {
                     note: 'Reused previous orchestration snapshot.',
                 });
                 updateUiStatus(i18n('Orchestrator completed.'));
-                clearRunInfoToast();
                 return;
             }
         }
         updateUiStatus(i18n('Orchestrator running...'));
-        showRunInfoToast(i18n('Orchestrator running...'), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                resolveStopRequest?.();
-            },
-        });
 
         const orchestrationTask = runOrchestration(context, orchestrationPayload, messages, profile);
         void orchestrationTask.catch((error) => {
@@ -1132,7 +1149,6 @@ async function onWorldInfoFinalized(payload) {
             reviewRerunCount: Number(finalRun?.reviewRerunCount || 0),
         });
         updateUiStatus(i18n('Orchestrator completed.'));
-        clearRunInfoToast();
     } catch (error) {
         if (isAbortError(error, orchestrationPayload?.signal)) {
             finalizeOrchestrationRuntimeTrace(getLatestOrchestrationRuntimeTrace(context), 'cancelled', {
@@ -1152,7 +1168,6 @@ async function onWorldInfoFinalized(payload) {
                     : 'Orchestration cancelled by user.',
                 includeSnapshot: false,
             });
-            clearRunInfoToast();
             return;
         }
         finalizeOrchestrationRuntimeTrace(getLatestOrchestrationRuntimeTrace(context), 'failed', {
@@ -1162,7 +1177,6 @@ async function onWorldInfoFinalized(payload) {
         console.warn(`[${MODULE_NAME}] Orchestration failed`, error);
         const failText = i18nFormat('Orchestrator failed: ${0}', String(error?.message || error));
         updateUiStatus(failText);
-        clearRunInfoToast();
         await emitOrchestratorResultEvent(context, payload, 'failed', {
             reason: 'runtime_error',
             error: String(error?.message || error),
@@ -1174,7 +1188,6 @@ async function onWorldInfoFinalized(payload) {
         if (activeOrchRunAbortController === pluginAbortController) {
             activeOrchRunAbortController = null;
         }
-        clearRunInfoToast();
         orchInFlight = false;
     }
 }
@@ -1264,65 +1277,6 @@ function updateUiStatus(text) {
     console.debug(`[${MODULE_NAME}]`, String(text || ''));
 }
 
-function showRunInfoToast(message, { stopLabel = '', onStop = null } = {}) {
-    if (typeof toastr === 'undefined') {
-        return;
-    }
-    if (activeRunInfoToast) {
-        toastr.clear(activeRunInfoToast);
-        activeRunInfoToast = null;
-    }
-    activeRunInfoToast = toastr.info(String(message || ''), '', {
-        timeOut: 0,
-        extendedTimeOut: 0,
-        tapToDismiss: false,
-        closeButton: false,
-        closable: false,
-        progressBar: false,
-    });
-    if (activeRunInfoToast && typeof onStop === 'function') {
-        const toastBody = activeRunInfoToast.find('.toast-message');
-        if (toastBody.length > 0) {
-            const button = jQuery('<button type="button" class="menu_button menu_button_small luker-toast-stop-button"></button>');
-            button.text(String(stopLabel || i18n('Stop')));
-            button.on('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                button.prop('disabled', true);
-                const toastElement = button.closest('.toast');
-                clearRunInfoToast();
-                if (toastElement && toastElement.length > 0) {
-                    toastElement.remove();
-                }
-                onStop();
-            });
-            toastBody.append(button);
-        }
-    }
-}
-
-function clearRunInfoToast() {
-    if (typeof toastr === 'undefined' || !activeRunInfoToast) {
-        return;
-    }
-    toastr.clear(activeRunInfoToast);
-    activeRunInfoToast = null;
-}
-
-function isPresetReferencedInSpec(spec, presetId) {
-    const targetPresetId = sanitizeIdentifierToken(presetId, '');
-    if (!targetPresetId) {
-        return false;
-    }
-    const stages = Array.isArray(spec?.stages) ? spec.stages : [];
-    return stages.some(stage =>
-        (stage?.nodes || []).some(node => {
-            const normalizedNode = normalizeNodeSpec(node);
-            const nodePresetId = sanitizeIdentifierToken(normalizedNode?.preset || normalizedNode?.id, '');
-            return nodePresetId === targetPresetId;
-        }));
-}
-
 function trimAiIterationMessages(session) {
     if (!session) {
         return;
@@ -1365,8 +1319,8 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '',
     'The working profile is rooted at `director` and has the fields: `mainAgent` (apiPresetName, promptPresetName, systemPrompt), `subAgents` (a list of objects with id, description, systemPrompt, apiPresetName, promptPresetName), `maxRounds`, `maxConcurrentSubagents`, `maxTotalSubagentRuns`, `discardOnAbort`, `tools` (nested `<namespace>.<verb>` boolean flag tree gating the loop tools available to both the main agent and sub-agents).',
     '',
-    '- `mainAgent.systemPrompt` follows an empty-means-default contract at runtime: empty → the runtime substitutes the built-in default prompt. Do not set it to a copy of the default; leave it empty when the user wants the default. If you do set it, set it to the full prompt the user wants.',
-    '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, apiPresetName must be a name from available_connection_profiles; promptPresetName must be a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card. Same semantics for each sub-agent\'s own preset fields.',
+    '- `mainAgent.systemPrompt` is stored verbatim and sent verbatim at runtime (an empty string sends no main-agent instruction; it does NOT substitute a built-in default). Read it before patching, and edit only the sections that need to change.',
+    '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). Before setting either, call `luker_orch_list_preset_routing`: apiPresetName must be a name from its available_connection_profiles; promptPresetName must be a name from its available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card. Same semantics for each sub-agent\'s own preset fields.',
     '- `tools.finalize` is always coerced to false on save (director provides its own finalize tool), regardless of input.',
     '',
     '## How sub-agents work at runtime (what every sub-agent gets by default — the BASELINE)',
@@ -1510,9 +1464,8 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     'The main agent\'s systemPrompt is NOT a generic "if you have sub-agents..." tutorial. It is the operations manual for THIS specific set of sub-agents. When the sub-agent list changes meaningfully (rename / add / remove / role shift), the main agent\'s systemPrompt may need to change too — it should name the actual configured sub-agents by id and give task-brief shapes for each.',
     '',
     'When updating the sub-agent list, decide whether the main-agent systemPrompt is still consistent:',
-    '- If the user has left `mainAgent.systemPrompt` empty (using the built-in default), and the default already references the sub-agents you now have, leave the prompt empty.',
-    '- If the user has left it empty BUT the sub-agent list no longer matches what the built-in default references, write an explicit `mainAgent.systemPrompt` that matches the new list. Reference each sub-agent by id with a task-brief shape.',
-    '- If the user already has a custom `mainAgent.systemPrompt`, patch it minimally to reflect the new sub-agent reality — do not rewrite the whole prompt unless asked.',
+    '- Read `mainAgent.systemPrompt` first. If it already references the updated sub-agents accurately, leave it alone.',
+    '- If it is empty or no longer matches the configured sub-agent list, patch or write `mainAgent.systemPrompt` minimally so it references each configured sub-agent by id with a task-brief shape — do not rewrite unrelated sections unless asked.',
     '',
     '## 4-phase workflow (a useful pattern)',
     '',
@@ -1556,10 +1509,10 @@ const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- The working profile contains a planner preset, agenda agents, finalAgentId, and runtime limits.',
     '- The planner preset and agenda agents may optionally set apiPresetName to use a specific Connection Manager profile.',
     '- Leave planner/agent apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
-    '- If you set planner/agent apiPresetName, use only a name from available_connection_profiles.',
+    '- Before setting planner/agent apiPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_connection_profiles.',
     '- The planner preset and agenda agents may optionally set promptPresetName to use a specific chat completion preset.',
     '- Leave planner/agent promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-    '- If you set planner/agent promptPresetName, use only a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
+    '- Before setting planner/agent promptPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
     '- Prefer targeted edits. Do not rewrite the full planner preset unless necessary.',
     '- Anti-duplication (agenda-mode consequences of the shared mental model): the principle was already established — systemPrompt is identity, not runtime data; the agent sees raw activated entries with no metadata; uid is a runtime handle. Agenda-specific violations: pasting lorebook bodies into a planner / agent systemPrompt instead of naming the entry by display name and letting the agent resolve it via `lorebook_list` + `lorebook_get` at runtime; baking the planner\'s per-dispatch task brief into an agent\'s systemPrompt (the planner passes it via the dispatch payload — do not pre-fill those slots in the persistent identity); mirroring chat / character-card / scene context. **Never write a literal `uid: N` into systemPrompt** — refer to entries by display name (`comment`) or stable `entry_key` only.',
     '',
@@ -1614,10 +1567,10 @@ const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '- Think through what to change and why before issuing tool calls; output format follows the current prompt policy.',
     '- Presets may optionally set apiPresetName to use a specific Connection Manager profile.',
     '- Leave preset apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
-    '- If you set preset apiPresetName, use only a name from available_connection_profiles.',
+    '- Before setting preset apiPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_connection_profiles.',
     '- Presets may optionally set promptPresetName to use a specific chat completion preset.',
     '- Leave preset promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-    '- If you set preset promptPresetName, use only a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
+    '- Before setting preset promptPresetName, call `luker_orch_list_preset_routing` and use only a name from its available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
     `- Runtime prepends previous orchestration result and approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` before node template text; do not use placeholders for that context.`,
     '- Anti-duplication (spec-mode consequences of the shared mental model): the principle was already established — systemPrompt is identity, not runtime data; the node sees raw activated entries with no metadata; uid is a runtime handle. Spec-specific violations: pasting lorebook bodies into a node\'s preset systemPrompt instead of naming the entry by display name and letting the node resolve it via `lorebook_list` + `lorebook_get` at runtime; restating upstream stage output (the runtime already prepends it before each node\'s template); mirroring chat / character-card / scene context. **Never write a literal `uid: N` into systemPrompt** — refer to entries by display name (`comment`) or stable `entry_key` only.',
     '',
@@ -2155,6 +2108,7 @@ export function buildAiIterationToolSet(session = null) {
                 },
             },
             buildReadFieldsToolDef('director', '\'mainAgent.systemPrompt\', \'subAgents\', \'subAgents[N].systemPrompt\', \'tools.<ns>.<verb>\''),
+            PRESET_ROUTING_TOOL_DEF,
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -2210,6 +2164,7 @@ export function buildAiIterationToolSet(session = null) {
                 },
             },
             buildReadFieldsToolDef('loop', '\'system_prompt\', \'max_rounds\', \'wall_clock_budget_ms\', \'tools.<ns>.<verb>\''),
+            PRESET_ROUTING_TOOL_DEF,
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -2390,6 +2345,7 @@ export function buildAiIterationToolSet(session = null) {
                 },
             },
             buildReadFieldsToolDef('agenda', '\'planner.systemPrompt\', \'agents.<agent_id>.systemPrompt\', \'finalAgentId\', \'limits.plannerMaxRounds\''),
+            PRESET_ROUTING_TOOL_DEF,
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -2562,6 +2518,7 @@ export function buildAiIterationToolSet(session = null) {
             },
         },
         buildReadFieldsToolDef('spec', '\'spec.stages\', \'spec.stages[N].nodes\', \'spec.stages[N].nodes[M].preset\', \'presets.<preset_id>.systemPrompt\''),
+        PRESET_ROUTING_TOOL_DEF,
         ...lorebookFilterToolDefs,
         ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
     ];
@@ -3076,35 +3033,6 @@ function extractOrchestratorSimulationWorldInfoHits(trace) {
     return [];
 }
 
-function resolveIterationStage(session, stageId, createIfMissing = false) {
-    const safeId = sanitizeIdentifierToken(stageId, '');
-    if (!safeId) {
-        return null;
-    }
-    const stages = session?.workingProfile?.spec?.stages || [];
-    let stage = stages.find(item => String(item?.id || '') === safeId) || null;
-    if (!stage && createIfMissing) {
-        stage = { id: safeId, mode: 'serial', nodes: [] };
-        stages.push(stage);
-    }
-    return stage;
-}
-
-function applyIndexReorder(list, currentIndex, position) {
-    if (!Array.isArray(list) || currentIndex < 0 || currentIndex >= list.length) {
-        return;
-    }
-    if (!Number.isInteger(position)) {
-        return;
-    }
-    const targetIndex = Math.max(0, Math.min(list.length - 1, position));
-    if (targetIndex === currentIndex) {
-        return;
-    }
-    const [item] = list.splice(currentIndex, 1);
-    list.splice(targetIndex, 0, item);
-}
-
 /**
  * Shared dispatch shim for the orchestrator iter-studio's custom-tool
  * authoring tools (see custom-tool-iter-studio.js). Each per-mode
@@ -3146,40 +3074,6 @@ async function dispatchCustomToolIterStudioCall({ call, profile }) {
         pendingCustomToolEdit: null,
         actionText: `Custom-tool iter-studio: ${name} failed (${failureReason}): ${failureHint}`,
         changed: false,
-    };
-}
-
-/**
- * Build the extended failure payload for a `applyStringPatch` miss.
- * Attaches `match_diagnosis` (fuzzy layers over the live text) and
- * `next_step` (name-drop the per-mode read tool + target path) so the
- * iterating AI sees WHY its anchor missed and knows exactly which read
- * call resolves it without a second reasoning round-trip.
- *
- * Called from every `applyStringPatch` failure site inside the four
- * mode dispatchers. `mode` is one of 'director' / 'loop' / 'agenda' /
- * 'spec'; `targetPath` is a lodash-style hint of the path the AI can
- * pass to `luker_orch_read_<mode>_fields` to re-read the field it
- * tried to patch.
- */
-function buildPatchFailureEnvelope({ mode, targetPath, actionText, currentText, oldString, error, detail }) {
-    if (error === 'not_found') {
-        const diagnosis = diagnoseAnchorMiss(currentText, oldString);
-        return {
-            ok: false,
-            error: 'not_found',
-            detail: detail || 'oldString not present in the current text',
-            currentLength: currentText.length,
-            match_diagnosis: diagnosis,
-            next_step: `Call luker_orch_read_${mode}_fields(['${targetPath}']) to see the current text, then re-issue the patch.`,
-            action: actionText,
-        };
-    }
-    return {
-        ok: false,
-        error,
-        detail,
-        action: actionText,
     };
 }
 
@@ -3279,136 +3173,8 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             if (profileChanged) changed = true;
             continue;
         }
-        if (name === 'luker_orch_set_agenda_agent') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda agent update: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const beforeAgent = session.workingProfile.agents[agentId] || null;
-            // Strict optional-string fields — only overwrite when the
-            // AI passed a string, otherwise inherit existing.
-            // The pre-fix code unconditionally overwrote systemPrompt
-            // and userPromptTemplate with `String(args.X || '').trim()`,
-            // which meant an `apiPresetName`-only patch wiped both
-            // prompt fields to '' — a real destructive bug, not merely
-            // a silent-noop one. Wrong-type args also throw so the
-            // executor reports `{ok:false, error:'invalid_args'}`.
-            let nextSystemPrompt, nextUserPromptTemplate;
-            try {
-                nextSystemPrompt = readIterationStringArg(args, 'systemPrompt', name);
-                nextUserPromptTemplate = readIterationStringArg(args, 'userPromptTemplate', name);
-            } catch (err) {
-                const detail = String(err?.message || err || 'invalid_args');
-                actions.push(`Skipped agenda agent "${agentId}" patch: ${detail}`);
-                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped agenda agent "${agentId}" patch: ${detail}` });
-                continue;
-            }
-            session.workingProfile.agents[agentId] = createPresetDraft({
-                ...(beforeAgent || {}),
-                ...(nextSystemPrompt !== undefined ? { systemPrompt: nextSystemPrompt.trim() } : {}),
-                ...(nextUserPromptTemplate !== undefined ? { userPromptTemplate: nextUserPromptTemplate.trim() } : {}),
-                ...(Object.prototype.hasOwnProperty.call(args, 'apiPresetName')
-                    ? { apiPresetName: sanitizeConnectionProfileName(args.apiPresetName) }
-                    : {}),
-                ...(Object.prototype.hasOwnProperty.call(args, 'promptPresetName')
-                    ? { promptPresetName: sanitizePromptPresetName(args.promptPresetName) }
-                    : {}),
-            });
-            const actionText = `Agenda agent "${agentId}" updated.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: true, action: actionText, agent_id: agentId });
-            changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_patch_agenda_agent_system_prompt') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda agent system-prompt patch: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: 'invalid_args', action: actionText });
-                continue;
-            }
-            const beforeAgent = session.workingProfile.agents[agentId];
-            if (!beforeAgent) {
-                const actionText = `Skipped agenda agent system-prompt patch: "${agentId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: 'not_found', action: actionText, agent_id: agentId });
-                continue;
-            }
-            const currentPrompt = String(beforeAgent.systemPrompt || '');
-            const result = applyStringPatch(currentPrompt, args);
-            if (!result.ok) {
-                const actionText = `Agenda agent "${agentId}" system-prompt patch failed: ${result.error}.`;
-                actions.push(actionText);
-                pushToolResult(buildPatchFailureEnvelope({
-                    mode: 'agenda',
-                    targetPath: `agents.${agentId}.systemPrompt`,
-                    actionText,
-                    currentText: currentPrompt,
-                    oldString: String(args?.oldString || ''),
-                    error: result.error,
-                    detail: result.detail,
-                }));
-                continue;
-            }
-            const profileChanged = result.nextText !== currentPrompt;
-            session.workingProfile.agents[agentId] = createPresetDraft({
-                ...beforeAgent,
-                systemPrompt: result.nextText,
-            });
-            const actionText = profileChanged
-                ? `Agenda agent "${agentId}" system prompt patched.`
-                : `Agenda agent "${agentId}" system-prompt patch produced no changes.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, agent_id: agentId, systemPrompt: result.nextText });
-            if (profileChanged) changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_remove_agenda_agent') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda agent removal: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            if (!session.workingProfile.agents[agentId]) {
-                const actionText = `Skipped agenda agent removal: "${agentId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, agent_id: agentId });
-                continue;
-            }
-            delete session.workingProfile.agents[agentId];
-            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
-            const actionText = `Agenda agent "${agentId}" removed.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: true, action: actionText, agent_id: agentId });
-            changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_set_agenda_final_agent') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda final agent update: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            session.workingProfile.finalAgentId = agentId;
-            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
-            if (String(session.workingProfile.finalAgentId || '') !== agentId) {
-                const actionText = `Skipped agenda final agent update: "${agentId}" is not available.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, agent_id: agentId });
-                continue;
-            }
-            const actionText = `Agenda final agent set to "${agentId}".`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: true, action: actionText, agent_id: agentId });
-            changed = true;
+        if (AGENDA_AGENT_TOOL_NAMES.has(name)) {
+            if (executeAgendaAgentTool(session, name, args, { actions, pushToolResult })) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_agenda_limits') {
@@ -3449,73 +3215,6 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             actions.push(actionText);
             pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.defaultTools });
             if (profileChanged) changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_set_agenda_agent_tools') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda agent tools update: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const agents = session.workingProfile.agents || {};
-            const preset = agents[agentId];
-            if (!preset || typeof preset !== 'object') {
-                const actionText = `Skipped agenda agent tools update: agent_id "${agentId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            if (!preset.tools || typeof preset.tools !== 'object') {
-                preset.tools = session.workingProfile.defaultTools && typeof session.workingProfile.defaultTools === 'object'
-                    ? JSON.parse(JSON.stringify(session.workingProfile.defaultTools))
-                    : sanitizeAgentToolFlags({});
-            }
-            const before = JSON.stringify(preset.tools);
-            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
-            for (const [ns, verbs] of Object.entries(incoming)) {
-                if (!verbs || typeof verbs !== 'object') continue;
-                if (!preset.tools[ns] || typeof preset.tools[ns] !== 'object') {
-                    preset.tools[ns] = {};
-                }
-                for (const [verb, value] of Object.entries(verbs)) {
-                    preset.tools[ns][verb] = Boolean(value);
-                }
-            }
-            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
-            const after = JSON.stringify(session.workingProfile.agents?.[agentId]?.tools || {});
-            const profileChanged = before !== after;
-            const actionText = profileChanged ? `Agenda agent "${agentId}" tools override updated.` : `Agenda agent "${agentId}" tools patch produced no changes.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.agents?.[agentId]?.tools });
-            if (profileChanged) changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_clear_agenda_agent_tools') {
-            const agentId = sanitizeIdentifierToken(args.agent_id, '');
-            if (!agentId) {
-                const actionText = 'Skipped agenda agent tools clear: missing agent_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const preset = session.workingProfile.agents?.[agentId];
-            if (!preset || typeof preset !== 'object') {
-                const actionText = `Skipped agenda agent tools clear: agent_id "${agentId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const hadOverride = preset.tools && typeof preset.tools === 'object';
-            preset.tools = null;
-            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
-            const actionText = hadOverride
-                ? `Agenda agent "${agentId}" tools cleared (now inherits default).`
-                : `Agenda agent "${agentId}" tools already inheriting default.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
-            if (hadOverride) changed = true;
             continue;
         }
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
@@ -3800,7 +3499,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         }
 
         if (name === 'luker_orch_set_director_subagent') {
-            const id = sanitizeIdentifierToken(args.id, '');
+            const id = normalizeIdToken(args.id, '');
             if (!id) {
                 const actionText = 'Skipped sub-agent update: missing id.';
                 actions.push(actionText);
@@ -3889,7 +3588,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         }
 
         if (name === 'luker_orch_patch_director_subagent_system_prompt') {
-            const id = sanitizeIdentifierToken(args.id, '');
+            const id = normalizeIdToken(args.id, '');
             if (!id) {
                 const actionText = 'Skipped sub-agent system-prompt patch: missing id.';
                 actions.push(actionText);
@@ -3937,7 +3636,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         }
 
         if (name === 'luker_orch_remove_director_subagent') {
-            const id = sanitizeIdentifierToken(args.id, '');
+            const id = normalizeIdToken(args.id, '');
             if (!id || !Array.isArray(director.subAgents)) {
                 const actionText = `Skipped sub-agent removal: id "${id}" not found.`;
                 actions.push(actionText);
@@ -4054,7 +3753,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         }
 
         if (name === 'luker_orch_set_director_subagent_tools') {
-            const id = sanitizeIdentifierToken(args.id, '');
+            const id = normalizeIdToken(args.id, '');
             if (!id) {
                 const actionText = 'Skipped sub-agent tools update: missing id.';
                 actions.push(actionText);
@@ -4099,7 +3798,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         }
 
         if (name === 'luker_orch_clear_director_subagent_tools') {
-            const id = sanitizeIdentifierToken(args.id, '');
+            const id = normalizeIdToken(args.id, '');
             if (!id) {
                 const actionText = 'Skipped sub-agent tools clear: missing id.';
                 actions.push(actionText);
@@ -4192,8 +3891,7 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
     const toolResults = [];
     const pendingCustomToolEdits = [];
     let changed = false;
-    const allowedPresetFallback = Object.keys(session?.workingProfile?.presets || {})[0] || 'distiller';
-    const pendingPresetRemovalActions = new Map();
+    const structureTools = createSpecStructureToolExecutor(session, { actions, toolResults });
     for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
         const name = String(call?.name || '').trim();
         const args = call?.args && typeof call.args === 'object' ? call.args : {};
@@ -4207,7 +3905,7 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
         if (!name) {
             continue;
         }
-        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile });
+        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile.spec });
         if (ctOutcome.handled) {
             actions.push(ctOutcome.actionText);
             pushToolResult(ctOutcome.payload);
@@ -4241,308 +3939,8 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
             if (outcome.changed) changed = true;
             continue;
         }
-        if (name === 'luker_orch_set_stage') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            if (!stageId) {
-                const actionText = 'Skipped stage update: missing stage_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const mode = String(args.mode || 'serial').toLowerCase() === 'parallel' ? 'parallel' : 'serial';
-            const stage = resolveIterationStage(session, stageId, true);
-            stage.mode = mode;
-            if (!Array.isArray(stage.nodes)) {
-                stage.nodes = [];
-            }
-            const stages = session.workingProfile.spec.stages;
-            const index = stages.findIndex(item => String(item?.id || '') === stageId);
-            applyIndexReorder(stages, index, Number.isInteger(args.position) ? Number(args.position) : NaN);
-            const actionText = `Stage "${stageId}" updated (${mode}).`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: true, action: actionText, stage_id: stageId, mode });
-            changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_remove_stage') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            const stages = session?.workingProfile?.spec?.stages || [];
-            const index = stages.findIndex(item => String(item?.id || '') === stageId);
-            if (index >= 0) {
-                stages.splice(index, 1);
-                const actionText = `Stage "${stageId}" removed.`;
-                actions.push(actionText);
-                pushToolResult({ ok: true, changed: true, action: actionText, stage_id: stageId });
-                changed = true;
-            } else {
-                const actionText = `Skipped stage removal: "${stageId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId });
-            }
-            continue;
-        }
-        if (name === 'luker_orch_set_node') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            const nodeId = sanitizeIdentifierToken(args.node_id, '');
-            if (!stageId || !nodeId) {
-                const actionText = 'Skipped node update: missing stage_id or node_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const stage = resolveIterationStage(session, stageId, true);
-            const presetId = sanitizeIdentifierToken(args.preset, nodeId || allowedPresetFallback) || allowedPresetFallback;
-            if (!session.workingProfile.presets[presetId]) {
-                session.workingProfile.presets[presetId] = createPresetDraft();
-            }
-            const nodes = Array.isArray(stage.nodes) ? stage.nodes : [];
-            const existingIndex = nodes.findIndex(item => (typeof item === 'string' ? item.trim() : String(item?.id || '')) === nodeId);
-            // Strict optional-string fields. Wrong-type args throw and
-            // surface as `{ok:false, error:'invalid_args'}` tool replies
-            // — silently falling back to the existing value (the old
-            // behavior) collapsed onto the iter-studio's "already
-            // matches" noop and the AI never learned what was wrong.
-            let nextType, nextUserPromptTemplate;
-            try {
-                nextType = readIterationStringArg(args, 'type', name);
-                nextUserPromptTemplate = readIterationStringArg(args, 'userPromptTemplate', name);
-            } catch (err) {
-                const detail = String(err?.message || err || 'invalid_args');
-                actions.push(`Skipped node "${nodeId}" patch: ${detail}`);
-                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped node "${nodeId}" patch: ${detail}` });
-                continue;
-            }
-            const nextNodeType = nextType !== undefined
-                ? normalizeNodeType(nextType)
-                : normalizeNodeType(existingIndex >= 0 ? nodes[existingIndex]?.type : ORCH_NODE_TYPE_WORKER);
-            const nextNode = {
-                id: nodeId,
-                preset: presetId,
-                type: nextNodeType,
-                userPromptTemplate: nextUserPromptTemplate !== undefined
-                    ? normalizeTemplateForRuntime(nextUserPromptTemplate)
-                    : (existingIndex >= 0 ? String(nodes[existingIndex]?.userPromptTemplate || '') : ''),
-            };
-            if (existingIndex >= 0) {
-                nodes[existingIndex] = nextNode;
-                applyIndexReorder(nodes, existingIndex, Number.isInteger(args.position) ? Number(args.position) : NaN);
-                const actionText = `Node "${nodeId}" updated in stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({
-                    ok: true,
-                    changed: true,
-                    action: actionText,
-                    stage_id: stageId,
-                    node_id: nodeId,
-                    preset_id: presetId,
-                });
-            } else {
-                nodes.push(nextNode);
-                applyIndexReorder(nodes, nodes.length - 1, Number.isInteger(args.position) ? Number(args.position) : NaN);
-                const actionText = `Node "${nodeId}" added to stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({
-                    ok: true,
-                    changed: true,
-                    action: actionText,
-                    stage_id: stageId,
-                    node_id: nodeId,
-                    preset_id: presetId,
-                });
-            }
-            stage.nodes = nodes;
-            changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_remove_node') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            const nodeId = sanitizeIdentifierToken(args.node_id, '');
-            const stage = resolveIterationStage(session, stageId, false);
-            if (!stage || !Array.isArray(stage.nodes)) {
-                const actionText = `Skipped node removal: stage "${stageId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-                continue;
-            }
-            const index = stage.nodes.findIndex(item => (typeof item === 'string' ? item.trim() : String(item?.id || '')) === nodeId);
-            if (index >= 0) {
-                stage.nodes.splice(index, 1);
-                const actionText = `Node "${nodeId}" removed from stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({ ok: true, changed: true, action: actionText, stage_id: stageId, node_id: nodeId });
-                changed = true;
-            } else {
-                const actionText = `Skipped node removal: "${nodeId}" not found in stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-            }
-            continue;
-        }
-        if (name === 'luker_orch_set_preset') {
-            const presetId = sanitizeIdentifierToken(args.preset_id, '');
-            if (!presetId) {
-                const actionText = 'Skipped preset update: missing preset_id.';
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText });
-                continue;
-            }
-            const queuedRemovalActionIndexes = pendingPresetRemovalActions.get(presetId) || [];
-            for (const actionIndex of queuedRemovalActionIndexes) {
-                if (Number.isInteger(actionIndex) && actionIndex >= 0 && actionIndex < actions.length) {
-                    const actionText = `Skipped preset removal: "${presetId}" overridden by later preset update.`;
-                    actions[actionIndex] = actionText;
-                    if (toolResults[actionIndex]) {
-                        toolResults[actionIndex].content = serializeToolResultContent({
-                            ok: false,
-                            error: actionText,
-                            preset_id: presetId,
-                        });
-                    }
-                }
-            }
-            pendingPresetRemovalActions.delete(presetId);
-            const beforePreset = session.workingProfile.presets[presetId] || null;
-            session.workingProfile.presets[presetId] = createPresetDraft({
-                ...(beforePreset || {}),
-                systemPrompt: String(args.systemPrompt || '').trim(),
-                userPromptTemplate: normalizeTemplateForRuntime(String(args.userPromptTemplate || '').trim()),
-                ...(Object.prototype.hasOwnProperty.call(args, 'apiPresetName')
-                    ? { apiPresetName: sanitizeConnectionProfileName(args.apiPresetName) }
-                    : {}),
-                ...(Object.prototype.hasOwnProperty.call(args, 'promptPresetName')
-                    ? { promptPresetName: sanitizePromptPresetName(args.promptPresetName) }
-                    : {}),
-            });
-            const actionText = `Preset "${presetId}" updated.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: true, action: actionText, preset_id: presetId });
-            changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_remove_preset') {
-            const presetId = sanitizeIdentifierToken(args.preset_id, '');
-            if (!presetId) {
-                const actionText = `Skipped preset removal: "${presetId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, preset_id: presetId });
-                continue;
-            }
-            if (!pendingPresetRemovalActions.has(presetId)) {
-                pendingPresetRemovalActions.set(presetId, []);
-            }
-            const actionText = `Preset "${presetId}" removal requested.`;
-            actions.push(actionText);
-            pendingPresetRemovalActions.get(presetId).push(actions.length - 1);
-            pushToolResult({ ok: true, action: actionText, preset_id: presetId });
-            continue;
-        }
-        if (name === 'luker_orch_set_spec_default_tools') {
-            const spec = session.workingProfile.spec;
-            if (!spec.defaultTools || typeof spec.defaultTools !== 'object') {
-                spec.defaultTools = sanitizeAgentToolFlags({});
-            }
-            const before = JSON.stringify(spec.defaultTools);
-            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
-            for (const [ns, verbs] of Object.entries(incoming)) {
-                if (!verbs || typeof verbs !== 'object') continue;
-                if (!spec.defaultTools[ns] || typeof spec.defaultTools[ns] !== 'object') {
-                    spec.defaultTools[ns] = {};
-                }
-                for (const [verb, value] of Object.entries(verbs)) {
-                    spec.defaultTools[ns][verb] = Boolean(value);
-                }
-            }
-            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
-            const after = JSON.stringify(session.workingProfile.spec.defaultTools);
-            const profileChanged = before !== after;
-            const actionText = profileChanged ? 'Spec default tools updated.' : 'Spec default tools patch produced no changes.';
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.spec.defaultTools });
-            if (profileChanged) changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_set_spec_node_tools') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            const nodeId = sanitizeIdentifierToken(args.node_id, '');
-            const stage = resolveIterationStage(session, stageId, false);
-            if (!stage || !Array.isArray(stage.nodes)) {
-                const actionText = `Skipped node tools update: stage "${stageId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-                continue;
-            }
-            const nodeIndex = stage.nodes.findIndex(n => (typeof n === 'string' ? n.trim() : String(n?.id || '')) === nodeId);
-            if (nodeIndex < 0) {
-                const actionText = `Skipped node tools update: node "${nodeId}" not found in stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-                continue;
-            }
-            if (typeof stage.nodes[nodeIndex] === 'string') {
-                stage.nodes[nodeIndex] = { id: nodeId, preset: nodeId, type: ORCH_NODE_TYPE_WORKER };
-            }
-            const node = stage.nodes[nodeIndex];
-            if (!node.tools || typeof node.tools !== 'object') {
-                node.tools = session.workingProfile.spec?.defaultTools && typeof session.workingProfile.spec.defaultTools === 'object'
-                    ? JSON.parse(JSON.stringify(session.workingProfile.spec.defaultTools))
-                    : sanitizeAgentToolFlags({});
-            }
-            const before = JSON.stringify(node.tools);
-            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
-            for (const [ns, verbs] of Object.entries(incoming)) {
-                if (!verbs || typeof verbs !== 'object') continue;
-                if (!node.tools[ns] || typeof node.tools[ns] !== 'object') {
-                    node.tools[ns] = {};
-                }
-                for (const [verb, value] of Object.entries(verbs)) {
-                    node.tools[ns][verb] = Boolean(value);
-                }
-            }
-            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
-            const refreshedStage = (session.workingProfile.spec.stages || []).find(s => String(s?.id || '') === stageId);
-            const refreshedNode = refreshedStage?.nodes?.find(n => String(n?.id || '') === nodeId);
-            const after = JSON.stringify(refreshedNode?.tools || {});
-            const profileChanged = before !== after;
-            const actionText = profileChanged
-                ? `Node "${nodeId}" tools override updated in stage "${stageId}".`
-                : `Node "${nodeId}" tools patch produced no changes.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: refreshedNode?.tools });
-            if (profileChanged) changed = true;
-            continue;
-        }
-        if (name === 'luker_orch_clear_spec_node_tools') {
-            const stageId = sanitizeIdentifierToken(args.stage_id, '');
-            const nodeId = sanitizeIdentifierToken(args.node_id, '');
-            const stage = resolveIterationStage(session, stageId, false);
-            if (!stage || !Array.isArray(stage.nodes)) {
-                const actionText = `Skipped node tools clear: stage "${stageId}" not found.`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-                continue;
-            }
-            const node = stage.nodes.find(n => (typeof n === 'string' ? n.trim() : String(n?.id || '')) === nodeId);
-            if (!node) {
-                const actionText = `Skipped node tools clear: node "${nodeId}" not found in stage "${stageId}".`;
-                actions.push(actionText);
-                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
-                continue;
-            }
-            if (typeof node === 'string') {
-                const actionText = `Node "${nodeId}" tools already inheriting default.`;
-                actions.push(actionText);
-                pushToolResult({ ok: true, changed: false, action: actionText });
-                continue;
-            }
-            const hadOverride = node.tools && typeof node.tools === 'object';
-            node.tools = null;
-            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
-            const actionText = hadOverride
-                ? `Node "${nodeId}" tools cleared in stage "${stageId}" (now inherits default).`
-                : `Node "${nodeId}" tools already inheriting default.`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
-            if (hadOverride) changed = true;
+        if (SPEC_STRUCTURE_TOOL_NAMES.has(name)) {
+            if (structureTools.execute(name, args, pushToolResult)) changed = true;
             continue;
         }
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
@@ -4586,33 +3984,7 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
         pushToolResult({ ok: false, ignored: true, action: actionText });
     }
 
-    for (const [presetId, actionIndexes] of pendingPresetRemovalActions.entries()) {
-        const presetExists = Boolean(session?.workingProfile?.presets?.[presetId]);
-        const inUse = isPresetReferencedInSpec(session?.workingProfile?.spec, presetId);
-        let message = '';
-        if (!presetExists) {
-            message = `Skipped preset removal: "${presetId}" not found.`;
-        } else if (inUse) {
-            message = `Skipped preset removal: "${presetId}" is still used by nodes.`;
-        } else {
-            delete session.workingProfile.presets[presetId];
-            message = `Preset "${presetId}" removed.`;
-            changed = true;
-        }
-        for (const actionIndex of actionIndexes) {
-            if (Number.isInteger(actionIndex) && actionIndex >= 0 && actionIndex < actions.length) {
-                actions[actionIndex] = message;
-                if (toolResults[actionIndex]) {
-                    toolResults[actionIndex].content = serializeToolResultContent({
-                        ok: !message.startsWith('Skipped'),
-                        action: message,
-                        ...(message.startsWith('Skipped') ? { error: message } : { changed: true }),
-                        preset_id: presetId,
-                    });
-                }
-            }
-        }
-    }
+    if (structureTools.finalize()) changed = true;
 
     session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
     session.workingProfile.presets = sanitizePresetMap(session.workingProfile.presets);
@@ -4629,21 +4001,6 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
     };
 }
 
-/**
- * Resolve the global target preset id to write into for an iter-studio
- * "save to global" action. When the session was opened from a character
- * scope, prefer the global preset whose `name` matches the character's
- * active preset name — the user's mental model is "save this work to the
- * same-named preset", not "overwrite whatever happens to be global's
- * currently-active slot (almost always 'default')". Character-scope
- * sessions with no source name (cards that never customized the preset
- * name) and global-scope sessions both fall through to the original
- * writeActivePreset path.
- *
- * Returns {payload, applyWrite}: applyWrite(payload) performs the write
- * and returns the standard {ok, hint?, reason?, ambiguous?, created?,
- * candidateIds?, presetId?} envelope. Toast wording is the caller's job.
- */
 async function openOrchestratorSkillManager() {
     const context = getContext();
     await openSkillManagerPanel({ context, initialScope: computeActiveOrchPresetScope(context, extension_settings[MODULE_NAME]), t: i18n });
@@ -4682,7 +4039,6 @@ function ensureUi() {
 
 jQuery(() => {
     const context = getContext();
-    registerLocaleData();
     ensureStyles();
     ensureUi();
     import('./lens/index.js')
@@ -4704,40 +4060,19 @@ jQuery(() => {
     } catch (err) {
         console.warn(`[${MODULE_NAME}] failed to register skill orchestration tools:`, err);
     }
-    // Hook skills embed lifecycle: character/preset embed import dialog +
-    // cascade-delete on character/preset removal. Listens on context's
-    // own event bus, idempotent.
-    try {
-        registerSkillEmbedLifecycle({ context, t: i18n });
-    } catch (err) {
-        console.warn(`[${MODULE_NAME}] failed to register skill embed lifecycle:`, err);
-    }
-    // Hook preset export: when the user clicks Export, ask whether to bundle
-    // the preset-scope skills into the JSON before download fires. The hook
-    // listens on OAI_PRESET_EXPORT_READY which carries `{data, presetName}`
-    // (aligned with OAI_PRESET_IMPORT_READY); we mutate `data` in place to
-    // attach `extensions.luker.embedded_skills_source`. `presetName` is the
-    // real slot name so the hook resolves the correct preset-scope skills
-    // even under card-bound selection (where oai_settings.preset_settings_openai
-    // is stale global).
-    if (context.eventTypes?.OAI_PRESET_EXPORT_READY) {
-        context.eventSource.on(context.eventTypes.OAI_PRESET_EXPORT_READY, async ({ data, presetName } = {}) => {
-            try {
-                await maybeAttachSkillsToPresetExport({ context, data, presetName, t: i18n });
-            } catch (err) {
-                console.warn(`[${MODULE_NAME}] preset export skills attachment failed:`, err);
-            }
-        });
-    }
-    // Hook orch-preset export: analogous to the OAI hook above but keyed
-    // by (mode, preset name) derived from the payload's `mode` +
-    // `profile.name`. Fires on ORCH_PRESET_EXPORT_READY from Task 6.
+    // Hook orch-preset export: ask whether to bundle the skills active for
+    // the preset, keyed by (mode, preset name) derived from the payload's
+    // `mode` + `profile.name`. The embed lifecycle and the chat completion
+    // preset export hook are registered by core.
     if (context.eventTypes?.ORCH_PRESET_EXPORT_READY) {
         context.eventSource.on(context.eventTypes.ORCH_PRESET_EXPORT_READY, async (payload) => {
             try {
                 await maybeAttachSkillsToOrchPresetExport({ context, payload, t: i18n });
             } catch (err) {
-                console.warn(`[${MODULE_NAME}] orch-preset export skills attachment failed:`, err);
+                console.error(`[${MODULE_NAME}] orch-preset export skills attachment failed:`, err);
+                if (typeof toastr !== 'undefined') {
+                    toastr.error(i18n('Failed to bundle skills with preset: ${0}').replace('${0}', err?.message || String(err)));
+                }
             }
         });
     }
@@ -4889,8 +4224,8 @@ jQuery(() => {
                 // is forced by the takeover protocol — core can only know a
                 // takeover happened by emitting dispatch first). A
                 // chat-completion hook firing in that later emit may replace
-                // `generate_data.prompt` with a new array (e.g.
-                // ST-Prompt-Template's @INJECT splicing); lazy resolution
+                // `generate_data.prompt` with a new array (a prompt-injection
+                // loader may splice its entries in); lazy resolution
                 // ensures director agents reading the cache later in the
                 // turn see that replacement.
                 // ST's Generate() stores the chat-completion messages array

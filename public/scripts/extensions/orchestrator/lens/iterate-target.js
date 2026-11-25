@@ -4,7 +4,7 @@
 // Provides full iter-studio parity across spec, loop, agenda, and director
 // modes in both global and character scopes:
 //   - per-mode field/profile tools + read_fields + simulate + read_run
-//   - lorebook reads (both scopes) & lorebook-write proposals (character scope)
+//   - lorebook reads and lorebook-write proposals in both scopes
 //   - skill-author proposals + policy-binding / extraction helpers
 //   - custom-tool-author proposals + compile validation + dry-run
 //   - character-scope reset controls (reset_to_blank / reset_to_global)
@@ -20,7 +20,6 @@ import {
     LOREBOOK_WRITE_TOOL_DEFS,
     isLorebookWriteTool,
     runLorebookWriteTool,
-    applyLorebookProposal,
 } from '../../../iteration-library/tools/lorebook-writes.js';
 import {
     CHARACTER_PRESET_READ_TOOL_DEFS,
@@ -54,6 +53,7 @@ import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.j
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
 import { dispatchReadFields } from '../iter-studio/read-fields-dispatcher.js';
 import { interpretSandboxOutcome } from '../iter-studio/sandbox-result.js';
+import { PRESET_ROUTING_TOOL_DEF, PRESET_ROUTING_TOOL_NAME, isPresetRoutingTool } from '../preset-routing-tool.js';
 import { buildRunView, displayStatus } from './model/run.js';
 import { i18n, i18nFormat, agentName, modeInfo } from './i18n.js';
 
@@ -754,6 +754,22 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         return sanitizeForMode(mode, raw || {});
     }
 
+    function destinationPresetId(target) {
+        return target.scope === 'character' && !target.hasOverride ? 'default' : target.presetId;
+    }
+
+    function readTargetProfile(ctx, settings, target) {
+        const { mode, scope, avatar } = target;
+        const id = destinationPresetId(target);
+        const characterLibrary = scope === 'character'
+            ? deps.getCharacterExtensionDataByAvatar(ctx, avatar)?.presetLibraries?.[mode]
+            : null;
+        const copyingGlobal = scope === 'character' && !target.hasOverride && !characterLibrary?.[id];
+        const entry = deps.getPreset(settings, mode, copyingGlobal ? 'global' : scope, copyingGlobal ? target.presetId : id, { context: ctx, avatar });
+        if (!entry) throw new SourceError('preset-missing', i18nFormat('Preset "${0}" no longer exists.', copyingGlobal ? target.presetId : id));
+        return sanitizeForMode(mode, entry);
+    }
+
     const skillTargetHandler = {
         read: async (target) => ({ skill: target?.name || '', path: target?.path || '' }),
         write: async (target) => {
@@ -770,11 +786,19 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const entry = (uid != null && book?.entries) ? book.entries[uid] : null;
             return clone(entry || {});
         },
-        write: async (target) => {
+        write: async (target, next) => {
             const c = resolveCtx();
-            if (target?._op) {
-                await applyLorebookProposal(c, target._op);
+            const name = String(target?.name || '').trim();
+            const uid = Number(target?.uid);
+            if (!name || !Number.isInteger(uid) || uid < 0) {
+                throw new SourceError('validation_args', 'lorebook entry target needs a book name and a non-negative integer uid');
             }
+            const book = await c?.loadWorldInfo?.(name);
+            if (!book?.entries || typeof book.entries !== 'object' || !book.entries[uid]) {
+                throw new SourceError('conflict', `Entry uid ${uid} not found in "${name}"`);
+            }
+            book.entries[uid] = { ...clone(next ?? {}), uid };
+            await c.saveWorldInfo(name, book, true, { refreshEditor: true });
         },
         describe: (target) => `${target?.name || ''}#${target?.uid ?? ''}`,
     };
@@ -783,12 +807,9 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         read: async (target) => {
             const c = resolveCtx();
             const settings = getOrchSettings();
-            const m = target?._mode || resolveMode(settings);
-            const sc = target?._scope || 'global';
-            const av = target?._avatar || resolveActiveAvatar(c);
-            const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
-            const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
-            const container = getCustomToolContainer(prof, m);
+            const owner = target._profileTarget;
+            const prof = readTargetProfile(c, settings, owner);
+            const container = getCustomToolContainer(prof, owner.mode);
             const tools = Array.isArray(container?.customTools) ? container.customTools : [];
             return { name: target?.name || '', tool: tools.find(t => String(t?.name || '') === String(target?.name || '')) || null };
         },
@@ -796,21 +817,20 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             if (!target?._op) return;
             const c = resolveCtx();
             const settings = getOrchSettings();
-            const m = target._mode || resolveMode(settings);
-            const sc = target._scope || 'global';
-            const av = target._avatar || resolveActiveAvatar(c);
-            const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
-            const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
-            const flagBucket = getCustomToolFlagBucket(prof, m);
-            const container = getCustomToolContainer(prof, m);
+            const owner = target._profileTarget;
+            const prof = readTargetProfile(c, settings, owner);
+            const flagBucket = getCustomToolFlagBucket(prof, owner.mode);
+            const container = getCustomToolContainer(prof, owner.mode);
             commitApprovedCustomToolProposal(container, flagBucket, target._op);
             resanitizeProfileCustomTools(container);
-            await persistProfileToScope(c, settings, m, sc, av, prof);
+            await persistProfileToScope(c, settings, owner, prof);
         },
         describe: (target) => String(target?.name || 'custom-tool'),
     };
 
-    async function persistProfileToScope(ctx, settings, mode, scope, avatar, profile) {
+    async function persistProfileToScope(ctx, settings, target, profile) {
+        const { mode, scope, avatar } = target;
+        const id = destinationPresetId(target);
         const sanitized = sanitizeForMode(mode, profile);
         if (scope === 'character') {
             if (!avatar) throw new SourceError('no-character', i18n('No character selected.'));
@@ -820,23 +840,45 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             ext.presetLibraries ||= {};
             ext.presetLibraries[mode] ||= {};
             ext.activePresetIds ||= {};
-            let id = String(ext.activePresetIds[mode] || '');
-            if (!id || !ext.presetLibraries[mode][id]) {
-                id = Object.keys(ext.presetLibraries[mode])[0] || 'default';
-                ext.activePresetIds[mode] = id;
+            if (!ext.presetLibraries[mode][id]) {
+                if (target.hasOverride) throw new SourceError('preset-missing', i18nFormat('Preset "${0}" no longer exists.', id));
+                if (!ext.activePresetIds[mode]) ext.activePresetIds[mode] = id;
             }
             const existingName = ext.presetLibraries[mode][id]?.name || 'Default';
             const entry = deps.sanitizePresetEntry ? deps.sanitizePresetEntry(mode, { ...sanitized, name: existingName }) : { name: existingName, ...sanitized };
             ext.presetLibraries[mode][id] = entry;
             const ok = await deps.persistOrchestratorCharacterExtension?.(ctx, idx, ext);
             if (!ok) throw new SourceError('write-failed', i18n('Failed to persist character override.'));
-            deps.initializeUiState?.(ctx);
+            (deps.refreshUiStateFromHost ?? deps.initializeUiState)?.(ctx);
             return;
         }
-        const wr = deps.writeActivePreset?.(settings, mode, 'global', sanitized, { context: ctx });
-        if (!wr?.ok) throw new SourceError('write-failed', wr?.hint || wr?.reason || i18n('Could not save the preset.'));
+        const write = () => {
+            const library = settings.presetLibraries[mode];
+            const existing = library[id];
+            if (!existing) throw new SourceError('preset-missing', i18nFormat('Preset "${0}" no longer exists.', id));
+            library[id] = deps.sanitizePresetEntry(mode, { ...sanitized, name: existing.name });
+            return { ok: true, presetId: id };
+        };
+        if (typeof deps.persistGlobalPresetWrite === 'function') {
+            const saved = await deps.persistGlobalPresetWrite(
+                settings,
+                mode,
+                write,
+                {
+                    context: ctx,
+                    replaceGlobal: true,
+                    saveGlobal: async () => {
+                        await saveSettingsChecked(ctx);
+                        return true;
+                    },
+                },
+            );
+            if (!saved) throw new SourceError('write-failed', i18n('Could not save the preset.'));
+            return;
+        }
+        write();
         await saveSettingsChecked(ctx);
-        deps.initializeUiState?.(ctx);
+        (deps.refreshUiStateFromHost ?? deps.initializeUiState)?.(ctx);
     }
 
     const proposalKinds = {
@@ -855,7 +897,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         'lorebook-write': {
             ...lorebookWrite,
             targetType: 'orch-lorebook',
-            inverseAvailable: false,
+            inverseAvailable: true,
             targetHandler: lorebookTargetHandler,
             label: (entry) => `${entry?.meta?.bookName || ''}#${entry?.meta?.uid ?? ''}`,
             group: () => i18n('Lorebook'),
@@ -1058,17 +1100,18 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
 
             const helperSession = { mode, scope: resolvedScope, hasOverride, workingProfile: live };
             const baseTools = (deps.buildAiIterationToolSet?.(helperSession) || []).filter(t => !CONTROL_TOOL_SET.has(t?.function?.name));
+            const routingTools = baseTools.some(t => t?.function?.name === PRESET_ROUTING_TOOL_NAME)
+                ? []
+                : [PRESET_ROUTING_TOOL_DEF];
             const controlTools = resolvedScope === 'character'
                 ? CONTROL_TOOL_DEFS.filter(t => t.function.name !== CONTROL_TOOL_NAMES.resetToGlobal || hasOverride)
                 : [];
-            const charTools = resolvedScope === 'character'
-                ? [...LOREBOOK_WRITE_TOOL_DEFS]
-                : [];
             return [
                 ...baseTools,
+                ...routingTools,
                 ...LOREBOOK_READ_TOOL_DEFS,
                 ...CHARACTER_PRESET_READ_TOOL_DEFS,
-                ...charTools,
+                ...LOREBOOK_WRITE_TOOL_DEFS,
                 ...controlTools,
                 ...SKILL_ITER_STUDIO_TOOL_DEFS,
                 READ_RUN_TOOL_DEF,
@@ -1077,6 +1120,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         isRead(name) {
             const n = String(name || '');
             return PROFILE_READ_TOOLS.has(n)
+                || isPresetRoutingTool(n)
                 || n === SIMULATE_TOOL_NAME
                 || n === READ_RUN_TOOL_NAME
                 || isLorebookReadTool(n)
@@ -1094,6 +1138,12 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
 
             if (PROFILE_READ_TOOLS.has(name)) {
                 return dispatchReadFields({ sanitizedProfile: sanitizeForMode(meta.mode, live), args });
+            }
+            if (isPresetRoutingTool(name)) {
+                const reader = typeof deps?.readAgentPresetRouting === 'function'
+                    ? deps.readAgentPresetRouting
+                    : (await import('../agent-resolution.js')).readAgentPresetRouting;
+                return reader(c, getOrchSettings() || {});
             }
             if (isLorebookReadTool(name)) {
                 const out = await runLorebookReadTool({ id: callId, name, args }, { context: c, avatar });
@@ -1276,9 +1326,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                             type: 'orch-custom-tool',
                             name: stable.name,
                             _op: blob.op,
-                            _mode: meta.mode,
-                            _scope: meta.scope,
-                            _avatar: avatar,
+                            _profileTarget: { ...meta, avatar },
                         },
                         before: stable,
                         after: stable,
@@ -1339,12 +1387,10 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 }
             }
 
-            const readDisk = (av) => {
-                const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
-                return readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
-            };
+            const owner = { ...meta, mode: m, scope: sc, avatar };
+            const readDisk = () => readTargetProfile(c, settings, owner);
 
-            const beforeDisk = readDisk(avatar);
+            const beforeDisk = readDisk();
             const ops = fieldPlan(orchUnits(base, m), orchUnits(next, m), keys);
             const merged = mergeOps(orchUnits(beforeDisk, m), ops);
             const applied = [...merged.write, ...merged.already].map(op => op.key);
@@ -1352,7 +1398,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
 
             if (merged.write.length) {
                 const mergedDoc = applyOrchOps(beforeDisk, merged.write, m);
-                await persistProfileToScope(c, settings, m, sc, avatar, mergedDoc);
+                await persistProfileToScope(c, settings, owner, mergedDoc);
             }
             if (sc === 'character') blankSeedKeys.delete(`${m}:${avatar}`);
 
@@ -1362,12 +1408,12 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 failure: '',
                 async undo() {
                     if (!merged.write.length) return;
-                    const undoAvatar = checkAvatar();
-                    const nowDisk = readDisk(undoAvatar);
+                    checkAvatar();
+                    const nowDisk = readDisk();
                     const back = mergeOps(orchUnits(nowDisk, m), reverseOps(merged.write));
                     if (back.write.length) {
                         const revertedDoc = applyOrchOps(nowDisk, back.write, m);
-                        await persistProfileToScope(c, settings, m, sc, undoAvatar, revertedDoc);
+                        await persistProfileToScope(c, settings, owner, revertedDoc);
                     }
                     if (back.skipped.length) throw conflictsLeftAlone(back.skipped.length);
                 },

@@ -9,13 +9,6 @@
  *
  * Three responsibilities:
  *
- *   - `ensureSkillsFieldShape(obj, opts)` — normalize the on-disk shape of the
- *     `skills` field at sanitizer time. Mode-level: defaults to
- *     `{ visible: ['*'], deny: [] }` so all installed skills are visible.
- *     Agent-level (`isAgent: true`): leaves the field undefined when absent
- *     so the resolver knows to "inherit mode default"; normalizes a partial
- *     shape if present.
- *
  *   - `resolveAgentVisibleSkills({ modeProfile, agentConfig, runtimeContext })`
  *     — load the inventory (with brief in-memory cache), merge the four
  *     scope layers (global → oai-preset → orch-preset → character,
@@ -43,38 +36,6 @@ const skillsApi = Luker.getContext().skills;
 let cachedInventory = null;
 let cacheStamp = 0;
 const CACHE_TTL_MS = 5000;
-
-/**
- * Normalize the `skills` field on a mode profile or per-agent config in place.
- *
- * Mode-level (default): inserts `{ visible: ['*'], deny: [] }` when absent.
- * Agent-level (`opts.isAgent === true`): leaves `obj.skills` undefined when
- * absent so the resolver knows to fall back to the mode default; only
- * canonicalizes the shape if the caller already provided a partial object.
- *
- * The mode/agent distinction matters because the `+` inheritance semantics
- * are anchored on the mode profile — overwriting an undefined agent field
- * with the mode default would erase the "inherit" signal.
- *
- * @param {object} obj
- * @param {{ isAgent?: boolean }} [opts]
- */
-export function ensureSkillsFieldShape(obj, { isAgent = false } = {}) {
-    if (!obj || typeof obj !== 'object') return;
-    if (isAgent) {
-        if (obj.skills && typeof obj.skills === 'object') {
-            if (!Array.isArray(obj.skills.visible)) obj.skills.visible = [];
-            if (!Array.isArray(obj.skills.deny)) obj.skills.deny = [];
-        }
-        return;
-    }
-    if (!obj.skills || typeof obj.skills !== 'object') {
-        obj.skills = { visible: ['*'], deny: [] };
-        return;
-    }
-    if (!Array.isArray(obj.skills.visible)) obj.skills.visible = ['*'];
-    if (!Array.isArray(obj.skills.deny)) obj.skills.deny = [];
-}
 
 /**
  * Resolve the list of skills visible to an agent.
@@ -156,10 +117,8 @@ export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runt
     }
     const inventory = Array.from(merged.values());
 
-    // Normalize the mode profile so the lookups below always see arrays.
-    // We mutate the input here rather than working on a clone — sanitizer
-    // shape is idempotent and callers benefit from the canonical fields.
-    ensureSkillsFieldShape(modeProfile);
+    // Read-only on the inputs: the iteration studio passes its live working
+    // profile here, and any field added to it would leak into proposals.
     const modeVisible = Array.isArray(modeProfile?.skills?.visible)
         ? modeProfile.skills.visible : ['*'];
     const modeDeny = Array.isArray(modeProfile?.skills?.deny)

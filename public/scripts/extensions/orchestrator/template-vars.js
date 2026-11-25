@@ -2,13 +2,9 @@
  * Template-variable helpers for orchestrator user/system prompts.
  *
  * Pure string transforms — no chat-state, no `extension_settings`, no
- * I/O. Owns the four operations every caller needs against the
+ * I/O. Owns the operations every caller needs against the
  * mustache-style `{{var}}` syntax used in node prompt templates:
  *
- *   - `extractTemplateVariables` / `getUnsupportedTemplateVariables`:
- *     scan a template for placeholders and flag any not in the project's
- *     allow-list (the union of user-visible vars + auto-injected vars +
- *     legacy-removed vars; see `defaults.js`).
  *   - `replaceAutoInjectedTemplatePlaceholders`: collapse the
  *     `{{previous_orchestration}}` placeholder so it cannot leak back
  *     into a runtime prompt; the runtime injects that content out-of-band.
@@ -27,30 +23,13 @@
  */
 
 import {
-    ALLOWED_TEMPLATE_VARS,
     AUTO_INJECTED_PLACEHOLDER_AI_NOTE,
     AUTO_INJECTED_PLACEHOLDER_REGEX,
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
     LEGACY_REMOVED_PLACEHOLDER_REGEX,
 } from './defaults.js';
 
-export function extractTemplateVariables(template) {
-    const result = [];
-    const text = String(template || '');
-    const regex = /{{\s*([a-zA-Z0-9_]+)\s*}}/g;
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-        result.push(String(match[1] || '').trim());
-    }
-    return [...new Set(result.filter(Boolean))];
-}
-
-export function getUnsupportedTemplateVariables(template) {
-    const used = extractTemplateVariables(template);
-    return used.filter(name => !ALLOWED_TEMPLATE_VARS.includes(name));
-}
-
-export function replaceAutoInjectedTemplatePlaceholders(template, replacement = '') {
+function replaceAutoInjectedTemplatePlaceholders(template, replacement = '') {
     const source = String(template || '');
     if (!source) {
         return '';
@@ -58,7 +37,7 @@ export function replaceAutoInjectedTemplatePlaceholders(template, replacement = 
     return source.replace(AUTO_INJECTED_PLACEHOLDER_REGEX, String(replacement || ''));
 }
 
-export function replaceLegacyRemovedTemplatePlaceholders(template, replacement = '') {
+function replaceLegacyRemovedTemplatePlaceholders(template, replacement = '') {
     const source = String(template || '');
     if (!source) {
         return '';

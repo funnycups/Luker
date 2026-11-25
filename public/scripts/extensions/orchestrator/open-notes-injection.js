@@ -82,29 +82,3 @@ export async function loadOpenNotesBlock(contextForNotes) {
     const openNotes = await readOpenNotes(contextForNotes);
     return renderOpenNotesBlock(openNotes);
 }
-
-/**
- * Compose the standard "runtime state" user message that carries the
- * Open Notes block for modes that ship volatile per-dispatch context
- * as a trailing user message (spec / agenda / director sub-agents).
- * Returns `null` when there is no block to inject so callers can
- * spread the result into a messages array without conditional guards
- * (`messages.push(...[msg].filter(Boolean))`).
- *
- * Callers that need to compose additional runtime-state sections
- * (e.g. main-agent digest, current-draft snapshot in director mode)
- * should call `loadOpenNotesBlock` directly and assemble their own
- * `<runtime_state>` envelope — this helper is the single-section
- * convenience for the common case.
- *
- * @param {object|null|undefined} contextForNotes
- * @returns {Promise<{role: 'user', content: string} | null>}
- */
-export async function buildOpenNotesRuntimeStateMessage(contextForNotes) {
-    const block = await loadOpenNotesBlock(contextForNotes);
-    if (!block) return null;
-    return {
-        role: 'user',
-        content: `<runtime_state>\n${block}\n</runtime_state>`,
-    };
-}

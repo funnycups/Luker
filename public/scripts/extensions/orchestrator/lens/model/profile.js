@@ -11,6 +11,7 @@
 // agent. Pure: no DOM, no Luker — tests import it in Node.
 
 import { agentGroup } from '../i18n.js';
+import { resolveStoredIdToken } from './edit.js';
 
 const str = (value) => (typeof value === 'string' ? value : value == null ? '' : String(value));
 const obj = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -120,7 +121,8 @@ export function buildFlow(profile, meta = {}) {
         const agents = {};
         const planner = makeAgent('agenda_planner', p.planner, { kind: 'planner' });
         agents.agenda_planner = planner;
-        const finalId = str(p.finalAgentId);
+        const resolvedFinal = resolveStoredIdToken(Object.keys(obj(p.agents)), p.finalAgentId);
+        const finalId = resolvedFinal.status === 'found' ? resolvedFinal.id : '';
         const pool = [];
         for (const [id, raw] of Object.entries(obj(p.agents))) {
             agents[id] = makeAgent(id, raw, { kind: id === finalId ? 'final' : 'worker' });

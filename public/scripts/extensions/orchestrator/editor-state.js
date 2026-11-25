@@ -26,6 +26,7 @@ import {
     ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
+    ORCH_NODE_TYPE_REVIEW,
     ORCH_NODE_TYPE_WORKER,
     createDefaultDirectorProfile,
     defaultLoopProfile,
@@ -35,14 +36,20 @@ import {
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterActivePresetId,
+    getCharacterExtensionDataByAvatar,
     getRuntimePresetScope,
     normalizeExecutionMode,
 } from './character-overrides.js';
+import { makeModeMap } from './preset-modes.js';
+import { canonicalStringify } from './canonical-stringify.js';
 import {
     createPresetDraft,
+    resolveStoredIdReference,
+    sanitizePresetMap,
     toEditablePresetMap,
     toEditableSpec,
 } from './editable-spec.js';
+import { sanitizeSpec } from './spec-schema.js';
 import {
     ensureAgendaEditorIntegrity,
     sanitizeAgendaWorkingProfile,
@@ -73,8 +80,8 @@ export const uiState = {
     directorDisplayedScope: 'global',
     aiIterationSession: null,
     orchEditorPopupContentId: '',
-    globalActivePresetIds: { spec: '', agenda: '', loop: '', director: '' },
-    characterActivePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+    globalActivePresetIds: makeModeMap(() => ''),
+    characterActivePresetIds: makeModeMap(() => ''),
 };
 
 export function ensureEditorIntegrity(editor) {
@@ -123,6 +130,14 @@ export function pickDefaultPreset(editor) {
     return keys[0];
 }
 
+/**
+ * Point a spec editor node at the preset `value` resolves to; an empty
+ * value falls back to the default preset.
+ */
+export function setEditorNodePreset(editor, node, value) {
+    node.preset = resolveStoredIdReference(editor?.presets, value) || pickDefaultPreset(editor);
+}
+
 export function createNewStage(editor) {
     const defaultPreset = pickDefaultPreset(editor);
     const index = (editor.spec?.stages?.length || 0) + 1;
@@ -138,6 +153,168 @@ export function createNewStage(editor) {
     };
 }
 
+function buildBestEffortSpecFromAgendaAgents(agents, finalAgentId) {
+    const normalizedAgents = sanitizePresetMap(agents);
+    const agentIds = Object.keys(normalizedAgents);
+    const fallbackFinalAgentId = agentIds[0] || 'finalizer';
+    const resolvedFinalAgentId = normalizedAgents[finalAgentId]
+        ? String(finalAgentId)
+        : fallbackFinalAgentId;
+    const nonFinalAgentIds = agentIds.filter(id => id !== resolvedFinalAgentId);
+    const distillerId = nonFinalAgentIds.find(id => {
+        const normalizedId = String(id || '').trim().toLowerCase();
+        return normalizedId === 'distiller' || normalizedId.includes('distill');
+    }) || null;
+    const reviewAgentIds = nonFinalAgentIds.filter(id => {
+        if (id === distillerId) {
+            return false;
+        }
+        const normalizedId = String(id || '').trim().toLowerCase();
+        return normalizedId === 'critic'
+            || normalizedId.includes('critic')
+            || normalizedId.includes('review')
+            || normalizedId.includes('audit');
+    });
+    const remainingWorkerIds = nonFinalAgentIds.filter(id => id !== distillerId && !reviewAgentIds.includes(id));
+    const groundingAgentIds = remainingWorkerIds.filter(id => {
+        const normalizedId = String(id || '').trim().toLowerCase();
+        return normalizedId.includes('lore')
+            || normalizedId.includes('ground')
+            || normalizedId.includes('constraint')
+            || normalizedId.includes('recall')
+            || normalizedId.includes('memory');
+    });
+    const reasoningAgentIds = remainingWorkerIds.filter(id => {
+        if (groundingAgentIds.includes(id)) {
+            return false;
+        }
+        const normalizedId = String(id || '').trim().toLowerCase();
+        return normalizedId.includes('plan')
+            || normalizedId.includes('scene')
+            || normalizedId.includes('progress')
+            || normalizedId.includes('writer')
+            || normalizedId.includes('draft');
+    });
+    const supportAgentIds = remainingWorkerIds.filter(id => !groundingAgentIds.includes(id) && !reasoningAgentIds.includes(id));
+    const stages = [];
+
+    if (distillerId) {
+        stages.push({
+            id: 'distill',
+            mode: 'serial',
+            nodes: [distillerId],
+        });
+    }
+
+    if (groundingAgentIds.length > 0) {
+        stages.push({
+            id: 'grounding',
+            mode: groundingAgentIds.length > 1 ? 'parallel' : 'serial',
+            nodes: groundingAgentIds,
+        });
+    }
+
+    if (reasoningAgentIds.length > 0) {
+        stages.push({
+            id: 'reason',
+            mode: reasoningAgentIds.length > 1 ? 'parallel' : 'serial',
+            nodes: reasoningAgentIds,
+        });
+    }
+
+    if (supportAgentIds.length > 0) {
+        stages.push({
+            id: 'workers',
+            mode: supportAgentIds.length > 1 ? 'parallel' : 'serial',
+            nodes: supportAgentIds,
+        });
+    }
+
+    if (reviewAgentIds.length > 0) {
+        stages.push({
+            id: 'review',
+            mode: reviewAgentIds.length > 1 ? 'parallel' : 'serial',
+            nodes: reviewAgentIds.map(id => ({
+                id,
+                preset: id,
+                type: ORCH_NODE_TYPE_REVIEW,
+            })),
+        });
+    }
+
+    stages.push({
+        id: 'finalize',
+        mode: 'serial',
+        nodes: [resolvedFinalAgentId],
+    });
+
+    return sanitizeSpec({ stages });
+}
+
+export function copyAgendaAgentsIntoSpecEditor(agendaEditor, specEditor) {
+    ensureAgendaEditorIntegrity(agendaEditor);
+    ensureEditorIntegrity(specEditor);
+    const copiedPresets = sanitizePresetMap(agendaEditor.agents);
+    const fallbackFinalAgentId = Object.keys(copiedPresets)[0] || 'finalizer';
+    const resolvedFinalAgentId = resolveStoredIdReference(copiedPresets, agendaEditor.finalAgentId);
+    const finalAgentId = copiedPresets[resolvedFinalAgentId] ? resolvedFinalAgentId : fallbackFinalAgentId;
+    specEditor.presets = copiedPresets;
+    specEditor.spec = buildBestEffortSpecFromAgendaAgents(copiedPresets, finalAgentId);
+    ensureEditorIntegrity(specEditor);
+}
+
+/**
+ * Canonical JSON of what a mode's character draft is loaded from, split
+ * into the card data and the merged global base:
+ * - card: the active avatar, the card's library and active slot for
+ *   that mode, and the legacy override payload the loader migrates.
+ *   Missing containers fingerprint like empty ones, because the loader
+ *   seeds them in memory only.
+ * - globalBase: the global active preset for that mode, which every
+ *   character loader merges under the card data.
+ * The card shape is settled first, as the loaders do, so a card whose
+ * legacy flags settle only in memory compares equal to its settled draft.
+ */
+export function getCharacterDraftSourceFingerprint(context, avatar, mode, extension = null) {
+    getRuntimePresetScope(context, avatar, mode);
+    const ext = extension ?? (avatar ? getCharacterExtensionDataByAvatar(context, avatar) : {});
+    const library = ext.presetLibraries?.[mode];
+    const override = ext.override && typeof ext.override === 'object' ? ext.override : {};
+    const legacy = mode === ORCH_EXECUTION_MODE_SPEC
+        ? { spec: override.spec, presets: override.presets, presetPatch: override.presetPatch, enabled: override.enabled }
+        : override[mode];
+    const globalActive = getActivePreset(getSettings(), mode, { scope: 'global' });
+    return {
+        card: canonicalStringify({
+            avatar: String(avatar || ''),
+            library: library && typeof library === 'object' ? library : {},
+            activeId: String(ext.activePresetIds?.[mode] || ''),
+            legacy: legacy ?? null,
+            overrideEnabled: ext.overrideEnabled?.[mode] ?? null,
+        }),
+        globalBase: canonicalStringify((globalActive.ok && globalActive.state) || null),
+    };
+}
+
+/** Fingerprints of the sources each mode's character draft was last loaded from. */
+const characterDraftSources = makeModeMap(() => null);
+const characterDraftContents = makeModeMap(() => null);
+
+/** Acknowledge an owned write without replacing unrelated unsaved fields. */
+export function acknowledgeCharacterDraftSource(context, avatar, mode, expectedDraft = null, expectedSource = null) {
+    if (!avatar || uiState.selectedAvatar !== avatar) return false;
+    if (expectedDraft && CHARACTER_DRAFT_LOADERS[mode]?.key && uiState[CHARACTER_DRAFT_LOADERS[mode].key] !== expectedDraft) return false;
+    const source = getCharacterDraftSourceFingerprint(context, avatar, mode);
+    if (expectedSource && (source.card !== expectedSource.card || source.globalBase !== expectedSource.globalBase)) return false;
+    characterDraftSources[mode] = source;
+    return true;
+}
+
+export function getCharacterDraftForMode(mode) {
+    const key = CHARACTER_DRAFT_LOADERS[mode]?.key;
+    return key ? uiState[key] : null;
+}
+
 export function loadGlobalEditorState() {
     const settings = getSettings();
     // `getActivePreset` returns `{ok:true, state}` envelope after Task 4.1;
@@ -150,9 +327,11 @@ export function loadGlobalEditorState() {
     return { spec, presets };
 }
 
-export function loadCharacterEditorState(context, avatar) {
+function buildCharacterEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
+    // Settle legacy card shapes before reading, as the runtime does.
+    getRuntimePresetScope(context, safeAvatar, ORCH_EXECUTION_MODE_SPEC);
     const globalActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' });
     const globalActive = (globalActiveResult.ok && globalActiveResult.state) ? globalActiveResult.state : {};
     const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC,
@@ -188,9 +367,11 @@ export function loadGlobalAgendaEditorState() {
     return sanitizeAgendaWorkingProfile(active || {});
 }
 
-export function loadCharacterAgendaEditorState(context, avatar) {
+function buildCharacterAgendaEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
+    // Settle legacy card shapes before reading, as the runtime does.
+    getRuntimePresetScope(context, safeAvatar, ORCH_EXECUTION_MODE_AGENDA);
     // Override merged on top of global base — fields the override doesn't
     // specify inherit from the global profile. Without this, a partial
     // override (e.g. only `{ enabled: true, planner: { systemPrompt } }`)
@@ -256,9 +437,11 @@ export function loadGlobalLoopEditorState() {
  * draft carries `enabled` like the spec/agenda character editors, so
  * save / clear flows can roundtrip that field.
  */
-export function loadCharacterLoopEditorState(context, avatar) {
+function buildCharacterLoopEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
+    // Settle legacy card shapes before reading, as the runtime does.
+    getRuntimePresetScope(context, safeAvatar, ORCH_EXECUTION_MODE_LOOP);
     // Override merged on top of global base — fields the override doesn't
     // specify (system_prompt, tools, max_rounds, etc.) inherit from the
     // global loop profile instead of falling back to LOOP_PROFILE_DEFAULTS.
@@ -328,9 +511,11 @@ export function loadGlobalDirectorEditorState() {
  * returned draft carries `enabled` like the spec/agenda/loop character
  * editors, so save / clear flows can roundtrip that field.
  */
-export function loadCharacterDirectorEditorState(context, avatar) {
+function buildCharacterDirectorEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
+    // Settle legacy card shapes before reading, as the runtime does.
+    getRuntimePresetScope(context, safeAvatar, ORCH_EXECUTION_MODE_DIRECTOR);
     // Override merged on top of global base. Without this, a partial
     // override (e.g. only `{ enabled: true, mainAgent: {} }`) would land
     // with an empty mainAgent.systemPrompt and zero sub-agents because
@@ -376,6 +561,19 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     };
 }
 
+/**
+ * Refresh the cached `uiState.{global,character}ActivePresetIds` from
+ * stored settings and the selected card. Editor drafts are left as-is,
+ * so callers that re-render after an in-memory edit keep that edit.
+ */
+export function syncActivePresetIdsFromSettings(context) {
+    const settings = getSettings();
+    uiState.globalActivePresetIds = makeModeMap((mode) => getActivePresetId(settings, mode, { scope: 'global' }));
+    if (uiState.selectedAvatar) {
+        uiState.characterActivePresetIds = makeModeMap((mode) => getCharacterActivePresetId(context, uiState.selectedAvatar, mode));
+    }
+}
+
 export function initializeUiState(context) {
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     if (activeAvatar !== uiState.selectedAvatar) {
@@ -398,21 +596,45 @@ export function initializeUiState(context) {
     ensureLoopEditorIntegrity(uiState.characterLoopEditor);
     ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
     ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-    uiState.globalActivePresetIds = {
-        spec: getActivePresetId(getSettings(), 'spec', { scope: 'global' }),
-        agenda: getActivePresetId(getSettings(), 'agenda', { scope: 'global' }),
-        loop: getActivePresetId(getSettings(), 'loop', { scope: 'global' }),
-        director: getActivePresetId(getSettings(), 'director', { scope: 'global' }),
-    };
-    if (uiState.selectedAvatar) {
-        uiState.characterActivePresetIds = {
-            spec: getCharacterActivePresetId(context, uiState.selectedAvatar, 'spec'),
-            agenda: getCharacterActivePresetId(context, uiState.selectedAvatar, 'agenda'),
-            loop: getCharacterActivePresetId(context, uiState.selectedAvatar, 'loop'),
-            director: getCharacterActivePresetId(context, uiState.selectedAvatar, 'director'),
-        };
-    }
+    syncActivePresetIdsFromSettings(context);
     syncDisplayedScopesFromStoredState(context, getSettings());
+}
+
+const CHARACTER_DRAFT_LOADERS = {
+    [ORCH_EXECUTION_MODE_SPEC]: { key: 'characterEditor', load: loadCharacterEditorState, ensure: ensureEditorIntegrity },
+    [ORCH_EXECUTION_MODE_AGENDA]: { key: 'characterAgendaEditor', load: loadCharacterAgendaEditorState, ensure: ensureAgendaEditorIntegrity },
+    [ORCH_EXECUTION_MODE_LOOP]: { key: 'characterLoopEditor', load: loadCharacterLoopEditorState, ensure: ensureLoopEditorIntegrity },
+    [ORCH_EXECUTION_MODE_DIRECTOR]: { key: 'characterDirectorEditor', load: loadCharacterDirectorEditorState, ensure: ensureDirectorEditorIntegrity },
+};
+
+function loadCharacterDraft(context, avatar, mode, build, ensure) {
+    const draft = build(context, avatar);
+    ensure(draft);
+    characterDraftSources[mode] = getCharacterDraftSourceFingerprint(context, avatar, mode);
+    characterDraftContents[mode] = JSON.parse(JSON.stringify(draft));
+    return draft;
+}
+
+export function loadCharacterEditorState(context, avatar) {
+    return loadCharacterDraft(context, avatar, ORCH_EXECUTION_MODE_SPEC, buildCharacterEditorState, ensureEditorIntegrity);
+}
+
+export function loadCharacterAgendaEditorState(context, avatar) {
+    return loadCharacterDraft(context, avatar, ORCH_EXECUTION_MODE_AGENDA, buildCharacterAgendaEditorState, ensureAgendaEditorIntegrity);
+}
+
+export function loadCharacterLoopEditorState(context, avatar) {
+    return loadCharacterDraft(context, avatar, ORCH_EXECUTION_MODE_LOOP, buildCharacterLoopEditorState, ensureLoopEditorIntegrity);
+}
+
+export function loadCharacterDirectorEditorState(context, avatar) {
+    return loadCharacterDraft(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR, buildCharacterDirectorEditorState, ensureDirectorEditorIntegrity);
+}
+
+function reloadCharacterDraft(context, mode, avatar) {
+    const { key, load, ensure } = CHARACTER_DRAFT_LOADERS[mode];
+    uiState[key] = load(context, avatar);
+    ensure(uiState[key]);
 }
 
 export function syncCharacterEditorWithActiveAvatar(context) {
@@ -422,29 +644,122 @@ export function syncCharacterEditorWithActiveAvatar(context) {
     }
     applyCharacterExecutionModeForAvatar(context, getSettings(), activeAvatar);
     uiState.selectedAvatar = activeAvatar;
-    uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
-    uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
-    uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
-    uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
-    ensureEditorIntegrity(uiState.characterEditor);
-    ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-    ensureLoopEditorIntegrity(uiState.characterLoopEditor);
-    ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-    uiState.globalActivePresetIds = {
-        spec: getActivePresetId(getSettings(), 'spec', { scope: 'global' }),
-        agenda: getActivePresetId(getSettings(), 'agenda', { scope: 'global' }),
-        loop: getActivePresetId(getSettings(), 'loop', { scope: 'global' }),
-        director: getActivePresetId(getSettings(), 'director', { scope: 'global' }),
-    };
-    if (uiState.selectedAvatar) {
-        uiState.characterActivePresetIds = {
-            spec: getCharacterActivePresetId(context, uiState.selectedAvatar, 'spec'),
-            agenda: getCharacterActivePresetId(context, uiState.selectedAvatar, 'agenda'),
-            loop: getCharacterActivePresetId(context, uiState.selectedAvatar, 'loop'),
-            director: getCharacterActivePresetId(context, uiState.selectedAvatar, 'director'),
-        };
+    for (const mode of Object.keys(CHARACTER_DRAFT_LOADERS)) {
+        reloadCharacterDraft(context, mode, activeAvatar);
     }
+    syncActivePresetIdsFromSettings(context);
     syncDisplayedScopesFromStoredState(context, getSettings());
+}
+
+/**
+ * Reload the selected avatar's character draft for `mode` when the card
+ * data or the merged global base it was loaded from changed. The
+ * displayed scope is re-derived only on a card change: the stored scope
+ * comes from the card's active slot alone, and re-deriving it otherwise
+ * would override an explicit display choice. Returns whether it reloaded.
+ */
+export function refreshCharacterDraftIfSourceChanged(context, mode) {
+    const avatar = uiState.selectedAvatar;
+    const recorded = characterDraftSources[mode];
+    const current = getCharacterDraftSourceFingerprint(context, avatar, mode);
+    const cardChanged = current.card !== recorded?.card;
+    if (!cardChanged && current.globalBase === recorded?.globalBase) {
+        return false;
+    }
+    const draft = getCharacterDraftForMode(mode);
+    const baseline = characterDraftContents[mode];
+    reloadCharacterDraft(context, mode, avatar);
+    if (!cardChanged && baseline) {
+        const key = CHARACTER_DRAFT_LOADERS[mode].key;
+        uiState[key] = mergeDraftEdits(baseline, draft, uiState[key]);
+    }
+    if (cardChanged) {
+        setDisplayedScopeForMode(context, getSettings(), mode);
+    }
+    return true;
+}
+
+// Three-way structural rebase: fields unchanged by the editor follow the
+// new global base. Edited values and arrays remain the user's draft.
+function mergeDraftEdits(before, draft, next) {
+    if (canonicalStringify(before) === canonicalStringify(draft)) return next;
+    if (!before || !draft || !next || typeof before !== 'object' || typeof draft !== 'object' || typeof next !== 'object'
+        || Array.isArray(before) || Array.isArray(draft) || Array.isArray(next)) return draft;
+    const merged = { ...next };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(draft)])) {
+        if (!Object.hasOwn(draft, key)) delete merged[key];
+        else merged[key] = mergeDraftEdits(before[key], draft[key], next[key]);
+    }
+    return merged;
+}
+
+const GLOBAL_DRAFT_LOADERS = {
+    [ORCH_EXECUTION_MODE_SPEC]: { key: 'globalEditor', load: loadGlobalEditorState, ensure: ensureEditorIntegrity },
+    [ORCH_EXECUTION_MODE_AGENDA]: { key: 'globalAgendaEditor', load: loadGlobalAgendaEditorState, ensure: ensureAgendaEditorIntegrity },
+    [ORCH_EXECUTION_MODE_LOOP]: { key: 'globalLoopEditor', load: loadGlobalLoopEditorState, ensure: ensureLoopEditorIntegrity },
+    [ORCH_EXECUTION_MODE_DIRECTOR]: { key: 'globalDirectorEditor', load: loadGlobalDirectorEditorState, ensure: ensureDirectorEditorIntegrity },
+};
+
+/** Reload an explicitly selected preset without clearing other modes' drafts. */
+export function reloadPresetDraft(context, mode) {
+    const { key, load, ensure } = GLOBAL_DRAFT_LOADERS[mode];
+    uiState[key] = load();
+    ensure(uiState[key]);
+    reloadCharacterDraft(context, mode, uiState.selectedAvatar);
+    syncActivePresetIdsFromSettings(context);
+    setDisplayedScopeForMode(context, getSettings(), mode);
+}
+
+/** Capture draft ownership before an asynchronous global write. */
+export function captureGlobalWriteDrafts(mode) {
+    const key = GLOBAL_DRAFT_LOADERS[mode].key;
+    return {
+        key, draft: uiState[key], content: canonicalStringify(uiState[key]),
+        avatar: uiState.selectedAvatar, characterDraft: getCharacterDraftForMode(mode),
+        characterContent: canonicalStringify(getCharacterDraftForMode(mode)),
+        characterSource: characterDraftSources[mode],
+    };
+}
+
+/** Publish an acknowledged source without replacing later or unrelated draft edits. */
+export function acknowledgeGlobalWriteDrafts(context, mode, captured, { replaceGlobal = false, sourceEditor = null } = {}) {
+    const { key, load, ensure } = GLOBAL_DRAFT_LOADERS[mode];
+    if (replaceGlobal && uiState[key] === captured.draft && canonicalStringify(uiState[key]) === captured.content) {
+        uiState[key] = load();
+        ensure(uiState[key]);
+    }
+    if (uiState.selectedAvatar !== captured.avatar || getCharacterDraftForMode(mode) !== captured.characterDraft) return;
+    const currentSource = getCharacterDraftSourceFingerprint(context, captured.avatar, mode);
+    if (currentSource.card !== captured.characterSource?.card) return;
+    if (sourceEditor === captured.characterDraft && canonicalStringify(sourceEditor) === captured.characterContent) {
+        reloadCharacterDraft(context, mode, captured.avatar);
+    } else if (canonicalStringify(captured.characterDraft) !== captured.characterContent) {
+        acknowledgeCharacterDraftSource(context, captured.avatar, mode, captured.characterDraft, currentSource);
+    } else {
+        // Narrow writes must retain the global editor's other unsaved fields
+        // while allowing inherited character fields to follow acknowledged data.
+        refreshCharacterDraftIfSourceChanged(context, mode);
+    }
+}
+
+/**
+ * Refresh editor state after a host event (connection profile, chat or
+ * character change) re-renders an already mounted drawer. Global drafts
+ * are kept: their source is the saved orchestrator settings, which host
+ * events do not change. Character drafts are swapped on an avatar change
+ * and otherwise reloaded per mode only when the card data or the global
+ * base they were loaded from changed.
+ */
+export function refreshUiStateFromHost(context) {
+    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+    if (activeAvatar !== uiState.selectedAvatar) {
+        syncCharacterEditorWithActiveAvatar(context);
+        return;
+    }
+    for (const mode of Object.keys(CHARACTER_DRAFT_LOADERS)) {
+        refreshCharacterDraftIfSourceChanged(context, mode);
+    }
+    syncActivePresetIdsFromSettings(context);
 }
 
 export function getScopePreferenceStateKey(mode = ORCH_EXECUTION_MODE_SPEC) {
@@ -478,7 +793,7 @@ export function setDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTIO
     return uiState[key];
 }
 
-export function syncDisplayedScopesFromStoredState(context, settings) {
+function syncDisplayedScopesFromStoredState(context, settings) {
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);

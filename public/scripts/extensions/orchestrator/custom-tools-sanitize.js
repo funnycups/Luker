@@ -5,7 +5,23 @@
  * persist — failures surface as a console warn at run time, not at save.
  */
 
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+export const CUSTOM_TOOL_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+
+const AsyncFunction = (async () => {}).constructor;
+
+export function isValidCustomToolName(name) {
+    return CUSTOM_TOOL_NAME_PATTERN.test(String(name ?? ''));
+}
+
+/**
+ * Compile a custom tool body (`exec` or `simulate`) into
+ * `async (args, ctx) => { <body> }`. Throws `SyntaxError` on invalid
+ * source; callers decide whether that rejects a save or skips the tool.
+ */
+export function compileCustomToolBody(body) {
+    return new AsyncFunction('args', 'ctx', String(body || ''));
+}
+
 const BODY_MAX_BYTES = 65536;
 const DESCRIPTION_MAX_BYTES = 8192;
 const DISPLAY_NAME_MAX_BYTES = 256;
@@ -22,7 +38,7 @@ export function sanitizeCustomTools(input) {
     for (const raw of input) {
         if (!raw || typeof raw !== 'object') continue;
         const name = String(raw.name || '');
-        if (!NAME_PATTERN.test(name)) continue;
+        if (!isValidCustomToolName(name)) continue;
         const mode = raw.mode === 'read' ? 'read' : 'write';
         const entry = {
             name,

@@ -20,9 +20,9 @@
  *     readers with sensible defaults; both fall back to live
  *     `extension_settings.orchestrator` when the caller passes no arg.
  *
- * `sanitizePresetMap` / `mergePresetMaps` / `ensureSettings` live in
+ * `sanitizePresetMap` lives in editable-spec.js and `ensureSettings` in
  * main.js because they call into editor draft helpers
- * (`createPresetDraft`, `sanitizeIdentifierToken`, etc.) that own the
+ * (`createPresetDraft`, `normalizeIdToken`, etc.) that own the
  * preset-editor UI state — they belong with the editor surface, not
  * with the spec schema.
  */
@@ -45,7 +45,7 @@ export function cloneDefault(value) {
     return Array.isArray(value) || typeof value === 'object' ? cloneJsonCompatible(value) : value;
 }
 
-export function cloneJsonCompatible(value) {
+function cloneJsonCompatible(value) {
     if (value === undefined) {
         return undefined;
     }
@@ -147,7 +147,7 @@ export function sanitizeSpec(spec) {
             .filter(Boolean);
 
         return {
-            id: String(stage?.id || `stage_${stageIndex + 1}`),
+            id: String(stage?.id ?? '').trim() || `stage_${stageIndex + 1}`,
             mode: String(stage?.mode || 'serial').toLowerCase() === 'parallel' ? 'parallel' : 'serial',
             nodes: normalizedNodes,
         };

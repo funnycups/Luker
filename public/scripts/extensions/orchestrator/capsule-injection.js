@@ -23,8 +23,6 @@
  *   - `clearCapsulePrompt` is the inverse used when the orchestrator is
  *     bypassed (cancellation, early abort) so a stale capsule from a
  *     previous turn never leaks into the next request.
- *   - `getTargetAssistantLayer` infers the assistant turn that the
- *     anchor capsule will land on for a given generation type.
  *
  * `buildCapsule` (synthesizes the final guidance text from
  * `stageOutputs`) and `reapplyLatestCapsuleInjection` (re-syncs the
@@ -55,7 +53,7 @@ export function normalizeCapsuleInjectPosition(value) {
     return SUPPORTED_WORLD_INFO_POSITIONS.includes(numeric) ? numeric : world_info_position.atDepth;
 }
 
-export function normalizeCapsuleInjectRole(value) {
+function normalizeCapsuleInjectRole(value) {
     const allowedRoles = [extension_prompt_roles.SYSTEM, extension_prompt_roles.USER, extension_prompt_roles.ASSISTANT];
     const numeric = Number(value);
     return allowedRoles.includes(numeric) ? numeric : extension_prompt_roles.SYSTEM;
@@ -139,13 +137,4 @@ export function clearCapsulePrompt(context) {
         true,
         extension_prompt_roles.SYSTEM,
     );
-}
-
-export function getTargetAssistantLayer(payload) {
-    const type = String(payload?.type || 'normal').trim().toLowerCase();
-    const messages = Array.isArray(payload?.coreChat) ? payload.coreChat : [];
-    const assistantCount = messages.filter(message => !message?.is_user).length;
-    return (type === 'regenerate' || type === 'swipe' || type === 'continue')
-        ? Math.max(assistantCount, 1)
-        : Math.max(assistantCount + 1, 1);
 }

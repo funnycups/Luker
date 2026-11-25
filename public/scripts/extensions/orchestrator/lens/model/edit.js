@@ -22,6 +22,21 @@
 
 import { i18n, i18nFormat } from '../i18n.js';
 
+/** Pure stored-id resolver shared by pure lens model modules (no host/lib imports). */
+export function resolveStoredIdToken(storedIds, value) {
+    const raw = value === null || value === undefined ? '' : String(value);
+    const trimmed = raw.trim();
+    if (!trimmed) return { status: 'empty' };
+    const ids = (Array.isArray(storedIds) ? storedIds : []).map(id => String(id ?? ''));
+    const matchesOf = predicate => ids.reduce((out, id, index) => (predicate(id) ? [...out, index] : out), []);
+    for (const predicate of [id => id === raw, id => id === trimmed, id => id.trim() === trimmed]) {
+        const indexes = matchesOf(predicate);
+        if (indexes.length === 1) return { status: 'found', id: ids[indexes[0]], index: indexes[0] };
+        if (indexes.length > 1) return { status: 'ambiguous', id: trimmed, matches: indexes.map(index => ids[index]) };
+    }
+    return { status: 'missing', id: trimmed };
+}
+
 export const PROFILE = '@profile';
 const FIELD_LABELS = {
     system: 'Role prompt', task: 'Task template', description: 'Agent description', api: 'Connection profile', preset: 'Generation preset',
@@ -435,7 +450,7 @@ export const addAgendaAgent = (profile, id) => edit(profile, (p) => {
 });
 export const removeAgendaAgent = (profile, id) => edit(profile, (p) => {
     delete p.agents[id];
-    if (!p.agents[p.finalAgentId]) p.finalAgentId = Object.keys(p.agents)[0] || '';
+    if (resolveStoredIdToken(Object.keys(p.agents), p.finalAgentId).status !== 'found') p.finalAgentId = Object.keys(p.agents)[0] || '';
 });
 
 export const addSubAgent = (profile, id) => edit(profile, (p) => {
@@ -493,7 +508,7 @@ export function validateStructure(mode, profile) {
     } else if (mode === 'agenda') {
         const agents = Object.keys(obj(p.agents) || {});
         if (!agents.length) out.push(i18n('Add at least one agent.'));
-        else if (!agents.includes(str(p.finalAgentId))) out.push(i18n('Pick a final agent.'));
+        else if (resolveStoredIdToken(agents, p.finalAgentId).status !== 'found') out.push(i18n('Pick a final agent.'));
     } else if (mode === 'director') {
         const seen = new Set();
         for (const sub of Array.isArray(p.subAgents) ? p.subAgents : []) {
@@ -505,4 +520,24 @@ export function validateStructure(mode, profile) {
         }
     }
     return out;
+}
+
+/**
+ * Resolve options and selected value for the agenda final-agent dropdown.
+ * Stored agent keys are kept verbatim, so a trimmed `finalAgentId` selects its
+ * unique whitespace-padded agent key while an ambiguous or unknown id renders
+ * an explicit `(missing)` option instead of falling back to the first option.
+ */
+export function buildAgendaFinalAgentSelectModel(agents, finalAgentId, { missingSuffix = i18n('(missing)') } = {}) {
+    const ids = Object.keys(obj(agents) || {});
+    const resolved = resolveStoredIdToken(ids, finalAgentId);
+    const options = ids.map(id => ({ value: id, label: id }));
+    if (resolved.status === 'found') {
+        return { options, value: resolved.id };
+    }
+    const fallback = str(finalAgentId).trim();
+    if (fallback) {
+        options.push({ value: fallback, label: `${fallback} ${missingSuffix}` });
+    }
+    return { options, value: fallback };
 }

@@ -34,7 +34,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/pro
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettings,
     getContext: () => ({}),
-    writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
+    writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); return true; },
     UNSET_VALUE: Symbol('unset'),
 }));
 jest.unstable_mockModule('../../public/script.js', () => ({
@@ -191,7 +191,11 @@ describe('persistCustomToolsPatch — shape guarantees', () => {
         };
         const ctx = {
             characters: [character],
-            writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
+            writeExtensionField: async (id, key, value) => {
+                if (typeof value === 'function') value = await value(structuredClone(ctx.characters[id].data.extensions[key]));
+                ctx.characters[id].data.extensions[key] = value;
+                writes.push({ id, key, value }); return true;
+            },
         };
         await persist.persistCustomToolsPatch(ctx, extensionSettings.orchestrator, 'director', 'character', [
             { name: 'card_only_tool', description: 'X' },

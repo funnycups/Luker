@@ -433,12 +433,18 @@ export function getEnabledToolSchemas(profile, customToolRegistry = null) {
 }
 
 /**
- * Returns the live Layer-1 builtin tool registry. Used at runtime by other
- * layers (e.g. register-custom-tool's collision check, main.js's
- * builtin-name set) and by tests for setup.
+ * Returns the live Layer-1 builtin tool registry for test setup.
  */
 export function getBuiltinToolRegistry() {
     return REGISTRY;
+}
+
+/**
+ * True when `name` is a Layer-1 builtin tool. Profile and extension tools
+ * must not shadow these names.
+ */
+export function isBuiltinToolName(name) {
+    return REGISTRY.has(String(name ?? ''));
 }
 
 /**
@@ -466,15 +472,4 @@ export function resolveToolSource(name, context) {
         return extEntry.source === 'st-bridge' ? 'st-bridge' : 'extension';
     }
     return 'unknown';
-}
-
-/** @internal — alias retained for existing test files. */
-export const __getRegistryForTest = getBuiltinToolRegistry;
-
-/**
- * @internal — exposed for tests. Returns the live TOOL_SCHEMAS array
- * (excluding finalize, which the runtime owns directly).
- */
-export function __getSchemasForTest() {
-    return TOOL_SCHEMAS;
 }

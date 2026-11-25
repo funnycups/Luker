@@ -30,9 +30,10 @@
  *     `resolveCardFirstPresetName` helper in `agent-preset-resolver.js`
  *     — that same helper is what director-runtime / director-tools
  *     call so all three orchestrator modes share one resolution path.
- *   - AI-build routing prompt builders (`buildAgentApiRoutingPromptData`,
- *     `buildAgentPromptPresetRoutingPromptData`) that surface the available
- *     profiles + global defaults to the AI builder so it can pick a route
+ *   - Routing data for the iteration studio (`buildAgentApiRoutingPromptData`,
+ *     `buildAgentPromptPresetRoutingPromptData`, combined by
+ *     `readAgentPresetRouting`): the available profiles, preset names and
+ *     global defaults the `luker_orch_list_preset_routing` tool returns
  *   - `<select>` option renderers (`renderConnectionProfileOptions`,
  *     `renderOpenAIPresetOptions`) and the `refreshOpenAIPresetSelectors`
  *     DOM helper used by the editor popup to repopulate selects when
@@ -42,14 +43,14 @@
  * pre-resolves the runtime world-info snapshot once per dispatch so
  * callers can pass the same object to every retry of `generateTask`
  * without re-simulating world info each attempt.
- *
- * `escapeHtml` is duplicated as a private helper to keep this module
- * portable. main.js owns the canonical copy; both will collapse into a
- * shared `html-utils.js` helper if/when more modules want it.
  */
 
 const extension_settings = Luker.getContext().extensionSettings;
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
+import {
+    getOpenAIPresetNames,
+    renderConnectionProfileOptions as renderSharedConnectionProfileOptions,
+} from '../../lens-shared/preset-selectors.js';
 import { throwIfAborted } from './abort-utils.js';
 import { i18n } from './i18n.js';
 import { resolveCardFirstPresetName } from './agent-preset-resolver.js';
@@ -59,6 +60,7 @@ import {
     normalizeWorldInfoResolverMessages,
     rewriteDepthWorldInfoToAfter,
 } from './world-info.js';
+import { escapeHtml } from '../../lib/html-escape.js';
 
 // Character-bound preset access is routed through the ctx layer
 // (`Luker.getContext().character.presets.*`, wired in st-context.js).
@@ -87,26 +89,7 @@ function listCardBoundPresets(character) {
 
 const MODULE_NAME = 'orchestrator';
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll('\'', '&#39;');
-}
-
-export function getOpenAIPresetNames(context) {
-    const manager = context?.getPresetManager?.('openai');
-    if (!manager || typeof manager.getAllPresets !== 'function') {
-        return [];
-    }
-    const names = manager.getAllPresets();
-    if (!Array.isArray(names)) {
-        return [];
-    }
-    return [...new Set(names.map(name => String(name || '').trim()).filter(Boolean))];
-}
+export { getOpenAIPresetNames };
 
 export function renderOpenAIPresetOptions(context, selectedName = '', emptyLabel = i18n('(Current preset)')) {
     const selected = String(selectedName || '').trim();
@@ -188,7 +171,7 @@ export function getPresetPromptPresetName(preset = null) {
     );
 }
 
-export function sanitizeConnectionProfilesForAiPrompt(profiles = getConnectionProfiles()) {
+function sanitizeConnectionProfilesForAiPrompt(profiles = getConnectionProfiles()) {
     return (Array.isArray(profiles) ? profiles : [])
         .map((profile) => {
             const name = sanitizeConnectionProfileName(profile?.name);
@@ -261,6 +244,22 @@ export function buildAgentPromptPresetRoutingPromptData(context, settings = exte
 }
 
 /**
+ * Result of the iteration studio's `luker_orch_list_preset_routing` tool:
+ * the API and prompt-preset routing data, computed on every call from the
+ * live settings and the active character card.
+ *
+ * @param {object} context Luker context
+ * @param {object} [settings] orchestrator settings slot
+ * @returns {{api: object, prompt: object}}
+ */
+export function readAgentPresetRouting(context, settings = extension_settings[MODULE_NAME]) {
+    return {
+        api: buildAgentApiRoutingPromptData(settings),
+        prompt: buildAgentPromptPresetRoutingPromptData(context, settings),
+    };
+}
+
+/**
  * Resolve the API connection profile name an agent should use.
  *
  * For orchestrator agent binding, name resolution is card-first:
@@ -322,16 +321,10 @@ export function resolveOrchestrationAgentPromptPresetName(settings, preset = nul
 }
 
 export function renderConnectionProfileOptions(selectedName = '', emptyLabel = i18n('(Current API config)')) {
-    const selected = sanitizeConnectionProfileName(selectedName);
-    const names = getConnectionProfiles().map(profile => profile.name);
-    const options = [`<option value="">${escapeHtml(String(emptyLabel || i18n('(Current API config)')))}</option>`];
-    for (const name of names) {
-        options.push(`<option value="${escapeHtml(name)}"${name === selected ? ' selected' : ''}>${escapeHtml(name)}</option>`);
-    }
-    if (selected && !names.includes(selected)) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(i18n('(missing)'))}</option>`);
-    }
-    return options.join('');
+    return renderSharedConnectionProfileOptions(getConnectionProfiles(), sanitizeConnectionProfileName(selectedName), {
+        emptyLabel: String(emptyLabel || i18n('(Current API config)')),
+        missingLabel: i18n('(missing)'),
+    });
 }
 
 export function refreshOpenAIPresetSelectors(root, context, settings, prefix = '') {

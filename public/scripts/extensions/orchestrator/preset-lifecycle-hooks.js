@@ -8,11 +8,14 @@
  *   2. `context.eventSource.emit(ORCH_PRESET_*, payload)` for the skills
  *      embed-lifecycle subscriber (Task 7).
  *
- * Every helper is best-effort: guards on the target API being present,
+ * Called only after the preset mutation is acknowledged. Skill operations
+ * are secondary best-effort work: failure does not undo a persisted preset.
+ * Failed secondary operations are logged without rolling the preset back.
+ * Every helper guards on the target API being present,
  * wraps the call in try/catch, and either swallows expected errors
  * (like 404 = no source skills) or logs unexpected ones. Never throws
- * back to the caller — orchestrator preset CRUD proceeds regardless
- * of skill subsystem state.
+ * back to the caller. Rename returns false for a logged secondary failure
+ * so a subsequent mutation can retain the last acknowledged skill scope.
  */
 
 import { getExecutionMode } from './character-overrides.js';
@@ -67,10 +70,13 @@ export async function renameOrchPresetSkills(context, { mode, oldName, newName }
             { kind: 'orch-preset', mode, name: oldName },
             { mode, name: newName },
         );
+        return true;
     } catch (e) {
         if (e?.status !== 404) {
             console.warn(`[${MODULE_NAME}] rename preset skills scope failed:`, e?.message || e);
+            return false;
         }
+        return true;
     }
 }
 
@@ -256,4 +262,3 @@ export function purgePromptPresetNameInLibrary(presetLibraries, deletedName) {
     }
     return mutated;
 }
-

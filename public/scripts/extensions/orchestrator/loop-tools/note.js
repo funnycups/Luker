@@ -20,13 +20,10 @@
  *      the chat tail (`max(0, chat.length - 1)`) so the note follows the
  *      conversation when branches / deletions reshape history. Tests can
  *      override the target floor through `context.__targetFloorForNote`.
- *   2. `loadOpenNotes(context)` reads every surviving open note via the
- *      adapter's `listAcrossFloors()` helper and filters out closed
- *      entries. Loop-runtime calls this once at run start and stashes the
- *      result on the context so `buildInitialMessages` can render the
- *      `## Open Notes` block. `loadAllNotes` is a back-compat alias for
- *      `loadOpenNotes` during the staged refactor; both currently surface
- *      open-only entries.
+ *   2. Reading lives in `open-notes-injection.js`: `readOpenNotes` /
+ *      `loadOpenNotesBlock` read every surviving open note via the
+ *      adapter's `listAcrossFloors()` helper, drop closed entries, and
+ *      render the `## Open Notes` block for every orchestration mode.
  *   3. No LRU. Each note is hard-capped at 16 KiB UTF-8 so a single entry
  *      can't blow up the prompt, but the count is unbounded — the agent
  *      is expected to close notes when their thread resolves rather than
@@ -58,7 +55,7 @@
  *         Promise<{ok:true, id:string} | {ok:false, reason:string, hint:string}>
  *       // success returns the new id; write rejections surface state-error
  *       // reason/hint envelopes (see ../loop-runtime.js: makeNotesAdapter
- *       // and ../../state-errors.js: STATE_ERROR_REASONS).
+ *       // and public/scripts/lib/state-errors.js: STATE_ERROR_REASONS).
  *     listAcrossFloors(): Promise<Array<{id, text, status, closure_reason?}>>
  *       // chronological; legacy entries without `status` are treated as 'open'
  *     updateStatusById(id, status, reason?):
@@ -254,41 +251,3 @@ export async function execNoteClose(args, context) {
     }
     return result;
 }
-
-/**
- * Read every open (non-closed) persisted note for the current chat in
- * chronological order. Closed entries are filtered out so they don't
- * pollute the prompt. Legacy entries with no `status` field are treated
- * as `'open'` for back-compat with chats predating the status refactor.
- *
- * Returns `[]` when the floor-state adapter is missing — `loop-runtime`
- * checks the result before injecting an Open Notes block, so an empty
- * list simply means no historical context to bring forward.
- *
- * @param {object} context
- * @returns {Promise<Array<{id: string, text: string}>>}
- */
-export async function loadOpenNotes(context) {
-    const fs = pickFloorStateForNotes(context);
-    if (!fs || typeof fs.listAcrossFloors !== 'function') return [];
-    const all = await fs.listAcrossFloors();
-    if (!Array.isArray(all)) return [];
-    return all
-        .filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open')
-        .map(e => ({ id: String(e.id || ''), text: String(e.text || '') }));
-}
-
-/**
- * Back-compat alias for `loadOpenNotes`. Kept during the staged refactor
- * so existing imports (`loop-runtime`, tests) keep working; this alias
- * surfaces only open notes — the same filtered view the prompt injects.
- *
- * @deprecated Use `loadOpenNotes` directly; this alias will be removed
- * once all callers are migrated.
- */
-export const loadAllNotes = loadOpenNotes;
-
-export const NOTES_NAMESPACE = 'luker_orch_loop_notes';
-export const NOTE_LIMITS = Object.freeze({
-    MAX_NOTE_BYTES,
-});

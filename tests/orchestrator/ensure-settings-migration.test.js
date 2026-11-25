@@ -5,6 +5,9 @@ import { jest } from '@jest/globals';
 // (line 9 in main.js). Exposing the same reference here lets each test
 // mutate `extensionSettings.orchestrator` before invoking ensureSettings.
 const extensionSettings = { orchestrator: {} };
+// Captures every registerExtensionApi call made at main.js module load.
+const registeredExtensionApis = {};
+const mockSetCharacterActivePreset = async () => ({ ok: false, mode: '', reason: 'no_saved_mode' });
 
 // main.js bottom-of-file IIFE registers UI handlers via `jQuery(() => …)`;
 // `toastr.error/info/success` may be reached from defensive branches. Provide
@@ -36,7 +39,7 @@ globalThis.Luker = {
         extensionSettings,
         saveSettings: async () => {},
         saveSettingsDebounced: () => {},
-        registerExtensionApi: () => {},
+        registerExtensionApi: (name, api) => { registeredExtensionApis[name] = api; },
         chatCompletionSettings: {},
         createMessageEditorHandle: () => null,
         skills: { listSkills: () => [], getSkill: () => null },
@@ -142,7 +145,7 @@ jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => ({
 // the named export(s) main.js destructures — providing more would invite
 // silent breakage if main.js starts using something the mock lies about.
 // Functions ensureSettings() actually calls (sanitizePresetMap,
-// createAgendaPlannerDraft, sanitizeIdentifierToken, sanitizeSpec,
+// createAgendaPlannerDraft, normalizeIdToken, sanitizeSpec,
 // migrateLegacyCapsuleInjectPosition, normalizeCapsuleInjectPosition,
 // sanitizeLoopProfile, cloneDefault, normalizeExecutionMode) come from
 // the REAL modules — those imports are not mocked here.
@@ -154,7 +157,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templa
     renderInheritOrOverridePanel: () => '',
     renderSkillChipsPlaceholder: () => '',
 }));
-// anchors.js is leaf-pure (no imports) and small; load the real module
+// anchors.js delegates to the shared playable-anchor helpers; load it
 // so persistence.js (also real, transitively imported via the persistence
 // → anchors chain) finds its named exports.
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/styles.js', () => ({
@@ -210,6 +213,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agenda-pr
     cloneAgendaWorkingProfileFromEditor: (v) => v,
     ensureAgendaEditorIntegrity: (v) => v,
     sanitizeAgendaWorkingProfile: (v) => v,
+    setAgendaEditorFinalAgent: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agenda-runtime.js', () => ({
     runAgendaOrchestration: async () => ({}),
@@ -239,7 +243,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-tool
     executeLoopTool: async () => null,
     beginSimulation: () => {},
     endSimulation: () => {},
-    getBuiltinToolRegistry: () => ({}),
+    isBuiltinToolName: () => false,
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/register-custom-tool.js', () => ({
     registerOrchestrationTool: () => {},
@@ -281,16 +285,12 @@ jest.unstable_mockModule('../../public/scripts/skills/skill-chips.js', () => ({
     mountSkillChips: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/skills/embed-lifecycle.js', () => ({
-    registerSkillEmbedLifecycle: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/skills/embed-export-hook.js', () => ({
-    maybeAttachSkillsToPresetExport: () => {},
     maybeAttachSkillsToOrchPresetExport: () => {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/profile-projection.js', () => ({
-    sanitizeProfileForAiPrompt: (v) => v,
-}));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-state.js', () => ({
+    copyAgendaAgentsIntoSpecEditor: () => {},
     createNewStage: () => ({}),
     ensureDirectorEditorIntegrity: (v) => v,
     ensureEditorIntegrity: (v) => v,
@@ -301,12 +301,11 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-st
     loadCharacterDirectorEditorState: () => ({}),
     loadCharacterEditorState: () => ({}),
     loadCharacterLoopEditorState: () => ({}),
-    loadGlobalAgendaEditorState: () => ({}),
-    loadGlobalDirectorEditorState: () => ({}),
-    loadGlobalEditorState: () => ({}),
-    loadGlobalLoopEditorState: () => ({}),
     pickDefaultPreset: () => '',
+    refreshUiStateFromHost: () => {},
+    reloadPresetDraft: () => {},
     setDisplayedScopeForMode: () => {},
+    setEditorNodePreset: () => {},
     syncCharacterEditorWithActiveAvatar: () => {},
     uiState: {},
 }));
@@ -334,13 +333,15 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-pe
     persistCharacterDirectorEditor: async () => {},
     persistCharacterEditor: async () => {},
     persistCharacterLoopEditor: async () => {},
-    persistCustomToolsPatch: async () => {},
+    persistCustomToolsKeepingDrafts: async () => {},
     persistGlobalAgendaEditorFrom: async () => {},
     persistGlobalDirectorEditorFrom: async () => {},
     persistGlobalEditorFrom: async () => {},
     persistGlobalLoopEditorFrom: async () => {},
+    persistGlobalPresetWrite: async () => {},
     persistOrchestratorCharacterExtension: async () => {},
-    persistRuntimeLimitsPatch: async () => {},
+    persistRuntimeLimitsKeepingDrafts: async () => {},
+    setCharacterActivePresetForSavedMode: mockSetCharacterActivePreset,
     setCharacterAgendaOverrideEnabled: async () => {},
     setCharacterDirectorOverrideEnabled: async () => {},
     setCharacterLoopOverrideEnabled: async () => {},
@@ -363,8 +364,10 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/simulatio
 }));
 
 let main;
+let routingTool;
 beforeAll(async () => {
     main = await import('../../public/scripts/extensions/orchestrator/main.js');
+    routingTool = await import('../../public/scripts/extensions/orchestrator/preset-routing-tool.js');
 });
 
 beforeEach(() => {
@@ -392,5 +395,63 @@ describe('ensureSettings — runs migration once', () => {
         };
         main.ensureSettings();
         expect(extensionSettings.orchestrator.presetLibraries.loop.foo.system_prompt).toBe('KEEP');
+    });
+});
+
+describe('orchestrator extension api — card preset surface', () => {
+    test('exposes the saved-mode reader and the preset switch, not the raw library writers', () => {
+        const api = registeredExtensionApis.orchestrator;
+        expect(typeof api.getCharacterSavedExecutionModeByAvatar).toBe('function');
+        expect(typeof api.setCharacterActivePresetForSavedMode).toBe('function');
+        expect(api).not.toHaveProperty('getCharacterPresetLibrary');
+        expect(api).not.toHaveProperty('setActivePresetId');
+    });
+});
+
+describe('iteration studio — preset routing read tool', () => {
+    test.each(['spec', 'agenda', 'loop', 'director'])('the %s catalog offers the routing tool once', (mode) => {
+        extensionSettings.orchestrator = {};
+        main.ensureSettings();
+        const names = main.buildAiIterationToolSet({ mode }).map((def) => def?.function?.name);
+        expect(names.filter((name) => name === routingTool.PRESET_ROUTING_TOOL_NAME)).toHaveLength(1);
+    });
+
+    test('the tool takes no arguments', () => {
+        expect(routingTool.PRESET_ROUTING_TOOL_DEF.function.name).toBe(routingTool.PRESET_ROUTING_TOOL_NAME);
+        expect(routingTool.PRESET_ROUTING_TOOL_DEF.function.parameters).toEqual({ type: 'object', properties: {}, additionalProperties: false });
+        expect(routingTool.isPresetRoutingTool(routingTool.PRESET_ROUTING_TOOL_NAME)).toBe(true);
+        expect(routingTool.isPresetRoutingTool('luker_orch_read_spec_fields')).toBe(false);
+    });
+});
+
+describe('ensureSettings — persisted preset routing prompt lines', () => {
+    const FIELDS = ['requestSystemPrompt', 'iterModePromptLoop', 'iterModePromptDirector', 'iterModePromptAgenda', 'iterModePromptSpec'];
+
+    function seededDefaults() {
+        extensionSettings.orchestrator = {};
+        main.ensureSettings();
+        return Object.fromEntries(FIELDS.map((key) => [key, extensionSettings.orchestrator[key]]));
+    }
+
+    test('stored prompts that still carry the replaced lines load as the current defaults', () => {
+        const defaults = seededDefaults();
+        const toLegacy = new Map(routingTool.PRESET_ROUTING_PROMPT_LINE_MIGRATIONS.map(([legacy, current]) => [current, legacy]));
+        const stored = Object.fromEntries(FIELDS.map((key) => [
+            key,
+            defaults[key].split('\n').map((line) => toLegacy.get(line) ?? line).join('\n'),
+        ]));
+        for (const key of FIELDS) expect(stored[key]).not.toBe(defaults[key]);
+
+        extensionSettings.orchestrator = { ...stored };
+        main.ensureSettings();
+        for (const key of FIELDS) expect(extensionSettings.orchestrator[key]).toBe(defaults[key]);
+    });
+
+    test('a routing line the user edited stays as written', () => {
+        const [legacy] = routingTool.PRESET_ROUTING_PROMPT_LINE_MIGRATIONS[0];
+        const custom = `The keeper routes every agent through the lighthouse relay.\n${legacy} Ask before touching it.`;
+        extensionSettings.orchestrator = { requestSystemPrompt: custom };
+        main.ensureSettings();
+        expect(extensionSettings.orchestrator.requestSystemPrompt).toBe(custom);
     });
 });

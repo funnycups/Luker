@@ -443,14 +443,18 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             hostApp?.refreshBadges?.();
         }
         const count = draftsActive() ? totalDrafts : 0;
-        const foreign = !draftsActive() && totalDrafts > 0;
+        const foreignCount = drafts.foreignCount();
+        const foreign = !count && foreignCount > 0;
         savebar.hidden = !count && !foreign;
         if (savebar.hidden) return;
         clear(savebar);
         if (foreign) {
             put(savebar, icon('alert', { size: 14 }),
-                h('span', { class: 'ol-savebar-text', text: i18nFormat('Another profile still has ${0} unsaved edits (the chat or profile changed)', drafts.count()) }),
-                button(i18n('Discard these edits'), () => { drafts.discard(); renderAll(); }, { className: 'ol-btn-sm ol-btn-ghost' }));
+                h('span', { class: 'ol-savebar-text', text: i18nFormat('Another profile still has ${0} unsaved edits (the chat or profile changed)', foreignCount) }),
+                button(i18n('Discard these edits'), () => {
+                    drafts.discardForeign();
+                    renderAll();
+                }, { className: 'ol-btn-sm ol-btn-ghost' }));
             return;
         }
         put(savebar, icon('pen', { size: 14 }),
@@ -499,7 +503,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
                 if (value === 'force') await saveDrafts({ force: true });
                 return;
             }
-            drafts.discard();
+            drafts.acknowledgeSaved(target, changes);
             lastSaved = { target, changes: result.applied };
             showToast(`${i18nFormat('Saved to ${0}', scopeText(target))}${result.missing.length ? i18nFormat(' (skipped ${0}: their agents are no longer in the profile)', result.missing.length) : ''}`, { action: { label: i18n('Undo'), run: () => undoSave() }, duration: 12000 });
             await load();
@@ -679,6 +683,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     const ticker = setInterval(() => { if (rec.isRunning()) renderLive(); }, 1000);
 
     store.subscribe((state, changed) => {
+        if (changed.has('view') && state.compact && state.sheet) store.set({ sheet: false });
         if (changed.has('theme') && !hostApp) root.dataset.theme = state.theme;
         if (changed.has('compact') || changed.has('sheet') || changed.has('inspectorOpen') || changed.has('view')) applyLayout();
         if (changed.has('compact')) flowView.onLayoutChange?.();

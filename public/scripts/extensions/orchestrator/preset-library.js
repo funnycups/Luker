@@ -28,37 +28,30 @@ import {
     sanitizeDirectorProfile,
 } from './defaults.js';
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
+import { resolveStoredIdToken, sanitizePresetMap } from './editable-spec.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
 import { createAgendaPlannerDraft } from './editable-spec.js';
-
-function getStateErrors(context = null) {
-    const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
-    if (!se) {
-        throw new Error('Luker.getContext().stateErrors is unavailable');
-    }
-    return se;
-}
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../lib/state-errors.js';
+import { formatValidationTargetHint } from '../../lib/state-errors-format.js';
+import { ORCH_PRESET_MODES, makeModeMap } from './preset-modes.js';
 
 const MODULE_NAME = 'orchestrator';
 const DEFAULT_PRESET_ID = 'default';
 const DEFAULT_PRESET_NAME = 'Default';
 
-const ALL_MODES = Object.freeze([
-    ORCH_EXECUTION_MODE_SPEC,
-    ORCH_EXECUTION_MODE_AGENDA,
-    ORCH_EXECUTION_MODE_LOOP,
-    ORCH_EXECUTION_MODE_DIRECTOR,
-]);
+const ALL_MODES = ORCH_PRESET_MODES;
 
 function makePresetId() {
     return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
- * Persist scope changes made by legacy-profile migration and prompt
- * initialization. An empty avatar selects global settings; a card avatar
- * selects that card's extension data.
+ * Callback fired after `migrateLegacyCardOverrideForMode` mutates a
+ * card's `data.extensions.orchestrator` blob into the new preset-library
+ * shape. main.js wires this to a debounced write through
+ * `persistOrchestratorCharacterExtension` so the migrated shape settles
+ * to disk instead of being re-derived on every reload.
  *
  * Kept as an opt-in hook (rather than a direct import of the persistence
  * helper) to avoid a `preset-library → editor-persist → preset-library`
@@ -111,17 +104,79 @@ export function sanitizePresetEntry(mode, entry) {
     }
     // spec
     const spec = sanitizeSpec(raw.spec || {});
-    const presets = raw.presets && typeof raw.presets === 'object' ? raw.presets : {};
+    const presets = sanitizePresetMap(raw.presets);
+    repairLegacySlugPresetRefs(spec, presets);
     return { name, spec, presets };
+}
+
+// Exact copy of the v2.8.0 preset-key slug transform:
+// `git show v2.8.0:public/scripts/extensions/orchestrator/editable-spec.js`,
+// `sanitizeIdentifierToken` (lines 62-68). v2.8.0 applied it to preset map
+// keys but kept node `preset` refs raw, so stored profiles can hold a raw
+// ref whose content sits under the slugged key.
+export function legacySlugPresetKey(value) {
+    return String(value || '')
+        .trim()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Re-point spec node `preset` refs that v2.8.0 left dangling. A ref is
+ * re-pointed to its legacy slug only when the ref resolves to no key, the slug
+ * differs from the ref and is a key, no other missing ref slugs to the same
+ * key, and no node references the slug key directly — the last two reject
+ * slug keys that v2.8.0 produced by merging several raw keys. Keys are never
+ * renamed. String-form nodes count as refs; a ref used by a string-form
+ * node is left as is, since its id and preset are the same string.
+ */
+function repairLegacySlugPresetRefs(spec, presets) {
+    const stages = Array.isArray(spec?.stages) ? spec.stages : [];
+    if (!presets || typeof presets !== 'object' || stages.length === 0) return;
+    const presetIds = Object.keys(presets);
+    const hasKey = key => Object.prototype.hasOwnProperty.call(presets, key);
+    const refs = new Set();
+    const stringNodeRefs = new Set();
+    for (const stage of stages) {
+        for (const node of Array.isArray(stage?.nodes) ? stage.nodes : []) {
+            const ref = typeof node === 'string' ? node : String(node?.preset || '');
+            if (!ref) continue;
+            refs.add(ref);
+            if (typeof node === 'string') stringNodeRefs.add(ref);
+        }
+    }
+    const missingRefsBySlug = new Map();
+    for (const ref of refs) {
+        if (resolveStoredIdToken(presetIds, ref).status !== 'missing') continue;
+        const slug = legacySlugPresetKey(ref);
+        if (!slug || slug === ref || !hasKey(slug)) continue;
+        if (!missingRefsBySlug.has(slug)) missingRefsBySlug.set(slug, new Set());
+        missingRefsBySlug.get(slug).add(ref);
+    }
+    const repoint = new Map();
+    for (const [slug, missingRefs] of missingRefsBySlug) {
+        if (missingRefs.size !== 1 || refs.has(slug)) continue;
+        const ref = [...missingRefs][0];
+        if (stringNodeRefs.has(ref)) continue;
+        repoint.set(ref, slug);
+    }
+    if (repoint.size === 0) return;
+    for (const stage of stages) {
+        for (const node of Array.isArray(stage?.nodes) ? stage.nodes : []) {
+            if (!node || typeof node !== 'object') continue;
+            const slug = repoint.get(String(node.preset || ''));
+            if (slug) node.preset = slug;
+        }
+    }
 }
 
 function getScopeContainer(settings, scope, { context, avatar } = {}) {
     if (scope === 'global') {
         if (!settings.presetLibraries || typeof settings.presetLibraries !== 'object') {
-            settings.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+            settings.presetLibraries = makeModeMap(() => ({}));
         }
         if (!settings.activePresetIds || typeof settings.activePresetIds !== 'object') {
-            settings.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+            settings.activePresetIds = makeModeMap(() => '');
         }
         if (initializeAgendaPrompts(settings.presetLibraries, settings.chatOverrides)) migrationPersistHook(context, '', ORCH_EXECUTION_MODE_AGENDA);
         return { libraries: settings.presetLibraries, activeIds: settings.activePresetIds };
@@ -133,10 +188,10 @@ function getScopeContainer(settings, scope, { context, avatar } = {}) {
         const ext = character.data?.extensions?.[MODULE_NAME];
         if (!ext || typeof ext !== 'object') return null;
         if (!ext.presetLibraries || typeof ext.presetLibraries !== 'object') {
-            ext.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+            ext.presetLibraries = makeModeMap(() => ({}));
         }
         if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
-            ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+            ext.activePresetIds = makeModeMap(() => '');
         }
         if (initializeAgendaPrompts(ext.presetLibraries)) migrationPersistHook(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
         return { libraries: ext.presetLibraries, activeIds: ext.activePresetIds };
@@ -225,7 +280,7 @@ export function setActivePresetId(settings, mode, scope, presetId, { context, av
  * trigger a debounced save), false otherwise. Pure-ish: only mutates
  * the supplied character's extension blob in place.
  */
-export function migrateLegacyCardOverrideForMode(context, avatar, mode) {
+function migrateLegacyCardOverrideForMode(context, avatar, mode) {
     if (!context || !avatar) return false;
     const character = (context.characters || []).find(c => String(c?.avatar || '') === String(avatar));
     if (!character) return false;
@@ -256,10 +311,10 @@ export function migrateLegacyCardOverrideForMode(context, avatar, mode) {
     }
     if (!legacyPayload) return false;
     if (!ext.presetLibraries || typeof ext.presetLibraries !== 'object') {
-        ext.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+        ext.presetLibraries = makeModeMap(() => ({}));
     }
     if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
-        ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+        ext.activePresetIds = makeModeMap(() => '');
     }
     if (!ext.presetLibraries[mode] || typeof ext.presetLibraries[mode] !== 'object') {
         ext.presetLibraries[mode] = {};
@@ -386,7 +441,7 @@ export function deletePreset(settings, mode, scope, presetId, { context, avatar 
             // Character scope deletes its last preset → leave the library
             // empty rather than re-seeding a factory default. Seeding here
             // would synthesize a phantom override (the card would read
-            // `hasCharacter*Override === true` again on the next render)
+            // `getRuntimePresetScope(...) === 'character'` again on the next render)
             // and silently undo the user's intent to clear that mode.
             c.activeIds[mode] = '';
         } else {
@@ -429,7 +484,6 @@ export function duplicatePreset(settings, mode, scope, sourceId, { name }, { con
  * the name should use `renamePreset`).
  */
 export function writeActivePreset(settings, mode, scope, payload, { context, avatar } = {}) {
-    const { STATE_ERROR_REASONS, makeStateError, makeStateOk, formatValidationTargetHint } = getStateErrors(context);
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
@@ -469,7 +523,6 @@ export function writeActivePreset(settings, mode, scope, payload, { context, ava
  *     warning rather than silently picking one.
  */
 export function writePresetByName(settings, mode, scope, name, payload, { context, avatar } = {}) {
-    const { STATE_ERROR_REASONS, makeStateError, formatValidationTargetHint } = getStateErrors(context);
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
@@ -504,6 +557,68 @@ export function writePresetByName(settings, mode, scope, name, payload, { contex
     };
 }
 
+/**
+ * Resolve the global target preset id to write into for an iter-studio
+ * "save to global" action. When the session was opened from a character
+ * scope, prefer the global preset whose `name` matches the character's
+ * active preset name — the user's mental model is "save this work to the
+ * same-named preset", not "overwrite whatever happens to be global's
+ * currently-active slot (almost always 'default')". Character-scope
+ * sessions with no source name (cards that never customized the preset
+ * name) and global-scope sessions both fall through to the original
+ * writeActivePreset path.
+ *
+ * Returns {sourceName, applyWrite}: applyWrite(payload) performs the write
+ * and returns the standard {ok, hint?, reason?, ambiguous?, created?,
+ * candidateIds?, presetId?} envelope. Toast wording is the caller's job.
+ */
+export function resolveSaveToGlobalWriter(context, settings, mode, session) {
+    const sourceScope = String(session?.scope || 'global');
+    if (sourceScope !== 'character') {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    const avatar = String(context?.characters?.[context?.characterId]?.avatar || '');
+    if (!avatar) {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    const charActiveId = getActivePresetId(settings, mode, { scope: 'character', context, avatar });
+    const charActive = charActiveId
+        ? getPreset(settings, mode, 'character', charActiveId, { context, avatar })
+        : null;
+    const sourceName = String(charActive?.name || '').trim();
+    if (!sourceName) {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    return {
+        applyWrite: (payload) => writePresetByName(settings, mode, 'global', sourceName, payload),
+        sourceName,
+    };
+}
+
+/**
+ * Commit a spec-mode iteration session's working profile to the global
+ * library. Builds the persisted spec payload and writes it through the
+ * save target `resolveSaveToGlobalWriter` picks. Returns the write
+ * envelope plus the source preset name used for the toast wording.
+ */
+export function commitSpecIterationSessionToGlobal(context, settings, session) {
+    const payload = {
+        spec: sanitizeSpec(session?.workingProfile?.spec),
+        presets: sanitizePresetMap(session?.workingProfile?.presets),
+    };
+    const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_SPEC, session);
+    return { writeResult: applyWrite(payload), sourceName };
+}
+
 export function allModes() {
     return [...ALL_MODES];
 }
@@ -524,8 +639,8 @@ export function allModes() {
  */
 export function migrateGlobalLegacyToLibraries(settings) {
     if (!settings || typeof settings !== 'object') return;
-    if (!settings.presetLibraries) settings.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
-    if (!settings.activePresetIds) settings.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+    if (!settings.presetLibraries) settings.presetLibraries = makeModeMap(() => ({}));
+    if (!settings.activePresetIds) settings.activePresetIds = makeModeMap(() => '');
     for (const mode of ALL_MODES) {
         if (!settings.presetLibraries[mode]) settings.presetLibraries[mode] = {};
         if (settings.presetLibraries[mode][DEFAULT_PRESET_ID]) {

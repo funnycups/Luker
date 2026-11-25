@@ -9,7 +9,8 @@ import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.
 import { i18n, i18nFormat, modeInfo, MODE_IDS, toolGroupName, toolName } from '../i18n.js';
 import { button, iconButton, checkRow, switchControl, sectionTitle, emptyState } from '../ui/components.js';
 import {
-    PROFILE, addAgendaAgent, addNode, addPresetEntry, addStage, addSubAgent, moveNode, moveStage,
+    PROFILE, addAgendaAgent, addNode, addPresetEntry, addStage, addSubAgent,
+    buildAgendaFinalAgentSelectModel, moveNode, moveStage,
     removeAgendaAgent, removeNode, removePresetEntry, removeStage, removeSubAgent, setDefaultTools,
     setNodeProp, setStageProp, withToolFlag,
 } from '../model/edit.js';
@@ -95,12 +96,12 @@ export function createSetupView(app) {
         return text ? JSON.parse(text) : null;
     };
 
-    async function action(fn, done = '') {
+    async function action(fn, done = '', { reloadAfter = true } = {}) {
         try {
             const result = await fn();
             if (result === false) return;
             if (done) app.notify(done);
-            await app.reload();
+            if (reloadAfter) await app.reload();
         } catch (err) {
             fail(err);
         }
@@ -160,6 +161,19 @@ export function createSetupView(app) {
         if (t.scope === 'chat') return null;
         const list = presets.list(t);
         const encode = (scope, id) => `${scope}:${id}`;
+        const runLibraryAction = async (fn, done = '') => {
+            let reloaded = false;
+            presets.onDesiredChange?.(async () => {
+                reloaded = true;
+                await app.reload();
+            });
+            try {
+                await action(fn, done, { reloadAfter: false });
+                if (!reloaded) await app.reload();
+            } finally {
+                presets.onDesiredChange?.(null);
+            }
+        };
         const select = h('select', {
             class: 'ol-select',
             'aria-label': i18n('Orchestration profile'),
@@ -168,17 +182,16 @@ export function createSetupView(app) {
                 const sep = rawVal.indexOf(':');
                 const selScope = sep >= 0 ? rawVal.slice(0, sep) : 'global';
                 const selId = sep >= 0 ? rawVal.slice(sep + 1) : rawVal;
-                if (!cleanDrafts()) { render(true); return; }
-                await action(() => presets.select(t, selScope, selId));
+                await runLibraryAction(() => presets.select(t, selScope, selId));
             },
         },
         list.character.length ? h('optgroup', { label: i18n('This character') }, list.character.map(p => h('option', { value: encode('character', p.id), text: p.name }))) : null,
         h('optgroup', { label: i18n('General') }, list.global.map(p => h('option', { value: encode('global', p.id), text: p.name }))));
         select.value = encode(t.scope, t.presetId);
         const named = (titleText, initial, run) => async () => {
-            if (!cleanDrafts()) return;
             const name = await app.promptText(titleText, initial);
-            if (name) await action(() => run(name));
+            if (!name) return;
+            await runLibraryAction(() => run(name));
         };
         const onCard = t.scope === 'character';
         return h('div', { class: 'ol-setup-bar' }, select,
@@ -186,23 +199,42 @@ export function createSetupView(app) {
             iconButton('copy', i18n('Duplicate'), named(i18n('Enter a name for the new preset'), '', name => presets.duplicate(t, name)), { className: 'ol-iconbtn-sm' }),
             iconButton('pen', i18n('Rename'), named(i18n('Rename'), app.snapshot().presetName, name => presets.rename(t, name)), { className: 'ol-iconbtn-sm' }),
             iconButton('trash', i18n('Delete'), async () => {
-                if (cleanDrafts() && await confirmDanger(i18n('Delete'), i18nFormat('Delete preset "${0}"?', app.snapshot().presetName), i18n('Delete'))) await action(() => presets.remove(t));
+                if (!await confirmDanger(i18n('Delete'), i18nFormat('Delete preset "${0}"?', app.snapshot().presetName), i18n('Delete'))) return;
+                await runLibraryAction(async () => {
+                    await presets.remove(t);
+                    app.drafts.discardTarget?.(t);
+                });
             }, { className: 'ol-iconbtn-sm' }),
             button(i18n('Import'), async () => {
-                if (!cleanDrafts()) return;
                 try {
                     const text = await pickFile();
                     if (!text) return;
                     const parsed = presets.parseImport(t, text);
                     const name = await app.promptText(i18n('Enter a name for the imported preset'), parsed.defaultName);
-                    if (name) await action(() => presets.importParsed(t, parsed, name), i18n('Imported preset.'));
+                    if (!name) return;
+                    await runLibraryAction(() => presets.importParsed(t, parsed, name), i18n('Imported preset.'));
                 } catch (err) { fail(err); }
             }, { className: 'ol-btn-sm ol-btn-ghost' }),
             button(i18n('Export'), () => action(() => presets.exportActive(t), i18n('Exported preset.')), { className: 'ol-btn-sm ol-btn-ghost' }),
-            onCard ? button(i18n('Save To Global'), () => { if (cleanDrafts()) action(() => presets.saveToGlobal(t), i18n('Global orchestration profile saved.')); }, { className: 'ol-btn-sm ol-btn-ghost' }) : null,
-            !onCard && t.avatar ? button(i18n('Save To Character Override'), () => { if (cleanDrafts()) action(() => presets.saveToCharacter(t), i18n('Character orchestration override saved.')); }, { className: 'ol-btn-sm ol-btn-ghost' }) : null,
+            onCard ? button(i18n('Save To Global'), () => action(async () => {
+                const screenProfile = profile();
+                await presets.saveToGlobal(t, screenProfile);
+                app.drafts.discardTarget?.(t);
+            }, i18n('Global orchestration profile saved.')), { className: 'ol-btn-sm ol-btn-ghost' }) : null,
+            !onCard && t.avatar ? button(i18n('Save To Character Override'), () => action(async () => {
+                const screenProfile = profile();
+                const saved = await presets.saveToCharacter(t, screenProfile);
+                if (saved === false) return false;
+                app.drafts.discardTarget?.(t);
+                return true;
+            }, i18n('Character orchestration override saved.')), { className: 'ol-btn-sm ol-btn-ghost' }) : null,
             onCard ? button(i18n('Clear presets from this card'), async () => {
-                if (cleanDrafts() && await confirmDanger(i18n('Clear presets from this card'), i18n('Clear presets from this card'), i18n('Delete'))) await action(() => presets.clearCharacter(t), i18n('Character orchestration override removed.'));
+                if (await confirmDanger(i18n('Clear presets from this card'), i18n('Clear presets from this card'), i18n('Delete'))) {
+                    await action(async () => {
+                        await presets.clearCharacter(t);
+                        app.drafts.discardTarget?.(t);
+                    }, i18n('Character orchestration override removed.'));
+                }
             }, { className: 'ol-btn-sm ol-btn-ghost' }) : null,
             app.canAi?.() ? button(i18n('Open AI Iteration Studio'), () => { if (cleanDrafts()) app.openAi?.(); }, { className: 'ol-btn-sm ol-btn-ghost', iconName: 'sparkle' }) : null,
             app.source.openSkillManager ? button(i18n('Manage skills...'), async () => {
@@ -446,9 +478,10 @@ export function createSetupView(app) {
         const p = profile();
         const ids = Object.keys(p.agents || {});
         const disabled = !editable();
+        const finalSelect = buildAgendaFinalAgentSelectModel(p.agents, p.finalAgentId);
         return [
             h('section', { class: 'ol-setup-section' }, sectionTitle(i18n('Agents')),
-                formRow(i18n('Final agent'), selectInput(ids.map(id => ({ value: id, label: id })), p.finalAgentId, v => commit(PROFILE, 'finalAgentId', JSON.stringify(v)), { disabled })),
+                formRow(i18n('Final agent'), selectInput(finalSelect.options, finalSelect.value, v => commit(PROFILE, 'finalAgentId', JSON.stringify(v)), { disabled })),
                 ids.map(id => agentDetails(id, () => structure(q => removeAgendaAgent(q, id)), t, () => jsonOf(PROFILE, 'defaultTools'))),
                 button(i18n('Add agent'), () => askId(id => structure(q => addAgendaAgent(q, id))), { iconName: 'plus', className: 'ol-btn-sm', disabled }),
                 h('details', { class: 'ol-setup-node', dataset: { detailKey: 'agent:agenda_planner' } }, h('summary', null, h('span', { class: 'ol-setup-name', text: i18n('Planner') })), agentExtras('agenda_planner', t, { tools: false }))),

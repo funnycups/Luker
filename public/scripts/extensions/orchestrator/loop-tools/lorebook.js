@@ -28,6 +28,7 @@
 import { ToolError } from '../loop-runtime.js';
 import { gatherGrepMatches } from '../grep-tool.js';
 import { compileLorebookFilter } from '../lorebook-filter.js';
+import { LorebookError, lorebookHelpers } from '../../../iteration-library/tools/_lorebook-helpers.js';
 
 function entryActivationKey(entry) {
     if (!entry) return '';
@@ -214,41 +215,12 @@ async function loadWorldBookScopes(context) {
         if (injected && typeof injected === 'object') return new Map(Object.entries(injected));
         return new Map();
     }
-    const scopes = new Map();
-    if (typeof Luker === 'undefined' || typeof Luker.getContext !== 'function') return scopes;
+    if (typeof Luker === 'undefined' || typeof Luker.getContext !== 'function') return new Map();
     const ctx = Luker.getContext();
-    if (!ctx) return scopes;
-
-    const push = (name, scope) => {
-        const trimmed = String(name || '').trim();
-        if (!trimmed || scopes.has(trimmed)) return;
-        scopes.set(trimmed, scope);
-    };
-
+    if (!ctx) return new Map();
     const characters = Array.isArray(ctx.characters) ? ctx.characters : [];
     const character = characters[ctx.characterId] || null;
-
-    push(character?.data?.extensions?.world, 'character');
-
-    if (character?.avatar && typeof ctx.getCharaFilename === 'function' && typeof ctx.getCharaAuxWorlds === 'function') {
-        try {
-            const fileName = ctx.getCharaFilename(null, { manualAvatarKey: character.avatar });
-            for (const name of ctx.getCharaAuxWorlds(fileName) || []) push(name, 'character_aux');
-        } catch { /* character resolution may fail in odd states */ }
-    }
-
-    const getChatNames = ctx.chatWorldInfo?.getNames;
-    if (typeof getChatNames === 'function') {
-        try {
-            for (const name of getChatNames(ctx.chatMetadata) || []) push(name, 'chat');
-        } catch { /* chat metadata may be unavailable */ }
-    }
-
-    const globalSelection = ctx.chatWorldInfo?.globalSelection;
-    if (Array.isArray(globalSelection)) {
-        for (const name of globalSelection) push(name, 'global');
-    }
-    return scopes;
+    return new Map(lorebookHelpers.collectWorldBookSources(ctx, character, ctx.chatMetadata));
 }
 
 /**
@@ -288,10 +260,12 @@ export async function execWorldBookList(_args, context) {
     return { ok: true, output: lines.join('\n') };
 }
 
+const UID_RANGE_INVALID_HINT = 'Use formats like 0~100, 50~, or ~100 (separators ~, -, :, .. also accepted).';
+
 /**
- * Parse a range string into `{start, end}` inclusive bounds, mirroring
- * iter-studio's `normalizeUidRange` (`_lorebook-helpers.js`) so the runtime
- * tool and the iter-studio popup tools share validation muscle memory.
+ * Parse a range string into `{start, end}` inclusive bounds through the
+ * shared `normalizeUidRange` (`_lorebook-helpers.js`), keeping this
+ * runtime tool's own `ToolError` messages and hint.
  *
  * Accepts:
  *   - empty / missing input → `null` (caller treats as "no range filter")
@@ -308,52 +282,15 @@ export async function execWorldBookList(_args, context) {
  */
 function parseUidRange(input) {
     const text = String(input ?? '').trim();
-    if (!text) return null;
-
-    const invalidHint = 'Use formats like 0~100, 50~, or ~100 (separators ~, -, :, .. also accepted).';
-
-    const exact = text.match(/^(\d+)$/);
-    if (exact) {
-        const uid = Number.parseInt(exact[1], 10);
-        if (!Number.isInteger(uid) || uid < 0) {
-            throw new ToolError(
-                `lorebook_list: invalid range '${text}'.`,
-                'LOREBOOK_RANGE_INVALID',
-                invalidHint,
-            );
-        }
-        return { start: uid, end: uid };
+    try {
+        return lorebookHelpers.normalizeUidRange(text);
+    } catch (err) {
+        if (!(err instanceof LorebookError)) throw err;
+        const message = err.code === 'RANGE_REVERSED'
+            ? `lorebook_list: invalid range '${text}' — start must be <= end.`
+            : `lorebook_list: invalid range '${text}'.`;
+        throw new ToolError(message, 'LOREBOOK_RANGE_INVALID', UID_RANGE_INVALID_HINT);
     }
-
-    const rangeMatch = text.match(/^(\d+)?\s*(?:~|-|:|\.\.)\s*(\d+)?$/);
-    if (!rangeMatch) {
-        throw new ToolError(
-            `lorebook_list: invalid range '${text}'.`,
-            'LOREBOOK_RANGE_INVALID',
-            invalidHint,
-        );
-    }
-
-    const startText = String(rangeMatch[1] ?? '').trim();
-    const endText = String(rangeMatch[2] ?? '').trim();
-    const start = startText ? Number.parseInt(startText, 10) : 0;
-    const end = endText ? Number.parseInt(endText, 10) : Number.MAX_SAFE_INTEGER;
-
-    if (!Number.isInteger(start) || start < 0 || !Number.isInteger(end) || end < 0) {
-        throw new ToolError(
-            `lorebook_list: invalid range '${text}'.`,
-            'LOREBOOK_RANGE_INVALID',
-            invalidHint,
-        );
-    }
-    if (start > end) {
-        throw new ToolError(
-            `lorebook_list: invalid range '${text}' — start must be <= end.`,
-            'LOREBOOK_RANGE_INVALID',
-            invalidHint,
-        );
-    }
-    return { start, end };
 }
 
 /**

@@ -44,14 +44,7 @@ import {
     migrateLegacyAnchorsIfNeeded,
     pickLatestValidSnapshot,
 } from './persistence.js';
-
-function getStateErrors(context = null) {
-    const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
-    if (!se) {
-        throw new Error('Luker.getContext().stateErrors is unavailable');
-    }
-    return se;
-}
+import { STATE_ERROR_REASONS, makeStateError } from '../../lib/state-errors.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -87,7 +80,7 @@ export function clearCacheForChatChange() {
     latestAnchorMap = null;
 }
 
-export function setLatestAnchorMap(chatKey, anchors) {
+function setLatestAnchorMap(chatKey, anchors) {
     const normalizedChatKey = String(chatKey || '').trim();
     if (!normalizedChatKey) {
         latestAnchorMap = null;
@@ -322,7 +315,6 @@ export async function refreshOrchestratorStateAfterStructuralEvent(context) {
  * @returns {Promise<{ ok: boolean, reason?: string, hint?: string }>}
  */
 export async function persistEditedSnapshotToFloorState(context, snapshot) {
-    const { STATE_ERROR_REASONS, makeStateError } = getStateErrors(context);
     const anchorPlayableFloor = normalizeAnchorPlayableFloor(snapshot?.anchorPlayableFloor);
     if (!anchorPlayableFloor) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'snapshot anchorPlayableFloor missing or invalid');

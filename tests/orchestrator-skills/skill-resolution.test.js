@@ -19,49 +19,10 @@ globalThis.st = stub;
 globalThis.Luker = stub;
 
 const {
-    ensureSkillsFieldShape,
     resolveAgentVisibleSkills,
     buildAvailableSkillsBlock,
     invalidateSkillInventory,
 } = await import('../../public/scripts/extensions/orchestrator/skill-resolution.js');
-
-describe('ensureSkillsFieldShape', () => {
-    test('defaults mode-level skills to wildcard visible / empty deny', () => {
-        const p = {};
-        ensureSkillsFieldShape(p);
-        expect(p.skills).toEqual({ visible: ['*'], deny: [] });
-    });
-
-    test('preserves existing mode-level skills', () => {
-        const p = { skills: { visible: ['a', 'b'], deny: ['c'] } };
-        ensureSkillsFieldShape(p);
-        expect(p.skills).toEqual({ visible: ['a', 'b'], deny: ['c'] });
-    });
-
-    test('repairs mode-level shape with missing arrays', () => {
-        const p = { skills: { /* both missing */ } };
-        ensureSkillsFieldShape(p);
-        expect(p.skills).toEqual({ visible: ['*'], deny: [] });
-    });
-
-    test('leaves agent-level skills undefined when absent', () => {
-        const a = { id: 'x' };
-        ensureSkillsFieldShape(a, { isAgent: true });
-        expect(a.skills).toBeUndefined();
-    });
-
-    test('normalizes agent-level partial shape', () => {
-        const a = { id: 'x', skills: { visible: ['+', 'foo'] } };
-        ensureSkillsFieldShape(a, { isAgent: true });
-        expect(a.skills.deny).toEqual([]);
-        expect(a.skills.visible).toEqual(['+', 'foo']);
-    });
-
-    test('no-op on null/undefined input', () => {
-        expect(() => ensureSkillsFieldShape(null)).not.toThrow();
-        expect(() => ensureSkillsFieldShape(undefined, { isAgent: true })).not.toThrow();
-    });
-});
 
 describe('resolveAgentVisibleSkills', () => {
     beforeEach(() => {
@@ -212,16 +173,26 @@ describe('resolveAgentVisibleSkills', () => {
         expect(result).toEqual([]);
     });
 
-    test('null modeProfile is repaired by ensureSkillsFieldShape default', async () => {
+    test('modeProfile without skills resolves with the wildcard default', async () => {
         const profile = {};
         const result = await resolveAgentVisibleSkills({
             modeProfile: profile,
             agentConfig: null,
             runtimeContext: { presetName: 'rp' },
         });
-        // Default visible=['*'] applied; preset-x reachable since preset ctx provided.
-        expect(result.map(s => s.name).sort()).toContain('preset-x');
-        expect(profile.skills).toEqual({ visible: ['*'], deny: [] });
+        // Default visible=['*'] applied: every global skill plus the preset
+        // scope; char-y stays out because no characterFile is in context.
+        expect(result.map(s => s.name).sort()).toEqual(['global-a', 'global-b', 'preset-x']);
+    });
+
+    test('leaves the input profile and agent config unchanged', async () => {
+        const profile = { spec: { stages: [] }, presets: { a: { systemPrompt: 'x' } } };
+        const partial = { name: 'p', skills: { visible: ['global-a'] } };
+        const agent = { skills: { deny: ['global-b'] } };
+        const snapshots = JSON.parse(JSON.stringify([profile, partial, agent]));
+        await resolveAgentVisibleSkills({ modeProfile: profile, agentConfig: null, runtimeContext: {} });
+        await resolveAgentVisibleSkills({ modeProfile: partial, agentConfig: agent, runtimeContext: {} });
+        expect([profile, partial, agent]).toStrictEqual(snapshots);
     });
 });
 

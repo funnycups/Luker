@@ -87,7 +87,7 @@ describe('clearCharacterExtensionForMode — drops per-mode preset library so pr
         expect(after.overrideEnabled?.spec).toBe(true);
     });
 
-    test('after clear, hasCharacterLoopOverride reads false', () => {
+    test('after clear, the loop runtime preset scope reads global', () => {
         const before = {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
@@ -95,7 +95,7 @@ describe('clearCharacterExtensionForMode — drops per-mode preset library so pr
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'loop');
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
-        expect(overrides.hasCharacterLoopOverride(ctx, 'a.png')).toBe(false);
+        expect(overrides.getRuntimePresetScope(ctx, 'a.png', 'loop')).toBe('global');
     });
 
     test('director: drops presetLibraries.director + activePresetIds.director', () => {
@@ -107,7 +107,7 @@ describe('clearCharacterExtensionForMode — drops per-mode preset library so pr
         expect(after.presetLibraries?.director).toBeUndefined();
         expect(after.activePresetIds?.director).toBeUndefined();
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
-        expect(overrides.hasCharacterDirectorOverride(ctx, 'a.png')).toBe(false);
+        expect(overrides.getRuntimePresetScope(ctx, 'a.png', 'director')).toBe('global');
     });
 
     test('agenda: drops presetLibraries.agenda + activePresetIds.agenda', () => {
@@ -117,7 +117,7 @@ describe('clearCharacterExtensionForMode — drops per-mode preset library so pr
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'agenda');
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
-        expect(overrides.hasCharacterAgendaOverride(ctx, 'a.png')).toBe(false);
+        expect(overrides.getRuntimePresetScope(ctx, 'a.png', 'agenda')).toBe('global');
     });
 
     test('spec: drops presetLibraries.spec + activePresetIds.spec + overrideEnabled.spec', () => {
@@ -128,7 +128,7 @@ describe('clearCharacterExtensionForMode — drops per-mode preset library so pr
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'spec');
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
-        expect(overrides.hasCharacterSpecOverride(ctx, 'a.png')).toBe(false);
+        expect(overrides.getRuntimePresetScope(ctx, 'a.png', 'spec')).toBe('global');
         expect(after.overrideEnabled).toBeUndefined();
     });
 

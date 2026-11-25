@@ -201,6 +201,34 @@ describe('exportAgendaPayload', () => {
     });
 });
 
+describe('exportAgendaPayload with a whitespace-padded agent key', () => {
+    it('joins the dispatch to its run by the stored agent key', () => {
+        const agent = ' 守夜';
+        const trace = {
+            mode: 'agenda',
+            agenda: {
+                plannerRounds: 1,
+                todos: [],
+                runs: [{ runId: 'r1', todoId: 'watch', agent, taskBrief: 'Keep the watch.', inputRunIds: [], outputText: 'out', kind: 'agent' }],
+                finalGuidance: '',
+            },
+            attempts: [{
+                runKind: 'worker',
+                stageIndex: 0,
+                nodeIndex: 0,
+                nodeId: `${agent}:watch`,
+                preset: agent,
+                nodeType: 'worker',
+                status: 'completed',
+                output: 'out',
+                conversation: { messages: [] },
+            }],
+        };
+        const [dispatch] = exportAgendaPayload(trace).rounds[0].dispatches;
+        expect(dispatch).toMatchObject({ agentName: agent, todoId: 'watch', taskBrief: 'Keep the watch.' });
+    });
+});
+
 describe('exportLoopPayload', () => {
     it('reads live conversation aliased on trace.loop.conversation', () => {
         const trace = {

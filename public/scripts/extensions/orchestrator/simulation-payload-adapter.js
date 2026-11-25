@@ -150,7 +150,8 @@ export function exportSpecPayload(trace) {
  * which the runtime push-appends in dispatch order — we join by (agent, todoId).
  */
 function resolveAgendaDispatchMeta(attempt, agendaRuns) {
-    const agent = String(attempt?.preset || '').trim();
+    // The stored agent key, kept verbatim as on the run and in `nodeId`.
+    const agent = String(attempt?.preset || '');
     const nodeId = String(attempt?.nodeId || '');
     // `nodeId` shape is `${agent}:${todoId}`. Recover todoId by stripping
     // the agent prefix; fall back to the whole nodeId if the format

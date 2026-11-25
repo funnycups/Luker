@@ -11,13 +11,21 @@
 
 import { i18n, i18nFormat } from './i18n.js';
 import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
-import { DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT, DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE } from '../defaults.js';
+import { getConnectionProfileNames, getOpenAIPresetNames } from '../../../lens-shared/preset-selectors.js';
 import {
-    initializeUiState,
+    DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,
+    DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE,
+    defaultSpec,
+    sanitizeDirectorProfile,
+} from '../defaults.js';
+import { sanitizeAgendaWorkingProfile } from '../agenda-profile.js';
+import { toEditablePresetMap, toEditableSpec } from '../editable-spec.js';
+import {
     loadGlobalAgendaEditorState,
     loadGlobalDirectorEditorState,
     loadGlobalEditorState,
     loadGlobalLoopEditorState,
+    refreshUiStateFromHost,
 } from '../editor-state.js';
 import {
     createPreset,
@@ -45,9 +53,10 @@ import {
     persistCharacterDirectorEditor,
     persistCharacterEditor,
     persistCharacterLoopEditor,
-    persistCustomToolsPatch,
+    persistCustomToolsKeepingDrafts,
+    persistGlobalPresetWrite,
     persistOrchestratorCharacterExtension,
-    persistRuntimeLimitsPatch,
+    persistRuntimeLimitsKeepingDrafts,
 } from '../editor-persist.js';
 import {
     copyOrchPresetSkills,
@@ -63,10 +72,9 @@ import {
     extractImportedProfileForMode,
     parseImportedProfilePayload,
 } from '../preset-io.js';
-import { sanitizeAgentToolFlags } from '../persistence.js';
+import { sanitizeAgentToolFlags, sanitizeLoopProfile } from '../persistence.js';
 import { sanitizeConnectionProfileName } from '../agent-resolution.js';
 import { normalizeCapsuleInjectPosition } from '../capsule-injection.js';
-import { sanitizeIdentifierToken } from '../editable-spec.js';
 import { buildDirectorDefaultSystemPrompt } from '../director-default-prompt.js';
 import { promptEmbedUnembeddedPresetsForCharacterApply } from '../prompt-embed-unembedded.js';
 import { getField, mergeChanges, validateStructure } from './model/edit.js';
@@ -155,21 +163,42 @@ async function writeTarget(ctx, settings, target, profile) {
     if (scope === 'global') {
         const library = settings.presetLibraries?.[mode];
         if (!library?.[presetId]) throw new WriteError('target-gone', i18n('The profile to edit was deleted'));
+        if (presetId === getActivePresetId(settings, mode, { scope: 'global' })) {
+            const ok = await persistGlobalPresetWrite(
+                settings,
+                mode,
+                () => writeActivePreset(settings, mode, 'global', profile, { context: ctx }),
+                {
+                    context: ctx,
+                    replaceGlobal: true,
+                },
+            );
+            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
+            return;
+        }
         await saveFields(ctx, library, { [presetId]: sanitizePresetEntry(mode, { ...profile, name: library[presetId].name }) });
         return;
     }
     const index = (ctx.characters || []).findIndex(c => String(c?.avatar || '') === String(target.avatar || ''));
-    const ext = clone(index >= 0 ? ctx.characters[index]?.data?.extensions?.orchestrator : null);
-    const library = ext?.presetLibraries?.[mode];
-    if (!library?.[presetId]) throw new WriteError('target-gone', i18n('The profile on the character card was deleted'));
-    library[presetId] = sanitizePresetEntry(mode, { ...profile, name: library[presetId].name });
-    const ok = await ctx.getExtensionApi('orchestrator').persistOrchestratorCharacterExtension(ctx, index, ext);
+    if (index < 0) throw new WriteError('target-gone', i18n('The profile on the character card was deleted'));
+    let targetGone = false;
+    const ok = await ctx.getExtensionApi('orchestrator').persistOrchestratorCharacterExtension(ctx, index, (current) => {
+        const ext = current && typeof current === 'object' ? clone(current) : null;
+        const library = ext?.presetLibraries?.[mode];
+        if (!library?.[presetId]) {
+            targetGone = true;
+            throw new WriteError('target-gone', i18n('The profile on the character card was deleted'));
+        }
+        library[presetId] = sanitizePresetEntry(mode, { ...profile, name: library[presetId].name });
+        return ext;
+    });
+    if (targetGone) throw new WriteError('target-gone', i18n('The profile on the character card was deleted'));
     if (!ok) throw new WriteError('write', i18n('Failed to write to the character card'));
 }
 
-/** Makes the shared editor state drop its cached drafts. */
+/** Syncs shared editor state from host without discarding unrelated unsaved drafts. */
 function refreshEditors(ctx) {
-    initializeUiState(ctx);
+    refreshUiStateFromHost(ctx);
 }
 
 /**
@@ -201,10 +230,10 @@ export function createProfileAccess(host) {
         /** Connection profiles and generation presets to pick from. */
         async options() {
             const { ctx } = host();
-            const connections = (getChatCompletionConnectionProfiles() || []).map(p => String(p?.name || '')).filter(Boolean);
-            const names = ctx.getPresetManager('openai')?.getAllPresets();
-            const presets = Array.isArray(names) ? [...new Set(names.map(n => String(n || '').trim()).filter(Boolean))] : [];
-            return { connections, presets };
+            return {
+                connections: getConnectionProfileNames(getChatCompletionConnectionProfiles()),
+                presets: getOpenAIPresetNames(ctx),
+            };
         },
 
         /** Every tool flag on or off. Director keeps `finalize` off in its defaults. */
@@ -236,28 +265,74 @@ export function createProfileAccess(host) {
 
 const scopeOf = (target) => (target?.scope === 'character' ? 'character' : 'global');
 
-async function changeLibrary(ctx, settings, { mode, avatar }, scope, edit) {
-    const index = scope === 'character' ? getCharacterIndexByAvatar(ctx, avatar) : -1;
-    const card = ctx.characters?.[index];
-    if (scope === 'character' && !card) throw new WriteError('no-character', i18n('No character selected.'));
-    const owner = card ? getCharacterExtensionDataByAvatar(ctx, avatar) : settings;
-    const staged = {
-        ...owner,
-        presetLibraries: { ...owner.presetLibraries, [mode]: clone(owner.presetLibraries?.[mode] || {}) },
-        activePresetIds: { ...owner.activePresetIds },
-    };
-    let context = ctx;
-    if (card) {
-        const characters = ctx.characters.slice();
-        characters[index] = { ...card, data: { ...card.data, extensions: { ...card.data?.extensions, orchestrator: staged } } };
-        context = { ...ctx, characters };
+const globalPresetLifecycle = new Map();
+
+// Persistent operations follow acknowledgement order, not UI selection. Keep
+// the last skill scope for each opaque preset id so A→B→C and rename→delete
+// compose even while earlier responses or secondary operations are pending.
+function enqueueGlobalPresetLifecycle(context, mode, operation, pending) {
+    if (!operation) return pending;
+    let queue = globalPresetLifecycle.get(mode);
+    if (!queue) {
+        queue = { tail: Promise.resolve(), names: new Map() };
+        globalPresetLifecycle.set(mode, queue);
     }
-    edit(card ? settings : staged, { context, avatar });
-    if (card) {
-        if (!await persistOrchestratorCharacterExtension(ctx, index, staged)) throw new WriteError('write', i18n('Failed to persist character override.'));
-    } else {
-        await saveFields(ctx, settings, { presetLibraries: staged.presetLibraries, activePresetIds: staged.activePresetIds });
+    if (!queue.names.has(operation.id)) {
+        queue.names.set(operation.id, operation.action === 'duplicate' ? operation.newName : operation.oldName);
     }
+    const previous = queue.tail;
+    const next = (async () => {
+        await previous;
+        if (!await pending) return false;
+        const oldName = queue.names.get(operation.id);
+        if (operation.action === 'rename') {
+            const ok = await renameOrchPresetSkills(context, { mode, oldName, newName: operation.newName });
+            if (ok !== false) queue.names.set(operation.id, operation.newName);
+        } else if (operation.action === 'delete') {
+            await emitOrchPresetDeleted(context, { mode, name: oldName });
+            queue.names.delete(operation.id);
+        } else {
+            const sourceName = queue.names.get(operation.sourceId) ?? operation.oldName;
+            await copyOrchPresetSkills(context, { mode, oldName: sourceName, newName: operation.newName });
+            queue.names.set(operation.id, operation.newName);
+        }
+        return true;
+    })();
+    queue.tail = next;
+    return next;
+}
+
+function persistGlobalLibraryState(ctx, settings, mode, { operation = null, directSave = false } = {}) {
+    const activeId = settings.activePresetIds?.[mode];
+    const libraryJson = JSON.stringify(settings.presetLibraries?.[mode]);
+    const pending = (typeof ctx?.saveSettings === 'function'
+        ? Promise.resolve(ctx.saveSettings(0, directSave ? { directSave: true } : undefined)).then((outcome) => {
+            if (!outcome || typeof outcome !== 'object') return false;
+            if (!outcome.ok) return false;
+            if (!outcome.payload) return true;
+            const saved = outcome.payload?.extension_settings?.orchestrator;
+            return saved?.activePresetIds?.[mode] === activeId
+                && JSON.stringify(saved?.presetLibraries?.[mode]) === libraryJson;
+        })
+        : saveSettingsViaContext(ctx).then(() => true, () => false));
+    return enqueueGlobalPresetLifecycle(ctx, mode, operation, pending);
+}
+
+async function persistCharacterLibraryInPlace(ctx, avatar) {
+    const index = getCharacterIndexByAvatar(ctx, avatar);
+    if (index < 0) throw new WriteError('no-character', i18n('No character selected.'));
+    const prev = getCharacterExtensionDataByAvatar(ctx, avatar);
+    if (!prev || typeof prev !== 'object' || Object.keys(prev).length === 0) return true;
+    return persistOrchestratorCharacterExtension(ctx, index, { ...prev });
+}
+
+function toCharacterEditorFromProfile(mode, profile) {
+    if (mode === 'loop') return sanitizeLoopProfile(profile);
+    if (mode === 'agenda') return sanitizeAgendaWorkingProfile(profile);
+    if (mode === 'director') return sanitizeDirectorProfile(profile);
+    const presets = toEditablePresetMap(profile?.presets);
+    const spec = toEditableSpec(profile?.spec || defaultSpec, presets);
+    return { spec, presets };
 }
 
 function downloadJson(fileName, payload) {
@@ -275,11 +350,17 @@ function downloadJson(fileName, payload) {
 export function createPresetAccess(host) {
     const refreshed = (ctx) => refreshEditors(ctx);
     const opts = (ctx, avatar) => ({ context: ctx, avatar });
+    let desiredChangeListener = null;
+    const notifyDesiredChange = () => desiredChangeListener?.();
     const nameOf = (ctx, settings, mode, scope, avatar, id) => {
         const library = scope === 'character' ? getCharacterPresetLibrary(ctx, avatar, mode) : (settings.presetLibraries?.[mode] || {});
         return String(library?.[id]?.name || '').trim();
     };
     return {
+        onDesiredChange(fn) {
+            desiredChangeListener = typeof fn === 'function' ? fn : null;
+        },
+
         list(target) {
             const { ctx, settings } = host();
             const { mode, avatar } = target;
@@ -295,57 +376,114 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const { mode, avatar } = target;
             const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                if (!setActivePresetId(working, mode, scope, presetId, options)) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
-            });
             if (scope === 'global' && hadCardSlot) {
-                await changeLibrary(ctx, settings, target, 'character', (working, options) => setActivePresetId(working, mode, 'character', '', options));
+                setActivePresetId(settings, mode, 'character', '', opts(ctx, avatar));
+            }
+            if (!setActivePresetId(settings, mode, scope, presetId, opts(ctx, avatar))) {
+                throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
             }
             refreshed(ctx);
+            await notifyDesiredChange();
+            const globalSave = scope === 'global'
+                ? persistGlobalLibraryState(ctx, settings, mode, { directSave: hadCardSlot })
+                : null;
+            let cardSaved = true;
+            if (hadCardSlot || (scope === 'character' && avatar)) {
+                cardSaved = await persistCharacterLibraryInPlace(ctx, avatar);
+            }
+            if (scope === 'global') {
+                const ok = await globalSave;
+                if (!ok || !cardSaved) throw new WriteError('write', i18n('Failed to save the settings'));
+                return;
+            }
+            if (!cardSaved) throw new WriteError('write', i18n('Failed to persist character override.'));
         },
 
         async create(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                const id = createPreset(working, target.mode, scope, { name }, options);
-                if (!id || !setActivePresetId(working, target.mode, scope, id, options)) throw new WriteError('write', i18n('Could not save the preset.'));
-            });
+            const id = createPreset(settings, target.mode, scope, { name }, opts(ctx, target.avatar));
+            if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
+                throw new WriteError('write', i18n('Could not save the preset.'));
+            }
             refreshed(ctx);
+            await notifyDesiredChange();
+            if (scope === 'character') {
+                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
+                return;
+            }
+            if (!await persistGlobalLibraryState(ctx, settings, target.mode)) {
+                throw new WriteError('write', i18n('Failed to save the settings'));
+            }
         },
 
         async duplicate(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                const id = duplicatePreset(working, target.mode, scope, target.presetId, { name }, options);
-                if (!id || !setActivePresetId(working, target.mode, scope, id, options)) throw new WriteError('write', i18n('Could not save the preset.'));
-            });
-            await copyOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
+            const id = duplicatePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar));
+            if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
+                throw new WriteError('write', i18n('Could not save the preset.'));
+            }
             refreshed(ctx);
+            await notifyDesiredChange();
+            if (scope === 'character') {
+                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
+                await copyOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
+                return;
+            }
+            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+                operation: { action: 'duplicate', id, sourceId: target.presetId, oldName, newName: name },
+            });
+            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
         },
 
         async rename(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                if (!renamePreset(working, target.mode, scope, target.presetId, { name }, options)) throw new WriteError('write', i18n('Could not save the preset.'));
-            });
-            await renameOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
+            if (!renamePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar))) {
+                throw new WriteError('write', i18n('Could not save the preset.'));
+            }
             refreshed(ctx);
+            await notifyDesiredChange();
+            if (scope === 'character') {
+                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
+                await renameOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
+                return;
+            }
+            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+                operation: { action: 'rename', id: target.presetId, oldName, newName: name },
+            });
+            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
         },
 
         async remove(target) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const name = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                if (!deletePreset(working, target.mode, scope, target.presetId, options)) throw new WriteError('write', i18n('Could not save the preset.'));
-            });
-            await emitOrchPresetDeleted(ctx, { mode: target.mode, name });
+            if (!deletePreset(settings, target.mode, scope, target.presetId, opts(ctx, target.avatar))) {
+                throw new WriteError('write', i18n('Could not save the preset.'));
+            }
             refreshed(ctx);
+            await notifyDesiredChange();
+            if (scope === 'character') {
+                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
+                await emitOrchPresetDeleted(ctx, { mode: target.mode, name });
+                return;
+            }
+            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+                operation: { action: 'delete', id: target.presetId, oldName: name },
+            });
+            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
         },
 
         async exportActive(target) {
@@ -355,7 +493,8 @@ export function createPresetAccess(host) {
             if (!active) throw new WriteError('no-preset', i18n('No active preset to export.'));
             const payload = buildPortablePayloadForMode(target.mode, active);
             await emitOrchPresetExportReady(ctx, payload);
-            downloadJson(`luker-orchestrator-${target.mode}-${scope}-${sanitizeIdentifierToken(active.name || 'preset', 'preset')}.json`, payload);
+            const slug = String(active.name || 'preset').trim().replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset';
+            downloadJson(`luker-orchestrator-${target.mode}-${scope}-${slug}.json`, payload);
         },
 
         /** Reads a preset file; the caller asks for the name, then calls `importParsed`. */
@@ -370,12 +509,21 @@ export function createPresetAccess(host) {
             const scope = scopeOf(target);
             const { mode } = target;
             const profile = extractImportedProfileForMode(imported);
-            await changeLibrary(ctx, settings, target, scope, (working, options) => {
-                const id = createPreset(working, mode, scope, { name }, options);
-                if (!id || !setActivePresetId(working, mode, scope, id, options)) throw new WriteError('write', i18n('Could not create the preset.'));
-                const result = writeActivePreset(working, mode, scope, profile, options);
-                if (!result.ok) throw new WriteError('write', result.hint || result.reason);
-            });
+            const id = createPreset(settings, mode, scope, { name }, opts(ctx, target.avatar));
+            if (!id || !setActivePresetId(settings, mode, scope, id, opts(ctx, target.avatar))) {
+                throw new WriteError('write', i18n('Could not create the preset.'));
+            }
+            const writeResult = writeActivePreset(settings, mode, scope, profile, opts(ctx, target.avatar));
+            if (!writeResult.ok) throw new WriteError('write', writeResult.hint || writeResult.reason);
+            refreshed(ctx);
+            await notifyDesiredChange();
+            if (scope === 'character') {
+                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
+            } else if (!await persistGlobalLibraryState(ctx, settings, mode)) {
+                throw new WriteError('write', i18n('Failed to save the settings'));
+            }
             const data = { ...profile };
             const envelope = JSON.parse(fileText);
             if (envelope?.extensions) data.extensions = envelope.extensions;
@@ -384,27 +532,37 @@ export function createPresetAccess(host) {
         },
 
         /** Copies the profile on screen over the global active preset. */
-        async saveToGlobal(target) {
+        async saveToGlobal(target, profileOnScreen = null) {
             const { ctx, settings } = host();
-            const current = getPreset(settings, target.mode, scopeOf(target), target.presetId, opts(ctx, target.avatar));
+            const current = profileOnScreen
+                ? clone(profileOnScreen)
+                : getPreset(settings, target.mode, scopeOf(target), target.presetId, opts(ctx, target.avatar));
             if (!current) throw new WriteError('target-gone', i18n('The profile to edit was deleted'));
             const { name: _name, ...body } = current;
-            await changeLibrary(ctx, settings, target, 'global', (working, options) => {
-                getActivePreset(working, target.mode, { scope: 'global', ...options });
-                const result = writeActivePreset(working, target.mode, 'global', body, options);
-                if (!result.ok) throw new WriteError('write', result.hint || result.reason);
-            });
+            const ok = await persistGlobalPresetWrite(
+                settings,
+                target.mode,
+                () => {
+                    getActivePreset(settings, target.mode, { scope: 'global', ...opts(ctx, target.avatar) });
+                    return writeActivePreset(settings, target.mode, 'global', body, opts(ctx, target.avatar));
+                },
+                {
+                    context: ctx,
+                    replaceGlobal: scopeOf(target) === 'global',
+                },
+            );
+            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
             refreshed(ctx);
         },
 
-        /** Copies the global active preset onto the current character card. */
-        async saveToCharacter(target) {
+        /** Copies the profile on screen (or global active preset) onto the current character card. */
+        async saveToCharacter(target, profileOnScreen = null) {
             const { ctx, settings } = host();
             const { mode, avatar } = target;
             if (!avatar) throw new WriteError('no-character', i18n('No character selected.'));
             const load = { loop: loadGlobalLoopEditorState, agenda: loadGlobalAgendaEditorState, director: loadGlobalDirectorEditorState, spec: loadGlobalEditorState }[mode];
             const persist = { loop: persistCharacterLoopEditor, agenda: persistCharacterAgendaEditor, director: persistCharacterDirectorEditor, spec: persistCharacterEditor }[mode];
-            const editor = load();
+            const editor = profileOnScreen ? toCharacterEditorFromProfile(mode, profileOnScreen) : load();
             const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
                 context: ctx,
                 activeCharacter: ctx.characters?.find(c => c?.avatar === avatar) || null,
@@ -452,8 +610,7 @@ export function createPresetAccess(host) {
         async saveCustomTools(target, tools) {
             const { ctx, settings } = host();
             if (getActivePresetId(settings, target.mode, { scope: scopeOf(target), context: ctx, avatar: target.avatar }) !== target.presetId) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
-            if (!await persistCustomToolsPatch(ctx, settings, target.mode, scopeOf(target), tools, { avatar: target.avatar, saveGlobal: () => saveSettingsViaContext(ctx) })) throw new WriteError('write', i18n('Failed to persist character override.'));
-            refreshed(ctx);
+            if (!await persistCustomToolsKeepingDrafts(ctx, settings, target.mode, scopeOf(target), tools, { avatar: target.avatar })) throw new WriteError('write', i18n('Failed to persist character override.'));
         },
     };
 }
@@ -507,8 +664,7 @@ export function createSettingsAccess(host) {
         async setLimit(target, patch) {
             const { ctx, settings } = host();
             if (getActivePresetId(settings, target.mode, { scope: scopeOf(target), context: ctx, avatar: target.avatar }) !== target.presetId) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
-            if (!await persistRuntimeLimitsPatch(ctx, settings, target.mode, scopeOf(target), patch, { avatar: target.avatar, saveGlobal: () => saveSettingsViaContext(ctx) })) throw new WriteError('write', i18n('Failed to persist character override.'));
-            refreshEditors(ctx);
+            if (!await persistRuntimeLimitsKeepingDrafts(ctx, settings, target.mode, scopeOf(target), patch, { avatar: target.avatar })) throw new WriteError('write', i18n('Failed to persist character override.'));
         },
     };
 }

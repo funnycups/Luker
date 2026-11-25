@@ -57,7 +57,7 @@ import {
     resolveOrchestrationAgentPromptPresetName,
     resolveOrchestrationRuntimeWorldInfo,
 } from './agent-resolution.js';
-import { sanitizeIdentifierToken } from './editable-spec.js';
+import { normalizeIdToken, resolveStoredIdReference } from './editable-spec.js';
 import {
     buildDistillerOutputMarkdown,
     buildNodeOutputMapFromStageOutputs,
@@ -362,7 +362,7 @@ function finishRuntimeNodeAttempt(trace, attempt, details = {}) {
 }
 
 
-export function buildNodeToolSet(nodeSpec, { isFinalStage = false } = {}) {
+function buildNodeToolSet(nodeSpec, { isFinalStage = false } = {}) {
     if (isReviewNodeSpec(nodeSpec)) {
         return [
             {
@@ -450,7 +450,7 @@ export function buildNodeToolSet(nodeSpec, { isFinalStage = false } = {}) {
         }];
 }
 
-export function buildNodeIterationContractText(nodeSpec, { isFinalStage = false } = {}) {
+function buildNodeIterationContractText(nodeSpec, { isFinalStage = false } = {}) {
     if (isReviewNodeSpec(nodeSpec)) {
         return [
             '## node_iteration_contract',
@@ -469,7 +469,7 @@ export function buildNodeIterationContractText(nodeSpec, { isFinalStage = false 
     ].join('\n');
 }
 
-export function createStageOutputSnapshot(stage, stageWorkerOutputs = new Map()) {
+function createStageOutputSnapshot(stage, stageWorkerOutputs = new Map()) {
     const nodes = (Array.isArray(stage?.nodes) ? stage.nodes : [])
         .map(rawNode => normalizeNodeSpec(rawNode))
         .filter(nodeSpec => !isReviewNodeSpec(nodeSpec))
@@ -491,7 +491,7 @@ export function createStageOutputSnapshot(stage, stageWorkerOutputs = new Map())
     };
 }
 
-export function collectPriorNodeEntries(stages, currentStageIndex, currentNodeIndex) {
+function collectPriorNodeEntries(stages, currentStageIndex, currentNodeIndex) {
     const entries = [];
     for (let stageIndex = 0; stageIndex <= currentStageIndex; stageIndex++) {
         const stage = stages[stageIndex];
@@ -525,7 +525,7 @@ export function resolveReviewTargetEntries(stages, currentStageIndex, currentNod
     const index = new Map(priorEntries.map(entry => [entry.nodeId, entry]));
     const resolved = [];
     for (const rawTarget of Array.isArray(targetNodeIds) ? targetNodeIds : []) {
-        const targetNodeId = sanitizeIdentifierToken(rawTarget, '');
+        const targetNodeId = normalizeIdToken(rawTarget, '');
         if (!targetNodeId) {
             continue;
         }
@@ -571,7 +571,7 @@ export function extractReviewDecision(toolCalls = [], nodeId = '') {
 
     if (rerunCall) {
         const rawTargets = Array.isArray(rerunCall?.args?.target_node_ids) ? rerunCall.args.target_node_ids : [];
-        const targetNodeIds = [...new Set(rawTargets.map(item => sanitizeIdentifierToken(item, '')).filter(Boolean))];
+        const targetNodeIds = [...new Set(rawTargets.map(item => normalizeIdToken(item, '')).filter(Boolean))];
         if (targetNodeIds.length === 0) {
             throw new Error(`Review node '${nodeId}' requested rerun without target_node_ids.`);
         }
@@ -883,6 +883,14 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             if (enableLoopTools && loopToolCalls.length > 0) {
                 const assistantToolCallEntries = loopToolCalls.map(tc => {
                     const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+                    const callSig = typeof tc?.signature === 'string' && tc.signature.length > 0
+                        ? tc.signature
+                        : (typeof tc?.raw?.signature === 'string' && tc.raw.signature.length > 0
+                            ? tc.raw.signature
+                            : (typeof tc?.raw?.thoughtSignature === 'string' && tc.raw.thoughtSignature.length > 0 ? tc.raw.thoughtSignature : null));
+                    const callExtra = tc?.extra_content && typeof tc.extra_content === 'object'
+                        ? structuredClone(tc.extra_content)
+                        : (tc?.raw?.extra_content && typeof tc.raw.extra_content === 'object' ? structuredClone(tc.raw.extra_content) : null);
                     return {
                         id: String(tc?.id || makeRuntimeToolCallId()),
                         type: 'function',
@@ -890,14 +898,20 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                             name: normalizedName,
                             arguments: canonicalStringifyArgs(tc?.args),
                         },
+                        ...(callSig ? { signature: callSig } : {}),
+                        ...(callExtra ? { extra_content: callExtra } : {}),
                         source: resolveToolSource(normalizedName, toolContext),
                     };
                 });
                 runtimeToolMessages.push({
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
+                    ...(typeof detailed?.signature === 'string' && detailed.signature.length > 0 ? { signature: detailed.signature } : {}),
                     ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
                     ...(Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0 ? { reasoning_details: detailed.reasoningDetails } : {}),
+                    ...(Array.isArray(detailed?.nativeParts) && detailed.nativeParts.length > 0 ? { native_parts: detailed.nativeParts } : {}),
+                    ...(Array.isArray(detailed?.nativeContentBlocks) && detailed.nativeContentBlocks.length > 0 ? { native_content_blocks: detailed.nativeContentBlocks } : {}),
+                    ...(Array.isArray(detailed?.responsesOutputItems) && detailed.responsesOutputItems.length > 0 ? { responses_output_items: detailed.responsesOutputItems } : {}),
                     ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
                     tool_calls: assistantToolCallEntries,
                 });
@@ -978,7 +992,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     }
 }
 
-export async function replayStagesToReview(context, payload, messages, profile, runtime, {
+async function replayStagesToReview(context, payload, messages, profile, runtime, {
     currentStageIndex,
     currentNodeIndex,
     targetEntries,
@@ -1058,7 +1072,7 @@ export async function replayStagesToReview(context, payload, messages, profile, 
     };
 }
 
-export async function runReviewNode(context, payload, profile, nodeSpec, preset, messages, previousNodeOutputs, currentStageWorkerOutputs, abortSignal = null, options = {}) {
+async function runReviewNode(context, payload, profile, nodeSpec, preset, messages, previousNodeOutputs, currentStageWorkerOutputs, abortSignal = null, options = {}) {
     // Review nodes intentionally skip the `<available_skills>` catalog block
     // and the `__visibleSkillsForAgent` dispatch hint: they audit the
     // preceding worker's output via specialized review tools
@@ -1240,20 +1254,36 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 replayResult: replay.result,
                 conversation,
             });
+            const rerunSourceCall = (Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [])
+                .find(c => String(c?.name || '').trim() === ORCH_REVIEW_TOOL_RERUN) || null;
             appendStandardToolRoundMessages(runtimeToolMessages, [{
+                ...(rerunSourceCall?.id ? { id: rerunSourceCall.id } : {}),
                 name: ORCH_REVIEW_TOOL_RERUN,
                 args: {
                     target_node_ids: targetEntries.map(entry => entry.nodeId),
                     [ORCH_REVIEW_FEEDBACK_FIELD]: decision.reason,
                 },
                 result: replay.result,
+                ...(rerunSourceCall?.raw ? { raw: rerunSourceCall.raw } : {}),
+                ...(rerunSourceCall?.signature ? { signature: rerunSourceCall.signature } : {}),
+                ...(rerunSourceCall?.extra_content ? { extra_content: rerunSourceCall.extra_content } : {}),
             }], detailed?.assistantText || '', {
                 reasoning: String(detailed?.reasoning || ''),
+                signature: typeof detailed?.signature === 'string' && detailed.signature.length > 0 ? detailed.signature : null,
                 reasoningBlocks: Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0
                     ? detailed.reasoningBlocks
                     : null,
                 reasoningDetails: Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0
                     ? detailed.reasoningDetails
+                    : null,
+                nativeParts: Array.isArray(detailed?.nativeParts) && detailed.nativeParts.length > 0
+                    ? detailed.nativeParts
+                    : null,
+                nativeContentBlocks: Array.isArray(detailed?.nativeContentBlocks) && detailed.nativeContentBlocks.length > 0
+                    ? detailed.nativeContentBlocks
+                    : null,
+                responsesOutputItems: Array.isArray(detailed?.responsesOutputItems) && detailed.responsesOutputItems.length > 0
+                    ? detailed.responsesOutputItems
                     : null,
             });
         } catch (error) {
@@ -1269,7 +1299,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
     throw new Error(`Review node '${nodeSpec.id}' exceeded max rounds (${maxRounds}).`);
 }
 
-export async function executeStage(context, payload, messages, profile, runtime, stageIndex, previousNodeOutputs, abortSignal = null, options = {}) {
+async function executeStage(context, payload, messages, profile, runtime, stageIndex, previousNodeOutputs, abortSignal = null, options = {}) {
     const stage = runtime?.stages?.[stageIndex];
     const nodes = (Array.isArray(stage?.nodes) ? stage.nodes : []).map(rawNode => normalizeNodeSpec(rawNode));
     const stopBeforeNodeIndex = Number.isInteger(options?.stopBeforeNodeIndex)
@@ -1280,13 +1310,13 @@ export async function executeStage(context, payload, messages, profile, runtime,
         ? mergeNodeOutputMaps(options.seedStageWorkerOutputs)
         : new Map();
     const rerunNodeIds = options?.rerunNodeIds instanceof Set
-        ? new Set([...options.rerunNodeIds].map(nodeId => sanitizeIdentifierToken(nodeId, '')).filter(Boolean))
+        ? new Set([...options.rerunNodeIds].map(nodeId => normalizeIdToken(nodeId, '')).filter(Boolean))
         : null;
     let rerunReasonByNodeId = null;
     if (options?.rerunReasonByNodeId instanceof Map) {
         rerunReasonByNodeId = new Map();
         for (const [nodeId, reason] of options.rerunReasonByNodeId.entries()) {
-            const sanitizedNodeId = sanitizeIdentifierToken(nodeId, '');
+            const sanitizedNodeId = normalizeIdToken(nodeId, '');
             if (!sanitizedNodeId) {
                 continue;
             }
@@ -1298,7 +1328,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
         if (!(rerunReasonByNodeId instanceof Map)) {
             return undefined;
         }
-        const key = sanitizeIdentifierToken(nodeId, '');
+        const key = normalizeIdToken(nodeId, '');
         if (!key || !rerunReasonByNodeId.has(key)) {
             return undefined;
         }
@@ -1357,7 +1387,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
                     // first-chunk signal — followers would only unblock
                     // when the lead's whole response finishes, which
                     // is worse than the pre-barrier baseline.
-                    const nodePreset = profile.presets[nodeSpec.preset] || {};
+                    const nodePreset = profile.presets[resolveStoredIdReference(profile.presets, nodeSpec.preset)] || {};
                     const resolvedLlmPresetName = resolveOrchestrationAgentPromptPresetName(extension_settings[MODULE_NAME], nodePreset)?.name || '';
                     const resolvedApiPresetName = resolveOrchestrationAgentApiPresetName(extension_settings[MODULE_NAME], nodePreset)?.name || '';
                     const streamEnabledForBarrier = typeof context?.isStreamingPresetEnabled === 'function'
@@ -1427,7 +1457,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
 
         for (let nodeIndex = 0; nodeIndex < limit; nodeIndex++) {
             const nodeSpec = nodes[nodeIndex];
-            const preset = profile.presets[nodeSpec.preset] || {};
+            const preset = profile.presets[resolveStoredIdReference(profile.presets, nodeSpec.preset)] || {};
             if (isReviewNodeSpec(nodeSpec)) {
                 const reviewSectionId = panelRunId
                     ? ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: `node-${nodeSpec.id}`, kind: 'note', title: i18n('Note') } })
@@ -1634,7 +1664,9 @@ export async function runSpecOrchestration(context, payload, messages, profile, 
     } catch (error) {
         finalizeRuntimeTrace(trace, 'failed', { error: String(error?.message || error) });
         try {
-            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+            // A stop from the run panel or an aborted generation aborts the
+            // run's signal; report that as aborted rather than as a failure.
+            finishRun({ runId, status: payload?.signal?.aborted ? 'aborted' : 'error', error: String(error?.message || error) });
         } catch (_) { /* run may already be cleared */ }
         throw error;
     }

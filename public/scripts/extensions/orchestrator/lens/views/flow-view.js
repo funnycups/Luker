@@ -78,7 +78,11 @@ export function createFlowView(app) {
             dataset: { tone: toneOf(id), status, agent: id },
             'aria-pressed': String(selected),
             'aria-label': status !== 'idle' ? i18nFormat('${0}, ${1}', agentName(id), i18n(status === 'running' ? 'Working' : status === 'failed' ? 'Errored' : 'Finished')) : agentName(id),
-            onClick: () => app.selectAgent(selected ? '' : id),
+            onClick: () => {
+                const state = app.state();
+                const detailsVisible = state.compact ? state.sheet : state.inspectorOpen;
+                app.selectAgent(state.selectedAgent === id && detailsVisible ? '' : id);
+            },
         },
         h('span', { class: 'ol-card-top' },
             agentAvatar(id),

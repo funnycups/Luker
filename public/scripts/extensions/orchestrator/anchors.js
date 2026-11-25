@@ -18,79 +18,20 @@
  *
  * This module is pure: no I/O, no chat-state interaction, no event
  * subscriptions. Persistence and event wiring live in
- * `persistence.js` and `main.js`.
+ * `persistence.js` and `main.js`. Playable-floor primitives come from
+ * public/scripts/lib/playable-anchor.js.
  */
 
-/**
- * Inline copy of `utils.getStringHash` (the cyrb53 variant). Inlined
- * to keep this module loadable from tests — the canonical helper lives
- * in `public/scripts/utils.js`, which transitively pulls in the full
- * app bundle and cannot be imported by a Node-based test runner. The
- * algorithm is fixed; if `utils.getStringHash` ever changes, this copy
- * must be updated in lockstep.
- */
-function hashStringForAnchor(str, seed = 0) {
-    if (typeof str !== 'string') {
-        return 0;
-    }
-    let h1 = 0xdeadbeef ^ seed;
-    let h2 = 0x41c6ce57 ^ seed;
-    for (let i = 0, ch; i < str.length; i++) {
-        ch = str.charCodeAt(i);
-        h1 = Math.imul(h1 ^ ch, 2654435761);
-        h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-}
+import {
+    computeLastUserAnchorCore,
+    isPlayableAnchorHashValid,
+} from '../../lib/playable-anchor.js';
 
-/**
- * Coerce a value to a positive integer playable floor. Returns 0 for any
- * non-positive / non-integer / negative value so callers can treat 0 as
- * "no anchor".
- *
- * @param {*} value
- * @returns {number}
- */
-export function normalizeAnchorPlayableFloor(value) {
-    const normalized = Math.max(0, Math.floor(Number(value) || 0));
-    return normalized > 0 ? normalized : 0;
-}
-
-/**
- * Find the last user message in the chat. Returns
- * `{ index: -1, message: null }` when the chat has no user message yet
- * (or when the input is not an array) so callers can branch without
- * optional chaining.
- *
- * @param {Array} messages
- * @returns {{ index: number, message: object | null }}
- */
-export function extractLastUserMessage(messages) {
-    if (!Array.isArray(messages)) {
-        return { index: -1, message: null };
-    }
-    for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i]?.is_user) {
-            return { index: i, message: messages[i] };
-        }
-    }
-    return { index: -1, message: null };
-}
-
-/**
- * Hash source for the user message at `endIndex`. Centralized so the
- * commit-time hash and the consume-time hash stay in lockstep.
- *
- * @param {Array} messages
- * @param {number} endIndex
- * @returns {string}
- */
-export function buildAnchorHashSource(messages, endIndex) {
-    const message = messages[endIndex];
-    return String(message?.mes ?? '');
-}
+export {
+    extractLastUserMessage,
+    getPlayableMessageAt,
+    normalizeAnchorPlayableFloor,
+} from '../../lib/playable-anchor.js';
 
 /**
  * Slice the chat array down to the most recent `assistantTurns` assistant
@@ -148,21 +89,17 @@ export function getRecentMessages(messages, assistantTurns) {
  * @returns {{ playableFloor: number, chatIndex: number, swipeId: number, hash: string } | null}
  */
 export function buildLastUserAnchorFromMessages(messages) {
-    const { index, message } = extractLastUserMessage(messages);
-    if (index < 0 || !message) {
+    const core = computeLastUserAnchorCore(messages);
+    if (!core) {
         return null;
     }
-    const hashSource = buildAnchorHashSource(messages, index);
-    const playableFloor = messages
-        .slice(0, index + 1)
-        .reduce((count, item) => count + (item && !item.is_system ? 1 : 0), 0);
-    const swipeIdRaw = message.swipe_id;
+    const swipeIdRaw = core.message.swipe_id;
     const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
     return {
-        chatIndex: index,
-        playableFloor,
+        chatIndex: core.index,
+        playableFloor: core.playableFloor,
         swipeId,
-        hash: String(hashStringForAnchor(hashSource)),
+        hash: core.hash,
     };
 }
 
@@ -183,35 +120,6 @@ export function buildLastUserAnchor(context, payloadMessages) {
         return contextAnchor;
     }
     return buildLastUserAnchorFromMessages(payloadMessages);
-}
-
-/**
- * Locate the chat message at the given playable ordinal. Used to verify
- * that a stored snapshot's anchor still points at a user message before
- * trusting its `anchorHash`.
- *
- * @param {Array} messages
- * @param {number} playableFloor
- * @returns {{ index: number, message: object } | null}
- */
-export function getPlayableMessageAt(messages, playableFloor) {
-    const source = Array.isArray(messages) ? messages : [];
-    const targetPlayableFloor = normalizeAnchorPlayableFloor(playableFloor);
-    if (!targetPlayableFloor) {
-        return null;
-    }
-    let playableSeq = 0;
-    for (let index = 0; index < source.length; index++) {
-        const message = source[index];
-        if (!message || message.is_system) {
-            continue;
-        }
-        playableSeq += 1;
-        if (playableSeq === targetPlayableFloor) {
-            return { index, message };
-        }
-    }
-    return null;
 }
 
 /**
@@ -253,16 +161,7 @@ export function isStoredOrchestrationSnapshotValidForMessages(anchorPlayableFloo
     if (!normalizedSnapshot) {
         return false;
     }
-    const target = getPlayableMessageAt(messages, anchorPlayableFloor);
-    if (!target?.message || target.message.is_system || !target.message.is_user) {
-        return false;
-    }
-    const storedHash = String(normalizedSnapshot.anchorHash || '').trim();
-    if (!storedHash) {
-        return false;
-    }
-    const currentHash = String(hashStringForAnchor(buildAnchorHashSource(messages, target.index)));
-    return currentHash === storedHash;
+    return isPlayableAnchorHashValid(messages, anchorPlayableFloor, normalizedSnapshot.anchorHash);
 }
 
 /**

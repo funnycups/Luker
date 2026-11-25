@@ -31,7 +31,7 @@
 import { ORCH_NODE_TYPE_REVIEW } from './defaults.js';
 import { toReadableYamlText } from './output-formatting.js';
 
-export function normalizeApprovedReviewFeedbackEntry(entry = {}) {
+function normalizeApprovedReviewFeedbackEntry(entry = {}) {
     const feedback = String(entry?.feedback || '').trim();
     const nodeId = String(entry?.nodeId || '').trim();
     if (!feedback || !nodeId) {
@@ -93,7 +93,7 @@ export function trimRuntimeApprovedReviewFeedbackEntries(runtime = null, keepBef
         .filter(entry => entry && entry.stageIndex < safeStageIndex);
 }
 
-export function buildReviewFeedbackPrelude({
+function buildReviewFeedbackPrelude({
     approvedReviewFeedbackEntries = [],
     rerunReason = undefined,
 } = {}) {

@@ -15,7 +15,7 @@
 // The AI could not distinguish origins, and could bake a card-bound name
 // into a profile intended for the global library.
 
-import { describe, test, expect, jest, beforeAll } from '@jest/globals';
+import { describe, test, expect, jest, beforeAll, afterEach } from '@jest/globals';
 
 // defaults.js (transitively imported by agent-resolution's siblings)
 // reads `Luker.getContext().constants.{promptRoles,wiPosition}` at
@@ -72,18 +72,27 @@ jest.unstable_mockModule('../../public/lib.js', () => ({
 
 // Sever the connection-manager gate — profile-resolver.js pulls textgen-models.js
 // → document.addEventListener under Node, which fails without JSDOM.
+let connectionProfiles = [];
 jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
+    getChatCompletionConnectionProfiles: () => connectionProfiles.map(p => ({ ...p })),
 }));
 
+let buildAgentApiRoutingPromptData;
 let buildAgentPromptPresetRoutingPromptData;
+let readAgentPresetRouting;
 let sanitizeOpenAIPresetNamesForAiPrompt;
 
 beforeAll(async () => {
     ({
+        buildAgentApiRoutingPromptData,
         buildAgentPromptPresetRoutingPromptData,
+        readAgentPresetRouting,
         sanitizeOpenAIPresetNamesForAiPrompt,
     } = await import('../../public/scripts/extensions/orchestrator/agent-resolution.js'));
+});
+
+afterEach(() => {
+    connectionProfiles = [];
 });
 
 function setCharacterWithPresets(names, defaultName = null) {
@@ -185,5 +194,51 @@ describe('buildAgentPromptPresetRoutingPromptData', () => {
         ctxState._openaiPresetNames = ['CardPreset', 'GlobalPreset'];
         const data = buildAgentPromptPresetRoutingPromptData(ctxState, {});
         expect(data).not.toHaveProperty('available_chat_completion_presets');
+    });
+});
+
+describe('readAgentPresetRouting — luker_orch_list_preset_routing executor', () => {
+    const LIGHTHOUSE = { name: 'Lighthouse Relay', api: 'openai', model: 'gpt-4o', mode: 'cc' };
+    const REEF = { name: 'Reef Backup', api: 'claude', model: 'claude-sonnet-4', mode: 'cc' };
+
+    test('returns exactly what the two routing builders produce', () => {
+        connectionProfiles = [LIGHTHOUSE, REEF];
+        ctxState._openaiPresetNames = ['Harbor Watch', 'Gull Rocks', 'Tide Card'];
+        setCharacterWithPresets(['Tide Card'], 'Tide Card');
+        const settings = { llmNodeApiPresetName: ' Lighthouse Relay ', llmNodePresetName: 'Harbor Watch' };
+
+        const out = readAgentPresetRouting(ctxState, settings);
+
+        expect(out).toEqual({
+            api: buildAgentApiRoutingPromptData(settings),
+            prompt: buildAgentPromptPresetRoutingPromptData(ctxState, settings),
+        });
+        expect(out.api.global_orchestration_api_preset).toBe('Lighthouse Relay');
+        expect(out.api.available_connection_profiles).toEqual([
+            { name: 'Lighthouse Relay', api: 'openai', model: 'gpt-4o' },
+            { name: 'Reef Backup', api: 'claude', model: 'claude-sonnet-4' },
+        ]);
+        expect(out.prompt.global_orchestration_prompt_preset).toBe('Harbor Watch');
+        expect(out.prompt.available_local_global_chat_completion_presets).toEqual(['Harbor Watch', 'Gull Rocks']);
+        expect(out.prompt.available_card_bound_chat_completion_presets).toEqual(['Tide Card']);
+    });
+
+    test('reads the live profiles, preset names and card on every call', () => {
+        const settings = { llmNodeApiPresetName: '', llmNodePresetName: '' };
+        connectionProfiles = [LIGHTHOUSE];
+        ctxState._openaiPresetNames = ['Harbor Watch'];
+        setNoCharacter();
+        const first = readAgentPresetRouting(ctxState, settings);
+
+        connectionProfiles = [LIGHTHOUSE, REEF];
+        ctxState._openaiPresetNames = ['Harbor Watch', 'Tide Card'];
+        setCharacterWithPresets(['Tide Card']);
+        const second = readAgentPresetRouting(ctxState, settings);
+
+        expect(first.api.available_connection_profiles.map(p => p.name)).toEqual(['Lighthouse Relay']);
+        expect(first.prompt.available_card_bound_chat_completion_presets).toEqual([]);
+        expect(second.api.available_connection_profiles.map(p => p.name)).toEqual(['Lighthouse Relay', 'Reef Backup']);
+        expect(second.prompt.available_local_global_chat_completion_presets).toEqual(['Harbor Watch']);
+        expect(second.prompt.available_card_bound_chat_completion_presets).toEqual(['Tide Card']);
     });
 });

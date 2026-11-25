@@ -6,7 +6,7 @@
  *
  * Mounts inside the second inline-drawer of the orchestrator settings
  * container (see `ui-templates.js` → `buildOrchestratorSettingsHtml`).
- * Renders the `NOTES_PANEL_TEMPLATE` from `ui-templates.js`, attaches a
+ * Renders `renderNotesPanelTemplate` from `ui-templates.js`, attaches a
  * floor-state adapter via `attachNotesFloorState`, and wires up the
  * Open/Closed tab switcher plus the per-row Close / Edit / Delete
  * actions.
@@ -22,7 +22,8 @@
  * floor-state plumbing.
  */
 
-import { NOTES_PANEL_TEMPLATE } from './ui-templates.js';
+import { renderNotesPanelTemplate } from './ui-templates.js';
+import { escapeHtml } from '../../lib/html-escape.js';
 import { attachNotesFloorState, onNotesChanged } from './loop-runtime.js';
 import { i18n as t } from './i18n.js';
 
@@ -73,7 +74,7 @@ function toastReasonForUser(verb, result) {
 export async function mountNotesPanel(host, context) {
     if (!host || host.dataset.luker_notes_mounted === '1') return;
     host.dataset.luker_notes_mounted = '1';
-    host.insertAdjacentHTML('beforeend', NOTES_PANEL_TEMPLATE);
+    host.insertAdjacentHTML('beforeend', renderNotesPanelTemplate({ escapeHtml, i18n: t }));
 
     let fs = null;
 
@@ -99,7 +100,7 @@ export async function mountNotesPanel(host, context) {
     await reattachFloorState();
     if (!fs) {
         const list = host.querySelector('#luker-notes-list');
-        if (list) list.innerHTML = '<li class="luker-notes-empty" data-i18n="No open notes yet">No open notes yet</li>';
+        if (list) list.innerHTML = `<li class="luker-notes-empty">${escapeHtml(t('No open notes yet'))}</li>`;
         // Even without floor state on mount, still wire the CHAT_CHANGED
         // handler — when the user switches to a chat that DOES have a
         // floor state, the next event re-attaches and the panel comes
@@ -121,13 +122,13 @@ export async function mountNotesPanel(host, context) {
         const list = host.querySelector('#luker-notes-list');
         if (!list) return;
         if (!fs) {
-            list.innerHTML = `<li class="luker-notes-empty" data-i18n="No ${currentTab} notes yet">No ${currentTab} notes yet</li>`;
+            list.innerHTML = `<li class="luker-notes-empty">${escapeHtml(t(currentTab === 'closed' ? 'No closed notes yet' : 'No open notes yet'))}</li>`;
             return;
         }
         const all = await fs.listAcrossFloors();
         const filtered = (Array.isArray(all) ? all : []).filter(e => (e?.status ?? 'open') === currentTab);
         if (filtered.length === 0) {
-            list.innerHTML = `<li class="luker-notes-empty" data-i18n="No ${currentTab} notes yet">No ${currentTab} notes yet</li>`;
+            list.innerHTML = `<li class="luker-notes-empty">${escapeHtml(t(currentTab === 'closed' ? 'No closed notes yet' : 'No open notes yet'))}</li>`;
             return;
         }
         list.innerHTML = '';

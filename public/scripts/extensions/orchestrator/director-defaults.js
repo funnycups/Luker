@@ -19,7 +19,7 @@
  * would produce two same-named tool schemas in the LLM's tools array.
  */
 
-import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persistence.js';
+import { DEFAULT_LAYER2_CUSTOMS, sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { sanitizeLorebookFilter } from './lorebook-filter.js';
@@ -68,55 +68,16 @@ export function getDirectorLimitBounds() {
     return DIRECTOR_LIMIT_BOUNDS;
 }
 
-// Canonical memory verb list passed to the legacy translator in
-// `sanitizeAgentToolFlags`. Spelled out here (rather than imported from
-// `persistence.js`'s private `MEMORY_TOOL_NAMES`) so director-defaults
-// stays self-contained, matching the loose-coupling note on that const.
-// `buildDefaultDirectorTools` and `buildMinimalDirectorTools` both read
-// from this list; flipping a verb on/off across both presets at once is
-// a single-line edit.
-const DIRECTOR_LEGACY_MEMORY_VERBS = Object.freeze([
-    'schema',
-    'list_candidates',
-    'edge_summary',
-    'node_brief',
-    'expand_seeds',
-    'keyword_search',
-    'vector_search',
-    'find_by_name',
-    'compaction_candidates',
-    'node_create',
-    'node_edit',
-    'node_delete',
-    'link_upsert',
-    'link_delete',
-    'compact_nodes',
-]);
-
-const DIRECTOR_LEGACY_SEARCH_VERBS = Object.freeze(['search', 'visit']);
-
-function buildLegacyVerbBag(verbs, value) {
-    const out = {};
-    for (const verb of verbs) out[verb] = value;
-    return out;
+function buildLayer2CustomFlags(enabled) {
+    return Object.fromEntries(Object.keys(DEFAULT_LAYER2_CUSTOMS).map(name => [name, enabled]));
 }
 
 function buildDefaultDirectorTools() {
-    // defaultAllOn: true → every verb (chat.read_range, chat.search, …)
-    // starts enabled. forceFinalize: false → finalize is NOT forced on; we
-    // explicitly override it to false below because director has its own
-    // finalize tool with the same name.
-    //
-    // memory + search tools live in Layer-2 and route through
-    // `tools.custom`. The sanitizer's defaultAllOn applies to the
-    // namespaces it manages (note / chat / lorebook / collab), but
-    // custom-tool flags only flip on when explicitly listed. Spell out
-    // the legacy memory_* / search_* verbs here so the director's
-    // default ships with the same enabled tool set users had before
-    // the namespace drop.
+    // defaultAllOn: true → every built-in namespace verb starts enabled.
+    // Layer-2 custom tools (memory_* / search_*) come from the shared
+    // DEFAULT_LAYER2_CUSTOMS table in persistence.js.
     const input = {
-        memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, true),
-        search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, true),
+        custom: buildLayer2CustomFlags(true),
         // Explicit off for sub-agent draft editing on brand-new profiles.
         // `defaultAllOn: true` below would otherwise flip these on, but
         // granting sub-agents write/patch on the message body is a
@@ -132,19 +93,12 @@ function buildDefaultDirectorTools() {
 
 function buildMinimalDirectorTools() {
     // Same default-all-on shape as the Full preset (notes / chat / lorebook /
-    // collab default-on), but every memory_* and search_* Layer-2 verb is
-    // explicitly disabled. Without these explicit `false` entries Layer-2's
-    // default-on policy (`customFlags[name] !== false` in
-    // `getEnabledToolSchemas`) would silently surface every memory / search
-    // tool to the director regardless of preset choice — defeating the whole
-    // point of the Minimal split. The legacy translator in
-    // `sanitizeAgentToolFlags` turns `tools.memory.<verb> = false` into
-    // `tools.custom.memory_<verb> = false`, which IS recognized by the
-    // runtime as "explicitly off".
+    // collab default-on), with every memory_* and search_* Layer-2 verb from
+    // DEFAULT_LAYER2_CUSTOMS explicitly set false so the runtime's default-on
+    // Layer-2 policy does not surface them in Minimal presets.
     const input = {
-        memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, false),
-        search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, false),
-        // See `buildFullDirectorTools` — same rationale for opting sub-
+        custom: buildLayer2CustomFlags(false),
+        // See `buildDefaultDirectorTools` — same rationale for opting sub-
         // agent draft editing OUT of the brand-new-profile default.
         message: { write_message: false, apply_message_patches: false },
     };

@@ -35,92 +35,11 @@ async function readOrch(rel) {
     return fs.readFile(path.resolve(ORCH_DIR, rel), 'utf8');
 }
 
-let normalizeMessageShape;
-let ORCH_TOOL_DISPLAY;
-
-beforeAll(async () => {
-    ({ normalizeMessageShape } = await import(
-        '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js'
-    ));
-    ({ ORCH_TOOL_DISPLAY } = await import(
-        '../../public/scripts/extensions/orchestrator/iter-studio/tool-display.js'
-    ));
-});
-
 describe('ORCH-1: luker_orch_simulate is classified as a read tool', () => {
-    test('tool-display map classifies simulate as read-type', () => {
-        expect(ORCH_TOOL_DISPLAY.luker_orch_simulate?.type).toBe('read');
-    });
-
     test('iterate-target recognizes simulate via isRead / SIMULATE_TOOL_NAME', async () => {
         const src = await readOrch('lens/iterate-target.js');
         expect(src).toMatch(/SIMULATE_TOOL_NAME\s*=\s*['"]luker_orch_simulate['"]/);
         expect(src).toMatch(/isRead\s*\(/);
-    });
-
-    test('persisted assistant message round-trips simulate toolResults', () => {
-        // The simulate read-path persists `{simulated:true, message}` (or
-        // the executor's real simulation payload) on assistantMsg.toolResults.
-        // Verify normalizeMessageShape preserves that on disk round-trip.
-        const m = {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Simulated.',
-            at: 100,
-            toolCalls: [{ id: 'call-1', name: 'luker_orch_simulate', args: {} }],
-            toolResults: [{
-                tool_call_id: 'call-1',
-                content: { simulated: true, message: 'simulation complete' },
-                status: 'ok',
-            }],
-        };
-        const n = normalizeMessageShape(m, 1);
-        expect(n.toolResults).toEqual(m.toolResults);
-        expect(n.toolCalls).toEqual(m.toolCalls);
-    });
-});
-
-describe('ORCH-6: normalizeMessageShape preserves toolResults across roundtrip', () => {
-    test('preserves toolResults on reload', () => {
-        const m = {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Listed.',
-            at: 100,
-            toolCalls: [{ id: 'c1', name: 'lorebook_list', args: { book_name: 'main' } }],
-            toolResults: [{
-                tool_call_id: 'c1',
-                content: { entries: [{ uid: 1, name: 'Foo' }] },
-                status: 'ok',
-            }],
-        };
-        const n = normalizeMessageShape(m, 1);
-        expect(Array.isArray(n.toolResults)).toBe(true);
-        expect(n.toolResults).toHaveLength(1);
-        expect(n.toolResults[0].tool_call_id).toBe('c1');
-    });
-
-    test('does NOT add toolResults when missing', () => {
-        const m = {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Hi',
-            at: 100,
-        };
-        const n = normalizeMessageShape(m, 1);
-        expect(n.toolResults).toBeUndefined();
-    });
-
-    test('drops empty toolResults array (Array.isArray gate)', () => {
-        const m = {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Hi',
-            at: 100,
-            toolResults: [],
-        };
-        const n = normalizeMessageShape(m, 1);
-        expect(n.toolResults).toBeUndefined();
     });
 });
 
@@ -173,28 +92,6 @@ describe('ORCH-2 / ORCH-3 / ORCH-4: system prompt references only real tool name
 });
 
 describe('ORCH-5: reset rejection produces a system + tool error result', () => {
-    test('rejected reset message persists with status=fail and error content', () => {
-        // Synthetic shape — mirrors what runIterationTurn pushes onto
-        // assistantMsg.toolResults for rejected reset calls. Round-trip
-        // through normalizeMessageShape so the persistence layer
-        // doesn't strip the fail status.
-        const msg = normalizeMessageShape({
-            id: 'a-1',
-            role: 'assistant',
-            content: '',
-            at: 1,
-            toolCalls: [{ id: 'reset_call_1', name: 'luker_orch_reset_live_to_blank', args: {} }],
-            toolResults: [{
-                tool_call_id: 'reset_call_1',
-                content: { error: 'Reset rejected: this card already has an override.' },
-                status: 'fail',
-            }],
-        }, 1);
-        expect(msg.toolResults).toHaveLength(1);
-        expect(msg.toolResults[0].status).toBe('fail');
-        expect(String(msg.toolResults[0].content?.error || '')).toMatch(/Reset rejected/);
-    });
-
     test('iterate-target rejection branches surface Reset rejected error', async () => {
         const src = await readOrch('lens/iterate-target.js');
         expect(src).toMatch(/Reset rejected/);

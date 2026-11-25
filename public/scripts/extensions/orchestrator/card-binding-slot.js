@@ -12,10 +12,11 @@
  */
 
 import { i18n, i18nFormat } from './i18n.js';
+import { ORCH_PRESET_MODES } from './preset-modes.js';
 
-export const ORCHESTRATOR_BINDING_SLOT_ID = 'orchestrator-override';
+const ORCHESTRATOR_BINDING_SLOT_ID = 'orchestrator-override';
 
-const MODE_KEYS = ['spec', 'agenda', 'loop', 'director'];
+const MODE_KEYS = ORCH_PRESET_MODES;
 const LEGACY_OVERRIDE_KEYS = ['spec', 'presets', 'presetPatch', 'agenda', 'loop', 'director', 'mode'];
 const OVERRIDE_CONTAINER_KEYS = ['presetLibraries', 'activePresetIds', 'override', 'overrideEnabled'];
 
@@ -115,7 +116,9 @@ export function registerOrchestratorCardBindingSlot(context) {
                 character?.data?.extensions?.orchestrator,
                 preserved,
             );
-            await context.writeExtensionField(characterId, 'orchestrator', nextExt);
+            if (await context.writeExtensionField(characterId, 'orchestrator', nextExt) === false) {
+                throw new Error('Failed to save character orchestration binding');
+            }
         },
     });
 }

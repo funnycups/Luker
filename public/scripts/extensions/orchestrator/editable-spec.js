@@ -19,17 +19,23 @@
  *     through `apiPresetName` / `promptPresetName` from `agent-resolution.js`.
  *   - `createAgendaPlannerDraft(seed)` is the agenda planner equivalent,
  *     pre-seeded with `defaultAgendaPlanner`.
- *   - `sanitizePresetMap` / `mergePresetMaps` normalize an arbitrary
- *     preset map before it lands either in storage or in an editor draft.
+ *   - `sanitizePresetMap` normalizes an arbitrary preset map before it
+ *     lands either in storage or in an editor draft. Values go through
+ *     `createPresetDraft`; keys are kept verbatim because nodes reference
+ *     presets by the stored key.
  *   - `toEditablePresetMap` / `toEditableSpec` convert from persistence
  *     shape to editor shape, ensuring at minimum a `distiller` preset and
  *     one default stage with one node.
  *   - `serializeEditorSpec` / `serializeEditorPresetMap` go the other
  *     way for save / export.
- *   - `sanitizeIdentifierToken(value, fallback)` is the shared id slug
- *     helper — kebab-friendly characters only, replaces whitespace with
- *     underscore, falls back to the supplied default when the value
- *     normalizes to empty.
+ *   - `normalizeIdToken(value, fallback)` is the shared id helper for
+ *     preset keys, stage / node ids and agent ids: it trims and falls
+ *     back to the supplied default when the value is empty. Ids are
+ *     otherwise kept as written — any non-empty string is a valid JSON
+ *     key and every DOM use escapes it — so ids in any script stay
+ *     addressable and distinct ids never merge.
+ *   - `resolveStoredIdToken` / `resolveStoredIdReference` resolve a
+ *     requested id or a reference against the stored keys.
  *
  * All functions are pure and side-effect-free except for the in-place
  * `presets[defaultPreset] = …` writes in `toEditableSpec`, which mutates
@@ -60,12 +66,58 @@ function cloneSkillsField(skills) {
     };
 }
 
-export function sanitizeIdentifierToken(value, fallback = '') {
-    const normalized = String(value || '')
-        .trim()
-        .replace(/\s+/g, '_')
-        .replace(/[^a-zA-Z0-9_-]/g, '_');
+export function normalizeIdToken(value, fallback = '') {
+    const normalized = value === null || value === undefined ? '' : String(value).trim();
     return normalized || String(fallback || '');
+}
+
+/**
+ * Resolve a requested id against stored ids, which are kept verbatim.
+ * An exact match wins — the raw request first, then its trimmed form —
+ * then a unique stored id that equals the request after trimming. Several
+ * stored ids matching at the same step is ambiguous rather than "first".
+ *
+ * @param {string[]} storedIds
+ * @param {unknown} value requested id
+ * @returns {{ status: 'empty' }
+ *   | { status: 'found', id: string, index: number }
+ *   | { status: 'missing', id: string }
+ *   | { status: 'ambiguous', id: string, matches: string[] }}
+ *   `index` is the position in `storedIds`; `missing` carries the trimmed
+ *   request for callers that create the id.
+ */
+export function resolveStoredIdToken(storedIds, value) {
+    const raw = value === null || value === undefined ? '' : String(value);
+    const trimmed = raw.trim();
+    if (!trimmed) {
+        return { status: 'empty' };
+    }
+    const ids = (Array.isArray(storedIds) ? storedIds : []).map(id => String(id ?? ''));
+    const matchesOf = predicate => ids.reduce((out, id, index) => (predicate(id) ? [...out, index] : out), []);
+    for (const predicate of [id => id === raw, id => id === trimmed, id => id.trim() === trimmed]) {
+        const indexes = matchesOf(predicate);
+        if (indexes.length === 1) {
+            return { status: 'found', id: ids[indexes[0]], index: indexes[0] };
+        }
+        if (indexes.length > 1) {
+            return { status: 'ambiguous', id: trimmed, matches: indexes.map(index => ids[index]) };
+        }
+    }
+    return { status: 'missing', id: trimmed };
+}
+
+/**
+ * Resolve a reference to a key of `map` with `resolveStoredIdToken`.
+ * Returns the stored key it resolves to, otherwise the trimmed reference,
+ * which is then not a key: an ambiguous reference reads as missing.
+ *
+ * @param {object} map keyed by stored ids
+ * @param {unknown} value reference
+ * @returns {string}
+ */
+export function resolveStoredIdReference(map, value) {
+    const resolved = resolveStoredIdToken(Object.keys(map && typeof map === 'object' ? map : {}), value);
+    return resolved.status === 'found' ? resolved.id : normalizeIdToken(value);
 }
 
 export function createPresetDraft(seed = {}) {
@@ -116,14 +168,11 @@ export function sanitizePresetMap(presets) {
         if (FORBIDDEN_PRESET_KEYS.has(key)) {
             continue;
         }
-        if (!value || typeof value !== 'object') {
+        const presetId = normalizeIdToken(key);
+        if (!value || typeof value !== 'object' || !presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
             continue;
         }
-        const presetId = sanitizeIdentifierToken(key, '');
-        if (!presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
-            continue;
-        }
-        normalized[presetId] = createPresetDraft(value);
+        normalized[key] = createPresetDraft(value);
     }
 
     return normalized;
@@ -138,22 +187,19 @@ export function mergePresetMaps(basePresets, patchPresets) {
         if (FORBIDDEN_PRESET_KEYS.has(key)) {
             continue;
         }
-        if (!rawValue || typeof rawValue !== 'object') {
+        const presetId = normalizeIdToken(key);
+        if (!rawValue || typeof rawValue !== 'object' || !presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
             continue;
         }
-        const presetId = sanitizeIdentifierToken(key, '');
-        if (!presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
-            continue;
-        }
-        merged[presetId] = createPresetDraft({
-            ...(base[presetId] || {}),
+        const targetKey = Object.prototype.hasOwnProperty.call(base, key) ? key : presetId;
+        merged[targetKey] = createPresetDraft({
+            ...(base[targetKey] || {}),
             ...rawValue,
         });
     }
 
     return sanitizePresetMap(merged);
 }
-
 export function toEditablePresetMap(presets) {
     const normalized = {};
     const source = sanitizePresetMap(presets);
@@ -173,16 +219,22 @@ export function toEditableSpec(spec, presets) {
 
     const stages = (Array.isArray(sanitized.stages) ? sanitized.stages : [])
         .map((stage, stageIndex) => {
-            const stageId = sanitizeIdentifierToken(stage?.id, `stage_${stageIndex + 1}`);
+            const stageId = normalizeIdToken(stage?.id, `stage_${stageIndex + 1}`);
             const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
             const normalizedNodes = nodes.map((node, nodeIndex) => {
                 const normalizedNode = normalizeNodeSpec(node);
-                const preset = sanitizeIdentifierToken(normalizedNode.preset || normalizedNode.id, defaultPreset);
-                if (!presets[preset]) {
+                const presetRef = normalizedNode.preset || normalizedNode.id;
+                const resolvedPreset = resolveStoredIdToken(Object.keys(presets), presetRef);
+                const preset = resolvedPreset.status === 'found'
+                    ? resolvedPreset.id
+                    : normalizeIdToken(presetRef, defaultPreset);
+                // An ambiguous ref stays missing rather than gaining an
+                // empty preset that would then win the exact match.
+                if (!presets[preset] && resolvedPreset.status !== 'ambiguous') {
                     presets[preset] = createPresetDraft();
                 }
                 const editableNode = {
-                    id: sanitizeIdentifierToken(normalizedNode.id || preset, `node_${nodeIndex + 1}`),
+                    id: normalizeIdToken(normalizedNode.id || preset, `node_${nodeIndex + 1}`),
                     preset,
                     type: normalizeNodeType(normalizedNode.type),
                     userPromptTemplate: String(normalizedNode.userPromptTemplate || ''),
@@ -215,6 +267,9 @@ export function toEditableSpec(spec, presets) {
         // null (no profile default) and the full custom-tool list.
         defaultTools: sanitized.defaultTools === undefined ? null : sanitized.defaultTools,
         customTools: Array.isArray(sanitized.customTools) ? sanitized.customTools : [],
+        // Carried so an emptied custom tool list is not re-seeded with
+        // the defaults when the draft is serialized back.
+        seededDefaultCustomTools: sanitized.seededDefaultCustomTools === true,
         skills: cloneSkillsField(sanitized.skills) || { visible: ['*'], deny: [] },
         // Round-trip the per-preset lorebook filter: sanitizeSpec always
         // emits a canonical `{ bookPattern, entryPattern }` shape, so the
@@ -253,12 +308,12 @@ export function serializeEditorSpec(editorSpec) {
     const payload = {
         stages: stages
             .map((stage, stageIndex) => ({
-                id: sanitizeIdentifierToken(stage?.id, `stage_${stageIndex + 1}`),
+                id: normalizeIdToken(stage?.id, `stage_${stageIndex + 1}`),
                 mode: String(stage?.mode || 'serial').toLowerCase() === 'parallel' ? 'parallel' : 'serial',
                 nodes: (Array.isArray(stage?.nodes) ? stage.nodes : [])
                     .map((node, nodeIndex) => {
-                        const id = sanitizeIdentifierToken(node?.id, `node_${nodeIndex + 1}`);
-                        const preset = sanitizeIdentifierToken(node?.preset, id);
+                        const id = normalizeIdToken(node?.id, `node_${nodeIndex + 1}`);
+                        const preset = normalizeIdToken(node?.preset, id);
                         const userPromptTemplate = String(node?.userPromptTemplate || '').trim();
 
                         const serialized = { id, preset, type: normalizeNodeType(node?.type) };
@@ -279,6 +334,7 @@ export function serializeEditorSpec(editorSpec) {
             }))
             .filter(stage => Array.isArray(stage.nodes) && stage.nodes.length > 0),
         customTools: Array.isArray(editorSpec?.customTools) ? editorSpec.customTools : [],
+        seededDefaultCustomTools: editorSpec?.seededDefaultCustomTools === true,
     };
     if (hasDefaultToolsKey) {
         payload.defaultTools = editorSpec.defaultTools;
@@ -297,4 +353,40 @@ export function serializeEditorSpec(editorSpec) {
 
 export function serializeEditorPresetMap(editorPresets) {
     return sanitizePresetMap(editorPresets || {});
+}
+
+/**
+ * Build a spec editor draft from an iteration session's working profile
+ * (`{ spec, presets }`), the shape the character-scope commit persists.
+ */
+export function createIterationEditorFromWorkingProfile(workingProfile) {
+    const safeSpec = sanitizeSpec(workingProfile?.spec);
+    const safePresets = sanitizePresetMap(workingProfile?.presets);
+    return {
+        spec: toEditableSpec(safeSpec, toEditablePresetMap(safePresets)),
+        presets: toEditablePresetMap(safePresets),
+    };
+}
+
+/**
+ * Whether a node of `spec` references the stored preset key `presetId`.
+ * Refs resolve against `presets` with `resolveStoredIdToken`; an ambiguous
+ * ref counts as referencing every key it matches, since removing one of
+ * them would make the ref resolve to another.
+ */
+export function isPresetReferencedInSpec(spec, presetId, presets) {
+    const targetPresetId = String(presetId ?? '');
+    if (!normalizeIdToken(targetPresetId)) {
+        return false;
+    }
+    const presetIds = Object.keys(presets && typeof presets === 'object' ? presets : {});
+    const stages = Array.isArray(spec?.stages) ? spec.stages : [];
+    return stages.some(stage =>
+        (stage?.nodes || []).some(node => {
+            const normalizedNode = normalizeNodeSpec(node);
+            const resolved = resolveStoredIdToken(presetIds, normalizedNode?.preset || normalizedNode?.id);
+            if (resolved.status === 'found') return resolved.id === targetPresetId;
+            if (resolved.status === 'ambiguous') return resolved.matches.includes(targetPresetId);
+            return false;
+        }));
 }

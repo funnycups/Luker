@@ -27,7 +27,9 @@
  * popup + CHARACTER_IMPORTED wiring sits on top in main.js.
  */
 
-const ALL_MODES = ['spec', 'agenda', 'loop', 'director'];
+import { ORCH_PRESET_MODES } from './preset-modes.js';
+
+const ALL_MODES = ORCH_PRESET_MODES;
 
 function isNonNullObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

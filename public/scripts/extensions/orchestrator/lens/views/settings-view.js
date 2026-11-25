@@ -4,6 +4,8 @@
 // run limits, capsule injection and the iteration AI.
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
+import { escapeHtml } from '../../../../lib/html-escape.js';
+import { renderFieldHelpButtonElement } from '../../../../lib/field-help-button.js';
 import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
 import { i18n } from '../i18n.js';
 import { button, checkRow, sectionTitle, emptyState } from '../ui/components.js';
@@ -217,6 +219,19 @@ export function createSettingsView(app) {
                 number('Review rerun max rounds', 'reviewRerunMaxRounds', runtimeLimitsSummary));
         }
 
+        const injectionPosition = () => {
+            const row = fieldWrap('capsuleInjectPosition', formRow(i18n('Injection position'), selectInput(positions, String(values.capsuleInjectPosition), (value) => {
+                liveValues.capsuleInjectPosition = value;
+                access.set('capsuleInjectPosition', value);
+                capsuleSummary.update();
+                render();
+            })));
+            put(row.firstElementChild, renderFieldHelpButtonElement({
+                title: i18n('About injection position'),
+                bodyHtml: escapeHtml(i18n('Injection position help body')),
+            }));
+            return row;
+        };
         const runPanelApi = Luker.getContext()?.runPanel;
         const dockPrefs = runPanelApi?.getRunDockPrefs?.() || { autoOpen: true, defaultSize: 'small' };
 
@@ -238,12 +253,7 @@ export function createSettingsView(app) {
             number('RPM limit (0 = unlimited)', 'rpmLimit', crossModeLimitsSummary));
 
         const capsuleSec = snapshot.mode === 'director' ? null : summarizedSection('Capsule injection', capsuleSummary,
-            fieldWrap('capsuleInjectPosition', formRow(i18n('Injection position'), selectInput(positions, String(values.capsuleInjectPosition), (value) => {
-                liveValues.capsuleInjectPosition = value;
-                access.set('capsuleInjectPosition', value);
-                capsuleSummary.update();
-                render();
-            }))),
+            injectionPosition(),
             atDepth ? number('Injection depth', 'capsuleInjectDepth', capsuleSummary) : null,
             atDepth ? fieldWrap('capsuleInjectRole', formRow(i18n('Injection role'), selectInput(roleOptions, String(values.capsuleInjectRole), set('capsuleInjectRole', capsuleSummary)))) : null,
             fieldWrap('capsuleCustomInstruction', formRow(i18n('Custom instruction'), textArea(values.capsuleCustomInstruction, set('capsuleCustomInstruction', capsuleSummary), {

@@ -188,6 +188,7 @@ describe('agenda mode: Open Notes reach planner + agent (single-round path)', ()
         expect(userMsg.content).toContain('[note_alpha] planted foreshadowing about the storm');
         expect(userMsg.content).toContain('[note_beta] promise: reunion by chapter 5');
         expect(userMsg.content).not.toContain('already-paid-off');
+        expect(userMsg.content).not.toContain('## planner_contract');
     });
 
     test('agenda single-round agent receives the ## Open Notes block inlined at the tail of userText (cache-aligned)', async () => {

@@ -23,10 +23,8 @@ const __ctx = Luker.getContext();
 const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 const POPUP_RESULT = __ctx.POPUP_RESULT;
-import { escapeHtml as esc } from './html-escape.js';
-
-const AsyncFunction = (async () => {}).constructor;
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+import { escapeHtml as esc } from '../../lib/html-escape.js';
+import { compileCustomToolBody, isValidCustomToolName } from './custom-tools-sanitize.js';
 
 function buildPopupHtml(initial, t) {
     const v = initial && typeof initial === 'object' ? initial : {};
@@ -135,7 +133,7 @@ export async function openCustomToolEditor({ initial, nameInUse, nameConflictsBu
                 return true;
             }
             const raw = readFormState(p.dlg);
-            if (!NAME_PATTERN.test(raw.name)) {
+            if (!isValidCustomToolName(raw.name)) {
                 showValidationError(p.dlg, t('Name must start with a letter and use only a-z, A-Z, 0-9, _ (max 64).'));
                 return false;
             }
@@ -158,16 +156,14 @@ export async function openCustomToolEditor({ initial, nameInUse, nameConflictsBu
                 return false;
             }
             try {
-                // eslint-disable-next-line no-new
-                new AsyncFunction('args', 'ctx', raw.body);
+                compileCustomToolBody(raw.body);
             } catch (err) {
                 showValidationError(p.dlg, `${t('Function body has syntax error')}: ${err.message}`);
                 return false;
             }
             if (raw.simulateBody) {
                 try {
-                    // eslint-disable-next-line no-new
-                    new AsyncFunction('args', 'ctx', raw.simulateBody);
+                    compileCustomToolBody(raw.simulateBody);
                 } catch (err) {
                     showValidationError(p.dlg, `${t('Simulate body has syntax error')}: ${err.message}`);
                     return false;
