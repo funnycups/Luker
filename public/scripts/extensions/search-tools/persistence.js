@@ -37,14 +37,7 @@ import {
     getPlayableMessageAt,
     normalizeAnchorPlayableFloor,
 } from './anchors.js';
-
-function getStateErrors(context = null) {
-    const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
-    if (!se) {
-        throw new Error('Luker.getContext().stateErrors is unavailable');
-    }
-    return se;
-}
+import { STATE_ERROR_REASONS, makeStateError } from '../../lib/state-errors.js';
 
 const STATE_NAMESPACE = 'luker_search_tools_anchors';
 
@@ -185,7 +178,6 @@ export async function loadManagedEntries(context) {
  * @returns {Promise<{ ok: boolean, updated?: boolean, reason?: string, hint?: string }>}
  */
 export async function commitManagedEntries(context, anchor, entries) {
-    const { STATE_ERROR_REASONS, makeStateError } = getStateErrors(context);
     const playableFloor = normalizeAnchorPlayableFloor(anchor?.playableFloor);
     if (!playableFloor) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'invalid anchor playableFloor');

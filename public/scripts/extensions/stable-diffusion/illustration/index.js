@@ -68,6 +68,7 @@ export async function initIllustration(bridge) {
             apiPresetName: String(currentProfile?.name || ''),
             llmPresetName: String(currentLlmPreset || ''),
         },
+        now: 0,
         presetNames: {
             tagStyle: t`Tag style`,
             naturalStyle: t`Natural language style`,

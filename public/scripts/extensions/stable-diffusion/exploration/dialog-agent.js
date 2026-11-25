@@ -270,14 +270,28 @@ export async function runCharacterBuilderTurn({
             roundIndex,
             assistantText,
             reasoning,
+            signature: response?.signature || null,
             reasoningBlocks: response?.reasoningBlocks || null,
             reasoningDetails: response?.reasoningDetails || null,
+            nativeParts: response?.nativeParts || null,
+            nativeContentBlocks: response?.nativeContentBlocks || null,
+            responsesOutputItems: response?.responsesOutputItems || null,
             toolCalls: calls,
         });
 
         if (calls.length === 0) {
             finalText = assistantText;
-            nextHistory.push({ role: 'assistant', content: finalText });
+            nextHistory.push({
+                role: 'assistant',
+                content: finalText,
+                ...(reasoning ? { reasoning } : {}),
+                ...(response?.signature ? { signature: response.signature } : {}),
+                ...(Array.isArray(response?.reasoningBlocks) && response.reasoningBlocks.length > 0 ? { reasoning_blocks: response.reasoningBlocks } : {}),
+                ...(Array.isArray(response?.reasoningDetails) && response.reasoningDetails.length > 0 ? { reasoning_details: response.reasoningDetails } : {}),
+                ...(Array.isArray(response?.nativeParts) && response.nativeParts.length > 0 ? { native_parts: response.nativeParts } : {}),
+                ...(Array.isArray(response?.nativeContentBlocks) && response.nativeContentBlocks.length > 0 ? { native_content_blocks: response.nativeContentBlocks } : {}),
+                ...(Array.isArray(response?.responsesOutputItems) && response.responsesOutputItems.length > 0 ? { responses_output_items: response.responsesOutputItems } : {}),
+            });
             trace.rounds.push(roundRecord);
             onTrace?.({ type: 'round_end', roundIndex, status: 'done' });
             break;
@@ -464,19 +478,23 @@ export async function runCharacterBuilderTurn({
                 name: callName,
                 args: callArgs,
                 result: toolResult,
+                raw: rawCall?.raw,
+                signature: rawCall?.signature,
+                extra_content: rawCall?.extra_content,
             });
         }
 
-        appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
+        const roundMeta = {
             reasoning,
+            signature: response?.signature,
             reasoningBlocks: response?.reasoningBlocks,
             reasoningDetails: response?.reasoningDetails,
-        });
-        appendStandardToolRoundMessages(nextHistory, executedCalls, assistantText, {
-            reasoning,
-            reasoningBlocks: response?.reasoningBlocks,
-            reasoningDetails: response?.reasoningDetails,
-        });
+            nativeParts: response?.nativeParts,
+            nativeContentBlocks: response?.nativeContentBlocks,
+            responsesOutputItems: response?.responsesOutputItems,
+        };
+        appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, roundMeta);
+        appendStandardToolRoundMessages(nextHistory, executedCalls, assistantText, roundMeta);
 
         if (visualInspection && imagesForPreview.length > 0) {
             const previewParts = [];

@@ -40,6 +40,12 @@ import { VolcengineTtsProvider } from './volcengine.js';
 import { applyLocale, t, translate } from '/scripts/i18n.js';
 import { renderTtsAttributionSelectors, loadAttributionMap, readAttributionFor, parseAndCacheAttribution, decorateMessageWithPlayButtons, ensureNpcVoiceMapEntries } from './npc-attribution.js';
 import { extractQuoteSegments, attachQuoteIndices } from './quote-segments.js';
+import {
+    DEFAULT_VOICE_MARKER,
+    DISABLED_VOICE_MARKER,
+    SYSTEM_VOICE_ALIASES,
+    defaultSettings,
+} from './defaults.js';
 import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import { prefersReducedMotion } from '../../lens-shared/util.js';
 import {
@@ -58,10 +64,6 @@ let lastMessageHash = null;
 let periodicMessageGenerationTimer = null;
 let lastPositionOfParagraphEnd = -1;
 let currentInitVoiceMapPromise = null;
-
-const DEFAULT_VOICE_MARKER = '[Default Voice]';
-const DISABLED_VOICE_MARKER = 'disabled';
-const SYSTEM_VOICE_ALIASES = new Set(['Luker System', 'SillyTavern System']);
 
 export function isSystemVoiceAlias(name) {
     return SYSTEM_VOICE_ALIASES.has(name);
@@ -922,6 +924,7 @@ function loadSettings() {
     if (extension_settings.tts.currentProvider === 'Coqui') {
         extension_settings.tts.currentProvider = 'System';
     }
+    delete extension_settings.tts.ttsEnabled;
     $('#tts_provider').val(extension_settings.tts.currentProvider);
     $('#tts_enabled').prop(
         'checked',
@@ -1144,22 +1147,6 @@ export function mountTtsBehaviorSummaries() {
         }, { signal: ttsSummaryAbort.signal });
     }
 }
-
-const defaultSettings = {
-    voiceMap: '',
-    ttsEnabled: false,
-    currentProvider: 'ElevenLabs',
-    auto_generation: true,
-    narrate_user: false,
-    playback_rate: 1,
-    multi_voice_enabled: false,
-    apply_regex: false,
-    regex_pattern: '',
-    npcAttributionEnabled: false,
-    npcAttributionApiPresetName: '',
-    npcAttributionPresetName: '',
-    npcAttributionRetryMax: 2,
-};
 
 function setTtsStatus(status, success) {
     $('#tts_status').text(status);

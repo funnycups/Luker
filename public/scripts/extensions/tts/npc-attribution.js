@@ -11,45 +11,27 @@
 import { extension_settings, getContext } from '../../extensions.js';
 import { saveSettingsDebounced } from '../../../script.js';
 import { getStringHash } from '../../utils.js';
+import {
+    renderConnectionProfileOptions as renderSharedConnectionProfileOptions,
+    renderOpenAIPresetOptions as renderSharedOpenAIPresetOptions,
+} from '../../lens-shared/preset-selectors.js';
 import { requestToolCallWithRetry } from '../../lib/iter-tool-calling.js';
 import { extractQuoteSegments } from './quote-segments.js';
 import { enqueueSegmentPlayback, initVoiceMap } from './index.js';
 import { translate } from '../../i18n.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
+import {
+    ATTRIBUTION_SYSTEM_PROMPT,
+    ATTRIBUTION_TOOL_NAME,
+    ATTRIBUTION_TOOL_PARAMETERS,
+    DEFAULT_VOICE_MARKER,
+    DISABLED_VOICE_MARKER,
+} from './defaults.js';
+
+export { ATTRIBUTION_TOOL_PARAMETERS };
 
 const MODULE_NAME = 'tts-npc-attribution';
 const STATE_NAMESPACE = 'tts';
-const DEFAULT_VOICE_MARKER = '[Default Voice]';
-const DISABLED_VOICE_MARKER = 'disabled';
-const ATTRIBUTION_TOOL_NAME = 'report_dialogue_attribution';
-
-export const ATTRIBUTION_TOOL_PARAMETERS = {
-    type: 'object',
-    required: ['segments'],
-    properties: {
-        segments: {
-            type: 'array',
-            items: {
-                type: 'object',
-                required: ['quote_text', 'speaker'],
-                properties: {
-                    quote_text: { type: 'string' },
-                    speaker: { type: ['string', 'null'] },
-                },
-            },
-        },
-    },
-    additionalProperties: false,
-};
-
-const ATTRIBUTION_SYSTEM_PROMPT = [
-    'Attribute each quoted line of dialogue in the message to its speaker.',
-    'Work only from textual evidence: surrounding narration, action text, and speaker tags.',
-    'The message author is a valid speaker. Characters from the roster are valid speakers.',
-    'If a name is not on the roster but the text clearly shows who spoke, return that name as written.',
-    'When you cannot decide, set speaker to null. Do not guess.',
-    'Return one segment per quoted line, in message order, with quote_text matching the quoted text.',
-].join('\n');
 
 function buildUserPrompt(context, attributionMap, message) {
     const roster = buildRoster(context, attributionMap);
@@ -298,46 +280,18 @@ export async function parseAndCacheAttribution(context, messageId, { force = fal
     }
 }
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;');
-}
-
-function getOpenAIPresetNames(context) {
-    const manager = context.getPresetManager?.('openai');
-    if (!manager || typeof manager.getAllPresets !== 'function') return [];
-    const names = manager.getAllPresets();
-    if (!Array.isArray(names)) return [];
-    return [...new Set(names.map(name => String(name || '').trim()).filter(Boolean))];
-}
-
 export function getTtsPresetOptions(context, selectedName = '') {
-    const selected = String(selectedName || '').trim();
-    const names = getOpenAIPresetNames(context);
-    const options = [`<option value="">${escapeHtml(translate('(Current preset)'))}</option>`];
-    for (const name of names) {
-        options.push(`<option value="${escapeHtml(name)}"${name === selected ? ' selected' : ''}>${escapeHtml(name)}</option>`);
-    }
-    if (selected && !names.includes(selected)) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(translate('(missing)'))}</option>`);
-    }
-    return options.join('');
+    return renderSharedOpenAIPresetOptions(context, selectedName, {
+        emptyLabel: translate('(Current preset)'),
+        missingLabel: translate('(missing)'),
+    });
 }
 
 export function getTtsConnectionOptions(selectedName = '') {
-    const selected = String(selectedName || '').trim();
-    const names = getChatCompletionConnectionProfiles().map(profile => profile.name);
-    const options = [`<option value="">${escapeHtml(translate('(Current API config)'))}</option>`];
-    for (const name of names) {
-        options.push(`<option value="${escapeHtml(name)}"${name === selected ? ' selected' : ''}>${escapeHtml(name)}</option>`);
-    }
-    if (selected && !names.includes(selected)) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(translate('(missing)'))}</option>`);
-    }
-    return options.join('');
+    return renderSharedConnectionProfileOptions(getChatCompletionConnectionProfiles(), selectedName, {
+        emptyLabel: translate('(Current API config)'),
+        missingLabel: translate('(missing)'),
+    });
 }
 
 export function renderTtsAttributionSelectors(context) {

@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { jest } from '@jest/globals';
+import { jest, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import {
+    installBrowserModuleContext,
+    installDomReadyJQuery,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 import { loadManagedEntries, resetFloorStateInstanceForTesting } from '../../public/scripts/extensions/search-tools/persistence.js';
 
-const __defaultStateErrors = globalThis.Luker?.getContext?.()?.stateErrors;
+const __defaultStateErrors = await loadStateErrorsApi();
 
 function makeLorebookContext() {
     const books = { __SEARCH_TOOLS__: { entries: {} } };
@@ -43,7 +48,8 @@ function makeLorebookContext() {
     };
 }
 
-globalThis.Luker = { getContext: () => makeLorebookContext().context };
+const jqueryEnv = installDomReadyJQuery();
+const browserEnv = installBrowserModuleContext(() => makeLorebookContext().context);
 
 // main.js transitively imports browser-only modules (`profile-resolver.js` ->
 // `openai.js` -> `textgen-models.js`) that touch `document` at load time. Stub
@@ -57,6 +63,11 @@ beforeAll(async () => {
     mod = await import('../../public/scripts/extensions/search-tools/main.js');
     settings.agentSystemPrompt = mod.DEFAULT_SETTINGS.agentSystemPrompt;
     settings.promptDefaultsInitialized = true;
+});
+
+afterAll(() => {
+    browserEnv.restore();
+    jqueryEnv.restore();
 });
 
 beforeEach(() => {

@@ -223,8 +223,12 @@ export async function runExplorationAgent({
             roundIndex,
             assistantText,
             reasoning,
+            signature: response?.signature || null,
             reasoningBlocks: response?.reasoningBlocks || null,
             reasoningDetails: response?.reasoningDetails || null,
+            nativeParts: response?.nativeParts || null,
+            nativeContentBlocks: response?.nativeContentBlocks || null,
+            responsesOutputItems: response?.responsesOutputItems || null,
             toolCalls: calls,
         });
 
@@ -349,13 +353,20 @@ export async function runExplorationAgent({
                 name: rawCall.name,
                 args: rawCall.args,
                 result: toolResult,
+                raw: rawCall?.raw,
+                signature: rawCall?.signature,
+                extra_content: rawCall?.extra_content,
             });
         }
 
         appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
             reasoning,
+            signature: response?.signature,
             reasoningBlocks: response?.reasoningBlocks,
             reasoningDetails: response?.reasoningDetails,
+            nativeParts: response?.nativeParts,
+            nativeContentBlocks: response?.nativeContentBlocks,
+            responsesOutputItems: response?.responsesOutputItems,
         });
 
         if (visualInspection && fetchedForPreview.length > 0) {

@@ -15,8 +15,12 @@
  * `tests/search-tools/entries-store.test.js`.
  */
 
-import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
-import { jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, jest } from '@jest/globals';
+import {
+    installBrowserModuleContext,
+    installDomReadyJQuery,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 
 import { createFloorStateWithDeps } from '../../public/scripts/floor-state.js';
 import {
@@ -149,7 +153,7 @@ function makeMainContext(chatRef) {
         saveSettings: () => {},
         saveSettingsDebounced: () => {},
         extensionSettings: { search_tools: { enabled: true, preRequestEnabled: false } },
-        stateErrors: globalThis.Luker?.getContext?.()?.stateErrors,
+        stateErrors: defaultStateErrors,
         secrets: { KEYS: {}, state: {} },
         escapeHtml: (s) => String(s ?? ''),
         getStringHash: (s) => String(s).length,
@@ -217,13 +221,20 @@ async function flush() {
     await new Promise((r) => setTimeout(r, 0));
 }
 
+const defaultStateErrors = await loadStateErrorsApi();
 const chatRef = { value: [] };
 const harness = makeMainContext(chatRef);
-globalThis.Luker = { getContext: () => harness.context };
+const jqueryEnv = installDomReadyJQuery();
+const browserEnv = installBrowserModuleContext(() => harness.context);
 
 let mod;
 beforeAll(async () => {
     mod = await import('../../public/scripts/extensions/search-tools/main.js');
+});
+
+afterAll(() => {
+    browserEnv.restore();
+    jqueryEnv.restore();
 });
 
 beforeEach(() => {

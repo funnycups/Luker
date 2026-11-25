@@ -1,4 +1,5 @@
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
+import { normalizeToolCallRetryMax } from '/scripts/lib/iter-tool-calling.js';
 import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import { buildSearchToolsLorebookSummary, buildSearchToolsMainSummary } from './behavior-summary-models.js';
 
@@ -45,6 +46,7 @@ export function createSearchToolsSettingsUi(deps) {
         getSettings,
         hasConfiguredSecret,
         i18n,
+        i18nFormat,
         listManagedEntries,
         manuallyDeleteManagedEntries,
         manuallyResetManagedEntries,
@@ -167,7 +169,7 @@ export function createSearchToolsSettingsUi(deps) {
             ${escapeHtml(i18n('Include world info'))}
         </label>
         <label for="search_tools_tool_call_retry_max">${escapeHtml(i18n('Tool call retry count'))}</label>
-        <input id="search_tools_tool_call_retry_max" class="text_pole" type="number" min="0" max="5" step="1" />
+        <input id="search_tools_tool_call_retry_max" class="text_pole" type="number" min="0" step="1" />
         <label for="search_tools_lorebook_position">${escapeHtml(i18n('Injection position'))}</label>
         <select id="search_tools_lorebook_position" class="text_pole">
             <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
@@ -355,7 +357,7 @@ export function createSearchToolsSettingsUi(deps) {
                 updateUiStatus(i18n('No shared search lorebook yet.'));
                 return;
             }
-            updateUiStatus(i18n(`Shared lorebook: ${lorebook.bookName} | Managed search entries: ${entryCount}`));
+            updateUiStatus(i18nFormat('Shared lorebook: ${0} | Managed search entries: ${1}', lorebook.bookName, entryCount));
         } catch (error) {
             console.warn(`[${MODULE_NAME}] Failed to refresh UI status`, error);
             updateUiStatus(i18n('Failed to inspect shared search lorebook.'));
@@ -788,7 +790,7 @@ export function createSearchToolsSettingsUi(deps) {
             saveSettingsDebounced();
         });
         root.on('change.searchTools', '#search_tools_tool_call_retry_max', function () {
-            settings.toolCallRetryMax = clampInteger(jQuery(this).val(), 0, 5, DEFAULT_SETTINGS.toolCallRetryMax);
+            settings.toolCallRetryMax = normalizeToolCallRetryMax(jQuery(this).val(), DEFAULT_SETTINGS.toolCallRetryMax);
             jQuery(this).val(String(settings.toolCallRetryMax));
             saveSettingsDebounced();
             refreshSummaries();

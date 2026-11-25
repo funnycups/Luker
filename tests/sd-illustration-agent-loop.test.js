@@ -1035,3 +1035,112 @@ describe('attachImageActivityDock shared Run Dock integration', () => {
         }));
     });
 });
+
+describe('illustration agent and studio store native replay preservation', () => {
+    test('runIllustrationAgent replays native provider turn metadata across tool rounds', async () => {
+        const capturedRounds = [];
+        const nativeParts = [{ functionCall: { name: 'read_character_profiles', args: { ids: ['char_lyra'] } }, thoughtSignature: 'sig-ill-g' }];
+        const nativeContentBlocks = [{ type: 'tool_use', id: 'call_read_native', name: 'read_character_profiles', input: { ids: ['char_lyra'] } }];
+        const responsesOutputItems = [{ type: 'function_call', call_id: 'call_read_native', name: 'read_character_profiles', arguments: '{"ids":["char_lyra"]}' }];
+        const profileStore = createSandboxProfileStore();
+        await profileStore.upsertProfile({ id: 'char_lyra', name: 'Lyra', description: 'Silver braid' });
+
+        const context = {
+            async generateTask(opts) {
+                capturedRounds.push(structuredClone(opts.taskMessages));
+                if (capturedRounds.length === 1) {
+                    return {
+                        assistantText: 'Reading profile',
+                        reasoning: 'look up lyra',
+                        signature: 'sig-ill-c',
+                        nativeParts,
+                        nativeContentBlocks,
+                        responsesOutputItems,
+                        toolCalls: [{
+                            id: 'call_read_native',
+                            name: 'read_character_profiles',
+                            args: { ids: ['char_lyra'] },
+                            signature: 'sig-ill-g',
+                            extra_content: { google: { thought_signature: 'sig-ill-g' } },
+                        }],
+                        finishReason: 'tool_calls',
+                    };
+                }
+                return {
+                    assistantText: '',
+                    toolCalls: [{
+                        id: 'call_img_1',
+                        name: 'add_image_prompt',
+                        args: {
+                            prompt: '1girl, silver braid',
+                            insert_after: 'She laid',
+                            insert_before: 'the spyglass.',
+                        },
+                    }],
+                    finishReason: 'tool_calls',
+                };
+            },
+        };
+
+        await runIllustrationAgent({
+            context,
+            preset: { illustrationPrompt: 'Illustrate scene' },
+            input: {
+                current: 'She laid the spyglass.',
+                snapshotText: 'She laid the spyglass.',
+                capabilities: { supportsCharacterTextReference: true, supportsCharacterReference: false },
+            },
+            profileStore,
+            media: { generate: async () => '/user/images/out.png' },
+        });
+
+        expect(capturedRounds).toHaveLength(2);
+        const replayedAssistant = capturedRounds[1].find(m => m.role === 'assistant' && Array.isArray(m.tool_calls));
+        expect(replayedAssistant).toMatchObject({
+            signature: 'sig-ill-c',
+            native_parts: nativeParts,
+            native_content_blocks: nativeContentBlocks,
+            responses_output_items: responsesOutputItems,
+        });
+        expect(replayedAssistant.tool_calls[0]).toMatchObject({
+            id: 'call_read_native',
+            signature: 'sig-ill-g',
+            extra_content: { google: { thought_signature: 'sig-ill-g' } },
+        });
+    });
+
+    test('studio-store persists and rebuilds native replay metadata on assistant turns', async () => {
+        const {
+            appendStudioAssistantTurn,
+            buildStudioHistoryMessages,
+            createStudioSession,
+        } = await import('../public/scripts/extensions/stable-diffusion/lens/studio-store.js');
+
+        const session = createStudioSession({ presetId: 'preset_1' });
+        const nativeParts = [{ text: 'Updated prompt', thoughtSignature: 'sig-st-g' }];
+        const nativeContentBlocks = [{ type: 'thinking', thinking: 'plan', signature: 'sig-st-c' }, { type: 'text', text: 'Updated prompt' }];
+        const responsesOutputItems = [{ type: 'reasoning', id: 'rs_st', encrypted_content: 'enc_st' }];
+
+        appendStudioAssistantTurn(session, {
+            text: 'Updated prompt',
+            reasoning: 'plan',
+            signature: 'sig-st-c',
+            nativeParts,
+            nativeContentBlocks,
+            responsesOutputItems,
+            toolCalls: [],
+        });
+
+        const history = buildStudioHistoryMessages(session);
+        expect(history).toHaveLength(1);
+        expect(history[0]).toMatchObject({
+            role: 'assistant',
+            content: 'Updated prompt',
+            reasoning: 'plan',
+            signature: 'sig-st-c',
+            native_parts: nativeParts,
+            native_content_blocks: nativeContentBlocks,
+            responses_output_items: responsesOutputItems,
+        });
+    });
+});

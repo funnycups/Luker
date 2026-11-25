@@ -44,6 +44,15 @@ const REGEX_SCRIPT_TYPE_LABELS = Object.freeze({
 const warnedInvalidPlacementScripts = new Set();
 let shownInvalidPlacementToast = false;
 const pendingPersistedRegexScriptCleanups = new Set();
+const failedPersistedRegexScriptCleanups = new Map();
+
+function normalizeCharacterId(value) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
 
 function isPersistedRegexScriptRecord(script) {
     return Boolean(script) && typeof script === 'object' && !Array.isArray(script);
@@ -53,14 +62,169 @@ function filterValidPersistedRegexScripts(scripts) {
     return Array.isArray(scripts) ? scripts.filter(isPersistedRegexScriptRecord) : [];
 }
 
-function getPersistedRegexScriptCleanupKey(scriptType) {
+function cloneValidPersistedRegexScripts(scripts) {
+    return filterValidPersistedRegexScripts(scripts).map(script => structuredClone(script));
+}
+
+function hasInvalidPersistedRegexEntries(scripts) {
+    return Array.isArray(scripts) && scripts.some(entry => !isPersistedRegexScriptRecord(entry));
+}
+
+function getRawPersistedRegexSignature(scripts) {
+    try {
+        return JSON.stringify(scripts);
+    } catch {
+        return String(Array.isArray(scripts) ? scripts.length : '');
+    }
+}
+
+function getScopedCleanupKey(avatar) {
+    const trimmed = String(avatar || '').trim();
+    return trimmed ? `scoped:${trimmed}` : '';
+}
+
+function getPresetCleanupKey(apiId, presetName) {
+    const trimmedApi = String(apiId || '').trim();
+    const trimmedName = String(presetName || '').trim();
+    return trimmedApi && trimmedName ? `preset:${trimmedApi}:${trimmedName}` : '';
+}
+
+/**
+ * Captures the current storage target identity for a regex script type before async work.
+ * @param {SCRIPT_TYPES} scriptType
+ * @returns {{ scriptType: SCRIPT_TYPES, characterId?: number | null, character?: object | null, avatar?: string, presetApiId?: string | null, presetName?: string | null }}
+ */
+export function captureRegexTarget(scriptType) {
+    switch (scriptType) {
+        case SCRIPT_TYPES.SCOPED: {
+            const characterId = normalizeCharacterId(this_chid);
+            const character = characterId !== null ? (characters?.[characterId] ?? null) : null;
+            return {
+                scriptType,
+                characterId,
+                character,
+                avatar: String(character?.avatar || '').trim(),
+            };
+        }
+        case SCRIPT_TYPES.PRESET:
+            return {
+                scriptType,
+                presetApiId: getCurrentPresetAPI?.() ?? null,
+                presetName: getCurrentPresetName?.() ?? null,
+            };
+        case SCRIPT_TYPES.GLOBAL:
+        default:
+            return { scriptType };
+    }
+}
+
+const CHARACTER_API_PROXY_TARGET = Symbol.for('luker.characterApiProxyTarget');
+
+function unwrapCharacterTarget(value) {
+    let current = value;
+    while (current && typeof current === 'object') {
+        const unwrapped = current[CHARACTER_API_PROXY_TARGET];
+        if (!unwrapped || unwrapped === current) {
+            break;
+        }
+        current = unwrapped;
+    }
+    return current;
+}
+
+function resolveScopedCharacterTarget(target = null) {
+    if (target && Object.prototype.hasOwnProperty.call(target, 'character')) {
+        const expectedCharacter = unwrapCharacterTarget(target.character);
+        if (!expectedCharacter) {
+            return null;
+        }
+        const preferredId = normalizeCharacterId(target.characterId);
+        if (preferredId !== null && unwrapCharacterTarget(characters?.[preferredId]) === expectedCharacter) {
+            const matched = characters[preferredId];
+            return {
+                characterId: preferredId,
+                character: matched,
+                avatar: String(matched.avatar || '').trim(),
+            };
+        }
+        if (Array.isArray(characters)) {
+            const reindexed = characters.findIndex(entry => unwrapCharacterTarget(entry) === expectedCharacter);
+            if (reindexed !== -1) {
+                const matched = characters[reindexed];
+                return {
+                    characterId: reindexed,
+                    character: matched,
+                    avatar: String(matched.avatar || '').trim(),
+                };
+            }
+        }
+        return null;
+    }
+
+    if (target && (Object.prototype.hasOwnProperty.call(target, 'characterId') || Object.prototype.hasOwnProperty.call(target, 'avatar'))) {
+        const preferredId = normalizeCharacterId(target.characterId);
+        const requestedAvatar = typeof target.avatar === 'string' ? target.avatar.trim() : '';
+        if (preferredId !== null) {
+            const candidate = characters?.[preferredId] ?? null;
+            if (candidate && (!requestedAvatar || String(candidate.avatar || '').trim() === requestedAvatar)) {
+                return {
+                    characterId: preferredId,
+                    character: candidate,
+                    avatar: String(candidate.avatar || '').trim(),
+                };
+            }
+        }
+        if (requestedAvatar && Array.isArray(characters)) {
+            const byAvatar = characters.findIndex(entry => String(entry?.avatar || '').trim() === requestedAvatar);
+            if (byAvatar !== -1) {
+                const candidate = characters[byAvatar];
+                return {
+                    characterId: byAvatar,
+                    character: candidate,
+                    avatar: String(candidate.avatar || '').trim(),
+                };
+            }
+        }
+        return null;
+    }
+
+    const characterId = normalizeCharacterId(this_chid);
+    const character = characterId !== null ? (characters?.[characterId] ?? null) : null;
+    if (characterId === null || !character) {
+        return null;
+    }
+    return {
+        characterId,
+        character,
+        avatar: String(character.avatar || '').trim(),
+    };
+}
+
+function resolvePresetTarget(target = null) {
+    if (target && (Object.prototype.hasOwnProperty.call(target, 'presetApiId') || Object.prototype.hasOwnProperty.call(target, 'presetName'))) {
+        return {
+            presetApiId: String(target.presetApiId || '').trim() || null,
+            presetName: String(target.presetName || '').trim() || null,
+        };
+    }
+    return {
+        presetApiId: String(getCurrentPresetAPI?.() || '').trim() || null,
+        presetName: String(getCurrentPresetName?.() || '').trim() || null,
+    };
+}
+
+function getPersistedRegexScriptCleanupKey(scriptType, target = null) {
     switch (scriptType) {
         case SCRIPT_TYPES.GLOBAL:
             return 'global';
-        case SCRIPT_TYPES.SCOPED:
-            return `scoped:${String(characters?.[this_chid]?.avatar || '').trim()}`;
-        case SCRIPT_TYPES.PRESET:
-            return `preset:${String(getCurrentPresetAPI?.() || '').trim()}:${String(getCurrentPresetName?.() || '').trim()}`;
+        case SCRIPT_TYPES.SCOPED: {
+            const scoped = resolveScopedCharacterTarget(target);
+            return getScopedCleanupKey(scoped?.avatar);
+        }
+        case SCRIPT_TYPES.PRESET: {
+            const preset = resolvePresetTarget(target);
+            return getPresetCleanupKey(preset.presetApiId, preset.presetName);
+        }
         default:
             return '';
     }
@@ -79,57 +243,120 @@ function getPersistedRegexScriptCleanupToastMessage(scriptType) {
     }
 }
 
-function schedulePersistedRegexScriptCleanup(scriptType, scripts) {
-    const cleanupKey = getPersistedRegexScriptCleanupKey(scriptType);
+function getPersistedRegexScriptCleanupFailedToastMessage(scriptType) {
+    switch (scriptType) {
+        case SCRIPT_TYPES.GLOBAL:
+            return t`Global regex entries contained invalid data, but automatic cleanup could not be saved. Invalid entries were skipped without modifying settings. Check the browser console for details.`;
+        case SCRIPT_TYPES.SCOPED:
+            return t`Character-scoped regex entries contained invalid data, but automatic cleanup could not be saved. Invalid entries were skipped without modifying the character card. Check the browser console for details.`;
+        case SCRIPT_TYPES.PRESET:
+            return t`Preset regex entries contained invalid data, but automatic cleanup could not be saved. Invalid entries were skipped without modifying the preset. Check the browser console for details.`;
+        default:
+            return t`Some regex scripts contained invalid data, but automatic cleanup could not be saved. Invalid entries were skipped. Check the browser console for details.`;
+    }
+}
+
+function schedulePersistedRegexScriptCleanup(scriptType, rawScripts, target = null) {
+    const capturedTarget = target || captureRegexTarget(scriptType);
+    const cleanupKey = getPersistedRegexScriptCleanupKey(scriptType, capturedTarget);
     if (!cleanupKey || pendingPersistedRegexScriptCleanups.has(cleanupKey)) {
         return;
     }
 
-    const nextScripts = structuredClone(filterValidPersistedRegexScripts(scripts));
-    const targetChid = Number(this_chid);
-    const targetPresetApiId = String(getCurrentPresetAPI?.() || '').trim();
-    const targetPresetName = String(getCurrentPresetName?.() || '').trim();
-    pendingPersistedRegexScriptCleanups.add(cleanupKey);
-
-    if (typeof toastr !== 'undefined') {
-        toastr.error(getPersistedRegexScriptCleanupToastMessage(scriptType), t`Regex script error`);
+    const rawSignature = getRawPersistedRegexSignature(rawScripts);
+    if (failedPersistedRegexScriptCleanups.get(cleanupKey) === rawSignature) {
+        return;
     }
+
+    pendingPersistedRegexScriptCleanups.add(cleanupKey);
 
     queueMicrotask(() => {
         void (async () => {
             try {
                 switch (scriptType) {
-                    case SCRIPT_TYPES.GLOBAL:
-                        extension_settings.regex = nextScripts;
-                        saveSettingsDebounced();
-                        break;
-                    case SCRIPT_TYPES.SCOPED: {
-                        if (!Number.isInteger(targetChid)) {
+                    case SCRIPT_TYPES.GLOBAL: {
+                        const current = extension_settings.regex;
+                        if (!hasInvalidPersistedRegexEntries(current)) {
+                            failedPersistedRegexScriptCleanups.delete(cleanupKey);
                             return;
                         }
-                        await writeExtensionField(targetChid, 'regex_scripts', nextScripts);
+                        extension_settings.regex = cloneValidPersistedRegexScripts(current);
+                        saveSettingsDebounced();
+                        failedPersistedRegexScriptCleanups.delete(cleanupKey);
+                        if (typeof toastr !== 'undefined') {
+                            toastr.error(getPersistedRegexScriptCleanupToastMessage(scriptType), t`Regex script error`);
+                        }
+                        break;
+                    }
+                    case SCRIPT_TYPES.SCOPED: {
+                        const scoped = resolveScopedCharacterTarget(capturedTarget);
+                        if (!scoped) {
+                            return;
+                        }
+                        let cleanupNeeded = true;
+                        let skippedBecauseClean = false;
+                        const saved = await writeExtensionField(
+                            scoped.characterId,
+                            'regex_scripts',
+                            (currentScripts) => {
+                                if (!hasInvalidPersistedRegexEntries(currentScripts)) {
+                                    cleanupNeeded = false;
+                                    skippedBecauseClean = true;
+                                    return currentScripts;
+                                }
+                                cleanupNeeded = true;
+                                return filterValidPersistedRegexScripts(currentScripts);
+                            },
+                            { isCurrent: () => cleanupNeeded },
+                        );
+                        if (skippedBecauseClean) {
+                            failedPersistedRegexScriptCleanups.delete(cleanupKey);
+                            return;
+                        }
+                        if (!saved) {
+                            throw new Error('Scoped regex cleanup could not be saved.');
+                        }
+                        failedPersistedRegexScriptCleanups.delete(cleanupKey);
+                        if (typeof toastr !== 'undefined') {
+                            toastr.error(getPersistedRegexScriptCleanupToastMessage(scriptType), t`Regex script error`);
+                        }
                         break;
                     }
                     case SCRIPT_TYPES.PRESET: {
-                        if (!targetPresetApiId || !targetPresetName) {
+                        const preset = resolvePresetTarget(capturedTarget);
+                        if (!preset.presetApiId || !preset.presetName) {
                             return;
                         }
-                        const presetManager = getPresetManager(targetPresetApiId);
+                        const presetManager = getPresetManager(preset.presetApiId);
                         if (!presetManager) {
                             return;
                         }
-                        await presetManager.writePresetExtensionField({ name: targetPresetName, path: 'regex_scripts', value: nextScripts });
+                        const currentScripts = presetManager.readPresetExtensionField({ name: preset.presetName, path: 'regex_scripts' });
+                        if (!hasInvalidPersistedRegexEntries(currentScripts)) {
+                            failedPersistedRegexScriptCleanups.delete(cleanupKey);
+                            return;
+                        }
+                        const nextScripts = cloneValidPersistedRegexScripts(currentScripts);
+                        await presetManager.writePresetExtensionField({ name: preset.presetName, path: 'regex_scripts', value: nextScripts });
+                        failedPersistedRegexScriptCleanups.delete(cleanupKey);
+                        if (typeof toastr !== 'undefined') {
+                            toastr.error(getPersistedRegexScriptCleanupToastMessage(scriptType), t`Regex script error`);
+                        }
                         break;
                     }
                     default:
                         break;
                 }
             } catch (error) {
-                console.warn('[Regex] Failed to persist sanitized regex scripts', {
+                failedPersistedRegexScriptCleanups.set(cleanupKey, rawSignature);
+                console.error('[Regex] Failed to persist sanitized regex scripts', {
                     scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
                     cleanupKey,
                     error,
                 });
+                if (typeof toastr !== 'undefined') {
+                    toastr.error(getPersistedRegexScriptCleanupFailedToastMessage(scriptType), t`Regex script error`);
+                }
             } finally {
                 pendingPersistedRegexScriptCleanups.delete(cleanupKey);
             }
@@ -137,29 +364,30 @@ function schedulePersistedRegexScriptCleanup(scriptType, scripts) {
     });
 }
 
-function sanitizePersistedRegexScriptList(scripts, scriptType) {
+function sanitizePersistedRegexScriptList(scripts, scriptType, target = null) {
     if (!Array.isArray(scripts)) {
         return [];
     }
 
+    const validScripts = [];
     const invalidEntries = [];
-    for (let index = scripts.length - 1; index >= 0; index--) {
+    for (let index = 0; index < scripts.length; index++) {
         if (isPersistedRegexScriptRecord(scripts[index])) {
+            validScripts.push(structuredClone(scripts[index]));
             continue;
         }
         invalidEntries.push({ index, type: scripts[index] === null ? 'null' : typeof scripts[index] });
-        scripts.splice(index, 1);
     }
 
     if (invalidEntries.length > 0) {
-        console.warn('[Regex] Removed invalid persisted regex entries', {
+        console.warn('[Regex] Detected invalid persisted regex entries', {
             scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
             invalidEntries,
         });
-        schedulePersistedRegexScriptCleanup(scriptType, scripts);
+        schedulePersistedRegexScriptCleanup(scriptType, scripts, target);
     }
 
-    return scripts;
+    return validScripts;
 }
 
 function summarizeRegexScriptForLog(script) {
@@ -617,30 +845,38 @@ export function captureRegexScripts({ includeCharacter = true, preset = null } =
 
 /**
  * Retrieves the regex scripts for a specific type.
+ * Returned arrays and script records are isolated copies of the persisted entries.
  * @param {SCRIPT_TYPES} scriptType The type of regex scripts to retrieve.
- * @param {GetRegexScriptsOptions} options Options for retrieving the regex scripts
+ * @param {GetRegexScriptsOptions & { target?: ReturnType<typeof captureRegexTarget> | null }} options Options for retrieving the regex scripts
  * @returns {RegexScript[]} An array of regex scripts for the specified type.
  */
-export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX_SCRIPTS_OPTIONS) {
+export function getScriptsByType(scriptType, { allowedOnly = false, target = null } = DEFAULT_GET_REGEX_SCRIPTS_OPTIONS) {
     switch (scriptType) {
         case SCRIPT_TYPE_UNKNOWN:
             return [];
         case SCRIPT_TYPES.GLOBAL:
-            return sanitizePersistedRegexScriptList(extension_settings.regex ?? [], SCRIPT_TYPES.GLOBAL);
+            return sanitizePersistedRegexScriptList(extension_settings.regex ?? [], SCRIPT_TYPES.GLOBAL, target);
         case SCRIPT_TYPES.SCOPED: {
-            if (allowedOnly && !extension_settings?.character_allowed_regex?.includes(characters?.[this_chid]?.avatar)) {
+            const scoped = resolveScopedCharacterTarget(target);
+            if (!scoped) {
                 return [];
             }
-            const scopedScripts = characters[this_chid]?.data?.extensions?.regex_scripts;
-            return sanitizePersistedRegexScriptList(scopedScripts, SCRIPT_TYPES.SCOPED);
+            if (allowedOnly && !extension_settings?.character_allowed_regex?.includes(scoped.avatar)) {
+                return [];
+            }
+            const scopedScripts = scoped.character?.data?.extensions?.regex_scripts;
+            return sanitizePersistedRegexScriptList(scopedScripts, SCRIPT_TYPES.SCOPED, { scriptType: SCRIPT_TYPES.SCOPED, ...scoped });
         }
         case SCRIPT_TYPES.PRESET: {
-            if (allowedOnly && !extension_settings?.preset_allowed_regex?.[getCurrentPresetAPI()]?.includes(getCurrentPresetName())) {
+            const preset = resolvePresetTarget(target);
+            if (allowedOnly && !extension_settings?.preset_allowed_regex?.[preset.presetApiId]?.includes(preset.presetName)) {
                 return [];
             }
-            const presetManager = getPresetManager();
-            const presetScripts = presetManager?.readPresetExtensionField({ path: 'regex_scripts' });
-            return sanitizePersistedRegexScriptList(presetScripts, SCRIPT_TYPES.PRESET);
+            const presetManager = getPresetManager(preset.presetApiId || undefined);
+            const presetScripts = presetManager?.readPresetExtensionField(
+                preset.presetName ? { name: preset.presetName, path: 'regex_scripts' } : { path: 'regex_scripts' },
+            );
+            return sanitizePersistedRegexScriptList(presetScripts, SCRIPT_TYPES.PRESET, { scriptType: SCRIPT_TYPES.PRESET, ...preset });
         }
         default:
             console.warn(`getScriptsByType: Invalid script type ${scriptType}`);
@@ -649,45 +885,170 @@ export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX
 }
 
 /**
+ * Serializes a read-modify-write update against character-scoped regex scripts on the captured target character.
+ * @param {(currentScripts: RegexScript[]) => RegexScript[] | null} updater Returns the next script array, or null to skip writing cleanly.
+ * @param {ReturnType<typeof captureRegexTarget> | null} [target=null] Captured scoped character target
+ * @returns {Promise<{ changed: boolean, character: object, characterId: number, scripts: RegexScript[] }>}
+ */
+export async function updateScopedRegexScripts(updater, target = null) {
+    const scoped = resolveScopedCharacterTarget(target);
+    if (!scoped) {
+        console.error('[Regex] Scoped scripts target character is unavailable', {
+            requestedChid: target?.characterId ?? this_chid ?? null,
+            requestedAvatar: target?.avatar ?? null,
+        });
+        throw new Error('Failed to save character-scoped regex scripts: target character is unavailable.');
+    }
+
+    let shouldPersist = true;
+    let computedScripts = [];
+    const saved = await writeExtensionField(
+        scoped.characterId,
+        'regex_scripts',
+        async (currentRaw) => {
+            const currentValid = cloneValidPersistedRegexScripts(currentRaw);
+            const nextRaw = await updater(currentValid);
+            if (nextRaw === null) {
+                shouldPersist = false;
+                computedScripts = currentValid;
+                return currentRaw;
+            }
+            shouldPersist = true;
+            computedScripts = cloneValidPersistedRegexScripts(nextRaw);
+            return computedScripts;
+        },
+        { isCurrent: () => shouldPersist },
+    );
+
+    if (!shouldPersist) {
+        return {
+            changed: false,
+            character: scoped.character,
+            characterId: scoped.characterId,
+            scripts: computedScripts,
+        };
+    }
+
+    if (!saved) {
+        console.error('[Regex] Scoped scripts failed to persist to character extension field', {
+            chid: scoped.characterId,
+            avatar: scoped.avatar || null,
+            scriptCount: computedScripts.length,
+        });
+        throw new Error('Failed to save character-scoped regex scripts.');
+    }
+
+    const cleanupKey = getScopedCleanupKey(scoped.avatar);
+    if (cleanupKey) {
+        failedPersistedRegexScriptCleanups.delete(cleanupKey);
+    }
+
+    console.info('[Regex] Scoped scripts persisted to character extension field', {
+        scriptType: REGEX_SCRIPT_TYPE_LABELS[SCRIPT_TYPES.SCOPED],
+        scriptCount: computedScripts.length,
+        chid: scoped.characterId,
+        avatar: scoped.avatar || null,
+        scripts: computedScripts.slice(0, 5).map(summarizeRegexScriptForLog),
+    });
+
+    return {
+        changed: true,
+        character: scoped.character,
+        characterId: scoped.characterId,
+        scripts: computedScripts,
+    };
+}
+
+/**
  * Saves an array of regex scripts for a specific type.
  * @param {RegexScript[]} scripts An array of regex scripts to save.
  * @param {SCRIPT_TYPES} scriptType The type of regex scripts to save.
+ * @param {{ target?: ReturnType<typeof captureRegexTarget> | null, persistGlobal?: (() => Promise<{ ok?: boolean, status?: string, error?: string }>) | null }} [options]
  * @returns {Promise<void>}
  */
-export async function saveScriptsByType(scripts, scriptType) {
-    const normalizedScripts = filterValidPersistedRegexScripts(scripts);
-    const character = characters?.[this_chid];
+export async function saveScriptsByType(scripts, scriptType, options = {}) {
+    const normalizedScripts = cloneValidPersistedRegexScripts(scripts);
+    const scopedTarget = scriptType === SCRIPT_TYPES.SCOPED ? resolveScopedCharacterTarget(options?.target) : null;
+    const presetTarget = scriptType === SCRIPT_TYPES.PRESET ? resolvePresetTarget(options?.target) : null;
+    const character = scriptType === SCRIPT_TYPES.SCOPED ? scopedTarget?.character : characters?.[this_chid];
+    const targetChid = scriptType === SCRIPT_TYPES.SCOPED ? scopedTarget?.characterId : this_chid;
     const context = {
         scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
         scriptCount: normalizedScripts.length,
-        chid: this_chid ?? null,
+        chid: targetChid ?? null,
         avatar: character?.avatar || null,
-        currentPresetApi: getCurrentPresetAPI?.() || null,
-        currentPresetName: getCurrentPresetName?.() || null,
+        currentPresetApi: presetTarget?.presetApiId || getCurrentPresetAPI?.() || null,
+        currentPresetName: presetTarget?.presetName || getCurrentPresetName?.() || null,
         scripts: normalizedScripts.slice(0, 5).map(summarizeRegexScriptForLog),
     };
 
     console.info('[Regex] saveScriptsByType requested', context);
 
     switch (scriptType) {
-        case SCRIPT_TYPES.GLOBAL:
+        case SCRIPT_TYPES.GLOBAL: {
+            const previousGlobalScripts = extension_settings.regex;
             extension_settings.regex = normalizedScripts;
+            if (typeof options?.persistGlobal === 'function') {
+                let outcome;
+                try {
+                    outcome = await options.persistGlobal();
+                } catch (error) {
+                    if (extension_settings.regex === normalizedScripts) {
+                        extension_settings.regex = previousGlobalScripts;
+                    }
+                    console.error('[Regex] Global scripts immediate persistence threw', { ...context, error });
+                    throw error;
+                }
+                if (!outcome?.ok || outcome.status !== 'saved') {
+                    if (extension_settings.regex === normalizedScripts) {
+                        extension_settings.regex = previousGlobalScripts;
+                    }
+                    console.error('[Regex] Global scripts immediate persistence failed', { ...context, outcome });
+                    throw new Error(outcome?.error || `Failed to save global regex scripts (${outcome?.status || 'failed'}).`);
+                }
+                failedPersistedRegexScriptCleanups.delete('global');
+                console.info('[Regex] Global scripts persisted to extension settings', context);
+                break;
+            }
             saveSettingsDebounced();
+            failedPersistedRegexScriptCleanups.delete('global');
             console.info('[Regex] Global scripts staged in extension settings', context);
             break;
-        case SCRIPT_TYPES.SCOPED:
-            await writeExtensionField(this_chid, 'regex_scripts', normalizedScripts);
+        }
+        case SCRIPT_TYPES.SCOPED: {
+            if (!scopedTarget) {
+                console.error('[Regex] Scoped scripts target character is unavailable', context);
+                throw new Error('Failed to save character-scoped regex scripts: target character is unavailable.');
+            }
+            const saved = await writeExtensionField(scopedTarget.characterId, 'regex_scripts', normalizedScripts);
+            if (!saved) {
+                console.error('[Regex] Scoped scripts failed to persist to character extension field', context);
+                throw new Error('Failed to save character-scoped regex scripts.');
+            }
+            const cleanupKey = getScopedCleanupKey(scopedTarget.avatar);
+            if (cleanupKey) {
+                failedPersistedRegexScriptCleanups.delete(cleanupKey);
+            }
             console.info('[Regex] Scoped scripts persisted to character extension field', context);
             break;
+        }
         case SCRIPT_TYPES.PRESET: {
-            const presetManager = getPresetManager();
-            await presetManager.writePresetExtensionField({ path: 'regex_scripts', value: normalizedScripts });
+            const presetManager = getPresetManager(presetTarget?.presetApiId || undefined);
+            if (!presetManager || !presetTarget?.presetName) {
+                console.error('[Regex] Preset scripts target preset is unavailable', context);
+                throw new Error('Failed to save preset regex scripts: target preset is unavailable.');
+            }
+            await presetManager.writePresetExtensionField({ name: presetTarget.presetName, path: 'regex_scripts', value: normalizedScripts });
+            const cleanupKey = getPresetCleanupKey(presetTarget.presetApiId, presetTarget.presetName);
+            if (cleanupKey) {
+                failedPersistedRegexScriptCleanups.delete(cleanupKey);
+            }
             console.info('[Regex] Preset scripts persisted to preset extension field', context);
             break;
         }
         default:
             console.warn(`saveScriptsByType: Invalid script type ${scriptType}`);
-            break;
+            throw new Error(`Invalid regex script type: ${scriptType}`);
     }
 }
 

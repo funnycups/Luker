@@ -387,16 +387,17 @@ function readTranslatorCallAt(src, pos) {
 function extractAddedLocaleDataFromSource(relPath) {
     const src = readFileSync(resolve(REPO_ROOT, relPath), 'utf8');
     const store = {};
-    for (const lang of ['zh-cn', 'zh-tw']) {
-        const marker = new RegExp(`addLocaleData\\s*\\(\\s*['"]${lang}['"]\\s*,\\s*\\{`);
-        const match = marker.exec(src);
+    for (const [lang, constName] of [['zh-cn', 'ZH_CN'], ['zh-tw', 'ZH_TW']]) {
+        const addMarker = new RegExp(`addLocaleData\\s*\\(\\s*['"]${lang}['"]\\s*,\\s*\\{`);
+        const constMarker = new RegExp(`const\\s+${constName}\\s*=\\s*\\{`);
+        const match = addMarker.exec(src) || constMarker.exec(src);
         if (!match) {
-            throw new Error(`Missing addLocaleData('${lang}', {...}) block in ${relPath}`);
+            throw new Error(`Missing locale table for '${lang}' in ${relPath}`);
         }
         const openBraceIndex = match.index + match[0].length - 1;
         const balanced = readBalancedSlice(src, openBraceIndex, '{', '}');
         if (!balanced) {
-            throw new Error(`Unterminated addLocaleData('${lang}', {...}) block in ${relPath}`);
+            throw new Error(`Unterminated locale table for '${lang}' in ${relPath}`);
         }
         store[lang] = (new Function(`return (${balanced.text});`))();
     }
@@ -591,9 +592,9 @@ function loadLocaleStores() {
     const mgStore = collectViaRegister(registerMemoryGraphLocaleData);
     const orchStore = collectViaRegister(registerOrchestratorLocaleData);
     const wbStore = collectViaRegister(registerWorkbenchLocaleData);
-    const searchToolsStore = extractAddedLocaleDataFromSource('public/scripts/extensions/search-tools/main.js');
-    const ceaStore = extractAddedLocaleDataFromSource('public/scripts/extensions/character-editor-assistant/main.js');
-    const cpaStore = extractAddedLocaleDataFromSource('public/scripts/extensions/completion-preset-assistant/main.js');
+    const searchToolsStore = extractAddedLocaleDataFromSource('public/scripts/extensions/search-tools/i18n.js');
+    const ceaStore = extractAddedLocaleDataFromSource('public/scripts/extensions/character-editor-assistant/i18n.js');
+    const cpaStore = extractAddedLocaleDataFromSource('public/scripts/extensions/completion-preset-assistant/i18n.js');
     const hookOrderStore = extractAddedLocaleDataFromSource('public/scripts/extensions/hook-order/index.js');
 
     const jsonBacked = { 'zh-cn': publicZhCn, 'zh-tw': publicZhTw };
@@ -618,9 +619,9 @@ function loadLocaleStores() {
             'public/scripts/extensions/memory-graph/lens/settings/behavior-summary-models.js': mergeCoreAndModule(mgStore),
             'public/scripts/extensions/orchestrator/lens/model/behavior-summary-models.js': mergeCoreAndModule(orchStore),
             'public/scripts/workbench/model/behavior-summary-models.js': mergeCoreAndModule(wbStore),
-            'public/scripts/extensions/search-tools/behavior-summary-models.js': searchToolsStore,
-            'public/scripts/extensions/character-editor-assistant/behavior-summary-model.js': ceaStore,
-            'public/scripts/extensions/completion-preset-assistant/behavior-summary-model.js': cpaStore,
+            'public/scripts/extensions/search-tools/behavior-summary-models.js': mergeCoreAndModule(searchToolsStore),
+            'public/scripts/extensions/character-editor-assistant/behavior-summary-model.js': mergeCoreAndModule(ceaStore),
+            'public/scripts/extensions/completion-preset-assistant/behavior-summary-model.js': mergeCoreAndModule(cpaStore),
             'public/scripts/extensions/hook-order/behavior-summary-model.js': hookOrderStore,
         },
     };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-export const SAFE_SEARCH_OPTIONS = [
+const SAFE_SEARCH_OPTIONS = [
     ['off', 'Off'],
     ['moderate', 'Moderate'],
     ['strict', 'Strict'],

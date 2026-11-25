@@ -4,6 +4,8 @@
 // Pure live behavioral summary models for Search Tools settings (Main Card +
 // Shared Lorebook Injection Card). No DOM dependencies.
 
+import { normalizeToolCallRetryMax } from '../../lib/iter-tool-calling.js';
+import { i18n as defaultTranslate } from './i18n.js';
 import { getSearchProviderDefinition } from './providers.js';
 
 const DEFAULT_POSITIONS = Object.freeze({
@@ -36,11 +38,6 @@ const LOREBOOK_FIELDS = Object.freeze([
     'lorebookRole',
     'lorebookEntryOrder',
 ]);
-
-function defaultTranslate(text) {
-    const fn = globalThis.Luker?.getContext?.()?.translate;
-    return typeof fn === 'function' ? fn(String(text ?? '')) : String(text ?? '');
-}
 
 function clampInt(raw, min, max, fallback) {
     const isBlank = raw === '' || raw === null || raw === undefined
@@ -94,7 +91,7 @@ export function buildSearchToolsMainSummary(state = {}) {
     const apiPresetName = String(state.agentApiPresetName || '').trim();
     const presetName = String(state.agentPresetName || '').trim();
     const includeWi = state.includeWorldInfoWithPreset !== false;
-    const retries = clampInt(state.toolCallRetryMax, 0, 5, 2);
+    const retries = normalizeToolCallRetryMax(state.toolCallRetryMax, 2);
     const agentPrompt = String(state.agentSystemPrompt ?? '');
 
     const requiresSecret = Boolean(providerDef.secretKey);

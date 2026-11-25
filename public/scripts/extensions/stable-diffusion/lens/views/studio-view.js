@@ -522,6 +522,13 @@ export function createStudioView(app) {
                                 toolCalls: [],
                                 toolResults: [],
                                 images: [],
+                                reasoning: response?.reasoning,
+                                signature: response?.signature,
+                                reasoningBlocks: response?.reasoningBlocks,
+                                reasoningDetails: response?.reasoningDetails,
+                                nativeParts: response?.nativeParts,
+                                nativeContentBlocks: response?.nativeContentBlocks,
+                                responsesOutputItems: response?.responsesOutputItems,
                             });
                         }
                         break;
@@ -558,6 +565,9 @@ export function createStudioView(app) {
                             name: call.name,
                             args: call.args,
                             result: toolResult,
+                            raw: call?.raw,
+                            signature: call?.signature,
+                            extra_content: call?.extra_content,
                         });
                         if (generatedImage) {
                             roundImages.push(generatedImage);
@@ -573,9 +583,19 @@ export function createStudioView(app) {
                             id: toolResultsForPersist[idx].tool_call_id,
                             name: c.name,
                             arguments: c.args,
+                            raw: c?.raw,
+                            signature: c?.signature,
+                            extra_content: c?.extra_content,
                         })),
                         toolResults: toolResultsForPersist,
                         images: roundImages,
+                        reasoning: response?.reasoning,
+                        signature: response?.signature,
+                        reasoningBlocks: response?.reasoningBlocks,
+                        reasoningDetails: response?.reasoningDetails,
+                        nativeParts: response?.nativeParts,
+                        nativeContentBlocks: response?.nativeContentBlocks,
+                        responsesOutputItems: response?.responsesOutputItems,
                     });
 
                     if (roundImages.length > 0 && session === turnSession) {
@@ -584,8 +604,12 @@ export function createStudioView(app) {
 
                     appendStandardToolRoundMessages(taskMessages, executedForHistory, assistantText, {
                         reasoning: response?.reasoning,
+                        signature: response?.signature,
                         reasoningBlocks: response?.reasoningBlocks,
                         reasoningDetails: response?.reasoningDetails,
+                        nativeParts: response?.nativeParts,
+                        nativeContentBlocks: response?.nativeContentBlocks,
+                        responsesOutputItems: response?.responsesOutputItems,
                     });
 
                     if (turnSession.visualReview && generatedPathsForPreview.length > 0) {
@@ -643,8 +667,15 @@ export function createStudioView(app) {
         await runWithStudioActivity(ctx, async () => {
             try {
                 const imageBackend = resolveImageBackend();
-                const freshCapabilities = (await imageBackend.getCapabilities?.()) ?? null;
-                currentCapabilities = freshCapabilities;
+                const hasSavedRefs = Boolean(image.sourceImageId)
+                    || (Array.isArray(image.characterImageIds) && image.characterImageIds.length > 0)
+                    || (Array.isArray(image.characterRefs) && image.characterRefs.length > 0);
+                const freshCapabilities = hasSavedRefs
+                    ? ((await imageBackend.getCapabilities?.()) ?? null)
+                    : currentCapabilities;
+                if (hasSavedRefs) {
+                    currentCapabilities = freshCapabilities;
+                }
 
                 const savedLoras = Array.isArray(image.loras) ? image.loras : [];
                 let loras = [];

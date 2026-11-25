@@ -186,4 +186,59 @@ describe('character visual exploration agent', () => {
             preset: { explorationPrompt: '   ' },
         })).rejects.toThrow(/prompt|reset/i);
     });
+
+    test('preserves provider-native replay fields and call signatures across exploration tool rounds', async () => {
+        const { runExplorationAgent } = await import('../public/scripts/extensions/stable-diffusion/exploration/agent.js');
+        const { createSandboxProfileStore } = await import('../public/scripts/extensions/stable-diffusion/lens/simulation-sandbox.js');
+
+        const capturedRounds = [];
+        const nativeParts = [{ functionCall: { name: 'list_character_profiles', args: {} }, thoughtSignature: 'sig-exp-g' }];
+        const nativeContentBlocks = [{ type: 'tool_use', id: 'call_list_1', name: 'list_character_profiles', input: {} }];
+        const responsesOutputItems = [{ type: 'function_call', call_id: 'call_list_1', name: 'list_character_profiles', arguments: '{}' }];
+        const context = {
+            async generateTask(opts) {
+                capturedRounds.push(structuredClone(opts.taskMessages));
+                if (capturedRounds.length === 1) {
+                    return {
+                        assistantText: 'Checking archive',
+                        reasoning: 'check existing entries',
+                        signature: 'sig-exp-c',
+                        nativeParts,
+                        nativeContentBlocks,
+                        responsesOutputItems,
+                        toolCalls: [{
+                            id: 'call_list_1',
+                            name: 'list_character_profiles',
+                            args: {},
+                            signature: 'sig-exp-g',
+                            extra_content: { google: { thought_signature: 'sig-exp-g' } },
+                        }],
+                    };
+                }
+                return { toolCalls: [], assistantText: 'Done.' };
+            },
+        };
+
+        await runExplorationAgent({
+            context,
+            profileStore: createSandboxProfileStore(),
+            targets: [{ name: 'Iris' }],
+            sourcePolicy: { kind: 'none' },
+            preset: { explorationPrompt: 'Inspect profiles.' },
+        });
+
+        expect(capturedRounds).toHaveLength(2);
+        const replayedAssistant = capturedRounds[1].find(m => m.role === 'assistant' && Array.isArray(m.tool_calls));
+        expect(replayedAssistant).toMatchObject({
+            signature: 'sig-exp-c',
+            native_parts: nativeParts,
+            native_content_blocks: nativeContentBlocks,
+            responses_output_items: responsesOutputItems,
+        });
+        expect(replayedAssistant.tool_calls[0]).toMatchObject({
+            id: 'call_list_1',
+            signature: 'sig-exp-g',
+            extra_content: { google: { thought_signature: 'sig-exp-g' } },
+        });
+    });
 });

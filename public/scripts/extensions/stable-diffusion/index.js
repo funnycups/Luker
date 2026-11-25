@@ -28,7 +28,6 @@ import {
 import { selected_group } from '../../group-chats.js';
 import {
     clamp,
-    debounce,
     deepMerge,
     delay,
     getBase64Async,
@@ -80,6 +79,7 @@ import {
     syncGenerationPresetFromSettings,
 } from './generation-presets.js';
 import { createLoraCatalog } from './lora/catalog.js';
+import { createCharacterPromptShareController, hasSharedCharacterPrompt } from './character-prompt-sharing.js';
 import { inspectReferenceSlots } from './reference/workflow.js';
 import { compileComfyWorkflowPromptPayload } from './comfy-workflow-graph.js';
 import { parseAspectRatio } from './aspect-ratio.js';
@@ -504,7 +504,44 @@ const defaultSettings = {
     img2img_enabled: false,
 };
 
-const writePromptFieldsDebounced = debounce(writePromptFields, debounce_timeout.relaxed);
+const characterPromptShareController = createCharacterPromptShareController({
+    getCharacters: () => getContext()?.characters ?? [],
+    getSelection: () => {
+        const context = getContext();
+        const isGroup = Boolean(selected_group);
+        if (isGroup || this_chid === undefined || this_chid === null || this_chid === '') {
+            return { characterId: null, character: null, isGroup };
+        }
+        const numericId = Number(this_chid);
+        if (!Number.isInteger(numericId) || numericId < 0) {
+            return { characterId: null, character: null, isGroup };
+        }
+        return {
+            characterId: numericId,
+            character: context?.characters?.[numericId] ?? null,
+            isGroup,
+        };
+    },
+    writeExtensionField,
+    debounceMs: debounce_timeout.relaxed,
+    setShareChecked: (checked) => {
+        $('#sd_character_prompt_share').prop('checked', Boolean(checked));
+    },
+    onFailure: (intent, { character, error }) => {
+        console.error('[SD] Failed to persist shared character prompt', {
+            intent,
+            avatar: character?.avatar || null,
+            error,
+        });
+        if (intent === 'unshare') {
+            toastr.error(t`Could not disable shared character image prompts on the character card. The shared prompts remain saved on the card.`);
+        } else if (intent === 'share') {
+            toastr.error(t`Could not save shared character image prompts to the character card. Your local prompt edits were kept.`);
+        } else {
+            toastr.error(t`Could not update shared character image prompts on the character card. Your local prompt edits were kept.`);
+        }
+    },
+});
 const isVideo = (/** @type {string} */ format) => VIDEO_EXTENSIONS.includes(String(format || '').trim().toLowerCase());
 
 /**
@@ -791,10 +828,12 @@ function getGenerationPresetBucket() {
 }
 
 function initializeGenerationPresets() {
+    // The default preset is synced with settings.json, so initial seeding uses
+    // a deterministic timestamp to avoid per-device first-pair conflicts.
     const bucket = normalizeGenerationPresets(getGenerationPresetBucket(), {
         currentConfig: pickGenerationConfig(extension_settings.sd),
         defaultName: t`Default`,
-        now: Date.now(),
+        now: 0,
     });
     extension_settings.sd.generationPresets = bucket;
     saveSettingsDebounced();
@@ -1750,8 +1789,9 @@ async function onChatChanged() {
     let negativePrompt = key ? (extension_settings.sd.character_negative_prompts[key] || '') : '';
 
     const context = getContext();
-    const sharedPromptData = context?.characters[this_chid]?.data?.extensions?.sd_character_prompt;
-    const hasSharedData = sharedPromptData && typeof sharedPromptData === 'object';
+    const character = context?.characters?.[this_chid];
+    const sharedPromptData = character?.data?.extensions?.sd_character_prompt;
+    const hasSharedData = hasSharedCharacterPrompt(character);
 
     if (typeof sharedPromptData?.positive === 'string' && !characterPrompt && sharedPromptData.positive) {
         characterPrompt = sharedPromptData.positive;
@@ -1781,18 +1821,34 @@ async function adjustElementScrollHeight() {
 
 async function onCharacterPromptInput() {
     const key = getCharaFilename(this_chid);
-    extension_settings.sd.character_prompts[key] = $('#sd_character_prompt').val();
+    const positive = String($('#sd_character_prompt').val() ?? '');
+    const negative = String($('#sd_character_negative_prompt').val() ?? '');
+    if (key) {
+        extension_settings.sd.character_prompts[key] = positive;
+    }
     saveSettingsDebounced();
-    writePromptFieldsDebounced(this_chid);
+    characterPromptShareController.scheduleSharedPromptUpdate({
+        shareChecked: Boolean($('#sd_character_prompt_share').prop('checked')),
+        positive,
+        negative,
+    });
     if (CSS.supports('field-sizing', 'content')) return;
     await resetScrollHeight($(this));
 }
 
 async function onCharacterNegativePromptInput() {
     const key = getCharaFilename(this_chid);
-    extension_settings.sd.character_negative_prompts[key] = $('#sd_character_negative_prompt').val();
+    const positive = String($('#sd_character_prompt').val() ?? '');
+    const negative = String($('#sd_character_negative_prompt').val() ?? '');
+    if (key) {
+        extension_settings.sd.character_negative_prompts[key] = negative;
+    }
     saveSettingsDebounced();
-    writePromptFieldsDebounced(this_chid);
+    characterPromptShareController.scheduleSharedPromptUpdate({
+        shareChecked: Boolean($('#sd_character_prompt_share').prop('checked')),
+        positive,
+        negative,
+    });
     if (CSS.supports('field-sizing', 'content')) return;
     await resetScrollHeight($(this));
 }
@@ -4462,7 +4518,13 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         throw error;
     }
 
-    if (extension_settings.sd.source === sources.comfy && extension_settings.sd.comfy_type === comfyTypes.standard) {
+    const hasExplicitRefs = Array.isArray(structuredOptions?.references) && structuredOptions.references.length > 0;
+    const hasPresetStyleRefs = structuredOptions?.includePresetStyleReferences !== false
+        && Array.isArray(extension_settings.sd?.style_references)
+        && extension_settings.sd.style_references.length > 0;
+    if ((hasExplicitRefs || hasPresetStyleRefs)
+        && extension_settings.sd.source === sources.comfy
+        && extension_settings.sd.comfy_type === comfyTypes.standard) {
         await refreshComfyReferenceSlots();
     }
 
@@ -6592,23 +6654,14 @@ async function onCharacterPromptShareInput() {
     }
 
     const shouldShare = !!$('#sd_character_prompt_share').prop('checked');
-
-    if (shouldShare) {
-        await writePromptFields(this_chid);
-    } else {
-        await writeExtensionField(this_chid, 'sd_character_prompt', null);
-    }
-}
-
-async function writePromptFields(characterId) {
-    const key = getCharaFilename(characterId);
-    const promptPrefix = key ? (extension_settings.sd.character_prompts[key] || '') : '';
-    const negativePromptPrefix = key ? (extension_settings.sd.character_negative_prompts[key] || '') : '';
-    const promptObject = {
-        positive: promptPrefix,
-        negative: negativePromptPrefix,
-    };
-    await writeExtensionField(characterId, 'sd_character_prompt', promptObject);
+    const key = getCharaFilename(this_chid);
+    const positive = key ? (extension_settings.sd.character_prompts[key] || '') : '';
+    const negative = key ? (extension_settings.sd.character_negative_prompts[key] || '') : '';
+    await characterPromptShareController.setShareEnabled({
+        shouldShare,
+        positive,
+        negative,
+    });
 }
 
 /**

@@ -109,6 +109,14 @@ export function appendStudioUserMessage(session, text, now = Date.now()) {
 function normalizeToolCalls(toolCalls, toolResults) {
     return (Array.isArray(toolCalls) ? toolCalls : []).map((call, index) => {
         const args = call?.arguments ?? call?.function?.arguments ?? {};
+        const signature = typeof call?.signature === 'string' && call.signature.length > 0
+            ? call.signature
+            : (typeof call?.raw?.signature === 'string' && call.raw.signature.length > 0
+                ? call.raw.signature
+                : (typeof call?.raw?.thoughtSignature === 'string' && call.raw.thoughtSignature.length > 0 ? call.raw.thoughtSignature : null));
+        const extraContent = call?.extra_content && typeof call.extra_content === 'object'
+            ? structuredClone(call.extra_content)
+            : (call?.raw?.extra_content && typeof call.raw.extra_content === 'object' ? structuredClone(call.raw.extra_content) : null);
         return {
             id: String(call?.id || call?.tool_call_id || toolResults?.[index]?.tool_call_id || ''),
             type: 'function',
@@ -116,6 +124,8 @@ function normalizeToolCalls(toolCalls, toolResults) {
                 name: String(call?.name || call?.function?.name || ''),
                 arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
             },
+            ...(signature ? { signature } : {}),
+            ...(extraContent ? { extra_content: extraContent } : {}),
         };
     }).filter(call => call.function.name);
 }
@@ -125,6 +135,13 @@ export function appendStudioAssistantTurn(session, {
     toolCalls = [],
     toolResults = [],
     images = [],
+    reasoning = '',
+    signature = null,
+    reasoningBlocks = null,
+    reasoningDetails = null,
+    nativeParts = null,
+    nativeContentBlocks = null,
+    responsesOutputItems = null,
     now = Date.now(),
 } = {}) {
     const normalizedResults = (Array.isArray(toolResults) ? toolResults : []).map(result => ({
@@ -136,6 +153,13 @@ export function appendStudioAssistantTurn(session, {
         assistantText: text,
         toolCalls: normalizeToolCalls(toolCalls, normalizedResults),
         toolResults: normalizedResults,
+        reasoning,
+        signature,
+        reasoningBlocks,
+        reasoningDetails,
+        nativeParts,
+        nativeContentBlocks,
+        responsesOutputItems,
         at: now,
     });
     session.messages.push(message);
@@ -178,7 +202,17 @@ export function buildStudioHistoryMessages(session) {
         }
         const toolHistory = buildPersistentToolHistoryMessages([message]);
         if (toolHistory.length === 0) {
-            history.push({ role: 'assistant', content: String(message.content ?? '') });
+            history.push({
+                role: 'assistant',
+                content: String(message.content ?? ''),
+                ...(typeof message.reasoning === 'string' && message.reasoning.length > 0 ? { reasoning: message.reasoning } : {}),
+                ...(typeof message.signature === 'string' && message.signature.length > 0 ? { signature: message.signature } : {}),
+                ...(Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0 ? { reasoning_blocks: message.reasoning_blocks } : {}),
+                ...(Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0 ? { reasoning_details: message.reasoning_details } : {}),
+                ...(Array.isArray(message.native_parts) && message.native_parts.length > 0 ? { native_parts: message.native_parts } : {}),
+                ...(Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0 ? { native_content_blocks: message.native_content_blocks } : {}),
+                ...(Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0 ? { responses_output_items: message.responses_output_items } : {}),
+            });
             continue;
         }
         history.push(...toolHistory);

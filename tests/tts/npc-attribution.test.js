@@ -248,4 +248,11 @@ describe('npc-attribution', () => {
         expect(warnSpy).toHaveBeenCalledTimes(1); // warnedMessages dedupes per message
         warnSpy.mockRestore();
     });
+
+    test('tts defaults module owns canonical voice markers and omits removed ttsEnabled key', async () => {
+        const ttsDefaults = await import('../../public/scripts/extensions/tts/defaults.js');
+        expect(ttsDefaults.defaultSettings).not.toHaveProperty('ttsEnabled');
+        expect(ttsDefaults.DEFAULT_VOICE_MARKER).toBe('[Default Voice]');
+        expect(ttsDefaults.DISABLED_VOICE_MARKER).toBe('disabled');
+    });
 });

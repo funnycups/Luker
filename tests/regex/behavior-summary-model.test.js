@@ -720,6 +720,7 @@ describe('Regex Editor DOM integration, popup reopen idempotency, and i18n audit
             messageFormatting: (s) => s,
             redisplayChat: jest.fn(),
             reloadCurrentChat: jest.fn(),
+            saveSettings: jest.fn(),
             saveSettingsDebounced: jest.fn(),
             substituteParams: (s) => s,
             substituteParamsExtended: (s) => s,

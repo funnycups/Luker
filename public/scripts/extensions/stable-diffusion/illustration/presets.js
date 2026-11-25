@@ -112,16 +112,18 @@ export function makeIllustrationId(prefix = 'ill') {
     return `${prefix}_${random}`;
 }
 
-export function createDefaultPresets({ llm = {}, now = Date.now(), names = {} } = {}) {
+export function createDefaultPresets({ llm = {}, now = 0, names = {} } = {}) {
     const sharedLlm = {
         apiPresetName: String(llm?.apiPresetName || ''),
         llmPresetName: String(llm?.llmPresetName || ''),
     };
     const tagName = String(names.tagStyle || 'Tag style');
     const naturalName = String(names.naturalStyle || 'Natural language style');
+    // Built-in default presets are synced with settings.json, so their initial
+    // ids and timestamps are deterministic across fresh installs.
     return [
         {
-            id: makeIllustrationId('preset'),
+            id: 'preset_default_tag',
             name: tagName,
             promptStyle: 'tag',
             promptDefaultsInitialized: true,
@@ -133,7 +135,7 @@ export function createDefaultPresets({ llm = {}, now = Date.now(), names = {} } 
             visualInspection: false,
         },
         {
-            id: makeIllustrationId('preset'),
+            id: 'preset_default_natural',
             name: naturalName,
             promptStyle: 'natural',
             promptDefaultsInitialized: true,

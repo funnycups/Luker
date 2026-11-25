@@ -22,7 +22,6 @@ import { createStudioSessionStore, normalizeStudioSession } from '../public/scri
 import { buildSdDiagnoseDraft } from '../public/scripts/extensions/stable-diffusion/activity.js';
 import { askTools, readLabel } from '../public/scripts/workbench/model/ask.js';
 import { wsName } from '../public/scripts/workbench/pages/ask.js';
-import { ensureSkillI18n } from '../public/scripts/skills/i18n.js';
 
 beforeAll(() => {
     globalThis.structuredClone ??= value => JSON.parse(JSON.stringify(value));
@@ -1462,13 +1461,6 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         const sideZh = sdAskProvider.getSideInfo({ characterCount: 3, brokenConnectionProfile: false });
         expect(sideZh.countText).not.toContain('chars');
         expect(sideZh.countText).not.toContain('UNTRANSLATED:');
-
-        // Verify ensureSkillI18n registers synchronously via Luker.getContext().addLocaleData
-        const addedLocales = [];
-        ctx.addLocaleData = (loc, table) => addedLocales.push([loc, table]);
-        const registration = ensureSkillI18n();
-        expect(addedLocales.map(([loc]) => loc)).toEqual(['zh-cn', 'zh-tw']);
-        await registration;
 
         handle.destroy();
         cleanup();

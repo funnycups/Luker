@@ -163,8 +163,12 @@ export async function runIllustrationAgent({
             preparedRequests: roundPreparedRequests,
             assistantText,
             reasoning: promptResult.reasoning || '',
+            signature: promptResult.signature || '',
             reasoningBlocks: promptResult.reasoningBlocks || null,
             reasoningDetails: promptResult.reasoningDetails || null,
+            nativeParts: promptResult.nativeParts || null,
+            nativeContentBlocks: promptResult.nativeContentBlocks || null,
+            responsesOutputItems: promptResult.responsesOutputItems || null,
             finishReason,
             toolCalls: [],
         };
@@ -247,6 +251,9 @@ export async function runIllustrationAgent({
                     name: rawCall.name,
                     args: rawCall.args,
                     result: body,
+                    raw: rawCall.raw,
+                    signature: rawCall.signature,
+                    extra_content: rawCall.extra_content,
                 });
                 continue;
             }
@@ -310,6 +317,9 @@ export async function runIllustrationAgent({
                     name: rawCall.name,
                     args: rawCall.args,
                     result: body,
+                    raw: rawCall.raw,
+                    signature: rawCall.signature,
+                    extra_content: rawCall.extra_content,
                 });
                 continue;
             }
@@ -354,6 +364,9 @@ export async function runIllustrationAgent({
                         name: rawCall.name,
                         args: rawCall.args,
                         result: resultObj,
+                        raw: rawCall.raw,
+                        signature: rawCall.signature,
+                        extra_content: rawCall.extra_content,
                     });
                 } else if (selection.rejected.length > 0) {
                     const rej = selection.rejected[0];
@@ -374,6 +387,9 @@ export async function runIllustrationAgent({
                         name: rawCall.name,
                         args: rawCall.args,
                         result: resultObj,
+                        raw: rawCall.raw,
+                        signature: rawCall.signature,
+                        extra_content: rawCall.extra_content,
                     });
                 }
                 continue;
@@ -393,6 +409,9 @@ export async function runIllustrationAgent({
                 name: rawCall.name,
                 args: rawCall.args,
                 result: unknownResult,
+                raw: rawCall.raw,
+                signature: rawCall.signature,
+                extra_content: rawCall.extra_content,
             });
         }
 
@@ -404,8 +423,12 @@ export async function runIllustrationAgent({
             validationRetries = 0;
             appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
                 reasoning: promptResult.reasoning,
+                signature: promptResult.signature,
                 reasoningBlocks: promptResult.reasoningBlocks,
                 reasoningDetails: promptResult.reasoningDetails,
+                nativeParts: promptResult.nativeParts,
+                nativeContentBlocks: promptResult.nativeContentBlocks,
+                responsesOutputItems: promptResult.responsesOutputItems,
             });
             continue;
         }
@@ -414,8 +437,12 @@ export async function runIllustrationAgent({
             validationRetries += 1;
             appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
                 reasoning: promptResult.reasoning,
+                signature: promptResult.signature,
                 reasoningBlocks: promptResult.reasoningBlocks,
                 reasoningDetails: promptResult.reasoningDetails,
+                nativeParts: promptResult.nativeParts,
+                nativeContentBlocks: promptResult.nativeContentBlocks,
+                responsesOutputItems: promptResult.responsesOutputItems,
             });
             continue;
         }

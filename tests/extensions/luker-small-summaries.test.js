@@ -235,13 +235,21 @@ describe('buildCeaSummaryModel', () => {
         expect(zeroModel.rows[0].tokens.toolCallRetryMax.text).toBe('0');
         expect(zeroModel.rows[0].tokens.toolCallRetryMax.tone).toBe('off');
 
-        const clampedModel = buildCeaSummaryModel({
+        const uncappedModel = buildCeaSummaryModel({
             requestApiPresetName: 'OpenAI',
             requestLlmPresetName: 'Strict',
             toolCallRetryMax: 99,
         });
-        expect(clampedModel.rows[0].tokens.toolCallRetryMax.text).toBe('10');
-        expect(clampedModel.rows[0].tokens.toolCallRetryMax.tone).toBe('active');
+        expect(uncappedModel.rows[0].tokens.toolCallRetryMax.text).toBe('99');
+        expect(uncappedModel.rows[0].tokens.toolCallRetryMax.tone).toBe('active');
+
+        const negativeModel = buildCeaSummaryModel({
+            requestApiPresetName: 'OpenAI',
+            requestLlmPresetName: 'Strict',
+            toolCallRetryMax: -5,
+        });
+        expect(negativeModel.rows[0].tokens.toolCallRetryMax.text).toBe('0');
+        expect(negativeModel.rows[0].tokens.toolCallRetryMax.tone).toBe('off');
     });
 
     test('passes i18n translations through cleanly', () => {
@@ -631,8 +639,8 @@ describe('jsdom mount & interaction verification', () => {
 
     test('all new summary i18n keys exist in zh-cn and zh-tw with matching slots and zero unescaped semicolons', () => {
         const files = [
-            'public/scripts/extensions/character-editor-assistant/main.js',
-            'public/scripts/extensions/completion-preset-assistant/main.js',
+            'public/scripts/extensions/character-editor-assistant/i18n.js',
+            'public/scripts/extensions/completion-preset-assistant/i18n.js',
             'public/scripts/extensions/hook-order/index.js',
         ];
         const modelFiles = [
@@ -640,6 +648,8 @@ describe('jsdom mount & interaction verification', () => {
             'public/scripts/extensions/completion-preset-assistant/behavior-summary-model.js',
             'public/scripts/extensions/hook-order/behavior-summary-model.js',
         ];
+        const coreZhCn = readFileSync(resolve(REPO_ROOT, 'public/locales/zh-cn.json'), 'utf8');
+        const coreZhTw = readFileSync(resolve(REPO_ROOT, 'public/locales/zh-tw.json'), 'utf8');
 
         for (let i = 0; i < files.length; i++) {
             const localeSrc = readFileSync(resolve(REPO_ROOT, files[i]), 'utf8');
@@ -652,8 +662,12 @@ describe('jsdom mount & interaction verification', () => {
             }
             expect(keys.size).toBeGreaterThan(0);
 
-            const zhCnStart = localeSrc.indexOf('addLocaleData(\'zh-cn\'');
-            const zhTwStart = localeSrc.indexOf('addLocaleData(\'zh-tw\'');
+            const zhCnStart = localeSrc.includes('const ZH_CN =')
+                ? localeSrc.indexOf('const ZH_CN =')
+                : localeSrc.indexOf('addLocaleData(\'zh-cn\'');
+            const zhTwStart = localeSrc.includes('const ZH_TW =')
+                ? localeSrc.indexOf('const ZH_TW =')
+                : localeSrc.indexOf('addLocaleData(\'zh-tw\'');
             expect(zhCnStart).toBeGreaterThan(-1);
             expect(zhTwStart).toBeGreaterThan(zhCnStart);
             const zhCnBlock = localeSrc.slice(zhCnStart, zhTwStart);
@@ -661,8 +675,9 @@ describe('jsdom mount & interaction verification', () => {
 
             for (const key of keys) {
                 const quoted = `'${key.replace(/'/g, '\\\'')}'`;
-                expect(zhCnBlock).toContain(quoted);
-                expect(zhTwBlock).toContain(quoted);
+                const jsonQuoted = JSON.stringify(key);
+                expect(zhCnBlock.includes(quoted) || coreZhCn.includes(jsonQuoted)).toBe(true);
+                expect(zhTwBlock.includes(quoted) || coreZhTw.includes(jsonQuoted)).toBe(true);
             }
         }
     });

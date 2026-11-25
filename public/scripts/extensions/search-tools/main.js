@@ -2,6 +2,14 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import { createSearchToolsSettingsUi } from './settings-ui.js';
+import {
+    MODULE_NAME,
+    TOOL_NAMES,
+    EXPORTED_TOOL_NAMES,
+    DEFAULT_SETTINGS,
+    LOREBOOK_POSITION_SCHEMA_VERSION,
+    SUPPORTED_WORLD_INFO_POSITIONS,
+} from './defaults.js';
 import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { createSearchRunPanel } from './run-panel.js';
 import {
@@ -24,9 +32,16 @@ import {
 } from './providers.js';
 import {
     appendStandardToolRoundMessages,
+    normalizeToolCallRetryMax,
     requestToolCallsWithRetry,
     serializeToolResultContent,
 } from '/scripts/lib/iter-tool-calling.js';
+import { i18n, i18nFormat } from './i18n.js';
+import {
+    renderConnectionProfileOptions as renderSharedConnectionProfileOptions,
+    renderOpenAIPresetOptions as renderSharedOpenAIPresetOptions,
+} from '../../lens-shared/preset-selectors.js';
+import { isAbortSignalLike, isStrictAbortError as isAbortError, linkAbortSignals, throwIfAborted } from '../../lib/abort-utils.js';
 
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
@@ -37,8 +52,6 @@ const saveSettings = __ctx.saveSettings;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
-const addLocaleData = __ctx.addLocaleData;
-const translate = __ctx.translate;
 const SECRET_KEYS = __ctx.secrets.KEYS;
 const secret_state = __ctx.secrets.state;
 const escapeHtml = __ctx.escapeHtml;
@@ -49,7 +62,6 @@ const world_info_position = __ctx.constants.wiPosition;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 const Popup = __ctx.Popup;
 
-const MODULE_NAME = 'search_tools';
 const UI_BLOCK_ID = 'search_tools_settings';
 const STYLE_ID = 'search_tools_style';
 const STATUS_ID = 'search_tools_status';
@@ -58,258 +70,6 @@ const SHARED_LOREBOOK_NAME = '__SEARCH_TOOLS__';
 const MANAGED_COMMENT_PREFIX = 'SEARCH_TOOLS';
 const ALLOWED_GENERATION_TYPES = new Set(['normal', 'continue', 'regenerate', 'swipe', 'impersonate']);
 const REUSE_GENERATION_TYPES = new Set(['continue', 'regenerate', 'swipe']);
-const TOOL_NAMES = Object.freeze({
-    SEARCH: 'luker_web_search',
-    VISIT: 'luker_web_visit',
-    IMAGE_SEARCH: 'luker_web_image_search',
-    PAGE_IMAGES: 'luker_web_page_images',
-    AGENT_SEARCH: 'luker_search_agent_search',
-    AGENT_VISIT: 'luker_search_agent_visit',
-    AGENT_UPSERT: 'luker_search_agent_upsert_lorebook_entry',
-    AGENT_DELETE: 'luker_search_agent_delete_lorebook_entry',
-    AGENT_GET: 'luker_search_agent_get_lorebook_entries',
-});
-const EXPORTED_TOOL_NAMES = Object.freeze({
-    SEARCH: TOOL_NAMES.SEARCH,
-    VISIT: TOOL_NAMES.VISIT,
-    IMAGE_SEARCH: TOOL_NAMES.IMAGE_SEARCH,
-    PAGE_IMAGES: TOOL_NAMES.PAGE_IMAGES,
-});
-const DEFAULT_LOREBOOK_CONTENT_TEMPLATE_GUIDANCE = [
-    'When you write lorebook content, the content field must be exactly one fenced yaml code block.',
-    'If an entry is created to provide creative inspiration, candidate suggestions, or temporary creative reference, set it constant / always_inject and add explicit top-level YAML markers `entry_usage: creative_inspiration_constant` and `retention: delete_if_unused_after_one_creation_round` inside the entry.',
-    'A non-constant entry is allowed only when the latest user input clearly already contains or directly invokes that entry\'s trigger words.',
-    'If the current turn does not need any real external reference grounding, do not create or update a lorebook entry at all.',
-    'Never write original setting material, speculative filler, plot continuation, or any content that is not directly grounded in managed search entries, search results, or visited pages.',
-    'Treat the templates below as flexible reference skeletons, not a rigid schema.',
-    'You may freely delete, rename, regroup, merge, or add sections when useful, as long as every included detail is directly supported by managed search entries, search results, or visited pages.',
-    'Do not keep empty placeholders, filler headings, or sections with no informational value.',
-    'When the source clearly indicates the canonical work (novel/game/anime/comic/film), include a top-level `source_work` field (label meaning: 原作).',
-    'Do not let the current chat context, roleplay direction, or likely next scene distort the entry. Keep it faithful to the gathered source material itself.',
-    'Prefer clear, information-dense worldbook notes over a minimal one- or two-sentence summary when the source supports more detail.',
-    'For character entries, source-backed roleplay-useful details such as mannerisms, speech style, and speech examples are allowed when the source explicitly supports them.',
-    'Speech examples must only be included when directly evidenced by the source text or an explicit quoted line.',
-    'Reference character template:',
-    '```yaml',
-    'name: "<Character Name>"',
-    'source_work: "<原作 / Source Work>"',
-    'aliases:',
-    '  - "<Alias>"',
-    'role: "<Identity or role>"',
-    'overview: |',
-    '  <Source-backed overview>',
-    'identity:',
-    '  species: "<Species or type>"',
-    '  occupation:',
-    '    - "<Occupation or function>"',
-    '  affiliation:',
-    '    - "<Group or faction>"',
-    'appearance:',
-    '  - "<Stable visual trait>"',
-    'personality:',
-    '  - "<Stable trait or behavioral tendency>"',
-    'mannerisms:',
-    '  - "<Habit or recognizable behavior>"',
-    'speech:',
-    '  style:',
-    '    - "<Speaking style or register>"',
-    '  examples:',
-    '    - "<Source-backed line or phrasing pattern>"',
-    'background:',
-    '  - "<Relevant history>"',
-    'relationships:',
-    '  - target: "<Person or group>"',
-    '    relation: "<Relationship>"',
-    '    notes: "<Source-backed detail>"',
-    'abilities:',
-    '  - "<Ability, skill, or limitation>"',
-    'items:',
-    '  - "<Equipment or associated item>"',
-    'notable_facts:',
-    '  - "<Important fact>"',
-    '```',
-    'Reference event template:',
-    '```yaml',
-    'title: "<Event Name>"',
-    'aliases:',
-    '  - "<Alternate name>"',
-    'time: "<Time or period>"',
-    'location: "<Place>"',
-    'overview: |',
-    '  <Source-backed overview>',
-    'background:',
-    '  - "<Cause or prior condition>"',
-    'participants:',
-    '  - "<Participant>"',
-    'sequence:',
-    '  - stage: "<Stage or moment>"',
-    '    details:',
-    '      - "<What happened>"',
-    'results:',
-    '  - "<Outcome or consequence>"',
-    'notable_details:',
-    '  - "<Memorable detail>"',
-    '```',
-    'Reference location template:',
-    '```yaml',
-    'name: "<Location Name>"',
-    'aliases:',
-    '  - "<Alternate name>"',
-    'type: "<City, building, region, site, ruin, venue>"',
-    'overview: |',
-    '  <Source-backed overview>',
-    'environment:',
-    '  - "<Environmental or atmospheric trait>"',
-    'layout:',
-    '  - "<Area, division, or structural feature>"',
-    'inhabitants:',
-    '  - "<Residents, caretakers, or controlling group>"',
-    'rules_or_customs:',
-    '  - "<Local rule, taboo, or custom>"',
-    'notable_features:',
-    '  - "<Landmark, danger, or resource>"',
-    'history:',
-    '  - "<Important historical fact>"',
-    '```',
-    'Reference organization template:',
-    '```yaml',
-    'name: "<Organization Name>"',
-    'aliases:',
-    '  - "<Alternate name>"',
-    'type: "<Organization type>"',
-    'overview: |',
-    '  <Source-backed overview>',
-    'purpose:',
-    '  - "<Goal or mission>"',
-    'structure:',
-    '  - "<Hierarchy or operating model>"',
-    'members:',
-    '  - "<Key member or subgroup>"',
-    'assets:',
-    '  - "<Resources, territory, or influence>"',
-    'methods:',
-    '  - "<Typical methods or activities>"',
-    'relations:',
-    '  - target: "<Other party>"',
-    '    status: "<Friendly, hostile, neutral, subordinate, allied>"',
-    '    notes: "<Source-backed detail>"',
-    'notable_facts:',
-    '  - "<Important fact>"',
-    '```',
-    'Reference item / technology / concept / rule template:',
-    '```yaml',
-    'name: "<Name>"',
-    'aliases:',
-    '  - "<Alternate name>"',
-    'type: "<Item, technology, concept, rule, power system>"',
-    'overview: |',
-    '  <Source-backed overview>',
-    'properties:',
-    '  - "<Property or defining trait>"',
-    'usage:',
-    '  - "<Use or application>"',
-    'mechanics:',
-    '  - "<How it works, including limits or costs>"',
-    'owners_or_users:',
-    '  - "<Associated person or group>"',
-    'notable_facts:',
-    '  - "<Important fact>"',
-    '```',
-].join('\n');
-const DEFAULT_AGENT_SYSTEM_PROMPT = [
-    'You are a pre-request web research agent for roleplay generation.',
-    'Your job is to decide whether any search-backed lorebook update is necessary before the main generation request continues.',
-    'Your first decision is whether this turn actually needs any external research or search-backed lorebook mutation at all.',
-    'If the needed grounding is already covered by active world info, character info, or managed search entries, do not search and do not write new entries. Reply with plain text and no tool calls to end the run.',
-    'A name, place, item, or concept that appears in the latest user message or the current scene and is not already covered by active world info, character info, or managed search entries is a search candidate.',
-    'Judge from the active world info and the surrounding context whether that candidate looks like it comes from an external work. If it does, treat it as a real external information gap and search for it before writing any entry.',
-    'You may finish immediately without searching if active world info, character information, and managed search entries already cover the need.',
-    'Search-backed lorebook content must stay strictly faithful to the source text from managed search entries, search results, and visited pages.',
-    'Every managed lorebook entry must read like an objective reference note, not like story direction, roleplay guidance, or character writing advice.',
-    'Search tools are only for external reference grounding. They are not for inventing lore, repairing thin scene context with creativity, or turning the current plot into fake research-backed notes.',
-    'Treat search output as source material only. Any story-driven adaptation, reinterpretation, dramatization, or extrapolation is out of scope.',
-    'Do not rewrite source-backed facts to fit the current plot, scene mood, or roleplay direction.',
-    'Do not infer or invent character emotions, cognition, motives, intentions, hidden thoughts, relationship shifts, future actions, or plot consequences unless the source explicitly states them.',
-    'Do not write instructions, recommendations, likely reactions, behavioral coaching, tone guidance, scene framing, or any text that tells the main model how to portray a character or continue the story.',
-    'If a source is ambiguous, keep wording neutral or do not write it.',
-    'Never create a managed entry whose content is original, speculative, scene-driven, or unrelated to the gathered search evidence.',
-    'Avoid duplicates. If information would repeat existing active world info, character card facts, or existing managed search entries, do not add it.',
-    'Search and visit are optional. You may use existing managed search entries as your own database.',
-    'If information is uncertain, highly time-sensitive, or search snippets are insufficient, prefer search plus visit before writing.',
-    `Keep each response focused. Prefer 1 to 3 new ${TOOL_NAMES.AGENT_SEARCH} calls per response, avoid exceeding 4 unless absolutely necessary, and never spray many near-duplicate searches in one response.`,
-    `To update or delete an existing entry, first read it with ${TOOL_NAMES.AGENT_GET} when you need its exact current content, then call ${TOOL_NAMES.AGENT_UPSERT} or ${TOOL_NAMES.AGENT_DELETE} using the exact entry_id shown in the index. Never re-create an entry that already exists — update it by entry_id.`,
-    'Only delete entries that are explicitly listed as deletable.',
-    'Delete managed entries that are no longer needed, duplicated, outdated for the current chat branch, or unsupported by the gathered evidence.',
-    'Use only the provided function tools.',
-    'Before any tool calls, output exactly one structured <thought>...</thought> block.',
-    'Hard output format for <thought> (must follow exactly this order):',
-    '<thought>',
-    '[1] Need gate: state whether there is a real external information gap for this turn. A name, place, item, or concept that is not already covered by active world info, character info, or managed search entries and looks like it comes from an external work is such a gap. If there is no such gap, say so explicitly and stop.',
-    '[2] Evidence gate: for every planned write, update, or deletion, name the exact supporting evidence already available from managed entries, search results, or visited pages. If evidence is missing, say no grounded write yet.',
-    '[3] Contamination gate: explicitly check whether any planned content is being influenced by plot pressure, current scene momentum, expected next actions, roleplay preference, or your own invention. Remove anything contaminated.',
-    '[4] Activation gate: for each planned entry, state constant vs non-constant and why. A non-constant entry is valid only if the latest user input clearly already contains or directly invokes that entry\'s trigger words; quote or name those trigger words explicitly.',
-    '[5] Cleanup gate: check whether any existing creative-inspiration constant entry has already served one creation round and is now confirmed unnecessary; if so, delete it.',
-    '[6] Action: choose exactly what to do now: search, visit, read, upsert, delete, or a grounded combination allowed by the tool contract.',
-    '</thought>',
-    'If the thought block misses any required section above, treat your own response as invalid and regenerate fully.',
-    'Use the thought block as a preflight check. If [1] says no real external gap, do not search and do not write.',
-    `If fresh evidence is still needed, [6] should choose ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT} only. Do not commit to concrete lorebook writes before the evidence arrives.`,
-    'After new search or visit results arrive, run the full gate sequence again from the updated evidence and only then decide concrete entry writes or deletions.',
-    'When you have gathered enough evidence and made every needed lorebook change, reply with plain text and emit no tool calls. That ends the run. There is no separate finalize step.',
-    'For lorebook writes, provide only the needed persistent factual content, activation keywords, and whether it should always inject.',
-    DEFAULT_LOREBOOK_CONTENT_TEMPLATE_GUIDANCE,
-    'Use always-inject entries when the information must stay visible in context continuously without a trigger. This includes always-on rules, core worldbuilding, setting assumptions, power-system rules, social norms, and any entry created to provide creative inspiration, candidate suggestions, or temporary creative reference.',
-    'For creative-inspiration entries, always set constant / always_inject and include explicit top-level YAML markers `entry_usage: creative_inspiration_constant` and `retention: delete_if_unused_after_one_creation_round` inside the entry.',
-    'After one creation round, if the current chat branch confirms an inspiration constant entry is no longer needed, delete it instead of keeping it.',
-    'Set an entry non-constant only when the latest user input clearly already contains or directly invokes that entry\'s trigger words. That is the only valid reason to rely on keyword activation.',
-    'When using a non-constant entry, choose precise trigger words that match wording already present in the latest user input.',
-    'If the trigger words are not clearly present in the latest user input, do not create a non-constant entry merely because it might become relevant later.',
-    'Prefer concise declarative fact statements over narrative prose.',
-    'When writing lorebook content, preserve source scope and uncertainty instead of upgrading it into stronger claims.',
-    'Do not move or redesign lorebook layout. Runtime controls managed entry position/depth/role/order from current settings.',
-    'Outside the single <thought>...</thought> block and tool calls, do not output plain prose except for the final plain-text reply that ends the run.',
-].join('\n');
-
-function buildDefaultProviderSettings() {
-    const defaults = {};
-    for (const definition of SEARCH_PROVIDERS) {
-        defaults[definition.id] = {};
-        for (const field of definition.fields) {
-            defaults[definition.id][field.key] = field.default;
-        }
-    }
-    return Object.freeze(defaults);
-}
-
-const DEFAULT_SETTINGS = Object.freeze({
-    enabled: false,
-    preRequestEnabled: false,
-    provider: 'ddg',
-    defaultMaxResults: 8,
-    defaultVisitMaxChars: 4000,
-    safeSearch: 'moderate',
-    providers: buildDefaultProviderSettings(),
-    agentApiPresetName: '',
-    agentPresetName: '',
-    includeWorldInfoWithPreset: true,
-    agentSystemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-    toolCallRetryMax: 2,
-    lorebookPosition: world_info_position.atDepth,
-    lorebookDepth: 9999,
-    lorebookRole: extension_prompt_roles.SYSTEM,
-    lorebookEntryOrder: 9800,
-});
-const LOREBOOK_POSITION_SCHEMA_VERSION = 2;
-const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
-    world_info_position.before,
-    world_info_position.after,
-    world_info_position.ANTop,
-    world_info_position.ANBottom,
-    world_info_position.EMTop,
-    world_info_position.EMBottom,
-    world_info_position.atDepth,
-]);
-
 let activeAgentRunToken = 0;
 let activeAgentAbortController = null;
 let latestSearchAgentSnapshot = null;
@@ -324,14 +84,6 @@ function initSearchRunPanel() {
     }
     searchRunPanel = createSearchRunPanel();
     searchRunPanel.init();
-}
-
-function i18n(text) {
-    return translate(String(text || ''));
-}
-
-function i18nFormat(text, ...values) {
-    return i18n(text).replace(/\$\{(\d+)\}/g, (_, index) => String(values[Number(index)] ?? ''));
 }
 
 /**
@@ -447,12 +199,7 @@ function ensureSettings() {
     if (initializePromptDefaults(settings, { agentSystemPrompt: DEFAULT_SETTINGS.agentSystemPrompt })) {
         saveSettingsDebounced();
     }
-    settings.toolCallRetryMax = clampInteger(
-        settings.toolCallRetryMax ?? DEFAULT_SETTINGS.toolCallRetryMax,
-        0,
-        5,
-        DEFAULT_SETTINGS.toolCallRetryMax,
-    );
+    settings.toolCallRetryMax = normalizeToolCallRetryMax(settings.toolCallRetryMax, DEFAULT_SETTINGS.toolCallRetryMax);
     const hasLorebookPositionSchemaVersion = Object.prototype.hasOwnProperty.call(settings, 'lorebookPositionSchemaVersion');
     if (!hasLorebookPositionSchemaVersion) {
         settings.lorebookPosition = migrateLegacyPromptInjectionPosition(settings.lorebookPosition ?? DEFAULT_SETTINGS.lorebookPosition);
@@ -617,44 +364,18 @@ async function loadSearchToolsChatState(context, { force = false } = {}) {
     }
 }
 
-function getOpenAIPresetNames(context) {
-    const manager = context.getPresetManager?.('openai');
-    if (!manager || typeof manager.getAllPresets !== 'function') {
-        return [];
-    }
-    const names = manager.getAllPresets();
-    if (!Array.isArray(names)) {
-        return [];
-    }
-    return [...new Set(names.map(name => String(name || '').trim()).filter(Boolean))];
-}
-
 function renderOpenAIPresetOptions(context, selectedName = '') {
-    const selected = String(selectedName || '').trim();
-    const names = getOpenAIPresetNames(context);
-    const options = [`<option value="">${escapeHtml(i18n('(Current preset)'))}</option>`];
-    for (const name of names) {
-        options.push(`<option value="${escapeHtml(name)}"${name === selected ? ' selected' : ''}>${escapeHtml(name)}</option>`);
-    }
-    if (selected && !names.includes(selected)) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(i18n('(missing)'))}</option>`);
-    }
-    return options.join('');
+    return renderSharedOpenAIPresetOptions(context, selectedName, {
+        emptyLabel: i18n('(Current preset)'),
+        missingLabel: i18n('(missing)'),
+    });
 }
 
 function renderConnectionProfileOptions(selectedName = '') {
-    const selected = String(selectedName || '').trim();
-    const names = (getContext()?.connectionProfiles?.list?.() || [])
-        .map(profile => String(profile?.name || '').trim())
-        .filter(Boolean);
-    const options = [`<option value="">${escapeHtml(i18n('(Current API config)'))}</option>`];
-    for (const name of names) {
-        options.push(`<option value="${escapeHtml(name)}"${name === selected ? ' selected' : ''}>${escapeHtml(name)}</option>`);
-    }
-    if (selected && !names.includes(selected)) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(i18n('(missing)'))}</option>`);
-    }
-    return options.join('');
+    return renderSharedConnectionProfileOptions(getContext(), selectedName, {
+        emptyLabel: i18n('(Current API config)'),
+        missingLabel: i18n('(missing)'),
+    });
 }
 
 function fallbackStripHtml(html) {
@@ -1281,72 +1002,11 @@ async function resolveAgentRuntimeWorldInfo(context, settings, payload, runtimeW
     return presetRuntimeWorldInfo === null ? {} : presetRuntimeWorldInfo;
 }
 
-function isAbortSignalLike(signal) {
-    return Boolean(signal && typeof signal === 'object' && typeof signal.aborted === 'boolean');
-}
-
-function isAbortError(error, signal = null) {
-    if (error?.name === 'AbortError') {
-        return true;
-    }
-    return Boolean(signal?.aborted);
-}
-
-function createAbortError(message = 'Operation aborted.') {
-    try {
-        return new DOMException(String(message || 'Operation aborted.'), 'AbortError');
-    } catch {
-        const error = new Error(String(message || 'Operation aborted.'));
-        error.name = 'AbortError';
-        return error;
-    }
-}
-
-function throwIfAborted(signal, message = 'Operation aborted.') {
-    if (isAbortSignalLike(signal) && signal.aborted) {
-        throw createAbortError(message);
-    }
-}
-
 function buildRecoverableToolErrorResult(error, fallbackMessage = 'Tool call failed.') {
     const message = normalizeWhitespace(error?.message || error || fallbackMessage) || fallbackMessage;
     return {
         ok: false,
         error: message,
-    };
-}
-
-function linkAbortSignals(...signals) {
-    const validSignals = signals.filter(isAbortSignalLike);
-    if (validSignals.length === 0) {
-        return { signal: null, cleanup: () => {} };
-    }
-    if (validSignals.length === 1) {
-        return { signal: validSignals[0], cleanup: () => {} };
-    }
-
-    const controller = new AbortController();
-    const onAbort = () => {
-        if (!controller.signal.aborted) {
-            controller.abort();
-        }
-    };
-
-    for (const signal of validSignals) {
-        if (signal.aborted) {
-            onAbort();
-            break;
-        }
-        signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return {
-        signal: controller.signal,
-        cleanup: () => {
-            for (const signal of validSignals) {
-                signal.removeEventListener('abort', onAbort);
-            }
-        },
     };
 }
 
@@ -1489,7 +1149,11 @@ async function refreshSharedLorebookVisibilityAndSelection(context, selected) {
             save: false,
         });
         if (changed) {
-            await saveSettings();
+            const outcome = await saveSettings();
+            if (outcome && typeof outcome === 'object' && outcome.ok === false) {
+                console.error(`[${MODULE_NAME}] Failed to save shared search lorebook selection`, outcome);
+                throw new Error(i18n('Failed to save shared search lorebook selection.'));
+            }
         }
     }
 }
@@ -1763,12 +1427,12 @@ function buildSearchAgentStatusText(result, { reused = false } = {}) {
     const managedEntryCount = Math.max(0, Number(result?.managedEntryCount ?? latestManagedEntries.length));
     if (reused) {
         return mutationCount
-            ? i18n(`Search agent reused cached lorebook update (${mutationCount} changes, ${managedEntryCount} managed entries).`)
-            : i18n(`Search agent reused cached result with no lorebook changes (${managedEntryCount} managed entries).`);
+            ? i18nFormat('Search agent reused cached lorebook update (${0} changes, ${1} managed entries).', mutationCount, managedEntryCount)
+            : i18nFormat('Search agent reused cached result with no lorebook changes (${0} managed entries).', managedEntryCount);
     }
     return mutationCount
-        ? i18n(`Search agent updated lorebook (${mutationCount} changes, ${managedEntryCount} managed entries).`)
-        : i18n(`Search agent finished with no lorebook changes (${managedEntryCount} managed entries).`);
+        ? i18nFormat('Search agent updated lorebook (${0} changes, ${1} managed entries).', mutationCount, managedEntryCount)
+        : i18nFormat('Search agent finished with no lorebook changes (${0} managed entries).', managedEntryCount);
 }
 
 async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
@@ -1901,16 +1565,10 @@ function buildManagedEntryCatalog(entries = []) {
     })), null, 2);
 }
 
-// Read cap mirrors the shared `lorebook_get` DETAIL_LIMIT_MAX
-// (iteration-library/tools/_lorebook-helpers.js) so the agent's per-call
-// payload stays bounded the same way every other lorebook read tool is.
-const MANAGED_ENTRY_READ_LIMIT = 10;
-
 function getManagedEntriesByIds(data, entryIds = []) {
     const requested = (Array.isArray(entryIds) ? entryIds : [])
         .map(id => sanitizeEntryId(id))
-        .filter(Boolean)
-        .slice(0, MANAGED_ENTRY_READ_LIMIT);
+        .filter(Boolean);
     const byId = new Map(listManagedEntries(data).map(entry => [entry.entryId, entry]));
     const entries = [];
     const missing_entry_ids = [];
@@ -2275,7 +1933,15 @@ async function runPreRequestSearchAgent(context, settings, payload, panel = null
             throwIfAborted(payload?.signal, 'Search agent aborted.');
         }
 
-        appendStandardToolRoundMessages(toolHistoryMessages, executedCalls, response.assistantText || '');
+        appendStandardToolRoundMessages(toolHistoryMessages, executedCalls, response.assistantText || '', {
+            reasoning: response?.reasoning || '',
+            signature: response?.signature || null,
+            reasoningBlocks: response?.reasoningBlocks || null,
+            reasoningDetails: response?.reasoningDetails || null,
+            nativeParts: response?.nativeParts || null,
+            nativeContentBlocks: response?.nativeContentBlocks || null,
+            responsesOutputItems: response?.responsesOutputItems || null,
+        });
 
         if (panel) {
             panel.store.setRoundStatus({ runId: panel.runId, roundId, status: 'done' });
@@ -2518,320 +2184,6 @@ function registerSearchToolsStructuralSync(context = getContext()) {
     }
 }
 
-function registerLocaleData() {
-    addLocaleData('zh-cn', {
-        'Search Tools': '搜索工具',
-        'Expose tools to main model': '暴露工具给主模型',
-        'Run pre-request search agent': '请求前运行搜索 Agent',
-        'Search provider': '搜索提供方',
-        'DuckDuckGo (no login)': 'DuckDuckGo（无需登录）',
-        'SearXNG (custom instance)': 'SearXNG（自定义实例）',
-        'Brave Search (API key)': 'Brave Search（API Key）',
-        'SearXNG instance URL': 'SearXNG 实例地址',
-        'Brave API key': 'Brave API Key',
-        'Configured': '已配置',
-        'Not configured': '未配置',
-        'Manage API key': '管理 API Key',
-        'Default max search results': '默认搜索结果上限',
-        'Default safe search': '默认安全搜索',
-        'Off': '关闭',
-        'Moderate': '中等',
-        'Strict': '严格',
-        'Default page excerpt max chars (0 = no truncation)': '默认网页摘录最大字符数（0=不截断）',
-        'Agent API preset (Connection profile)': 'Agent API 预设',
-        'Agent preset (params + prompt)': 'Agent 预设',
-        'Include world info': '包含世界书信息',
-        'Tool call retry count': '工具调用重试次数',
-        'Injection position': '注入位置',
-        'Before Character Definitions': '角色定义前',
-        'After Character Definitions': '角色定义后',
-        'Before Author\'s Note': '作者注释前',
-        'After Author\'s Note': '作者注释后',
-        'Before Example Messages': '示例消息前',
-        'After Example Messages': '示例消息后',
-        'At Chat Depth': '聊天深度',
-        'Injection depth': '注入深度',
-        'Injection role': '注入角色',
-        'Injection order': '注入顺序',
-        'Agent system prompt': 'Agent 系统提示词',
-        'Reset agent prompt': '重置 Agent 提示词',
-        'Reset agent prompt to default? This will overwrite the current agent system prompt.': '确认重置 Agent 提示词为默认值？这会覆盖当前 Agent 系统提示词。',
-        'System': '系统',
-        'User': '用户',
-        'Assistant': '助手',
-        'Stop': '终止',
-        'Search agent running...': '搜索 Agent 运行中...',
-        'Search agent aborted.': '搜索 Agent 已中止。',
-        'Search agent failed. Check console for details.': '搜索 Agent 失败，请查看控制台。',
-        'No active chat.': '当前没有激活聊天。',
-        'No shared search lorebook yet.': '当前还没有共享搜索世界书。',
-        'Failed to inspect shared search lorebook.': '检查共享搜索世界书失败。',
-        '(Current preset)': '（当前预设）',
-        '(Current API config)': '（当前 API 配置）',
-        '(missing)': '（缺失）',
-        'Manage stored search entries': '管理已保存的搜索条目',
-        'Remove entries that are no longer relevant. Changes apply to the current chat.': '删除不再相关的条目，改动只作用于当前聊天。',
-        'No managed search entries in this chat.': '当前聊天没有任何搜索条目。',
-        'Select all': '全选',
-        'Delete selected': '删除选中',
-        'Reset all': '重置全部',
-        'Delete': '删除',
-        'Close': '关闭',
-        'Total': '总计',
-        'Always inject': '始终注入',
-        'Always': '常驻',
-        'Delete 1 selected search entry? This cannot be undone for the current chat.': '删除已选中的 1 条搜索条目？当前聊天的此操作无法撤销。',
-        'Delete {count} selected search entries? This cannot be undone for the current chat.': '删除已选中的 {count} 条搜索条目？当前聊天的此操作无法撤销。',
-        'Remove ALL managed search entries from this chat? This cannot be undone.': '清空当前聊天的全部搜索条目？此操作无法撤销。',
-        'Failed to update managed entries. See console for details.': '更新搜索条目失败，详情查看控制台。',
-        'Failed to persist search agent snapshot.': '保存搜索 Agent 快照失败。',
-        'Failed to persist search agent snapshot (storage conflict).': '保存搜索 Agent 快照失败（存储冲突）。',
-        'Failed to persist search agent snapshot (server error).': '保存搜索 Agent 快照失败（服务器错误）。',
-        'Failed to persist search agent snapshot (network error).': '保存搜索 Agent 快照失败（网络错误）。',
-        'Failed to persist search agent snapshot (storage corrupted, reload chat).': '保存搜索 Agent 快照失败（存储已损坏，请重新加载聊天）。',
-        'Failed to persist search agent snapshot (disk write failed).': '保存搜索 Agent 快照失败（磁盘写入失败）。',
-        'Tavily (API key)': 'Tavily（API Key）',
-        'Exa (API key)': 'Exa（API Key）',
-        'Serper (API key)': 'Serper（API Key）',
-        'SerpApi (API key)': 'SerpApi（API Key）',
-        'Z.AI (API key)': 'Z.AI（API Key）',
-        'API key': 'API Key',
-        'Search depth': '搜索深度',
-        'Topic': '主题',
-        'Include answer': '包含答案',
-        'Search type': '搜索类型',
-        'Category': '类别',
-        'Result contents': '结果内容',
-        'Result type': '结果类型',
-        'Region': '地区',
-        'Language': '语言',
-        'Recency': '时间范围',
-        'Basic': '基础',
-        'Advanced': '高级',
-        'Fast': '快速',
-        'Ultra fast': '极速',
-        'General': '通用',
-        'News': '新闻',
-        'Finance': '财经',
-        'Auto': '自动',
-        'Instant': '即时',
-        'Deep lite': '深度精简',
-        'Deep': '深度',
-        'Deep reasoning': '深度推理',
-        'Any': '任意',
-        'Company': '公司',
-        'Publication': '出版物',
-        'Personal site': '个人网站',
-        'Financial report': '财报',
-        'People': '人物',
-        'Highlights': '摘要',
-        'Full text': '全文',
-        'None': '无',
-        'Web': '网页',
-        'No limit': '不限',
-        'Past day': '过去一天',
-        'Past week': '过去一周',
-        'Past month': '过去一月',
-        'Past year': '过去一年',
-        'Show search run panel': '显示搜索运行面板',
-        'Search': '搜索',
-        'Reasoning': '思考',
-        'Response': '响应',
-        'Tool: ${0}': '工具：${0}',
-        'Tool result: ${0}': '工具结果：${0}',
-        'Round ${0}': '第 ${0} 轮',
-        'Import example': '导入示例',
-        'Re-import example': '重新导入示例',
-        'Derive from an existing preset': '从现有预设派生',
-        'DeepSeek (API key)': 'DeepSeek（API Key）',
-        'Search Tools main behavior summary': '搜索工具主行为摘要',
-        'Search Tools lorebook injection summary': '搜索工具世界书注入摘要',
-        'Main model': '主模型',
-        'Web search & visit tools exposed': '已暴露网页搜索与页面访问工具',
-        '${enabled} — main chat model can search the web and visit pages.': '${enabled} —— 主聊天模型可直接搜索网页与访问页面。',
-        'Tools not exposed': '未暴露工具',
-        '${enabled} — main chat model cannot call web search tools directly.': '${enabled} —— 主聊天模型无法直接调用网页搜索工具。',
-        'Pre-request agent': '请求前 Agent',
-        'Runs automatically': '自动运行',
-        'with world info': '附带世界书信息',
-        'without world info': '不附带世界书信息',
-        '${preRequestEnabled} before generation using ${agentApiPresetName} + ${agentPresetName}, ${includeWorldInfoWithPreset}, up to ${toolCallRetryMax} tool retries.': '生成前${preRequestEnabled}，使用 ${agentApiPresetName} + ${agentPresetName}（${includeWorldInfoWithPreset}），工具调用最多重试 ${toolCallRetryMax} 次。',
-        'Pre-request agent off': '请求前 Agent 已关闭',
-        '${preRequestEnabled} — no automatic web research or lorebook writes run before generation.': '${preRequestEnabled} —— 生成前不会自动执行网页检索或写入世界书条目。',
-        'Provider & limits': '提供方与上限',
-        'no truncation': '不截断',
-        'Queries ${provider} (up to ${defaultMaxResults} results, ${defaultVisitMaxChars} on visited pages) — Orchestrator and other plugins can still call it when main toggles are off.': '使用 ${provider} 查询（最多返回 ${defaultMaxResults} 条结果，访问网页${defaultVisitMaxChars}）—— 即使上方两项开关关闭，编排与其他扩展仍可调用。',
-        'Queries ${provider} (up to ${defaultMaxResults} results, truncates visited pages at ${defaultVisitMaxChars} chars) — Orchestrator and other plugins can still call it when main toggles are off.': '使用 ${provider} 查询（最多返回 ${defaultMaxResults} 条结果，访问网页截断至 ${defaultVisitMaxChars} 字符）—— 即使上方两项开关关闭，编排与其他扩展仍可调用。',
-        'Queries ${provider} returning up to ${defaultMaxResults} results and ${defaultVisitMaxChars} on visited pages.': '使用 ${provider} 查询，最多返回 ${defaultMaxResults} 条结果，访问网页${defaultVisitMaxChars}。',
-        'Queries ${provider} returning up to ${defaultMaxResults} results and truncating visited pages at ${defaultVisitMaxChars} chars.': '使用 ${provider} 查询，最多返回 ${defaultMaxResults} 条结果，并将访问的网页截断至 ${defaultVisitMaxChars} 字符。',
-        '${provider} requires an API key that is not configured — search calls will fail until configured.': '${provider} 需要配置 API Key —— 未配置前所有搜索调用均会失败。',
-        '${provider} has an empty ${searxngBaseUrl} — search calls will fail until a URL is set.': '${provider} 的${searxngBaseUrl}为空 —— 设置有效地址前所有搜索调用均会失败。',
-        'Pre-request search agent is enabled with an empty ${agentSystemPrompt} — the agent cannot run without instructions.': '已启用请求前搜索 Agent，但${agentSystemPrompt}为空 —— 缺少提示词时 Agent 无法运行。',
-        'Lorebook injection': '世界书注入',
-        'Shared search lorebook is inactive while both ${enabled} and ${preRequestEnabled} are off — stored entries are not injected.': '${enabled}与${preRequestEnabled}均已关闭，共享搜索世界书处于休眠状态，已保存的条目不会注入。',
-        'Existing stored entries stay injected at ${lorebookPosition}, depth ${lorebookDepth} as ${lorebookRole}, order ${lorebookEntryOrder} — no new automatic entries are written while pre-request agent is off.': '已保存的条目仍会在 ${lorebookPosition}（深度 ${lorebookDepth}、角色 ${lorebookRole}、顺序 ${lorebookEntryOrder}）保持注入，但请求前 Agent 关闭期间不会自动写入新条目。',
-        'Existing stored entries stay injected at ${lorebookPosition}, order ${lorebookEntryOrder} — no new automatic entries are written while pre-request agent is off.': '已保存的条目仍会在 ${lorebookPosition}（顺序 ${lorebookEntryOrder}）保持注入，但请求前 Agent 关闭期间不会自动写入新条目。',
-        'Writes and injects stored search entries at ${lorebookPosition}, depth ${lorebookDepth} as ${lorebookRole}, order ${lorebookEntryOrder}.': '自动写入并将已保存的搜索条目注入到 ${lorebookPosition}，深度 ${lorebookDepth}、角色 ${lorebookRole}、顺序 ${lorebookEntryOrder}。',
-        'Writes and injects stored search entries at ${lorebookPosition}, order ${lorebookEntryOrder}.': '自动写入并将已保存的搜索条目注入到 ${lorebookPosition}，顺序 ${lorebookEntryOrder}。',
-    });
-
-    addLocaleData('zh-tw', {
-        'Search Tools': '搜尋工具',
-        'Expose tools to main model': '將工具暴露給主模型',
-        'Run pre-request search agent': '在請求前執行搜尋 Agent',
-        'Search provider': '搜尋提供方',
-        'DuckDuckGo (no login)': 'DuckDuckGo（無需登入）',
-        'SearXNG (custom instance)': 'SearXNG（自訂實例）',
-        'Brave Search (API key)': 'Brave Search（API Key）',
-        'SearXNG instance URL': 'SearXNG 實例網址',
-        'Brave API key': 'Brave API Key',
-        'Configured': '已設定',
-        'Not configured': '未設定',
-        'Manage API key': '管理 API Key',
-        'Default max search results': '預設搜尋結果上限',
-        'Default safe search': '預設安全搜尋',
-        'Off': '關閉',
-        'Moderate': '中等',
-        'Strict': '嚴格',
-        'Default page excerpt max chars (0 = no truncation)': '預設網頁摘錄最大字元數（0=不截斷）',
-        'Agent API preset (Connection profile)': 'Agent API 預設',
-        'Agent preset (params + prompt)': 'Agent 預設',
-        'Include world info': '包含世界書資訊',
-        'Tool call retry count': '工具呼叫重試次數',
-        'Injection position': '注入位置',
-        'Before Character Definitions': '角色定義前',
-        'After Character Definitions': '角色定義後',
-        'Before Author\'s Note': '作者註釋前',
-        'After Author\'s Note': '作者註釋後',
-        'Before Example Messages': '示例訊息前',
-        'After Example Messages': '示例訊息後',
-        'At Chat Depth': '聊天深度',
-        'Injection depth': '注入深度',
-        'Injection role': '注入角色',
-        'Injection order': '注入順序',
-        'Agent system prompt': 'Agent 系統提示詞',
-        'Reset agent prompt': '重置 Agent 提示詞',
-        'Reset agent prompt to default? This will overwrite the current agent system prompt.': '確認重置 Agent 提示詞為預設值？這會覆蓋目前 Agent 系統提示詞。',
-        'System': '系統',
-        'User': '使用者',
-        'Assistant': '助手',
-        'Stop': '終止',
-        'Search agent running...': '搜尋 Agent 執行中...',
-        'Search agent aborted.': '搜尋 Agent 已中止。',
-        'Search agent failed. Check console for details.': '搜尋 Agent 失敗，請查看主控台。',
-        'No active chat.': '目前沒有啟用聊天。',
-        'No shared search lorebook yet.': '目前還沒有共享搜尋世界書。',
-        'Failed to inspect shared search lorebook.': '檢查共享搜尋世界書失敗。',
-        '(Current preset)': '（目前預設）',
-        '(Current API config)': '（目前 API 設定）',
-        '(missing)': '（缺失）',
-        'Manage stored search entries': '管理已儲存的搜尋條目',
-        'Remove entries that are no longer relevant. Changes apply to the current chat.': '刪除不再相關的條目，變動只套用於目前聊天。',
-        'No managed search entries in this chat.': '目前聊天沒有任何搜尋條目。',
-        'Select all': '全選',
-        'Delete selected': '刪除選中',
-        'Reset all': '重置全部',
-        'Delete': '刪除',
-        'Close': '關閉',
-        'Total': '總計',
-        'Always inject': '始終注入',
-        'Always': '常駐',
-        'Delete 1 selected search entry? This cannot be undone for the current chat.': '刪除已選中的 1 條搜尋條目？目前聊天的此操作無法復原。',
-        'Delete {count} selected search entries? This cannot be undone for the current chat.': '刪除已選中的 {count} 條搜尋條目？目前聊天的此操作無法復原。',
-        'Remove ALL managed search entries from this chat? This cannot be undone.': '清空目前聊天的全部搜尋條目？此操作無法復原。',
-        'Failed to update managed entries. See console for details.': '更新搜尋條目失敗，詳情請查看主控台。',
-        'Failed to persist search agent snapshot.': '儲存搜尋 Agent 快照失敗。',
-        'Failed to persist search agent snapshot (storage conflict).': '儲存搜尋 Agent 快照失敗（儲存衝突）。',
-        'Failed to persist search agent snapshot (server error).': '儲存搜尋 Agent 快照失敗（伺服器錯誤）。',
-        'Failed to persist search agent snapshot (network error).': '儲存搜尋 Agent 快照失敗（網路錯誤）。',
-        'Failed to persist search agent snapshot (storage corrupted, reload chat).': '儲存搜尋 Agent 快照失敗（儲存已損毀，請重新載入聊天）。',
-        'Failed to persist search agent snapshot (disk write failed).': '儲存搜尋 Agent 快照失敗（磁碟寫入失敗）。',
-        'Tavily (API key)': 'Tavily（API Key）',
-        'Exa (API key)': 'Exa（API Key）',
-        'Serper (API key)': 'Serper（API Key）',
-        'SerpApi (API key)': 'SerpApi（API Key）',
-        'Z.AI (API key)': 'Z.AI（API Key）',
-        'API key': 'API Key',
-        'Search depth': '搜尋深度',
-        'Topic': '主題',
-        'Include answer': '包含答案',
-        'Search type': '搜尋類型',
-        'Category': '類別',
-        'Result contents': '結果內容',
-        'Result type': '結果類型',
-        'Region': '地區',
-        'Language': '語言',
-        'Recency': '時間範圍',
-        'Basic': '基礎',
-        'Advanced': '進階',
-        'Fast': '快速',
-        'Ultra fast': '極速',
-        'General': '通用',
-        'News': '新聞',
-        'Finance': '財經',
-        'Auto': '自動',
-        'Instant': '即時',
-        'Deep lite': '深度精簡',
-        'Deep': '深度',
-        'Deep reasoning': '深度推理',
-        'Any': '任意',
-        'Company': '公司',
-        'Publication': '出版物',
-        'Personal site': '個人網站',
-        'Financial report': '財報',
-        'People': '人物',
-        'Highlights': '摘要',
-        'Full text': '全文',
-        'None': '無',
-        'Web': '網頁',
-        'No limit': '不限',
-        'Past day': '過去一天',
-        'Past week': '過去一週',
-        'Past month': '過去一月',
-        'Past year': '過去一年',
-        'Show search run panel': '顯示搜尋執行面板',
-        'Search': '搜尋',
-        'Reasoning': '思考',
-        'Response': '回應',
-        'Tool: ${0}': '工具：${0}',
-        'Tool result: ${0}': '工具結果：${0}',
-        'Round ${0}': '第 ${0} 輪',
-        'Import example': '匯入示例',
-        'Re-import example': '重新匯入示例',
-        'Derive from an existing preset': '從現有預設派生',
-        'DeepSeek (API key)': 'DeepSeek（API Key）',
-        'Search Tools main behavior summary': '搜尋工具主行為摘要',
-        'Search Tools lorebook injection summary': '搜尋工具世界書注入摘要',
-        'Main model': '主模型',
-        'Web search & visit tools exposed': '已暴露網頁搜尋與頁面存取工具',
-        '${enabled} — main chat model can search the web and visit pages.': '${enabled} —— 主聊天模型可直接搜尋網頁與存取頁面。',
-        'Tools not exposed': '未暴露工具',
-        '${enabled} — main chat model cannot call web search tools directly.': '${enabled} —— 主聊天模型無法直接呼叫網頁搜尋工具。',
-        'Pre-request agent': '請求前 Agent',
-        'Runs automatically': '自動執行',
-        'with world info': '附帶世界書資訊',
-        'without world info': '不附帶世界書資訊',
-        '${preRequestEnabled} before generation using ${agentApiPresetName} + ${agentPresetName}, ${includeWorldInfoWithPreset}, up to ${toolCallRetryMax} tool retries.': '生成前${preRequestEnabled}，使用 ${agentApiPresetName} + ${agentPresetName}（${includeWorldInfoWithPreset}），工具呼叫最多重試 ${toolCallRetryMax} 次。',
-        'Pre-request agent off': '請求前 Agent 已關閉',
-        '${preRequestEnabled} — no automatic web research or lorebook writes run before generation.': '${preRequestEnabled} —— 生成前不會自動執行網頁檢索或寫入世界書條目。',
-        'Provider & limits': '提供方與上限',
-        'no truncation': '不截斷',
-        'Queries ${provider} (up to ${defaultMaxResults} results, ${defaultVisitMaxChars} on visited pages) — Orchestrator and other plugins can still call it when main toggles are off.': '使用 ${provider} 查詢（最多傳回 ${defaultMaxResults} 筆結果，存取網頁${defaultVisitMaxChars}）—— 即使上方兩項開關關閉，編排與其他擴充仍可呼叫。',
-        'Queries ${provider} (up to ${defaultMaxResults} results, truncates visited pages at ${defaultVisitMaxChars} chars) — Orchestrator and other plugins can still call it when main toggles are off.': '使用 ${provider} 查詢（最多傳回 ${defaultMaxResults} 筆結果，存取網頁截斷至 ${defaultVisitMaxChars} 字元）—— 即使上方兩項開關關閉，編排與其他擴充仍可呼叫。',
-        'Queries ${provider} returning up to ${defaultMaxResults} results and ${defaultVisitMaxChars} on visited pages.': '使用 ${provider} 查詢，最多傳回 ${defaultMaxResults} 筆結果，存取網頁${defaultVisitMaxChars}。',
-        'Queries ${provider} returning up to ${defaultMaxResults} results and truncating visited pages at ${defaultVisitMaxChars} chars.': '使用 ${provider} 查詢，最多傳回 ${defaultMaxResults} 筆結果，並將存取的網頁截斷至 ${defaultVisitMaxChars} 字元。',
-        '${provider} requires an API key that is not configured — search calls will fail until configured.': '${provider} 需要設定 API Key —— 未設定前所有搜尋呼叫均會失敗。',
-        '${provider} has an empty ${searxngBaseUrl} — search calls will fail until a URL is set.': '${provider} 的${searxngBaseUrl}為空 —— 設定有效網址前所有搜尋呼叫均會失敗。',
-        'Pre-request search agent is enabled with an empty ${agentSystemPrompt} — the agent cannot run without instructions.': '已啟用請求前搜尋 Agent，但${agentSystemPrompt}為空 —— 缺少提示詞時 Agent 無法執行。',
-        'Lorebook injection': '世界書注入',
-        'Shared search lorebook is inactive while both ${enabled} and ${preRequestEnabled} are off — stored entries are not injected.': '${enabled}與${preRequestEnabled}均已關閉，共享搜尋世界書處於休眠狀態，已儲存的條目不會注入。',
-        'Existing stored entries stay injected at ${lorebookPosition}, depth ${lorebookDepth} as ${lorebookRole}, order ${lorebookEntryOrder} — no new automatic entries are written while pre-request agent is off.': '已儲存的條目仍會在 ${lorebookPosition}（深度 ${lorebookDepth}、角色 ${lorebookRole}、順序 ${lorebookEntryOrder}）保持注入，但請求前 Agent 關閉期間不會自動寫入新條目。',
-        'Existing stored entries stay injected at ${lorebookPosition}, order ${lorebookEntryOrder} — no new automatic entries are written while pre-request agent is off.': '已儲存的條目仍會在 ${lorebookPosition}（順序 ${lorebookEntryOrder}）保持注入，但請求前 Agent 關閉期間不會自動寫入新條目。',
-        'Writes and injects stored search entries at ${lorebookPosition}, depth ${lorebookDepth} as ${lorebookRole}, order ${lorebookEntryOrder}.': '自動寫入並將已儲存的搜尋條目注入到 ${lorebookPosition}，深度 ${lorebookDepth}、角色 ${lorebookRole}、順序 ${lorebookEntryOrder}。',
-        'Writes and injects stored search entries at ${lorebookPosition}, order ${lorebookEntryOrder}.': '自動寫入並將已儲存的搜尋條目注入到 ${lorebookPosition}，順序 ${lorebookEntryOrder}。',
-    });
-}
-
 const {
     destroy: destroySettingsUi,
     ensureUi,
@@ -2857,6 +2209,7 @@ const {
     getSettings,
     hasConfiguredSecret,
     i18n,
+    i18nFormat,
     listManagedEntries,
     manuallyDeleteManagedEntries,
     manuallyResetManagedEntries,
@@ -2878,7 +2231,6 @@ const {
 
 jQuery(() => {
     ensureSettings();
-    registerLocaleData();
     initSearchRunPanel();
     installGlobalApi();
     publishSearchToolsExtensionApi();
@@ -2962,5 +2314,4 @@ export {
     registerSearchToolsChatChangedSync,
     registerSearchToolsStructuralSync,
     runPreRequestSearchAgent,
-    TOOL_NAMES,
 };

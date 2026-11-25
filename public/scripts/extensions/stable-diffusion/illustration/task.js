@@ -249,13 +249,34 @@ export async function requestIllustrationPrompts({
             if (call?.id) {
                 item.id = String(call.id);
             }
+            if (call?.raw && typeof call.raw === 'object') {
+                item.raw = call.raw;
+            }
+            const callSig = typeof call?.signature === 'string' && call.signature.length > 0
+                ? call.signature
+                : (typeof call?.raw?.signature === 'string' && call.raw.signature.length > 0
+                    ? call.raw.signature
+                    : (typeof call?.raw?.thoughtSignature === 'string' && call.raw.thoughtSignature.length > 0 ? call.raw.thoughtSignature : null));
+            if (callSig) {
+                item.signature = callSig;
+            }
+            const callExtra = call?.extra_content && typeof call.extra_content === 'object'
+                ? call.extra_content
+                : (call?.raw?.extra_content && typeof call.raw.extra_content === 'object' ? call.raw.extra_content : null);
+            if (callExtra) {
+                item.extra_content = callExtra;
+            }
             return item;
         }),
         assistantText: String(result?.assistantText || ''),
         finishReason: String(result?.finishReason || ''),
     };
     if (result?.reasoning) mapped.reasoning = String(result.reasoning);
+    if (result?.signature) mapped.signature = String(result.signature);
     if (result?.reasoningBlocks) mapped.reasoningBlocks = result.reasoningBlocks;
     if (result?.reasoningDetails) mapped.reasoningDetails = result.reasoningDetails;
+    if (result?.nativeParts) mapped.nativeParts = result.nativeParts;
+    if (result?.nativeContentBlocks) mapped.nativeContentBlocks = result.nativeContentBlocks;
+    if (result?.responsesOutputItems) mapped.responsesOutputItems = result.responsesOutputItems;
     return mapped;
 }
