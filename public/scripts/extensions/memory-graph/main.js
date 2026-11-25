@@ -5012,7 +5012,6 @@ async function applyRollupCompressionRound(context, store, settings, spec, type,
 
 async function compressSemanticHierarchical(context, store, settings, spec, type, config, options = {}) {
     let changed = false;
-    let guard = 0;
     let compressedRounds = 0;
     const forceMode = Boolean(options?.force);
     const maxRoundsPerType = Number.isFinite(Number(options?.maxRoundsPerType))
@@ -5031,16 +5030,20 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
 
     console.log(`[${MODULE_NAME}] compressSemanticHierarchical: type=${type}, forceMode=${forceMode}, threshold=${threshold}, fanIn=${fanIn}, maxRoundsPerType=${maxRoundsPerType}, maxDepth=${Number(config.maxDepth || 1)}`);
     for (let depth = 0; depth < Number(config.maxDepth || 1); depth++) {
-        while (guard < 120 && compressedRounds < maxRoundsPerType) {
+        let previousCandidateCount = Number.POSITIVE_INFINITY;
+        while (compressedRounds < maxRoundsPerType) {
             if (isAbortSignalLike(options?.abortSignal) && options.abortSignal.aborted) {
                 throw new DOMException('Memory compression aborted.', 'AbortError');
             }
-            guard += 1;
             let candidates = collectSemanticRootsByDepth(store, type, depth, options);
-            console.log(`[${MODULE_NAME}] compress depth=${depth}, guard=${guard}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => n.id).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
+            console.log(`[${MODULE_NAME}] compress depth=${depth}, round=${compressedRounds + 1}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => n.id).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
             if (ruleMatcher.enabled) {
                 candidates = candidates.filter(node => ruleMatcher.test(node));
             }
+            if (candidates.length >= previousCandidateCount) {
+                break;
+            }
+            previousCandidateCount = candidates.length;
             if (!forceMode && depth === 0 && Number(config.keepRecentLeaves || 0) > 0 && candidates.length > Number(config.keepRecentLeaves || 0)) {
                 candidates = candidates.slice(0, Math.max(0, candidates.length - Number(config.keepRecentLeaves || 0)));
             }
@@ -5075,7 +5078,6 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
 
 async function compressSemanticFlat(context, store, settings, spec, type, config, options = {}) {
     let changed = false;
-    let guard = 0;
     let compressedRounds = 0;
     const maxRoundsPerType = Number.isFinite(Number(options?.maxRoundsPerType))
         ? Math.max(1, Math.floor(Number(options.maxRoundsPerType)))
@@ -5090,19 +5092,20 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
     }
 
     console.log(`[${MODULE_NAME}] compressSemanticFlat: type=${type}, threshold=${threshold}, fanIn=${fanIn}, maxRoundsPerType=${maxRoundsPerType}`);
-    while (guard < 120 && compressedRounds < maxRoundsPerType) {
+    let previousCandidateCount = Number.POSITIVE_INFINITY;
+    while (compressedRounds < maxRoundsPerType) {
         if (isAbortSignalLike(options?.abortSignal) && options.abortSignal.aborted) {
             throw new DOMException('Memory compression aborted.', 'AbortError');
         }
-        guard += 1;
         let candidates = collectFlatSemanticRoots(store, type, options);
-        console.log(`[${MODULE_NAME}] flat compress guard=${guard}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => `${n.id}@L${Number(n?.semanticDepth ?? 0)}`).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
+        console.log(`[${MODULE_NAME}] flat compress round=${compressedRounds + 1}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => `${n.id}@L${Number(n?.semanticDepth ?? 0)}`).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
         if (ruleMatcher.enabled) {
             candidates = candidates.filter(node => ruleMatcher.test(node));
         }
-        if (candidates.length < threshold) {
+        if (candidates.length < threshold || candidates.length >= previousCandidateCount) {
             break;
         }
+        previousCandidateCount = candidates.length;
 
         const groupSize = Math.min(fanIn, candidates.length);
         if (groupSize < 2) {

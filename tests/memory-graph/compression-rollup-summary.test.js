@@ -698,6 +698,59 @@ describe('runCompressionLoop hierarchical & flat', () => {
         expect(context.generateTask).not.toHaveBeenCalled();
         expect(Object.values(store.nodes).filter(isRollupNode)).toHaveLength(0);
     });
+
+    test('runs past 120 rounds without an artificial guard ceiling in both hierarchical and flat modes', async () => {
+        const momentSpec = makeMomentSpec({
+            compression: {
+                mode: 'hierarchical',
+                threshold: 2,
+                fanIn: 2,
+                maxDepth: 1,
+                keepRecentLeaves: 0,
+                rule: '',
+                summarizeInstruction: '',
+            },
+        });
+        const settings = {
+            ...extensionSettingsMock.memory_graph,
+            nodeTypeSchema: [momentSpec],
+        };
+
+        // Hierarchical: 250 leaves with fanIn=2 → 125 L1 rollups (> 120)
+        const hierStore = createEmptyStore();
+        for (let i = 1; i <= 250; i += 1) {
+            createNode(hierStore, { type: 'moment', title: `M${i}`, fields: { detail: `D${i}` }, seqTo: i });
+        }
+        let hierRound = 0;
+        const hierCtx = {
+            generateTask: jest.fn(async () => {
+                hierRound += 1;
+                return { toolCalls: [{ name: 'luker_rpg_summary', args: { summary: `H${hierRound}` } }] };
+            }),
+        };
+        const hierChanged = await runCompressionLoop(hierCtx, hierStore, settings, { typeIds: ['moment'] });
+        expect(hierChanged).toBe(true);
+        expect(hierCtx.generateTask).toHaveBeenCalledTimes(125);
+        expect(Object.values(hierStore.nodes).filter(isRollupNode)).toHaveLength(125);
+        expect(Object.values(hierStore.nodes).filter(n => !isRollupNode(n) && !n.parentId)).toHaveLength(0);
+
+        // Flat: 125 leaves with fanIn=2 → 124 rollups collapsing to 1 root (> 120)
+        const flatStore = createEmptyStore();
+        for (let i = 1; i <= 125; i += 1) {
+            createNode(flatStore, { type: 'moment', title: `F${i}`, fields: { detail: `D${i}` }, seqTo: i });
+        }
+        let flatRound = 0;
+        const flatCtx = {
+            generateTask: jest.fn(async () => {
+                flatRound += 1;
+                return { toolCalls: [{ name: 'luker_rpg_summary', args: { summary: `F${flatRound}` } }] };
+            }),
+        };
+        const flatChanged = await runCompressionLoop(flatCtx, flatStore, settings, { typeIds: ['moment'], flatten: true });
+        expect(flatChanged).toBe(true);
+        expect(flatCtx.generateTask).toHaveBeenCalledTimes(124);
+        expect(Object.values(flatStore.nodes).filter(n => !n.parentId)).toHaveLength(1);
+    });
 });
 
 describe('runExtractionForStore fail-loud batch compression', () => {
