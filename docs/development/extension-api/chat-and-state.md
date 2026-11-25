@@ -435,6 +435,28 @@ Reducers must return a plain object. Returning an array, primitive, `null`, or `
 Exceptions thrown from inside the `fs.update` reducer are caught and surfaced as `{ok: false, reason: 'VALIDATION_ARGS', hint: 'reducer threw: ...'}` instead of bubbling out. Plugin code that depended on the throw must switch to inspecting `result.ok` + `result.hint`.
 :::
 
+### readFloorStateSnapshot
+
+```ts
+readFloorStateSnapshot(options: { namespace: string }): Promise<
+    | { ok: true, state: object | null }
+    | { ok: false, state: null, reason: string, hint?: string }
+>
+```
+
+Reads a pure read-only snapshot of a floor-state namespace for the active chat. It loads `<namespace>__floor_log` and replays surviving commits against the current chat's active swipes in memory, without registering a floor-state instance, running legacy migration, writing orphan backups, or modifying persisted chat state.
+
+- Returns `{ ok: true, state: null }` when the commit log is empty.
+- Returns `{ ok: false, state: null, reason, hint? }` using `STATE_ERROR_REASONS` (`VALIDATION_ARGS`, `VALIDATION_TARGET` when no chat is open, `REPLAY_BROKEN`, `TRANSPORT_ERROR`, `HTTP_ERROR`).
+
+```js
+const ctx = Luker.getContext();
+const snap = await ctx.readFloorStateSnapshot({ namespace: 'my-plugin' });
+if (snap.ok) {
+    console.log('Current floor state:', snap.state);
+}
+```
+
 ### Replacing the entire log (import / rebuild)
 
 `update` and `patch` are append-only — every call adds one commit on top of the existing history. When you need to install a fresh history wholesale (import a backup, rebuild from chat, reset to a known baseline), use `reset(commits)`:

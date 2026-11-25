@@ -340,6 +340,23 @@ context.chatWorldInfo.globalSelection: string[]
 
 Live read-only snapshot of the user's globally-activated world books (the books active on every chat). Mutate via `worldInfoEntry.setGlobalSelection` — direct writes are not persisted.
 
+### chatWorldInfo.getActivationTrace
+
+```ts
+context.chatWorldInfo.getActivationTrace(
+    scopeKey?: string,
+    options?: { maxScans?: number },
+): Promise<{ scopeKey: string, entries: Array<object> } | null>
+```
+
+Returns a cloned read-only snapshot of World Info activation traces for the current chat (or the specified `scopeKey`, defaulting to `chat:<currentChatId>`). Each entry contains `world`, `uid`, `lastActivatedAt`, `lastActivation`, `recentScans` (capped by `options.maxScans`, default `1`), `lastDryRunScanAt`, `lastDryRunActivation`, and `recentDryRunScans`.
+
+```js
+const ctx = Luker.getContext();
+const trace = await ctx.chatWorldInfo.getActivationTrace();
+console.log(trace?.scopeKey, trace?.entries.length);
+```
+
 ## Position Constants
 
 ### context.constants.wiAnchor
