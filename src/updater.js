@@ -508,17 +508,72 @@ export function selectDesktopAsset(assets, platform, arch, flavour = '') {
     return null;
 }
 
-export async function fetchLatestApkReleaseInfo({ includePrerelease = false } = {}) {
+const ANDROID_ABI_TOKENS = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'];
+
+/**
+ * Classifies an APK asset filename by its target Android ABI, or `'universal'`
+ * when the filename marks a universal package or omits an ABI token.
+ * @param {string} fileName
+ * @returns {string}
+ */
+function classifyApkAbi(fileName) {
+    const lower = String(fileName || '').toLowerCase();
+    for (const abi of ANDROID_ABI_TOKENS) {
+        const escaped = abi.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`(?:^|[-_.])${escaped}(?=$|[-_.])`).test(lower)) {
+            return abi;
+        }
+    }
+    return 'universal';
+}
+
+/**
+ * Picks the APK release asset matching the device's preferred Android ABIs,
+ * falling back to a universal APK when no ABI-specific asset matches.
+ * @param {Array<{ name: string, url: string, size: number }>} assets
+ * @param {string[]} [supportedAbis] Device ABIs ordered by preference (e.g. `Build.SUPPORTED_ABIS`).
+ * @returns {{ name: string, url: string, size: number } | null}
+ */
+export function selectApkAsset(assets, supportedAbis = []) {
+    const apkAssets = (Array.isArray(assets) ? assets : []).filter(asset =>
+        asset?.url && String(asset.name || '').toLowerCase().endsWith('.apk'));
+    if (apkAssets.length === 0) {
+        return null;
+    }
+
+    const classified = apkAssets.map(asset => ({
+        asset: { name: asset.name, url: asset.url, size: asset.size },
+        abi: classifyApkAbi(asset.name),
+    }));
+    const normalizedAbis = (Array.isArray(supportedAbis) ? supportedAbis : [])
+        .map(abi => String(abi || '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (normalizedAbis.length > 0) {
+        for (const abi of normalizedAbis) {
+            const match = classified.find(entry => entry.abi === abi);
+            if (match) {
+                return match.asset;
+            }
+        }
+        const universal = classified.find(entry => entry.abi === 'universal');
+        return universal ? universal.asset : null;
+    }
+
+    const universal = classified.find(entry => entry.abi === 'universal');
+    return universal ? universal.asset : classified[0].asset;
+}
+
+export async function fetchLatestApkReleaseInfo({ includePrerelease = false, abis = [] } = {}) {
     const release = await fetchLatestRelease({ includePrerelease });
     if (!release) {
         throw new Error('The repository has no published release.');
     }
 
-    const apkAsset = release.assets.find(asset =>
-        asset.url && asset.name.toLowerCase().endsWith('.apk'));
+    const apkAsset = selectApkAsset(release.assets, abis);
 
     if (!apkAsset) {
-        throw new Error('Latest release does not contain an APK asset.');
+        throw new Error('Latest release does not contain a compatible APK asset.');
     }
 
     return {

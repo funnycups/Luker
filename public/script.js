@@ -1810,6 +1810,21 @@ async function runServerGitUpdateFlow() {
     }
 }
 
+function getAndroidSupportedAbis() {
+    if (!isRunningInLukerAndroidApp() || typeof window.LukerAndroid.getSupportedAbis !== 'function') {
+        return [];
+    }
+    try {
+        const raw = window.LukerAndroid.getSupportedAbis();
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed)
+            ? parsed.map(abi => String(abi || '').trim()).filter(Boolean)
+            : [];
+    } catch {
+        return [];
+    }
+}
+
 async function runAndroidApkUpdateFlow() {
     if (!hasAndroidUpdateBridge()) {
         throw new Error(t`Android update bridge is unavailable.`);
@@ -1819,6 +1834,7 @@ async function runAndroidApkUpdateFlow() {
         setStatus(t`Fetching latest APK release...`);
         const release = await callLukerUpdateApi('apk-latest', {
             includePrerelease: power_user.luker_check_beta_updates !== false,
+            abis: getAndroidSupportedAbis(),
         });
         const apkName = String(release?.apk?.name || '');
         const apkUrl = String(release?.apk?.url || '');

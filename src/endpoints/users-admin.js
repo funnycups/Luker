@@ -289,8 +289,12 @@ router.post('/update/start', requireAdminMiddleware, async (_request, response) 
 
 router.post('/update/apk-latest', requireAdminMiddleware, async (request, response) => {
     try {
+        const abis = Array.isArray(request.body?.abis)
+            ? request.body.abis.map(abi => String(abi || '').trim()).filter(Boolean)
+            : [];
         const release = await fetchLatestApkReleaseInfo({
             includePrerelease: request.body?.includePrerelease === true,
+            abis,
         });
         return response.json(release);
     } catch (error) {

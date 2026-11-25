@@ -81,6 +81,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
@@ -979,6 +980,11 @@ class MainActivity : AppCompatActivity() {
             val resolvedName = sanitizeFileName(suggestedName)
             val resolvedMime = if (mimeType.isNullOrBlank()) parsed.first else mimeType
             runOnUiThread { requestSaveFile(parsed.second, resolvedName, resolvedMime) }
+        }
+
+        @JavascriptInterface
+        fun getSupportedAbis(): String {
+            return JSONArray(Build.SUPPORTED_ABIS.toList()).toString()
         }
 
         @JavascriptInterface

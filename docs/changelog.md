@@ -161,6 +161,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed "+ New file" in the Skill Manager file editor emptying an existing file when its path was entered.
 - Fixed opening the Skill Manager replacing some Chinese translations elsewhere in the UI with its own wording.
 
+### Client Apps
+
+- Split Android builds into per-architecture and universal APKs, matched the in-app updater to the device architecture, compressed the bundled Android runtime archive, and trimmed duplicate and test files from mobile runtime packages.
+
 ## v2.9.0-rc.5 (2026-11-25)
 
 ### Workbench

@@ -28,9 +28,9 @@ node android-app/scripts/fetch-nodejs-mobile.mjs
 android-app/gradlew -p android-app :app:assembleDebug
 ```
 
-Debug APK output:
+Debug APK outputs (per-ABI and universal):
 
-`android-app/app/build/outputs/apk/debug/app-debug.apk`
+`android-app/app/build/outputs/apk/debug/app-<abi>-debug.apk` (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `universal`)
 
 Runtime fetch policy:
 

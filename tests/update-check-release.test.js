@@ -1,7 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import http from 'node:http';
 
-import { fetchLatestRelease, getGitHubRepository, selectDesktopAsset } from '../src/updater.js';
+import {
+    fetchLatestApkReleaseInfo,
+    fetchLatestRelease,
+    getGitHubRepository,
+    selectApkAsset,
+    selectDesktopAsset,
+} from '../src/updater.js';
 import { checkRemoteVersion, getVersion } from '../src/util.js';
 
 /**
@@ -221,6 +227,30 @@ describe('release lookup', () => {
 
         await expect(checkRemoteVersion()).resolves.toEqual({ isLatest: true });
     });
+
+    test('fetchLatestApkReleaseInfo selects the APK matching the requested device ABIs', async () => {
+        stub.setResponse(200, {
+            tag_name: 'v2.9.0',
+            name: 'Luker v2.9.0',
+            html_url: 'https://example.invalid/releases/tag/v2.9.0',
+            published_at: '2026-01-02T03:04:05Z',
+            assets: [
+                { name: 'app-arm64-v8a-release.apk', browser_download_url: 'https://example.invalid/arm64.apk', size: 10 },
+                { name: 'app-armeabi-v7a-release.apk', browser_download_url: 'https://example.invalid/armv7.apk', size: 9 },
+                { name: 'app-universal-release.apk', browser_download_url: 'https://example.invalid/universal.apk', size: 20 },
+                { name: 'app-x86_64-release.apk', browser_download_url: 'https://example.invalid/x86_64.apk', size: 11 },
+            ],
+        });
+
+        const arm64 = await fetchLatestApkReleaseInfo({ abis: ['arm64-v8a', 'armeabi-v7a'] });
+        expect(arm64.apk.name).toBe('app-arm64-v8a-release.apk');
+
+        const x64 = await fetchLatestApkReleaseInfo({ abis: ['x86_64'] });
+        expect(x64.apk.name).toBe('app-x86_64-release.apk');
+
+        const fallback = await fetchLatestApkReleaseInfo();
+        expect(fallback.apk.name).toBe('app-universal-release.apk');
+    });
 });
 
 describe('desktop asset selection', () => {
@@ -312,5 +342,47 @@ describe('selectDesktopAsset on linux', () => {
     test('leaves the other platforms alone', () => {
         expect(selectDesktopAsset(release, 'darwin', 'arm64').url).toBe('d');
         expect(selectDesktopAsset(release, 'win32', 'x64', 'deb')).toBeNull();
+    });
+});
+
+describe('android apk asset selection', () => {
+    const splitAssets = [
+        { name: 'app-arm64-v8a-release.apk', url: 'https://example.invalid/arm64.apk', size: 100 },
+        { name: 'app-armeabi-v7a-release.apk', url: 'https://example.invalid/armv7.apk', size: 90 },
+        { name: 'app-universal-release.apk', url: 'https://example.invalid/universal.apk', size: 200 },
+        { name: 'app-x86_64-release.apk', url: 'https://example.invalid/x86_64.apk', size: 110 },
+        { name: 'Luker-2.9.0-mac-arm64.dmg', url: 'https://example.invalid/mac.dmg', size: 300 },
+    ];
+
+    test('matches the highest-priority supported ABI', () => {
+        expect(selectApkAsset(splitAssets, ['arm64-v8a', 'armeabi-v7a']).name).toBe('app-arm64-v8a-release.apk');
+        expect(selectApkAsset(splitAssets, ['armeabi-v7a']).name).toBe('app-armeabi-v7a-release.apk');
+        expect(selectApkAsset(splitAssets, ['x86_64', 'x86']).name).toBe('app-x86_64-release.apk');
+    });
+
+    test('does not confuse x86 with x86_64 and falls back to universal', () => {
+        expect(selectApkAsset(splitAssets, ['x86']).name).toBe('app-universal-release.apk');
+        const withX86 = [
+            ...splitAssets,
+            { name: 'app-x86-release.apk', url: 'https://example.invalid/x86.apk', size: 85 },
+        ];
+        expect(selectApkAsset(withX86, ['x86']).name).toBe('app-x86-release.apk');
+    });
+
+    test('falls back to a lower-priority supported ABI before universal', () => {
+        const withoutArm64 = splitAssets.filter(asset => !asset.name.includes('arm64-v8a'));
+        expect(selectApkAsset(withoutArm64, ['arm64-v8a', 'armeabi-v7a']).name).toBe('app-armeabi-v7a-release.apk');
+    });
+
+    test('prefers universal when no ABI list is supplied and supports legacy single-APK releases', () => {
+        expect(selectApkAsset(splitAssets, []).name).toBe('app-universal-release.apk');
+        const legacy = [{ name: 'app-release.apk', url: 'https://example.invalid/legacy.apk', size: 250 }];
+        expect(selectApkAsset(legacy, ['arm64-v8a']).name).toBe('app-release.apk');
+        expect(selectApkAsset(legacy, []).name).toBe('app-release.apk');
+    });
+
+    test('returns null when device ABIs are supplied and no compatible or universal APK exists', () => {
+        const onlyX64 = [{ name: 'app-x86_64-release.apk', url: 'https://example.invalid/x86_64.apk', size: 110 }];
+        expect(selectApkAsset(onlyX64, ['arm64-v8a'])).toBeNull();
     });
 });

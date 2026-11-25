@@ -13,6 +13,12 @@ val availableNodeAbis = jniLibsDir
     ?.map { it.name }
     ?.toSet()
     ?: emptySet()
+val targetNodeAbis = if (availableNodeAbis.isNotEmpty()) {
+    availableNodeAbis.sorted()
+} else {
+    // Safe default for most real devices when libnode ABI set has not been prepared yet.
+    listOf("arm64-v8a")
+}
 val packageJsonFile = File(projectRootDir, "package.json")
 
 fun parseAppVersionName(packageJson: File): String {
@@ -114,14 +120,14 @@ android {
                 arguments += listOf("-DANDROID_STL=c++_shared")
             }
         }
+    }
 
-        ndk {
-            if (availableNodeAbis.isNotEmpty()) {
-                abiFilters += availableNodeAbis
-            } else {
-                // Safe default for most real devices when libnode ABI set has not been prepared yet.
-                abiFilters += "arm64-v8a"
-            }
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*targetNodeAbis.toTypedArray())
+            isUniversalApk = true
         }
     }
 
