@@ -2,7 +2,7 @@
 
 import { describe, test, expect, jest } from '@jest/globals';
 import { readFloorStateSnapshot } from '../../public/scripts/floor-state.js';
-import { STATE_ERROR_REASONS } from '../../public/scripts/state-errors.js';
+import { STATE_ERROR_REASONS } from '../../public/scripts/lib/state-errors.js';
 
 function makeReadOnlyDeps({
     chatId = 'chat-1',

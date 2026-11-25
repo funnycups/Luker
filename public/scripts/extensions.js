@@ -10,7 +10,7 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
-import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './lib/state-errors.js';
 import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
 import {
@@ -18,7 +18,7 @@ import {
     formatTransportErrorHint,
     formatConflictHint,
     formatValidationArgsHint,
-} from './state-errors/format.js';
+} from './lib/state-errors-format.js';
 
 export {
     getContext,
@@ -473,7 +473,7 @@ export async function enableExtension(name, reload = true) {
     await callExtensionHook(name, 'enable');
     extension_settings.disabledExtensions = extension_settings.disabledExtensions.filter(x => x !== name);
     stateChanged = true;
-    await saveSettings();
+    if (!(await saveSettings()).ok) return;
     if (reload) {
         location.reload();
     } else {
@@ -490,7 +490,7 @@ export async function disableExtension(name, reload = true) {
     await callExtensionHook(name, 'disable');
     extension_settings.disabledExtensions.push(name);
     stateChanged = true;
-    await saveSettings();
+    if (!(await saveSettings()).ok) return;
     if (reload) {
         location.reload();
     } else {
@@ -572,13 +572,12 @@ async function getManifests(names) {
  * higher-`loading_order` extension starts, while still parallelizing
  * extensions that share an order.
  *
- * Cross-order ordering matters in practice: e.g. ST-Prompt-Template
- * (`loading_order: 1`) registers a `USER_MESSAGE_RENDERED` listener that
- * rewrites `.mes_text` via `updateMessageBlock`, and JS-Slash-Runner
- * registers a listener that wraps `<pre>` into a `TH-render` iframe.
- * If the iframe-wrapping listener runs first and the DOM-rewriting one
- * runs second, the iframe is destroyed; the only thing keeping that
- * order stable is `loading_order`-driven serial init.
+ * Cross-order ordering matters in practice: one extension may register a
+ * `USER_MESSAGE_RENDERED` listener that rewrites `.mes_text` via
+ * `updateMessageBlock`, while another registers a listener that wraps
+ * `<pre>` into an iframe. If the iframe-wrapping listener runs first and
+ * the DOM-rewriting one runs second, the iframe is destroyed; the only
+ * thing keeping that order stable is `loading_order`-driven serial init.
  * @returns {Promise<void>}
  */
 async function activateExtensions() {
@@ -1271,9 +1270,10 @@ async function showExtensionsDetails() {
                 if (stateChanged) {
                     waitingForSave = true;
                     const toast = toastr.info(t`The page will be reloaded shortly...`, t`Extensions state changed`);
-                    await saveSettings();
+                    const outcome = await saveSettings();
                     toastr.clear(toast);
                     waitingForSave = false;
+                    if (!outcome.ok) return false;
                     requiresReload = true;
                 }
 
@@ -1442,7 +1442,7 @@ async function cleanExtension(extensionName) {
     await callExtensionHook(fullExtensionName, 'clean');
 
     // Clean might have updated settings, which could race with the page reload, so we'll force save here
-    await saveSettings();
+    if (!(await saveSettings()).ok) return;
 
     toastr.success(t`Extension ${extensionName} data cleaned`);
     delay(1000).then(() => location.reload());
@@ -1585,7 +1585,7 @@ export async function deleteExtension(extensionName, shouldClean = false) {
     }
 
     // Delete or clean might have updated settings, which could race with the page reload, so we'll force save here
-    await saveSettings();
+    if (!(await saveSettings()).ok) return false;
 
     requiresReload = true;
     toastr.success(t`Extension ${extensionName} deleted`, t`Reload the page to apply changes`);
@@ -2115,6 +2115,28 @@ export async function runGenerationInterceptors(chat, contextSize, type) {
  */
 export const UNSET_VALUE = '__@@UNSET@@__';
 
+// Only the latest request for a character field owns local publication.
+// A WeakMap keeps replaced character objects out of future acknowledgements.
+const extensionFieldWrites = new WeakMap();
+const extensionFieldMutations = new WeakMap();
+const extensionFieldPersists = new WeakMap();
+const extensionFieldPersistTokens = new WeakMap();
+
+async function enqueueExtensionFieldPersist(persists, persistTokens, key, run) {
+    const previous = persists.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(() => {
+        const persistToken = {};
+        persistTokens.set(key, persistToken);
+        return run(persistToken);
+    });
+    persists.set(key, next);
+    try { return await next; } finally { if (persists.get(key) === next) persists.delete(key); }
+}
+
+function isCharacterPresent(context, character) {
+    return Boolean(character) && Array.isArray(context?.characters) && context.characters.includes(character);
+}
+
 function stripUnsetSentinels(node) {
     if (!node || typeof node !== 'object') return node;
     if (Array.isArray(node)) {
@@ -2145,19 +2167,79 @@ function stripUnsetSentinels(node) {
  *
  * @param {number|string} characterId Index in the character array
  * @param {string} key Field name
- * @param {any} value Field value, or {@link UNSET_VALUE} to delete
- * @param {{ requireSaved?: boolean }} [options] Throw on missing character or failed merge if true
- * @returns {Promise<void>} When the field is written
+ * @param {any|function(any): any} value Field value, deletion sentinel, or serialized read/modify/write callback
+ * @param {object} [options] Additional ownership of preparation and local acknowledgement
+ * @param {() => boolean} [options.isCurrent] False refuses preparation or publication without undoing a server commit
+ * @param {object} [options.ifMatch] Original server write versions for a conditional update
+ * @param {(response: Response) => void} [options.onAcknowledged] Observe a successful, locally owned acknowledgement
+ * @param {boolean} [options.requireSaved] Throw on missing character or failed merge if true
+ * @returns {Promise<boolean>} HTTP success, or false for a missing character or non-OK response
+ * @throws {TypeError|Error} A network failure rejects without publishing the value locally; throws Error when requireSaved is true and merge fails.
  */
-export async function writeExtensionField(characterId, key, value, { requireSaved = false } = {}) {
+export async function writeExtensionField(characterId, key, value, { isCurrent = () => true, ifMatch, onAcknowledged, requireSaved = false } = {}) {
     const context = getContext();
     const character = context.characters[characterId];
     if (!character) {
         if (requireSaved) throw new Error('Character not found');
         console.warn('Character not found', characterId);
-        return;
+        return false;
+    }
+    const writes = extensionFieldWrites.get(character) || new Map();
+    extensionFieldWrites.set(character, writes);
+    const persists = extensionFieldPersists.get(character) || new Map();
+    extensionFieldPersists.set(character, persists);
+    const persistTokens = extensionFieldPersistTokens.get(character) || new Map();
+    extensionFieldPersistTokens.set(character, persistTokens);
+    // Read/modify/write consumers resolve their mutation only after the prior
+    // mutation settled. Failed values never become the next operation's base.
+    if (typeof value === 'function') {
+        const queues = extensionFieldMutations.get(character) || new Map();
+        extensionFieldMutations.set(character, queues);
+        const previous = queues.get(key) || Promise.resolve();
+        const next = previous.catch(() => {}).then(async () => {
+            while (persists.has(key)) {
+                await persists.get(key).catch(() => {});
+            }
+            if (!isCharacterPresent(getContext(), character) || !isCurrent()) return false;
+            const current = character.data?.extensions?.[key];
+            const source = JSON.stringify(current);
+            const token = {};
+            writes.set(key, token);
+            const replacement = await value(cloneAsJsonWire(current));
+            // Preparation belongs to the original target and source. A direct
+            // request or local edit during an async callback is a conflict, not
+            // a new baseline. The callback is never retried.
+            if (!isCharacterPresent(getContext(), character) || writes.get(key) !== token || JSON.stringify(character.data?.extensions?.[key]) !== source || !isCurrent()) return false;
+            return enqueueExtensionFieldPersist(persists, persistTokens, key, persistToken =>
+                persistExtensionField(characterId, character, key, replacement, writes, token, source, {
+                    isCurrent,
+                    ifMatch,
+                    onAcknowledged,
+                    requireSaved,
+                    isWriteOwned: () => persistTokens.get(key) === persistToken,
+                }),
+            );
+        });
+        queues.set(key, next);
+        try { return await next; } finally { if (queues.get(key) === next) queues.delete(key); }
     }
 
+    if (!isCurrent()) return false;
+    const token = {};
+    writes.set(key, token);
+    return enqueueExtensionFieldPersist(persists, persistTokens, key, persistToken => {
+        if (!isCharacterPresent(getContext(), character) || !isCurrent()) return false;
+        return persistExtensionField(characterId, character, key, value, writes, token, JSON.stringify(character.data?.extensions?.[key]), {
+            isCurrent,
+            ifMatch,
+            onAcknowledged,
+            requireSaved,
+            isWriteOwned: () => persistTokens.get(key) === persistToken,
+        });
+    });
+}
+
+async function persistExtensionField(characterId, character, key, value, writes, token, previous, { isCurrent, ifMatch, onAcknowledged, requireSaved = false, isWriteOwned = () => writes.get(key) === token }) {
     const summary = Array.isArray(value)
         ? {
             kind: 'array',
@@ -2174,7 +2256,7 @@ export async function writeExtensionField(characterId, key, value, { requireSave
     const isUnset = value === UNSET_VALUE;
     console.info('[Extensions] writeExtensionField requested', {
         characterId,
-        contextCharacterId: context.characterId,
+        contextCharacterId: getContext().characterId,
         avatar: character.avatar || null,
         key,
         path: extensionPath,
@@ -2182,42 +2264,6 @@ export async function writeExtensionField(characterId, key, value, { requireSave
         valueSummary: summary,
         isUnset,
     });
-    function updateLocalCharacter() {
-        const cleanValue = !isUnset && value && typeof value === 'object'
-            ? stripUnsetSentinels(value)
-            : value;
-        if (isUnset) {
-            deleteValueByPath(character, extensionPath);
-        } else {
-            setValueByPath(character, extensionPath, cleanValue);
-        }
-
-        // Process JSON data
-        if (character.json_data) {
-            const jsonData = JSON.parse(character.json_data);
-            if (isUnset) {
-                deleteValueByPath(jsonData, extensionPath);
-            } else {
-                setValueByPath(jsonData, extensionPath, cleanValue);
-            }
-            character.json_data = JSON.stringify(jsonData);
-
-            // Make sure the data doesn't get lost when saving the current character
-            const isMirroredToEditor = Boolean(character.avatar && getContext().characters?.[getContext().characterId]?.avatar === character.avatar);
-            if (isMirroredToEditor) {
-                $('#character_json_data').val(character.json_data);
-            }
-
-            console.debug('[Extensions] writeExtensionField updated in-memory character JSON', {
-                characterId,
-                avatar: character.avatar || null,
-                key,
-                mirroredToOpenEditor: isMirroredToEditor,
-                jsonLength: character.json_data.length,
-            });
-        }
-    }
-    if (!requireSaved) updateLocalCharacter();
 
     // Save data to the server
     const saveDataRequest = {
@@ -2229,10 +2275,18 @@ export async function writeExtensionField(characterId, key, value, { requireSave
         },
         replacePaths: [`data.extensions.${key}`],
     };
+    if (ifMatch !== undefined) saveDataRequest.ifMatch = ifMatch;
+    // Serialize once so later mutations of the caller's value cannot change
+    // either the request or the value published after its acknowledgement.
+    const body = JSON.stringify(saveDataRequest);
+    const parsedWrittenValue = JSON.parse(body).data.extensions[key];
+    const writtenValue = !isUnset && parsedWrittenValue && typeof parsedWrittenValue === 'object'
+        ? stripUnsetSentinels(parsedWrittenValue)
+        : parsedWrittenValue;
     const mergeResponse = await fetch('/api/characters/merge-attributes', {
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify(saveDataRequest),
+        body,
     });
 
     console.info('[Extensions] writeExtensionField merge response', {
@@ -2245,13 +2299,29 @@ export async function writeExtensionField(characterId, key, value, { requireSave
     });
 
     if (!mergeResponse.ok) {
-        if (!requireSaved) {
-            console.error('Failed to save extension field', mergeResponse.statusText);
-            return;
+        if (requireSaved) {
+            throw new Error(`Failed to save extension field (${mergeResponse.status}): ${mergeResponse.statusText}`);
         }
-        throw new Error(`Failed to save extension field (${mergeResponse.status}): ${mergeResponse.statusText}`);
+        console.error('Failed to save extension field', mergeResponse.statusText);
+        return false;
     }
-    if (requireSaved) updateLocalCharacter();
+    if (!isCurrent()) return false;
+    // A refresh or another edit while the request was pending owns the live
+    // object now. Do not overwrite it with this older acknowledgement.
+    const live = getContext();
+    if (isWriteOwned() && isCharacterPresent(live, character) && JSON.stringify(character.data?.extensions?.[key]) === previous) {
+        if (isUnset) deleteValueByPath(character, extensionPath);
+        else setValueByPath(character, extensionPath, writtenValue);
+        if (character.json_data) {
+            const jsonData = JSON.parse(character.json_data);
+            if (isUnset) deleteValueByPath(jsonData, extensionPath);
+            else setValueByPath(jsonData, extensionPath, writtenValue);
+            character.json_data = JSON.stringify(jsonData);
+            if (character.avatar && live.characters[live.characterId] === character && live.menuType !== 'create') $('#character_json_data').val(character.json_data);
+        }
+        onAcknowledged?.(mergeResponse);
+    }
+    return mergeResponse.ok;
 }
 
 /**
@@ -2941,15 +3011,18 @@ export async function deleteGlobalState(namespace) {
  *   Defaults to `data.extensions.<key>` when unsetting, so deletion requests
  *   automatically skip characters where the field is missing/`undefined`.
  * @returns {Promise<BulkExtensionFieldResult>} Summary of the bulk operation
+ * @throws {Error} HTTP failures reject. Network failures also propagate.
  */
 export async function writeExtensionFieldBulk(avatars, key, value, { filterPath } = {}) {
-    const context = getContext();
     const extensionPath = `data.extensions.${key}`;
     const isUnset = value === UNSET_VALUE;
+    const avatarList = Array.isArray(avatars) && avatars.length > 0 ? avatars : [];
+    const avatarFilter = avatarList.length > 0 ? new Set(avatarList) : null;
 
-    // Build the server request
+    // Build and serialize once so later mutations of caller-owned objects
+    // cannot alter the request or the values published after acknowledgement.
     const requestBody = {
-        avatars: Array.isArray(avatars) && avatars.length > 0 ? avatars : [],
+        avatars: avatarList,
         data: {
             data: {
                 extensions: {
@@ -2966,56 +3039,122 @@ export async function writeExtensionFieldBulk(avatars, key, value, { filterPath 
         requestBody.filter = { path: resolvedFilterPath };
     }
 
-    const mergeResponse = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify(requestBody),
-    });
+    const body = JSON.stringify(requestBody);
+    const parsedWrittenValue = JSON.parse(body).data.data.extensions[key];
+    const writtenValue = !isUnset && parsedWrittenValue && typeof parsedWrittenValue === 'object'
+        ? stripUnsetSentinels(parsedWrittenValue)
+        : parsedWrittenValue;
 
-    if (!mergeResponse.ok) {
-        console.error('Bulk extension field update failed', mergeResponse.statusText);
-        return { updated: [], skipped: [], failed: [] };
+    // Drain any in-flight per-character persists for targeted characters until
+    // truly settled, then claim write & persist ownership across the bulk
+    // request so queued read/modify/write mutations wait and newer writes are
+    // never overwritten.
+    while (true) {
+        const currentContext = getContext();
+        const currentChars = (Array.isArray(currentContext.characters) ? currentContext.characters : [])
+            .filter(character => character && (!avatarFilter || avatarFilter.has(character.avatar)));
+        const priorPersists = [];
+        for (const character of currentChars) {
+            const persists = extensionFieldPersists.get(character);
+            if (persists?.has(key)) priorPersists.push(persists.get(key));
+        }
+        if (priorPersists.length === 0) break;
+        await Promise.allSettled(priorPersists);
     }
 
-    /** @type {BulkExtensionFieldResult} */
-    const result = await mergeResponse.json();
+    const bulkToken = {};
+    let resolveBulkDone;
+    const bulkDone = new Promise(resolve => { resolveBulkDone = resolve; });
+    const trackedChars = [];
+    const trackedSet = new Set();
+    const preFetchContext = getContext();
+    for (const character of (Array.isArray(preFetchContext.characters) ? preFetchContext.characters : [])) {
+        if (!character || (avatarFilter && !avatarFilter.has(character.avatar))) continue;
+        let writes = extensionFieldWrites.get(character);
+        if (!writes) extensionFieldWrites.set(character, writes = new Map());
+        let persists = extensionFieldPersists.get(character);
+        if (!persists) extensionFieldPersists.set(character, persists = new Map());
+        let persistTokens = extensionFieldPersistTokens.get(character);
+        if (!persistTokens) extensionFieldPersistTokens.set(character, persistTokens = new Map());
+        writes.set(key, bulkToken);
+        persistTokens.set(key, bulkToken);
+        persists.set(key, bulkDone);
+        trackedChars.push({ character, persists });
+        trackedSet.add(character);
+    }
 
-    // Sync in-memory character objects for successfully updated characters
-    const updatedSet = new Set(result.updated);
-    for (const character of context.characters) {
-        if (!character || !updatedSet.has(character.avatar)) continue;
+    try {
+        const mergeResponse = await fetch('/api/characters/merge-attributes', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body,
+        });
 
-        const cleanValue = !isUnset && value && typeof value === 'object'
-            ? stripUnsetSentinels(value)
-            : value;
-
-        if (isUnset) {
-            deleteValueByPath(character, extensionPath);
-        } else {
-            setValueByPath(character, extensionPath, cleanValue);
+        if (!mergeResponse.ok) {
+            console.error('Bulk extension field update failed', mergeResponse.statusText);
+            throw new Error(`Bulk extension field update failed: ${mergeResponse.status} ${mergeResponse.statusText}`);
         }
 
-        // Keep json_data in sync
-        if (character.json_data) {
-            const jsonData = JSON.parse(character.json_data);
-            if (isUnset) {
-                deleteValueByPath(jsonData, extensionPath);
-            } else {
-                setValueByPath(jsonData, extensionPath, cleanValue);
+        /** @type {BulkExtensionFieldResult} */
+        const result = await mergeResponse.json();
+
+        // Re-read live context after await; only publish to characters whose
+        // persist turn is still owned by this bulk write (or freshly loaded
+        // with no concurrent write). A single write queued behind bulkDone has
+        // already updated `writes` but will not take `persistTokens` until
+        // bulkDone resolves in finally, so this bulk write still publishes its
+        // acknowledged baseline first.
+        const live = getContext();
+        const updatedSet = new Set(result.updated);
+        const locallyUpdated = new Set();
+        for (const character of (Array.isArray(live.characters) ? live.characters : [])) {
+            if (!character || !updatedSet.has(character.avatar)) continue;
+            const writes = extensionFieldWrites.get(character);
+            const persistTokens = extensionFieldPersistTokens.get(character);
+            if (trackedSet.has(character)) {
+                if (persistTokens?.get(key) !== bulkToken) continue;
+            } else if (writes?.has(key) || persistTokens?.has(key)) {
+                continue;
             }
-            character.json_data = JSON.stringify(jsonData);
-        }
-    }
 
-    // If the currently active character was updated, sync the hidden input
-    if (context.characterId !== undefined) {
-        const activeChar = context.characters[context.characterId];
-        if (activeChar && updatedSet.has(activeChar.avatar) && activeChar.json_data) {
-            $('#character_json_data').val(activeChar.json_data);
-        }
-    }
+            const perCharacterValue = !isUnset && writtenValue && typeof writtenValue === 'object'
+                ? structuredClone(writtenValue)
+                : writtenValue;
 
-    return result;
+            if (isUnset) {
+                deleteValueByPath(character, extensionPath);
+            } else {
+                setValueByPath(character, extensionPath, perCharacterValue);
+            }
+
+            // Keep json_data in sync
+            if (character.json_data) {
+                const jsonData = JSON.parse(character.json_data);
+                if (isUnset) {
+                    deleteValueByPath(jsonData, extensionPath);
+                } else {
+                    setValueByPath(jsonData, extensionPath, structuredClone(perCharacterValue));
+                }
+                character.json_data = JSON.stringify(jsonData);
+            }
+            locallyUpdated.add(character);
+        }
+
+        // If the currently active character was updated (and not in create mode), sync the hidden input
+        if (live.characterId !== undefined && live.menuType !== 'create') {
+            const activeChar = live.characters[live.characterId];
+            if (activeChar && locallyUpdated.has(activeChar) && activeChar.json_data) {
+                $('#character_json_data').val(activeChar.json_data);
+            }
+        }
+
+        return result;
+    } finally {
+        for (const { persists } of trackedChars) {
+            if (persists.get(key) === bulkDone) persists.delete(key);
+        }
+        resolveBulkDone();
+    }
 }
 
 /**

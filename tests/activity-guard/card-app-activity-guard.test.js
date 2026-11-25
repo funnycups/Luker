@@ -113,7 +113,11 @@ beforeAll(async () => {
         groups: [], openGroupChat: asyncNoop, selected_group: null, unshallowGroupMembers: asyncNoop,
     }));
     jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-        addLocaleData: noop, getCurrentLocale: () => 'en', t: (s) => String(s ?? ''), translate: (s) => String(s ?? ''),
+        addLocaleData: noop,
+        createScopedI18n: () => ({ translate: (s) => String(s ?? ''), format: (s) => String(s ?? '') }),
+        getCurrentLocale: () => 'en',
+        t: (s) => String(s ?? ''),
+        translate: (s) => String(s ?? ''),
     }));
     jest.unstable_mockModule('../../public/scripts/loader.js', () => ({ hideLoader: noop, showLoader: noop }));
     jest.unstable_mockModule('../../public/scripts/action-loader.js', () => ({ loader: {} }));
@@ -145,7 +149,7 @@ beforeAll(async () => {
         registerPostReplaceAction: noop, listPostReplaceActions: () => [],
         importEmbeddedBookForCharacter: asyncNoop, rebindPreviousPrimaryBook: asyncNoop,
     }));
-    jest.unstable_mockModule('../../public/scripts/character/preset-ref-codec.js', () => ({ decodeCardBoundOptionValue: () => null }));
+    jest.unstable_mockModule('../../public/scripts/lib/preset-ref-codec.js', () => ({ decodeCardBoundOptionValue: () => null }));
     jest.unstable_mockModule('../../public/scripts/RossAscends-mods.js', () => ({
         humanizedDateTime: () => '', isMobile: () => false, shouldSendOnEnter: () => true,
     }));

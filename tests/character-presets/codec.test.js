@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 
-import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from '/scripts/character/preset-ref-codec.js';
+import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from '/scripts/lib/preset-ref-codec.js';
 
 test('round-trip normal case', () => {
     const enc = encodeCardBoundOptionValue('Aqua.png', 'SFW Storyteller');

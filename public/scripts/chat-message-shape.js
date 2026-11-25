@@ -37,5 +37,8 @@ export function shapeChatMessagePayload(message, isClaude) {
         ...(!isClaude && message.reasoning && { reasoning: message.reasoning }),
         ...(Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0 ? { reasoning_blocks: message.reasoning_blocks } : {}),
         ...(!isClaude && Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0 ? { reasoning_details: message.reasoning_details } : {}),
+        ...(isClaude && Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0 ? { native_content_blocks: message.native_content_blocks } : {}),
+        ...(!isClaude && Array.isArray(message.native_parts) && message.native_parts.length > 0 ? { native_parts: message.native_parts } : {}),
+        ...(!isClaude && Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0 ? { responses_output_items: message.responses_output_items } : {}),
     };
 }

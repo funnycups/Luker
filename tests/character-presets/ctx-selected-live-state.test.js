@@ -183,7 +183,9 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
         if (!c) throw new Error(`test-writeExtensionField: no character at id=${id}`);
         if (!c.data) c.data = {};
         if (!c.data.extensions) c.data.extensions = {};
+        if (typeof value === 'function') value = await value(c.data.extensions[ns] === undefined ? undefined : structuredClone(c.data.extensions[ns]));
         c.data.extensions[ns] = value;
+        return true;
     }),
     writeExtensionFieldBulk: async () => {},
     extensionNames: [],
@@ -237,7 +239,6 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
     SILICONFLOW_ENDPOINT: '',
     model_list: [],
     custom_prompt_post_processing_types: {},
-    getStreamingReply: () => '',
     tryParseStreamingError: () => null,
     createGenerationParameters: () => ({}),
     isOpenAIConnectionPresetField: () => false,
@@ -248,18 +249,8 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
     OpenAITtsProvider: class {},
 }));
 
-const noop = () => undefined;
 function nsStub(extra = {}) {
-    return new Proxy({ ...extra }, {
-        get(t, prop) {
-            if (prop in t) return t[prop];
-            if (prop === '__esModule') return true;
-            if (prop === 'then') return undefined;
-            if (prop === Symbol.toStringTag) return 'Module';
-            if (typeof prop === 'symbol') return undefined;
-            return noop;
-        },
-    });
+    return Object.assign(Object.create(null), { __esModule: true, ...extra });
 }
 
 jest.unstable_mockModule('../../public/scripts/lib/edits/index.js', () => nsStub());
@@ -271,7 +262,7 @@ jest.unstable_mockModule('../../public/scripts/group-chats.js', () => ({
     groups: [], openGroupChat: () => Promise.resolve(), selected_group: null, unshallowGroupMembers: () => Promise.resolve(),
 }));
 jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {}, getCurrentLocale: () => 'en-US', t: (k) => k, translate: (k) => k,
+    addLocaleData: () => {}, createScopedI18n: () => ({ t: (k) => k, translate: (k) => k, format: (k) => k, has: () => false }), getCurrentLocale: () => 'en-US', t: (k) => k, translate: (k) => k,
 }));
 jest.unstable_mockModule('../../public/scripts/loader.js', () => ({
     hideLoader: () => {}, showLoader: () => {},
@@ -449,7 +440,7 @@ jest.unstable_mockModule('../../public/scripts/user.js', () => ({
 
 const { getContext } = await import('../../public/scripts/st-context.js');
 const characterPresets = await import('../../public/scripts/character/presets.js');
-const { encodeCardBoundOptionValue } = await import('../../public/scripts/character/preset-ref-codec.js');
+const { encodeCardBoundOptionValue } = await import('../../public/scripts/lib/preset-ref-codec.js');
 
 beforeEach(() => {
     character.data.extensions = {};

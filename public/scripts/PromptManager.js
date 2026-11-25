@@ -1488,13 +1488,8 @@ class PromptManager {
             const renderProfileId = `prompt-manager-render-${requestId}`;
             this.profileStart(renderProfileId);
             const scrollPosition = this.#getScrollPosition();
-            await this.renderPromptManager();
-            if (requestId !== this.renderRequestId) {
-                this.profileEnd(renderProfileId);
-                return;
-            }
-            await this.renderPromptManagerListItems();
-            if (requestId !== this.renderRequestId) {
+            const rendered = await this.renderPromptManager(requestId);
+            if (!rendered || requestId !== this.renderRequestId) {
                 this.profileEnd(renderProfileId);
                 return;
             }
@@ -3600,13 +3595,65 @@ class PromptManager {
 
     /**
      * Empties, then re-assembles the container containing the prompt list.
+     * Preloads all templates before clearing the DOM so concurrent observers
+     * never witness an empty prompt list or missing group-edit UI mid-render.
+     * @param {number|null} [requestId]
+     * @returns {Promise<boolean>}
      */
-    async renderPromptManager() {
+    async renderPromptManager(requestId = null) {
+        const { prefix } = this.configuration;
         let selectedPromptIndex = 0;
-        const existingAppendSelect = document.getElementById(`${this.configuration.prefix}prompt_manager_footer_append_prompt`);
+        const existingAppendSelect = document.getElementById(`${prefix}prompt_manager_footer_append_prompt`);
         if (existingAppendSelect instanceof HTMLSelectElement) {
             selectedPromptIndex = existingAppendSelect.selectedIndex;
         }
+
+        const errorDiv = this.error ? `
+                <div class="${prefix}prompt_manager_error">
+                    <span class="fa-solid tooltip fa-triangle-exclamation text_danger"></span> ${DOMPurify.sanitize(this.error)}
+                </div>
+        ` : '';
+
+        const totalActiveTokens = this.tokenUsage;
+
+        const headerHtml = await renderTemplateAsync('promptManagerHeader', { error: this.error, errorDiv, prefix, totalActiveTokens });
+
+        let footerHtml = null;
+        if (null !== this.activeCharacter) {
+            const prompts = [...this.serviceSettings.prompts]
+                .filter(prompt => prompt && !prompt?.system_prompt)
+                .sort((promptA, promptB) => promptA.name.localeCompare(promptB.name));
+            const promptsHtml = prompts.reduce((acc, prompt) => acc + `<option value="${prompt.identifier}">${escapeHtml(prompt.name)}</option>`, '');
+
+            if (selectedPromptIndex > 0) {
+                selectedPromptIndex = Math.min(selectedPromptIndex, prompts.length - 1);
+            }
+
+            if (selectedPromptIndex === -1 && prompts.length) {
+                selectedPromptIndex = 0;
+            }
+
+            footerHtml = await renderTemplateAsync('promptManagerFooter', { promptsHtml, prefix });
+        }
+
+        const listHeaderHtml = this.serviceSettings.prompts
+            ? await renderTemplateAsync('promptManagerListHeader', { prefix })
+            : null;
+
+        if (requestId !== null && requestId !== this.renderRequestId) {
+            return false;
+        }
+
+        if (this._rlrafId) {
+            cancelAnimationFrame(this._rlrafId);
+            this._rlrafId = null;
+            if (this._rlrafResolve) {
+                const prev = this._rlrafResolve;
+                this._rlrafResolve = null;
+                prev();
+            }
+        }
+
         // Drop any prior Sortable instance before wiping the container —
         // jQuery UI Sortable stashes refs to the old <li> nodes inside its
         // own instance, so a bare innerHTML='' (followed by makeDraggable()
@@ -3614,7 +3661,7 @@ class PromptManager {
         // as detached nodes. Heap snapshots showed 228 stale drag handles.
         // Must run while the old list is still attached so jQuery can find it.
         this._teardownDeferredDraggable();
-        const $existingList = $(`#${this.configuration.prefix}prompt_manager_list`);
+        const $existingList = $(`#${prefix}prompt_manager_list`);
         // @ts-ignore
         if ($existingList.length && $existingList.sortable('instance') !== undefined) {
             // @ts-ignore
@@ -3622,19 +3669,8 @@ class PromptManager {
         }
         const promptManagerDiv = this.containerElement;
         promptManagerDiv.innerHTML = '';
-
-        const errorDiv = this.error ? `
-                <div class="${this.configuration.prefix}prompt_manager_error">
-                    <span class="fa-solid tooltip fa-triangle-exclamation text_danger"></span> ${DOMPurify.sanitize(this.error)}
-                </div>
-        ` : '';
-
-        const totalActiveTokens = this.tokenUsage;
-
-        const headerHtml = await renderTemplateAsync('promptManagerHeader', { error: this.error, errorDiv, prefix: this.configuration.prefix, totalActiveTokens });
         promptManagerDiv.insertAdjacentHTML('beforeend', headerHtml);
 
-        const { prefix } = this.configuration;
         const searchInput = /** @type {HTMLInputElement|null} */(promptManagerDiv.querySelector(`#${prefix}prompt_manager_search`));
         const searchHelpButton = /** @type {HTMLButtonElement|null} */(promptManagerDiv.querySelector(`#${prefix}prompt_manager_search_help`));
         const searchAdvancedInput = /** @type {HTMLInputElement|null} */(promptManagerDiv.querySelector(`#${prefix}prompt_manager_search_advanced`));
@@ -3668,27 +3704,13 @@ class PromptManager {
 
         this.listElement = promptManagerDiv.querySelector(`#${prefix}prompt_manager_list`);
 
-        if (null !== this.activeCharacter) {
-            const prompts = [...this.serviceSettings.prompts]
-                .filter(prompt => prompt && !prompt?.system_prompt)
-                .sort((promptA, promptB) => promptA.name.localeCompare(promptB.name));
-            const promptsHtml = prompts.reduce((acc, prompt) => acc + `<option value="${prompt.identifier}">${escapeHtml(prompt.name)}</option>`, '');
-
-            if (selectedPromptIndex > 0) {
-                selectedPromptIndex = Math.min(selectedPromptIndex, prompts.length - 1);
-            }
-
-            if (selectedPromptIndex === -1 && prompts.length) {
-                selectedPromptIndex = 0;
-            }
-
+        if (footerHtml !== null && null !== this.activeCharacter) {
             const rangeBlockDiv = promptManagerDiv.querySelector('.range-block');
             const headerDiv = promptManagerDiv.querySelector('.completion_prompt_manager_header');
-            const footerHtml = await renderTemplateAsync('promptManagerFooter', { promptsHtml, prefix: this.configuration.prefix });
             headerDiv.insertAdjacentHTML('afterend', footerHtml);
             rangeBlockDiv.querySelector('#prompt-manager-reset-character').addEventListener('click', this.handleCharacterReset);
 
-            const footerDiv = rangeBlockDiv.querySelector(`.${this.configuration.prefix}prompt_manager_footer`);
+            const footerDiv = rangeBlockDiv.querySelector(`.${prefix}prompt_manager_footer`);
             footerDiv.querySelector('.menu_button:nth-child(2)').addEventListener('click', this.handleAppendPrompt);
             footerDiv.querySelector('.caution').addEventListener('click', this.handleDeletePrompt);
             footerDiv.querySelector('.menu_button:last-child').addEventListener('click', this.handleNewPrompt);
@@ -3710,6 +3732,16 @@ class PromptManager {
                 }
             });
         }
+
+        if (this._groupEditMode) {
+            this.renderGroupEditUI();
+        }
+
+        if (listHeaderHtml !== null) {
+            this._populatePromptManagerListItemsSync(listHeaderHtml);
+        }
+
+        return true;
     }
 
     /**
@@ -3791,6 +3823,19 @@ class PromptManager {
     async _renderPromptManagerListItemsImpl() {
         if (!this.serviceSettings.prompts) return;
 
+        const { prefix } = this.configuration;
+        const listHeaderHtml = await renderTemplateAsync('promptManagerListHeader', { prefix });
+        this._populatePromptManagerListItemsSync(listHeaderHtml);
+    }
+
+    /**
+     * Synchronously rebuild the prompt list DOM with an already-rendered header
+     * template so there is no async gap where the list is empty.
+     * @param {string} listHeaderHtml
+     */
+    _populatePromptManagerListItemsSync(listHeaderHtml) {
+        if (!this.serviceSettings.prompts || !this.listElement) return;
+
         // Validate groups before rendering
         this.validateGroups();
 
@@ -3798,7 +3843,7 @@ class PromptManager {
         promptManagerList.innerHTML = '';
 
         const { prefix } = this.configuration;
-        let listItemHtml = await renderTemplateAsync('promptManagerListHeader', { prefix });
+        let listItemHtml = listHeaderHtml;
 
         const searchQuery = String(this.promptListSearchQuery || '').trim();
         const searchClauses = this.parsePromptSearchQuery(searchQuery, {

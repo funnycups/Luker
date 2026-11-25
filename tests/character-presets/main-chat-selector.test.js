@@ -24,7 +24,7 @@ if (typeof globalThis.structuredClone !== 'function') {
     globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
 }
 
-const { encodeCardBoundOptionValue } = await import('/scripts/character/preset-ref-codec.js');
+const { encodeCardBoundOptionValue } = await import('/scripts/lib/preset-ref-codec.js');
 
 beforeEach(() => {
     document.body.innerHTML = '<select id="settings_preset_openai"></select>';

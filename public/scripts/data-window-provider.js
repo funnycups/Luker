@@ -37,8 +37,9 @@ export function createLukerProvider({ handle } = {}) {
             return state;
         },
         start() {
-            sync.start();
+            const syncReady = sync.start();
             backup.start();
+            return syncReady;
         },
         stop() {
             sync.stop();

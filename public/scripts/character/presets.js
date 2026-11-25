@@ -94,19 +94,22 @@ export function readCharacterBoundState(character) {
     return state;
 }
 
-async function persistCharacterBoundState(character, state) {
+async function mutateCharacterBoundState(character, mutate) {
     const context = getContext();
     const id = context.characters.indexOf(character);
-    if (id < 0) throw new Error('persistCharacterBoundState: character not found in context.characters');
-    const value = (state.presets.length === 0 && !state.defaultPresetName)
-        ? null                                                                      // clear entirely
-        : { presets: state.presets, defaultPresetName: state.defaultPresetName };
+    if (id < 0) throw new Error('Character preset target is no longer available');
     // writeExtensionField has replace semantics: the whole `luker` object is
     // overwritten. Read-spread-overlay preserves siblings like `embedded_skills_source`.
-    const currentLuker = (character?.data?.extensions?.[NAMESPACE] && typeof character.data.extensions[NAMESPACE] === 'object' && !Array.isArray(character.data.extensions[NAMESPACE]))
-        ? character.data.extensions[NAMESPACE]
-        : {};
-    await context.writeExtensionField(id, NAMESPACE, { ...currentLuker, [FIELD]: value });
+    const ok = await context.writeExtensionField(id, NAMESPACE, previous => {
+        const cur = readCharacterBoundStateRaw({ data: { extensions: { [NAMESPACE]: previous } } });
+        const state = mutate(cur);
+        const normalizedDefault = typeof state?.defaultPresetName === 'string' && state.defaultPresetName.trim()
+            ? state.defaultPresetName.trim()
+            : null;
+        const value = state.presets.length === 0 && !normalizedDefault ? null : { presets: state.presets, defaultPresetName: normalizedDefault };
+        return { ...previous, [FIELD]: value };
+    });
+    if (ok === false) throw new Error('Failed to save character-bound presets');
 }
 
 /**
@@ -123,14 +126,17 @@ export async function writeCharacterBoundStateById(characterId, state) {
     if (!character) {
         throw new Error(`writeCharacterBoundStateById: character not found at index ${characterId}`);
     }
-    await persistCharacterBoundState(character, {
-        presets: Array.isArray(state?.presets) ? state.presets : [],
-        defaultPresetName: typeof state?.defaultPresetName === 'string' ? state.defaultPresetName : null,
-    });
+    const rawDefault = typeof state?.defaultPresetName === 'string' ? state.defaultPresetName.trim() : '';
+    const snapshotPresets = Array.isArray(state?.presets) ? structuredClone(state.presets) : [];
+    await mutateCharacterBoundState(character, () => ({
+        presets: snapshotPresets,
+        defaultPresetName: rawDefault || null,
+    }));
 }
 
 /** microtask-coalesced migration flush; keyed by avatar. */
 const pendingMigrationFlush = new Map();
+const MIGRATION_ALREADY_DONE = Symbol('migrationAlreadyDone');
 
 export function scheduleMigrationFlush(character) {
     const avatar = character?.avatar;
@@ -138,26 +144,36 @@ export function scheduleMigrationFlush(character) {
     pendingMigrationFlush.set(avatar, true);
     queueMicrotask(async () => {
         // Cleared before the persist runs so a follow-on read after this microtask
-        // can re-schedule if the persist throws.
+        // can re-schedule if the persist fails.
         pendingMigrationFlush.delete(avatar);
         // Use the pure raw reader here to avoid recursively re-scheduling
         // ourselves — the public `readCharacterBoundState` schedules on
-        // legacy detection, which would infinite-loop when persist throws
+        // legacy detection, which would infinite-loop when persist fails
         // (e.g. character not in ctx.characters) since raw stays legacy.
-        const state = readCharacterBoundStateRaw(character);
-        if (!state._migrated) return;
-        delete state._migrated;
         try {
-            await persistCharacterBoundState(character, state);
+            const context = getContext();
+            const id = context.characters.indexOf(character);
+            if (id < 0) return;
+            const ok = await context.writeExtensionField(id, NAMESPACE, current => {
+                const state = readCharacterBoundStateRaw({ data: { extensions: { [NAMESPACE]: current } } });
+                if (!state._migrated) throw MIGRATION_ALREADY_DONE;
+                const normalizedDefault = typeof state.defaultPresetName === 'string' && state.defaultPresetName.trim()
+                    ? state.defaultPresetName.trim()
+                    : null;
+                return { ...current, [FIELD]: { presets: state.presets, defaultPresetName: normalizedDefault } };
+            });
+            if (ok === false) {
+                console.error(`character preset binding migration failed for ${avatar}: save returned false`);
+            }
         } catch (err) {
-            throw new Error(`character preset binding migration failed for ${avatar}: ${err?.message || err}`);
+            if (err === MIGRATION_ALREADY_DONE) return;
+            console.error(`character preset binding migration failed for ${avatar}:`, err);
         }
     });
 }
 
 export function listCharacterBoundPresets(character) {
     const state = readCharacterBoundState(character);
-    if (state._migrated) scheduleMigrationFlush(character);
     return state.presets.map(p => ({
         name: p.name,
         preset: stripOpenAIConnectionFieldsFromPreset(p.preset),
@@ -169,7 +185,6 @@ export function getCharacterBoundPreset(character, name) {
     const trimmed = String(name || '').trim();
     if (!trimmed) return null;
     const state = readCharacterBoundState(character);
-    if (state._migrated) scheduleMigrationFlush(character);
     const hit = state.presets.find(p => p.name === trimmed);
     return hit ? { name: hit.name, preset: stripOpenAIConnectionFieldsFromPreset(hit.preset) } : null;
 }
@@ -177,53 +192,55 @@ export function getCharacterBoundPreset(character, name) {
 export async function addCharacterBoundPreset(character, name, presetBody) {
     const trimmed = String(name || '').trim();
     if (!trimmed) throw new Error('addCharacterBoundPreset: name required');
-    const stripped = stripOpenAIConnectionFieldsFromPreset(presetBody);
-    const cur = readCharacterBoundState(character);
-    if (cur.presets.some(p => p.name === trimmed)) {
-        throw new Error(`addCharacterBoundPreset: preset already exists: ${trimmed}`);
-    }
-    await persistCharacterBoundState(character, {
-        presets: [...cur.presets, { name: trimmed, preset: stripped }],
-        // Only bootstrap default on first-add of an empty set; respect explicit setDefault(null).
-        defaultPresetName: cur.presets.length === 0 ? trimmed : cur.defaultPresetName,
+    const stripped = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
+    return mutateCharacterBoundState(character, cur => {
+        if (cur.presets.some(p => p.name === trimmed)) {
+            throw new Error(`addCharacterBoundPreset: preset already exists: ${trimmed}`);
+        }
+        return {
+            presets: [...cur.presets, { name: trimmed, preset: stripped }],
+            // Only bootstrap default on first-add of an empty set; respect explicit setDefault(null).
+            defaultPresetName: cur.presets.length === 0 ? trimmed : cur.defaultPresetName,
+        };
     });
 }
 
 export async function updateCharacterBoundPreset(character, name, presetBody) {
     const trimmed = String(name || '').trim();
     if (!trimmed) throw new Error('updateCharacterBoundPreset: name required');
-    const cur = readCharacterBoundState(character);
-    const idx = cur.presets.findIndex(p => p.name === trimmed);
-    if (idx < 0) throw new Error(`updateCharacterBoundPreset: not found: ${trimmed}`);
-    const stripped = stripOpenAIConnectionFieldsFromPreset(presetBody);
-    const nextPresets = cur.presets.slice();
-    nextPresets[idx] = { name: trimmed, preset: stripped };
-    await persistCharacterBoundState(character, { presets: nextPresets, defaultPresetName: cur.defaultPresetName });
+    const stripped = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
+    return mutateCharacterBoundState(character, cur => {
+        const idx = cur.presets.findIndex(p => p.name === trimmed);
+        if (idx < 0) throw new Error(`updateCharacterBoundPreset: not found: ${trimmed}`);
+        const nextPresets = cur.presets.slice();
+        nextPresets[idx] = { name: trimmed, preset: stripped };
+        return { presets: nextPresets, defaultPresetName: cur.defaultPresetName };
+    });
 }
 
 export async function removeCharacterBoundPreset(character, name) {
     const trimmed = String(name || '').trim();
-    const cur = readCharacterBoundState(character);
-    if (!cur.presets.some(p => p.name === trimmed)) {
-        throw new Error(`removeCharacterBoundPreset: not found: ${trimmed}`);
-    }
-    const nextPresets = cur.presets.filter(p => p.name !== trimmed);
-    const nextDefault = cur.defaultPresetName === trimmed ? null : cur.defaultPresetName;
-    await persistCharacterBoundState(character, { presets: nextPresets, defaultPresetName: nextDefault });
+    return mutateCharacterBoundState(character, cur => {
+        if (!cur.presets.some(p => p.name === trimmed)) {
+            throw new Error(`removeCharacterBoundPreset: not found: ${trimmed}`);
+        }
+        const nextPresets = cur.presets.filter(p => p.name !== trimmed);
+        const nextDefault = cur.defaultPresetName === trimmed ? null : cur.defaultPresetName;
+        return { presets: nextPresets, defaultPresetName: nextDefault };
+    });
 }
 
 export async function setCharacterBoundDefault(character, name) {
-    if (name === null || name === undefined || name === '') {
-        const cur = readCharacterBoundState(character);
-        await persistCharacterBoundState(character, { presets: cur.presets, defaultPresetName: null });
-        return;
-    }
-    const trimmed = String(name).trim();
-    const cur = readCharacterBoundState(character);
-    if (!cur.presets.some(p => p.name === trimmed)) {
-        throw new Error(`setCharacterBoundDefault: name must be in presets[]: ${trimmed}`);
-    }
-    await persistCharacterBoundState(character, { presets: cur.presets, defaultPresetName: trimmed });
+    return mutateCharacterBoundState(character, cur => {
+        if (name === null || name === undefined || name === '') {
+            return { presets: cur.presets, defaultPresetName: null };
+        }
+        const trimmed = String(name).trim();
+        if (!cur.presets.some(p => p.name === trimmed)) {
+            throw new Error(`setCharacterBoundDefault: name must be in presets[]: ${trimmed}`);
+        }
+        return { presets: cur.presets, defaultPresetName: trimmed };
+    });
 }
 
 export function resolveCharacterBoundPresetByName(character, name) {
@@ -250,7 +267,7 @@ export function resolveCharacterBoundPresetByName(character, name) {
  *     global — cross-origin same-name collisions are legal).
  *   - If the renamed slot IS the current default, `defaultPresetName`
  *     follows the rename in the same persist call (atomic — a single
- *     `persistCharacterBoundState` write, no torn intermediate state).
+ *     `mutateCharacterBoundState` write, no torn intermediate state).
  *   - Does NOT emit the global `PRESET_RENAMED_BEFORE` / `PRESET_RENAMED`
  *     events, does NOT touch `preset_groups`, does NOT touch
  *     `openai_setting_names` / `openai_settings` — this is a pure card-slot
@@ -267,20 +284,21 @@ export async function renameCharacterBoundPreset(character, oldName, newName) {
     const newTrim = String(newName || '').trim();
     if (!oldTrim || !newTrim) throw new Error('renameCharacterBoundPreset: oldName and newName required');
     if (oldTrim === newTrim) return;
-    const cur = readCharacterBoundState(character);
-    const idx = cur.presets.findIndex(p => p.name === oldTrim);
-    if (idx < 0) throw new Error(`renameCharacterBoundPreset: not found: ${oldTrim}`);
-    if (cur.presets.some(p => p.name === newTrim)) {
+    return mutateCharacterBoundState(character, cur => {
+        const idx = cur.presets.findIndex(p => p.name === oldTrim);
+        if (idx < 0) throw new Error(`renameCharacterBoundPreset: not found: ${oldTrim}`);
+        if (cur.presets.some(p => p.name === newTrim)) {
         // Same-origin (same card) collision → error. Cross-origin (card vs
         // global) same-name is legal by design (see
         // resolveCharacterBoundPresetByName's card-first / global-fallback
         // layering at presets.js:209).
-        throw new Error(`renameCharacterBoundPreset: name already exists: ${newTrim}`);
-    }
-    const nextPresets = cur.presets.slice();
-    nextPresets[idx] = { name: newTrim, preset: nextPresets[idx].preset };
-    const nextDefault = cur.defaultPresetName === oldTrim ? newTrim : cur.defaultPresetName;
-    await persistCharacterBoundState(character, { presets: nextPresets, defaultPresetName: nextDefault });
+            throw new Error(`renameCharacterBoundPreset: name already exists: ${newTrim}`);
+        }
+        const nextPresets = cur.presets.slice();
+        nextPresets[idx] = { name: newTrim, preset: nextPresets[idx].preset };
+        const nextDefault = cur.defaultPresetName === oldTrim ? newTrim : cur.defaultPresetName;
+        return { presets: nextPresets, defaultPresetName: nextDefault };
+    });
 }
 
 /**
@@ -294,5 +312,5 @@ export async function renameCharacterBoundPreset(character, oldName, newName) {
  * @returns {Promise<void>}
  */
 export async function clearAllCharacterBoundPresets(character) {
-    await persistCharacterBoundState(character, { presets: [], defaultPresetName: null });
+    await mutateCharacterBoundState(character, () => ({ presets: [], defaultPresetName: null }));
 }

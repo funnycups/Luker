@@ -5303,6 +5303,63 @@ a:hover {
     display: none;
 }
 
+/* Message citations */
+.mes .mes_citations_wrapper:empty {
+    display: none;
+}
+
+.mes .mes_citations_wrapper {
+    margin-top: 0.45em;
+    padding-right: var(--mes-right-spacing);
+}
+
+.mes .mes_citations {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    padding: 0.3em 0.6em;
+    font-size: 0.85em;
+    opacity: 0.9;
+}
+
+.mes .mes_citations_summary {
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+}
+
+.mes .mes_citations_summary::-webkit-details-marker {
+    display: none;
+}
+
+.mes .mes_citations_list {
+    margin: 0.4em 0 0.1em;
+    padding-left: 1.3em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+}
+
+.mes .mes_citation_item {
+    line-height: 1.35;
+}
+
+.mes .mes_citation_link {
+    text-decoration: underline;
+    word-break: break-word;
+}
+
+.mes .mes_citation_excerpt {
+    display: block;
+    font-size: 0.92em;
+    opacity: 0.78;
+    margin-top: 0.1em;
+    word-break: break-word;
+}
+
 /* Message images/video */
 .mes .mes_media_wrapper:empty {
     display: none;

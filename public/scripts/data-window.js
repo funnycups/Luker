@@ -448,11 +448,14 @@ export class DataPages extends LukerWindow {
 
     // ---------- sync: list ----------
 
+    /** Why sync cannot be shown, in place of its pages. */
+    syncUnavailable() {
+        return `<div class="dw-empty"><span class="dw-card-icon" style="--tone:var(--dw-danger)">${ic('warn')}</span><b>${t`Sync unavailable`}</b>
+            <div>${esc(this.snap.unavailableReason || t`Sync is not enabled on the server`)}</div></div>`;
+    }
+
     viewList() {
-        if (!this.snap.available) {
-            return `<div class="dw-empty"><span class="dw-card-icon" style="--tone:var(--dw-danger)">${ic('warn')}</span><b>${t`Sync unavailable`}</b>
-                <div>${esc(this.snap.unavailableReason || t`Sync is not enabled on the server`)}</div></div>`;
-        }
+        if (!this.snap.available) return this.syncUnavailable();
         return `
             <div data-region="summary" style="display:contents">${this.renderSummary()}</div>
             <div data-region="top" style="display:contents">${this.renderTop()}</div>
@@ -495,6 +498,9 @@ export class DataPages extends LukerWindow {
 
     renderCards() {
         const { backends } = this.snap;
+        // Availability can fail after the page rendered, when a settings read
+        // fails; the cards region then carries the reason in place of the list.
+        if (!this.snap.available) return this.syncUnavailable();
         if (!backends.length) {
             return `<div class="dw-empty"><span class="dw-card-icon">${ic('sync')}</span><b>${t`No sync backends yet`}</b>
                 <button class="dw-btn primary" data-act="push" data-view="add">${ic('plus')}${t`Add`}</button></div>`;

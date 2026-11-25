@@ -14,7 +14,12 @@ jest.unstable_mockModule('/scripts/st-context.js', () => ({
     getContext: mockGetContext,
 }));
 
-const { renameCharacterBoundPreset, readCharacterBoundState } = await import(
+const {
+    renameCharacterBoundPreset,
+    readCharacterBoundState,
+    writeCharacterBoundStateById,
+    scheduleMigrationFlush,
+} = await import(
     '/scripts/character/presets.js'
 );
 
@@ -40,7 +45,9 @@ beforeEach(() => {
         // readCharacterBoundState post-write reflects the new value.
         const ctx = mockGetContext();
         const c = ctx.characters[id];
+        if (typeof value === 'function') value = await value(structuredClone(c.data.extensions[ns]));
         c.data.extensions[ns] = value;
+        return true;
     });
     mockStrip.mockClear();
 });
@@ -77,7 +84,7 @@ test('case 2 — no-op: trim 后 oldName === newName → 不调 persist', async 
     expect(mockWriteExtensionField).not.toHaveBeenCalled();
 });
 
-test('case 3 — oldName not found → throw, 不调 persist', async () => {
+test('rename rejects a missing source without changing the bound state', async () => {
     const character = makeCharacter([{ name: 'X', preset: {} }], 'X');
     mockGetContext.mockReturnValue({
         characters: [character],
@@ -85,10 +92,10 @@ test('case 3 — oldName not found → throw, 不调 persist', async () => {
     });
 
     await expect(renameCharacterBoundPreset(character, 'Nope', 'Y')).rejects.toThrow(/not found/i);
-    expect(mockWriteExtensionField).not.toHaveBeenCalled();
+    expect(character.data.extensions.luker.chat_completion_preset.presets.map(p => p.name)).toEqual(['X']);
 });
 
-test('case 4 — newName 已在同一 card → throw, 不调 persist', async () => {
+test('rename rejects an existing destination without changing the bound state', async () => {
     const character = makeCharacter([
         { name: 'X', preset: { temperature: 0.5 } },
         { name: 'Y', preset: { temperature: 0.9 } },
@@ -99,7 +106,7 @@ test('case 4 — newName 已在同一 card → throw, 不调 persist', async () 
     });
 
     await expect(renameCharacterBoundPreset(character, 'X', 'Y')).rejects.toThrow(/already exists/i);
-    expect(mockWriteExtensionField).not.toHaveBeenCalled();
+    expect(character.data.extensions.luker.chat_completion_preset.presets.map(p => p.name)).toEqual(['X', 'Y']);
 });
 
 test('case 5 — rename 掉的不是 default slot: defaultPresetName 不动', async () => {
@@ -130,4 +137,58 @@ test('bonus — 空 name 参数 → throw', async () => {
     await expect(renameCharacterBoundPreset(character, '', 'Y')).rejects.toThrow(/required/i);
     await expect(renameCharacterBoundPreset(character, 'X', '   ')).rejects.toThrow(/required/i);
     expect(mockWriteExtensionField).not.toHaveBeenCalled();
+});
+
+test('writeCharacterBoundStateById normalizes empty defaultPresetName to null', async () => {
+    const character = makeCharacter([], null);
+    mockGetContext.mockReturnValue({
+        characters: [character],
+        writeExtensionField: mockWriteExtensionField,
+    });
+
+    await writeCharacterBoundStateById(0, { presets: [{ name: 'A', preset: {} }], defaultPresetName: '   ' });
+    expect(character.data.extensions.luker.chat_completion_preset).toEqual({
+        presets: [{ name: 'A', preset: {} }],
+        defaultPresetName: null,
+    });
+});
+
+test('scheduleMigrationFlush skips persisting when already migrated and logs instead of throwing on failure', async () => {
+    const character = makeCharacter([{ name: 'X', preset: {} }], 'X');
+    let committed = false;
+    mockWriteExtensionField.mockImplementation(async (id, ns, value) => {
+        const ctx = mockGetContext();
+        const c = ctx.characters[id];
+        const next = await value(structuredClone(c.data.extensions[ns]));
+        committed = true;
+        c.data.extensions[ns] = next;
+        return true;
+    });
+    mockGetContext.mockReturnValue({
+        characters: [character],
+        writeExtensionField: mockWriteExtensionField,
+    });
+
+    scheduleMigrationFlush(character);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(committed).toBe(false);
+
+    // Legacy string triggers migration; failure logs via console.error rather than unhandled rejection
+    const legacyChar = {
+        avatar: 'legacy.png',
+        name: 'Legacy',
+        data: { extensions: { luker: { chat_completion_preset: 'OldGlobal' } } },
+    };
+    mockGetContext.mockReturnValue({
+        characters: [legacyChar],
+        writeExtensionField: jest.fn(async () => false),
+    });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+        scheduleMigrationFlush(legacyChar);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(errorSpy).toHaveBeenCalled();
+    } finally {
+        errorSpy.mockRestore();
+    }
 });

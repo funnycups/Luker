@@ -4,6 +4,8 @@ import { delay } from './utils.js';
 // Symbol for not primary swipe error
 const NOT_PRIMARY = Symbol('not_primary_swipe');
 
+const VALID_SSE_FIELDS = new Set(['event', 'data', 'id', 'retry']);
+
 /**
  * A stream which handles Server-Sent Events from a binary ReadableStream like you get from the fetch API.
  */
@@ -13,6 +15,59 @@ class EventSourceStream {
 
         let streamBuffer = '';
         let lastEventId = '';
+        const invalidLines = [];
+
+        function emitEventBlock(eventChunk, controller) {
+            if (!eventChunk) return;
+            let eventType = '';
+            // Split up by single newlines.
+            const lines = eventChunk.split(/\r\n|\n|\r/g);
+            let eventData = '';
+            for (const line of lines) {
+                if (!line || line.startsWith(':')) {
+                    continue;
+                }
+                const colonIndex = line.indexOf(':');
+                const field = colonIndex === -1 ? line : line.slice(0, colonIndex);
+                let value = colonIndex === -1 ? '' : line.slice(colonIndex + 1);
+                if (value.startsWith(' ')) {
+                    value = value.slice(1);
+                }
+
+                switch (field) {
+                    case 'event':
+                        eventType = value;
+                        break;
+                    case 'data':
+                        eventData += value;
+                        eventData += '\n';
+                        break;
+                    case 'id':
+                        // Ignore ID fields containing a NUL byte (WHATWG EventSource rule)
+                        if (!value.includes('\0')) lastEventId = value;
+                        break;
+                    case 'retry':
+                        break;
+                    default:
+                        if (!VALID_SSE_FIELDS.has(field)) {
+                            invalidLines.push(line);
+                        }
+                        break;
+                }
+            }
+
+            // https://html.spec.whatwg.org/multipage/server-sent-events.html#dispatchMessage
+            // Skip the event if the data buffer is the empty string.
+            if (eventData === '') return;
+
+            if (eventData[eventData.length - 1] === '\n') {
+                eventData = eventData.slice(0, -1);
+            }
+
+            // Trim the *last* trailing newline only.
+            const event = new MessageEvent(eventType || 'message', { data: eventData, lastEventId });
+            controller.enqueue(event);
+        }
 
         function processChunk(controller) {
             // Events are separated by two newlines
@@ -24,45 +79,7 @@ class EventSourceStream {
             streamBuffer = events.pop();
 
             for (const eventChunk of events) {
-                let eventType = '';
-                // Split up by single newlines.
-                const lines = eventChunk.split(/\n|\r|\r\n/g);
-                let eventData = '';
-                for (const line of lines) {
-                    const lineMatch = /([^:]+)(?:: ?(.*))?/.exec(line);
-                    if (lineMatch) {
-                        const field = lineMatch[1];
-                        const value = lineMatch[2] || '';
-
-                        switch (field) {
-                            case 'event':
-                                eventType = value;
-                                break;
-                            case 'data':
-                                eventData += value;
-                                eventData += '\n';
-                                break;
-                            case 'id':
-                                // The ID field cannot contain null, per the spec
-                                if (!value.includes('\0')) lastEventId = value;
-                                break;
-                            // We do nothing for the `delay` type, and other types are explicitly ignored
-                        }
-                    }
-                }
-
-
-                // https://html.spec.whatwg.org/multipage/server-sent-events.html#dispatchMessage
-                // Skip the event if the data buffer is the empty string.
-                if (eventData === '') continue;
-
-                if (eventData[eventData.length - 1] === '\n') {
-                    eventData = eventData.slice(0, -1);
-                }
-
-                // Trim the *last* trailing newline only.
-                const event = new MessageEvent(eventType || 'message', { data: eventData, lastEventId });
-                controller.enqueue(event);
+                emitEventBlock(eventChunk, controller);
             }
         }
 
@@ -71,12 +88,20 @@ class EventSourceStream {
                 streamBuffer += chunk;
                 processChunk(controller);
             },
+            flush(controller) {
+                if (streamBuffer) {
+                    const tail = streamBuffer;
+                    streamBuffer = '';
+                    emitEventBlock(tail, controller);
+                }
+            },
         });
 
         decoder.readable.pipeThrough(sseStream);
 
         this.readable = sseStream.readable;
         this.writable = decoder.writable;
+        this.getInvalidDiagnostic = () => (invalidLines.length > 0 ? invalidLines.join('\n') : null);
     }
 }
 
@@ -111,7 +136,7 @@ function getDelay(s) {
  * @returns {AsyncGenerator<{data: object, chunk: string, reasoning?: boolean}>} The parsed data and the chunk to be sent.
  */
 async function* parseStreamData(json) {
-    if (typeof json.delta === 'object' && typeof json.delta.message === 'object' && ['tool-plan-delta', 'content-delta'].includes(json.type)) {
+    if (typeof json.delta === 'object' && typeof json.delta.message === 'object' && json.type === 'content-delta') {
         // Cohere
         const text = json?.delta?.message?.content?.text ?? '';
         for (let i = 0; i < text.length; i++) {

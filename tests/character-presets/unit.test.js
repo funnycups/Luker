@@ -34,7 +34,9 @@ beforeEach(() => {
             // public/scripts/extensions.js:2104-2114). The whole `data.extensions[ns]`
             // is overwritten; callers must pre-spread siblings.
             const c = chars[id];
+            if (typeof value === 'function') value = await value(structuredClone(c.data.extensions[ns]));
             c.data.extensions[ns] = value;
+            return true;
         }),
         getPresetManager: () => ({
             getCompletionPresetByName: (name) => name === 'GlobalOnly' ? { temperature: 0.9 } : null,
@@ -115,8 +117,7 @@ test('remove last preset writes null (clears field entirely)', async () => {
     const c = ctx.characters[0];
     await addCharacterBoundPreset(c, 'Foo', {});
     await removeCharacterBoundPreset(c, 'Foo');
-    const last = ctx.writeExtensionField.mock.calls.at(-1);
-    expect(last[2].chat_completion_preset).toBeNull();
+    expect(c.data.extensions.luker.chat_completion_preset).toBeNull();
 });
 
 test('setDefault(name) name must be in presets[]', async () => {
@@ -215,7 +216,7 @@ test('migration flush is coalesced per microtask', async () => {
     await Promise.resolve();
     const writes = ctx.writeExtensionField.mock.calls;
     expect(writes.length).toBe(1);      // coalesced
-    expect(writes[0][2].chat_completion_preset).toEqual({
+    expect(writes[0][2]({ chat_completion_preset: { name: 'L', preset: { t: 1 } } }).chat_completion_preset).toEqual({
         presets: [{ name: 'L', preset: expect.any(Object) }],
         defaultPresetName: 'L',
     });
@@ -240,7 +241,7 @@ test('readCharacterBoundState on a legacy read-only card triggers persisted new-
     await Promise.resolve();
     const writes = ctx.writeExtensionField.mock.calls;
     expect(writes.length).toBe(1);
-    expect(writes[0][2].chat_completion_preset).toEqual({
+    expect(writes[0][2]({ chat_completion_preset: { name: 'RO', preset: { t: 2 } } }).chat_completion_preset).toEqual({
         presets: [{ name: 'RO', preset: expect.any(Object) }],
         defaultPresetName: 'RO',
     });
@@ -249,8 +250,7 @@ test('readCharacterBoundState on a legacy read-only card triggers persisted new-
 test('clearAll on empty state writes null', async () => {
     const c = ctx.characters[0];
     await clearAllCharacterBoundPresets(c);
-    const last = ctx.writeExtensionField.mock.calls.at(-1);
-    expect(last[2].chat_completion_preset).toBeNull();
+    expect(c.data.extensions.luker.chat_completion_preset).toBeNull();
 });
 
 test('clearAll preserves sibling luker.* fields', async () => {
@@ -259,8 +259,7 @@ test('clearAll preserves sibling luker.* fields', async () => {
     await addCharacterBoundPreset(c, 'Foo', { temperature: 0.5 });
     expect(c.data.extensions.luker.embedded_skills_source).toBe('sentinel-value');
     await clearAllCharacterBoundPresets(c);
-    const last = ctx.writeExtensionField.mock.calls.at(-1);
-    expect(last[2].chat_completion_preset).toBeNull();
+    expect(c.data.extensions.luker.chat_completion_preset).toBeNull();
     expect(c.data.extensions.luker.embedded_skills_source).toBe('sentinel-value');
 });
 
@@ -292,8 +291,8 @@ test('writeCharacterBoundStateById overlays the luker namespace and preserves si
     const call = ctx.writeExtensionField.mock.calls.at(-1);
     expect(call[0]).toBe(0);
     expect(call[1]).toBe('luker');
-    expect(call[2].embedded_skills_source).toEqual(['keep-me']);
-    expect(call[2].chat_completion_preset).toEqual({
+    expect(c.data.extensions.luker.embedded_skills_source).toEqual(['keep-me']);
+    expect(c.data.extensions.luker.chat_completion_preset).toEqual({
         presets: [{ name: 'P', preset: { temperature: 1 } }],
         defaultPresetName: 'P',
     });
@@ -301,7 +300,7 @@ test('writeCharacterBoundStateById overlays the luker namespace and preserves si
 
 test('writeCharacterBoundStateById clears the field for an empty state', async () => {
     await writeCharacterBoundStateById(0, { presets: [], defaultPresetName: null });
-    expect(ctx.writeExtensionField.mock.calls.at(-1)[2].chat_completion_preset).toBeNull();
+    expect(ctx.characters[0].data.extensions.luker.chat_completion_preset).toBeNull();
 });
 
 test('writeCharacterBoundStateById throws for an unknown index', async () => {

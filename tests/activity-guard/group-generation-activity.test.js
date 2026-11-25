@@ -88,12 +88,12 @@ beforeAll(async () => {
         { avatar: 'bob.png', name: 'Bob', shallow: false },
     ];
 
-    const chatElementStub = new Proxy({}, {
-        get(_, prop) {
-            if (prop === 'then') return undefined;
-            return () => chatElementStub;
-        },
-    });
+    const chatElementStub = { length: 0 };
+    for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'find', 'closest', 'children', 'parent', 'filter', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data', 'scrollTop']) {
+        chatElementStub[method] = () => chatElementStub;
+    }
+    chatElementStub.is = () => false;
+    chatElementStub.hasClass = () => false;
 
     jest.unstable_mockModule('../../public/scripts/RossAscends-mods.js', () => stubExports([
         'RA_CountCharTokens', 'humanizedDateTime', 'dragElement', 'favsToHotswap', 'getMessageTimeStamp',
@@ -246,11 +246,22 @@ beforeAll(async () => {
         json: async () => ([{ chat_metadata: { tainted: true } }]),
     }));
 
-    const baseJQuery = globalThis.jQuery;
+    const makeChain = (overrides = {}) => {
+        const chain = { length: 0, is: () => false, hasClass: () => false };
+        for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'detach', 'clone', 'after', 'before', 'replaceWith', 'find', 'closest', 'children', 'parent', 'parents', 'siblings', 'next', 'prev', 'filter', 'not', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data', 'removeAttr', 'scrollTop', 'fadeIn', 'fadeOut', 'slideUp', 'slideDown', 'animate', 'pagination', 'sortable', 'select2', 'draggable', 'resizable', 'autocomplete', 'tooltip']) {
+            chain[method] = () => chain;
+        }
+        return Object.assign(chain, overrides);
+    };
+    const fallbackChain = makeChain();
+    const baseJQuery = globalThis.jQuery || Object.assign(
+        (selectorOrFn) => (typeof selectorOrFn === 'function' ? undefined : fallbackChain),
+        { __chain: fallbackChain, escapeSelector: (s) => String(s ?? '') },
+    );
     const customJQuery = Object.assign(
         function (selectorOrFn) {
             if (typeof selectorOrFn === 'string' && selectorOrFn === '#send_textarea') {
-                const chain = Object.assign(Object.create(baseJQuery.__chain), {
+                const chain = makeChain({
                     val: (v) => {
                         if (v !== undefined) {
                             sendTextareaVal = v;

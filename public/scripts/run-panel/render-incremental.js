@@ -143,7 +143,7 @@ export class PanelRenderer {
     _renderRunStart() {
         const run = this._run();
         if (!run) return;
-        this.root.dataset.state = 'open';
+        // Whether the panel opens on run start is panel.js's decision.
         this.roundsListEl.innerHTML = '';
         this._manualToggles.clear();
         this._sweepRoundTimers();

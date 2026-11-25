@@ -241,14 +241,20 @@ beforeAll(async () => {
     });
     globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn() };
 
-    const baseJQuery = globalThis.jQuery;
-    const bannerChain = new Proxy(function () {}, {
-        get(_, prop) {
-            if (prop === 'then') return undefined;
-            if (prop === 'show') return bannerShowMock;
-            if (prop === 'hide') return bannerHideMock;
-            return () => bannerChain;
-        },
+    const makeChain = (overrides = {}) => {
+        const chain = { length: 0, is: () => false, hasClass: () => false };
+        for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'find', 'closest', 'children', 'parent', 'filter', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data']) {
+            chain[method] = () => chain;
+        }
+        return Object.assign(chain, overrides);
+    };
+    const fallbackChain = makeChain();
+    const baseJQuery = globalThis.jQuery || Object.assign((selectorOrFn) => (typeof selectorOrFn === 'function' ? undefined : fallbackChain), {
+        escapeSelector: (s) => String(s ?? ''),
+    });
+    const bannerChain = makeChain({
+        show: bannerShowMock,
+        hide: bannerHideMock,
     });
     const customJQuery = Object.assign(
         function (selectorOrFn) {

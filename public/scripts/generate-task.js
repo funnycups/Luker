@@ -755,6 +755,24 @@ export function dispatchToSenderStreaming({
             // Gemini/Cohere/etc. (and is a no-op when the call is
             // already OpenAI-shaped), and drops sparse holes /
             // unnameable entries before publishing the final result.
+            const finalSignature = typeof lastFrame?.state?.signature === 'string' && lastFrame.state.signature.length > 0
+                ? lastFrame.state.signature
+                : null;
+            const finalNativeParts = Array.isArray(lastFrame?.state?.nativeParts)
+                ? lastFrame.state.nativeParts.filter(Boolean)
+                : [];
+            const finalNativeContentBlocks = Array.isArray(lastFrame?.state?.nativeContentBlocks)
+                ? lastFrame.state.nativeContentBlocks.filter(Boolean)
+                : [];
+            const finalResponsesOutputItems = Array.isArray(lastFrame?.state?.responsesOutputItems)
+                ? lastFrame.state.responsesOutputItems.filter(Boolean)
+                : [];
+            const finalCitations = Array.isArray(lastFrame?.state?.citations)
+                ? lastFrame.state.citations.filter(Boolean)
+                : [];
+            const finalRefusal = typeof lastFrame?.state?.refusal === 'string' && lastFrame.state.refusal.length > 0
+                ? lastFrame.state.refusal
+                : null;
             const finalToolCalls = choiceToolCalls
                 .map(tc => _normalizeToolCallToOpenAiShape(tc))
                 .filter(tc => tc && typeof tc?.function?.name === 'string' && tc.function.name.length > 0);
@@ -763,11 +781,20 @@ export function dispatchToSenderStreaming({
                     message: {
                         content: finalText,
                         ...(finalReasoning ? { reasoning_content: finalReasoning } : {}),
+                        ...(finalSignature ? { signature: finalSignature } : {}),
                         ...(finalReasoningBlocks.length > 0 ? { reasoning_blocks: finalReasoningBlocks } : {}),
                         ...(finalReasoningDetails.length > 0 ? { reasoning_details: finalReasoningDetails } : {}),
+                        ...(finalNativeParts.length > 0 ? { native_parts: finalNativeParts } : {}),
+                        ...(finalNativeContentBlocks.length > 0 ? { native_content_blocks: finalNativeContentBlocks } : {}),
+                        ...(finalResponsesOutputItems.length > 0 ? { responses_output_items: finalResponsesOutputItems } : {}),
+                        ...(finalCitations.length > 0 ? { citations: finalCitations } : {}),
+                        ...(finalRefusal ? { refusal: finalRefusal } : {}),
                         tool_calls: finalToolCalls,
                     },
                     finish_reason: lastFrame?.state?.finishReason || 'stop',
+                    ...(lastFrame?.state?.nativeFinishReason ? { native_finish_reason: lastFrame.state.nativeFinishReason } : {}),
+                    ...(lastFrame?.state?.stopSequence ? { stop_sequence: lastFrame.state.stopSequence } : {}),
+                    ...(lastFrame?.state?.stopDetails ? { stop_details: lastFrame.state.stopDetails } : {}),
                 }],
                 usage: lastFrame?.state?.usage || null,
             });
@@ -806,9 +833,22 @@ export function dispatchToSenderStreaming({
  */
 function _normalizeToolCallToOpenAiShape(tc) {
     if (!tc || typeof tc !== 'object') return null;
+    const signature = typeof tc.signature === 'string' && tc.signature.length > 0
+        ? tc.signature
+        : (typeof tc.thoughtSignature === 'string' && tc.thoughtSignature.length > 0 ? tc.thoughtSignature : undefined);
+    const extraContent = tc.extra_content && typeof tc.extra_content === 'object'
+        ? structuredClone(tc.extra_content)
+        : undefined;
     // Fast path: already OpenAI-shaped.
     if (tc.function && typeof tc.function === 'object'
         && typeof tc.function.name === 'string' && tc.function.name.length > 0) {
+        if ((signature && tc.signature !== signature) || (extraContent && !tc.extra_content)) {
+            return {
+                ...tc,
+                ...(signature ? { signature } : {}),
+                ...(extraContent ? { extra_content: extraContent } : {}),
+            };
+        }
         return tc;
     }
     const name = tc?.function?.name || tc?.name || '';
@@ -830,10 +870,10 @@ function _normalizeToolCallToOpenAiShape(tc) {
             name: String(name),
             arguments: argsStr,
         },
+        ...(signature ? { signature } : {}),
+        ...(extraContent ? { extra_content: extraContent } : {}),
     };
 }
-
-const VALID_FINISH_REASONS = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'abort', 'error']);
 
 function emptyResultShape(raw) {
     return {
@@ -841,9 +881,17 @@ function emptyResultShape(raw) {
         toolCalls: [],
         jsonData: null,
         reasoning: null,
+        signature: null,
         reasoningBlocks: null,
         reasoningDetails: null,
+        nativeParts: null,
+        nativeContentBlocks: null,
+        responsesOutputItems: null,
+        citations: null,
+        refusal: null,
         finishReason: 'stop',
+        nativeFinishReason: null,
+        stopDetails: null,
         usage: null,
         raw: raw ?? null,
     };
@@ -853,22 +901,36 @@ function extractOpenAiUsage(rawUsage) {
     if (!rawUsage || typeof rawUsage !== 'object') {
         return null;
     }
-    const promptTokens = Number(rawUsage.prompt_tokens);
-    const completionTokens = Number(rawUsage.completion_tokens);
-    const totalTokens = Number(rawUsage.total_tokens);
+    const promptTokens = Number(rawUsage.prompt_tokens ?? rawUsage.input_tokens);
+    const completionTokens = Number(rawUsage.completion_tokens ?? rawUsage.output_tokens);
+    const totalRaw = Number(rawUsage.total_tokens);
+    const totalTokens = Number.isFinite(totalRaw)
+        ? totalRaw
+        : ((Number.isFinite(promptTokens) || Number.isFinite(completionTokens))
+            ? (Number.isFinite(promptTokens) ? promptTokens : 0) + (Number.isFinite(completionTokens) ? completionTokens : 0)
+            : NaN);
     if (!Number.isFinite(promptTokens) && !Number.isFinite(completionTokens) && !Number.isFinite(totalTokens)) {
         return null;
     }
-    return {
+    const out = {
         promptTokens: Number.isFinite(promptTokens) ? promptTokens : 0,
         completionTokens: Number.isFinite(completionTokens) ? completionTokens : 0,
         totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
     };
+    const cachedTokens = Number(rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.input_tokens_details?.cached_tokens ?? rawUsage.cache_read_input_tokens);
+    const cacheCreationTokens = Number(rawUsage.prompt_tokens_details?.cache_creation_tokens ?? rawUsage.cache_creation_input_tokens);
+    const reasoningTokens = Number(rawUsage.completion_tokens_details?.reasoning_tokens ?? rawUsage.output_tokens_details?.reasoning_tokens);
+    const toolUsePromptTokens = Number(rawUsage.prompt_tokens_details?.tool_use_prompt_tokens ?? rawUsage.tool_use_prompt_tokens);
+    if (Number.isFinite(cachedTokens)) out.cachedTokens = cachedTokens;
+    if (Number.isFinite(cacheCreationTokens)) out.cacheCreationTokens = cacheCreationTokens;
+    if (Number.isFinite(reasoningTokens)) out.reasoningTokens = reasoningTokens;
+    if (Number.isFinite(toolUsePromptTokens)) out.toolUsePromptTokens = toolUsePromptTokens;
+    return out;
 }
 
 function coerceFinishReason(value, fallback = 'stop') {
     const v = String(value || '').trim();
-    return VALID_FINISH_REASONS.has(v) ? v : fallback;
+    return v || fallback;
 }
 
 /**
@@ -889,17 +951,47 @@ export function normalizeResponse({ requestApi, mode, raw }) {
             jsonString = raw;
         } else if (raw && typeof raw === 'object' && Array.isArray(raw.choices) && raw.choices.length > 0) {
             // openai chat-completion shape — sendOpenAIRequest returns the full data object
-            const content = raw.choices[0]?.message?.content;
-            if (typeof content !== 'string') {
+            const msg = raw.choices[0]?.message;
+            const content = msg?.content;
+            if (typeof content === 'string' && content.trim().length > 0) {
+                jsonString = content;
+            } else if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
+                // Legacy Claude models fall back to a forced schema tool whose JSON
+                // payload arrives in tool_calls[0].function.arguments while content is empty.
+                const toolArgs = msg.tool_calls[0]?.function?.arguments;
+                if (typeof toolArgs === 'string' && toolArgs.trim().length > 0) {
+                    jsonString = toolArgs;
+                } else if (toolArgs && typeof toolArgs === 'object') {
+                    jsonString = JSON.stringify(toolArgs);
+                }
+            } else if (typeof content === 'string') {
+                jsonString = content;
+            }
+            if (typeof jsonString !== 'string') {
                 throw new GenerateTaskError(
                     'json_schema_violation',
                     'jsonSchema response: choices[0].message.content is not a string',
                     { details: { rawShape: 'chat_completion_no_content_string' } },
                 );
             }
-            jsonString = content;
             // Also extract metadata available on the openai chat-completion shape.
             result.finishReason = coerceFinishReason(raw.choices[0].finish_reason);
+            result.usage = extractOpenAiUsage(raw.usage);
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.content)) {
+            // Native Anthropic Messages JSON response (text block or forced schema tool_use.input).
+            const textBlock = raw.content.find(b => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0);
+            const toolUseBlock = raw.content.find(b => b?.type === 'tool_use' && b.input !== undefined);
+            if (textBlock) {
+                jsonString = textBlock.text;
+            } else if (toolUseBlock) {
+                jsonString = typeof toolUseBlock.input === 'string' ? toolUseBlock.input : JSON.stringify(toolUseBlock.input);
+            } else {
+                throw new GenerateTaskError(
+                    'json_schema_violation',
+                    'jsonSchema response: native content contains neither JSON text nor tool_use input',
+                    { details: { rawShape: 'native_content_no_json' } },
+                );
+            }
             result.usage = extractOpenAiUsage(raw.usage);
         } else {
             throw new GenerateTaskError(
@@ -930,13 +1022,37 @@ export function normalizeResponse({ requestApi, mode, raw }) {
         result.reasoning = message.reasoning_content
             ? String(message.reasoning_content)
             : (message.reasoning ? String(message.reasoning) : null);
+        result.signature = typeof message.signature === 'string' && message.signature.length > 0
+            ? message.signature
+            : null;
         result.reasoningBlocks = Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0
             ? message.reasoning_blocks
             : null;
         result.reasoningDetails = Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0
             ? message.reasoning_details
             : null;
+        result.nativeParts = Array.isArray(message.native_parts) && message.native_parts.length > 0
+            ? message.native_parts
+            : (Array.isArray(raw?.responseContent?.parts) && raw.responseContent.parts.length > 0 ? raw.responseContent.parts : null);
+        result.nativeContentBlocks = Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0
+            ? message.native_content_blocks
+            : (Array.isArray(raw?.content) && raw.content.length > 0 ? raw.content : null);
+        result.responsesOutputItems = Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0
+            ? message.responses_output_items
+            : null;
+        result.citations = Array.isArray(message.citations) && message.citations.length > 0
+            ? message.citations
+            : null;
+        result.refusal = typeof message.refusal === 'string' && message.refusal.length > 0
+            ? message.refusal
+            : null;
         result.finishReason = coerceFinishReason(choice.finish_reason);
+        result.nativeFinishReason = typeof choice.native_finish_reason === 'string' && choice.native_finish_reason.length > 0
+            ? choice.native_finish_reason
+            : (typeof choice.finish_reason === 'string' && choice.finish_reason.length > 0 ? choice.finish_reason : null);
+        result.stopDetails = choice.stop_details && typeof choice.stop_details === 'object'
+            ? choice.stop_details
+            : (typeof choice.stop_sequence === 'string' ? { stop_sequence: choice.stop_sequence } : null);
         result.usage = extractOpenAiUsage(raw.usage);
 
         if (mode === 'tool' && Array.isArray(message.tool_calls)) {
@@ -955,9 +1071,17 @@ export function normalizeResponse({ requestApi, mode, raw }) {
                         );
                     }
                 }
+                const callSig = typeof call?.signature === 'string' && call.signature.length > 0
+                    ? call.signature
+                    : (typeof call?.thoughtSignature === 'string' && call.thoughtSignature.length > 0 ? call.thoughtSignature : undefined);
+                const callExtra = call?.extra_content && typeof call.extra_content === 'object'
+                    ? structuredClone(call.extra_content)
+                    : undefined;
                 return {
                     name: String(fn?.name || ''),
                     args: parsedArgs,
+                    ...(callSig ? { signature: callSig } : {}),
+                    ...(callExtra ? { extra_content: callExtra } : {}),
                     raw: call,
                 };
             });
@@ -991,6 +1115,12 @@ function _wrapSenderError(error, abortSignal) {
         || (abortSignal && abortSignal.aborted);
     if (isAbort) {
         return new GenerateTaskError('aborted', 'request aborted', { cause: error });
+    }
+    if (error?.nonRetryable === true || error?.code === 'capability_conflict') {
+        const wrapped = new GenerateTaskError('capability_conflict', msg, { cause: error });
+        wrapped.nonRetryable = true;
+        if (error?.status) wrapped.status = error.status;
+        return wrapped;
     }
     if (error?.code === 'ENOTFOUND' || /fetch|network|ENETUNREACH|ECONNREFUSED/i.test(msg)) {
         return new GenerateTaskError('network', `network error: ${msg}`, { cause: error });
@@ -1028,7 +1158,7 @@ const RESPONSE_MODES = { TEXT: 'text', TOOL: 'tool', JSON: 'json' };
  * @param {Array|null} [params.tools]
  * @param {string|object} [params.toolChoice='auto']
  * @param {object|null} [params.jsonSchema]
- * @param {'auto'|'native'|'prompt_xml'|'prompt_json'} [params.functionCallMode='auto']
+ * @param {'auto'|'native'|'prompt_xml'} [params.functionCallMode='auto']
  * @param {object|null} [params.functionCallOptions]
  * @param {AbortSignal} [params.abortSignal]
  * @param {boolean} [params.substituteMacros=true] - Apply `substituteParams` (with

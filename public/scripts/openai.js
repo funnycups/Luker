@@ -4,12 +4,14 @@
 * https://github.com/CncAnon1/TavernAITurbo
 */
 import { Fuse, DOMPurify, lodash } from '../lib.js';
+import { createPresetLineage, preparePresetMutation } from './character/preset-mutation.js';
 
 import {
     abortStatusCheck,
     cancelStatusCheck,
     chat_metadata,
     characters,
+    cloneAsJsonWire,
     ensureFullSettingsLoaded,
     event_types,
     eventSource,
@@ -60,10 +62,23 @@ import { getMaxRequestRetries } from './extensions/connection-manager/max-retrie
 import { getRequestTimeoutMs } from './extensions/connection-manager/request-timeout.js';
 import { getNetworkProxy } from './extensions/connection-manager/network-proxy.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
-import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 
 import { getEventSourceStream } from './sse-stream.js';
+import { getLukerResponseMeta, onLukerResponseMeta } from './ws-delivery.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
+import {
+    resolveClaudeModelCapabilities,
+    resolveMinimaxModelCapabilities,
+    resolveOpenAIModelCapabilities,
+} from './lib/provider-capabilities.js';
+import {
+    ProtocolParseError,
+    createProtocolStreamParser,
+    isParsedTurnEmpty,
+    parseProtocolResponse,
+    parsedTurnToChatCompletion,
+    resolveWireProtocol,
+} from './lib/protocol-parser/index.js';
 import { readPresetDocument } from './named-resource-read.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import {
@@ -91,8 +106,6 @@ import {
     uuidv4,
 } from './utils.js';
 import { countTokensOpenAIAsync, countTokensOpenAIItemsAsync, getEncodingTokenizerType, getTokenizerModel, tokenizers } from './tokenizers.js';
-import { extractStreamingUsage, mergeStreamingUsage } from './openai-streaming-usage.js';
-import { createResponsesEventAdapter, responsesResultToChatCompletion } from './openai-responses.js';
 import { setLastUsage } from './last-usage.js';
 import { isMobile } from './RossAscends-mods.js';
 import { saveLogprobsForActiveMessage } from './logprobs.js';
@@ -108,27 +121,14 @@ import { t, translate } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { AbortReason } from './util/AbortReason.js';
-import { pushReasoningDetails } from './util/reasoning-details.js';
 import { resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { maybeDeleteLinkedLorebookForPresetDeletion } from './world-info.js';
 import { showUndoToast } from './undo-toast.js';
 import {
-    buildFunctionCallRetryAddendum,
-    diagnosePlainTextFunctionCallError,
-    isToolCallMandatory,
     PlainTextFunctionCallStreamDetector,
     TOOL_PROTOCOL_STYLE,
-    buildPlainTextToolProtocolMessage,
-    extractAllFunctionCallsFromText,
-    extractDisplayTextFromPlainTextFunctionResponse,
-    findLastTriggerSignalOutsideThought,
-    getResponseMessageContent,
-    generateRandomTriggerSignal,
-    mergeSystemAddendumIntoPromptMessages,
-    normalizeToolMessagesForPlainTextFunctionCalling,
     resolveFunctionCallMode,
-    validateParsedToolCalls,
 } from './extensions/function-call-runtime.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
@@ -141,7 +141,7 @@ import {
     REASONING_EFFORT_LABEL_KEYS,
     REASONING_EFFORT_LABELS,
 } from './reasoning-effort.js';
-import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from './lib/preset-ref-codec.js';
 import { readSelectedPresetRef, decideSavePresetDispatch } from './character/save-dispatch.js';
 import { hasUnsavedOpenAIPresetChanges as hasUnsavedOpenAIPresetChangesImpl } from './character/has-unsaved-openai-preset-changes.js';
 import { updateCharacterBoundPresetActiveState, clearCharacterBoundActiveAfterRemoval } from './character/character-bound-preset-state-sync.js';
@@ -257,6 +257,8 @@ let biasCache = undefined;
 export let model_list = [];
 let lastOpenAIReplyPersistedByServer = false;
 let lastOpenAIGenerationId = '';
+let activeOpenAILukerGenerationToken = 0;
+let disposeOpenAILukerResponseMetaListener = null;
 
 // Tracks the in-flight remote status check for the current chat-completion
 // source. Consumers that must observe a truly-populated model dropdown
@@ -404,25 +406,20 @@ export function getActiveCardBoundGhostSnapshot() {
  * the same object identity mirrors the global preset list: a consumer that
  * already holds `presets[i]` must observe the saved values.
  *
- * @param {string} name
+ * @param {{ghostValue: string, body: object}} snapshot Invocation-time runtime slot.
  * @param {object} body
  * @returns {boolean} true when a matching runtime slot was refreshed
  */
-export function refreshCharacterBoundPresetRuntimeBody(name, body) {
-    const targetName = String(name || '').trim();
-    if (!targetName) return false;
+export function refreshCharacterBoundPresetRuntimeBody(snapshot, body) {
+    const cached = characterBoundPresetState.runtimeOptions.get(snapshot.ghostValue);
+    if (!cached || cached.body !== snapshot.body) return false;
     const stripped = stripOpenAIConnectionFieldsFromPreset(body);
-    for (const cached of characterBoundPresetState.runtimeOptions.values()) {
-        if (!cached || !areLookupNamesEqual(cached.name, targetName)) continue;
-        const target = cached.body;
-        if (!target || typeof target !== 'object') continue;
-        for (const key of Object.keys(target)) {
-            delete target[key];
-        }
-        Object.assign(target, stripped);
-        return true;
+    const target = cached.body;
+    for (const key of Object.keys(target)) {
+        delete target[key];
     }
-    return false;
+    Object.assign(target, stripped);
+    return true;
 }
 
 function applyChangedPresetObject(target, previous, next) {
@@ -533,7 +530,9 @@ export async function syncSavedCharacterBoundPreset({ name, previousBody, body }
         return false;
     }
 
-    refreshCharacterBoundPresetRuntimeBody(targetName, body);
+    const snapshot = getActiveCardBoundGhostSnapshot();
+    if (!snapshot || !areLookupNamesEqual(snapshot.name, targetName)
+        || !refreshCharacterBoundPresetRuntimeBody(snapshot, body)) return false;
     applyPresetBodyChangesToSettings(previousBody, body);
     syncOpenAIPresetControlsFromSettings();
     await syncOpenAIPresetUiAfterApply();
@@ -1210,14 +1209,24 @@ function setOpenAIMessages(chat) {
         const reasoningDetails = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.reasoning_details)
             ? chat[j].extra.reasoning_details
             : null;
+        const nativeParts = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.native_parts)
+            ? chat[j].extra.native_parts
+            : null;
+        const nativeContentBlocks = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.native_content_blocks)
+            ? chat[j].extra.native_content_blocks
+            : null;
+        const responsesOutputItems = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.responses_output_items)
+            ? chat[j].extra.responses_output_items
+            : null;
 
         // Remove reasoning metadata from invocations if the API/model don't match
         if (Array.isArray(invocations) && invocations.length > 0) {
             invocations.forEach((invocation, index) => {
-                if (!isSameModel && (invocation.signature || invocation.reasoning)) {
+                if (!isSameModel && (invocation.signature || invocation.reasoning || invocation.extra_content)) {
                     const cloneInvocation = structuredClone(invocation);
                     delete cloneInvocation.signature;
                     delete cloneInvocation.reasoning;
+                    delete cloneInvocation.extra_content;
                     invocations[index] = cloneInvocation;
                 }
             });
@@ -1257,11 +1266,25 @@ function setOpenAIMessages(chat) {
             content = '';
         }
 
-        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks, 'reasoning_details': reasoningDetails };
+        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks, 'reasoning_details': reasoningDetails, 'native_parts': nativeParts, 'native_content_blocks': nativeContentBlocks, 'responses_output_items': responsesOutputItems, 'finish_reason': chat[j]?.extra?.finish_reason ?? null };
         j++;
     }
 
     return messages.filter(Boolean);
+}
+
+function hasNativeReplayPayload(message) {
+    if (!message || typeof message !== 'object') return false;
+    return (Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0)
+        || (Array.isArray(message.native_parts) && message.native_parts.length > 0)
+        || (Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0);
+}
+
+function isClaudePauseTurnMessage(message) {
+    if (!message || message.role !== 'assistant') return false;
+    if (message.finish_reason !== 'pause_turn') return false;
+    const blocks = message.native_content_blocks;
+    return Array.isArray(blocks) && blocks.length > 0;
 }
 
 /**
@@ -1533,7 +1556,7 @@ async function populationInjectionPrompts(prompts, messages) {
  * @param type
  * @param cyclePrompt
  */
-async function populateChatHistory(messages, prompts, chatCompletion, type = null, cyclePrompt = null) {
+async function populateChatHistory(messages, prompts, chatCompletion, type = null, cyclePrompt = null, pauseTurnResume = false) {
     if (!prompts.has('chatHistory')) {
         return;
     }
@@ -1554,8 +1577,13 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
     }
 
     // Reserve budget for continue nudge
+    const lastNonInjectedMessage = messages.findLast(x => !x.injected);
+    const isClaudePauseTurnResume = Boolean(pauseTurnResume)
+        || (type === 'continue'
+            && oai_settings.chat_completion_source === chat_completion_sources.CLAUDE
+            && isClaudePauseTurnMessage(lastNonInjectedMessage));
     let continueMessageCollection = null;
-    if (type === 'continue' && cyclePrompt && !oai_settings.continue_prefill) {
+    if (type === 'continue' && cyclePrompt && !oai_settings.continue_prefill && !isClaudePauseTurnResume) {
         const promptObject = {
             identifier: 'continueNudge',
             role: 'system',
@@ -1577,6 +1605,15 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             if (Array.isArray(continueMessage.reasoning_details) && continueMessage.reasoning_details.length > 0) {
                 chatMessage.reasoning_details = continueMessage.reasoning_details;
             }
+            if (Array.isArray(continueMessage.native_parts) && continueMessage.native_parts.length > 0) {
+                chatMessage.native_parts = continueMessage.native_parts;
+            }
+            if (Array.isArray(continueMessage.native_content_blocks) && continueMessage.native_content_blocks.length > 0) {
+                chatMessage.native_content_blocks = continueMessage.native_content_blocks;
+            }
+            if (Array.isArray(continueMessage.responses_output_items) && continueMessage.responses_output_items.length > 0) {
+                chatMessage.responses_output_items = continueMessage.responses_output_items;
+            }
             continueMessageCollection.add(chatMessage);
         }
         const continueNudgePrompt = new Prompt(promptObject);
@@ -1588,7 +1625,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
 
     const lastChatPrompt = messages[messages.length - 1];
     const message = await Message.createAsync('user', oai_settings.send_if_empty, 'emptyUserMessageReplacement');
-    if (lastChatPrompt && lastChatPrompt.role === 'assistant' && oai_settings.send_if_empty && chatCompletion.canAfford(message)) {
+    if (!isClaudePauseTurnResume && lastChatPrompt && lastChatPrompt.role === 'assistant' && oai_settings.send_if_empty && chatCompletion.canAfford(message)) {
         chatCompletion.insert(message, 'chatHistory');
     }
 
@@ -1630,6 +1667,15 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
         const reasoningDetails = Array.isArray(chatPrompt.reasoning_details) && chatPrompt.reasoning_details.length > 0
             ? chatPrompt.reasoning_details
             : null;
+        const nativeParts = Array.isArray(chatPrompt.native_parts) && chatPrompt.native_parts.length > 0
+            ? chatPrompt.native_parts
+            : null;
+        const nativeContentBlocks = Array.isArray(chatPrompt.native_content_blocks) && chatPrompt.native_content_blocks.length > 0
+            ? chatPrompt.native_content_blocks
+            : null;
+        const responsesOutputItems = Array.isArray(chatPrompt.responses_output_items) && chatPrompt.responses_output_items.length > 0
+            ? chatPrompt.responses_output_items
+            : null;
         const chatMessageDefinition = {
             role: preparedPrompt.role,
             content: preparedPrompt.content,
@@ -1640,6 +1686,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ...(reasoning ? { reasoning } : {}),
             ...(reasoningBlocks ? { reasoning_blocks: reasoningBlocks } : {}),
             ...(reasoningDetails ? { reasoning_details: reasoningDetails } : {}),
+            ...(nativeParts ? { native_parts: nativeParts } : {}),
+            ...(nativeContentBlocks ? { native_content_blocks: nativeContentBlocks } : {}),
+            ...(responsesOutputItems ? { responses_output_items: responsesOutputItems } : {}),
         };
         const chatMessageIndex = batchedMessageDefinitions.length;
         batchedMessageDefinitions.push(chatMessageDefinition);
@@ -2043,9 +2092,41 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
         });
     }
 
-    // Displace the message to be continued from its original position before performing in-chat injections
-    // In case if it is an assistant message, we want to prepend the users assistant prefill on the message
-    if (type === 'continue' && oai_settings.continue_prefill && messages.length) {
+    // Displace the message to be continued from its original position before performing in-chat injections.
+    // On Claude pause_turn continuation, keep the paused assistant turn verbatim as the trailing
+    // control prompt so depth-0 injections and post-history prompts preserve Round 1's exact prefix
+    // without flipping or following the paused assistant content blocks.
+    const isClaudePauseTurnResume = type === 'continue'
+        && oai_settings.chat_completion_source === chat_completion_sources.CLAUDE
+        && isClaudePauseTurnMessage(messages[0]);
+    if (isClaudePauseTurnResume) {
+        const pausedMessage = messages.shift();
+        const namesInCompletion = oai_settings.names_behavior === character_names_behavior.COMPLETION;
+        const pauseTurnMessage = await Message.createAsync(pausedMessage.role, pausedMessage.content ?? '', 'claudePauseTurn');
+        if (pausedMessage.name && namesInCompletion) {
+            await pauseTurnMessage.setName(promptManager.sanitizeName(pausedMessage.name));
+        }
+        if (typeof pausedMessage.reasoning === 'string' && pausedMessage.reasoning.length > 0) {
+            pauseTurnMessage.reasoning = pausedMessage.reasoning;
+        }
+        if (Array.isArray(pausedMessage.reasoning_blocks) && pausedMessage.reasoning_blocks.length > 0) {
+            pauseTurnMessage.reasoning_blocks = pausedMessage.reasoning_blocks;
+        }
+        if (Array.isArray(pausedMessage.reasoning_details) && pausedMessage.reasoning_details.length > 0) {
+            pauseTurnMessage.reasoning_details = pausedMessage.reasoning_details;
+        }
+        if (Array.isArray(pausedMessage.native_parts) && pausedMessage.native_parts.length > 0) {
+            pauseTurnMessage.native_parts = pausedMessage.native_parts;
+        }
+        if (Array.isArray(pausedMessage.native_content_blocks) && pausedMessage.native_content_blocks.length > 0) {
+            pauseTurnMessage.native_content_blocks = pausedMessage.native_content_blocks;
+        }
+        if (Array.isArray(pausedMessage.responses_output_items) && pausedMessage.responses_output_items.length > 0) {
+            pauseTurnMessage.responses_output_items = pausedMessage.responses_output_items;
+        }
+        controlPrompts.add(pauseTurnMessage);
+        chatCompletion.reserveBudget(pauseTurnMessage);
+    } else if (type === 'continue' && oai_settings.continue_prefill && messages.length) {
         const chatMessage = messages.shift();
         const isAssistantRole = chatMessage.role === 'assistant';
         const supportsAssistantPrefill = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
@@ -2064,9 +2145,9 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     // Decide whether dialogue examples should always be added
     if (power_user.pin_examples) {
         await populateDialogueExamples(prompts, chatCompletion, messageExamples);
-        await populateChatHistory(messages, prompts, chatCompletion, type, cyclePrompt);
+        await populateChatHistory(messages, prompts, chatCompletion, type, cyclePrompt, isClaudePauseTurnResume);
     } else {
-        await populateChatHistory(messages, prompts, chatCompletion, type, cyclePrompt);
+        await populateChatHistory(messages, prompts, chatCompletion, type, cyclePrompt, isClaudePauseTurnResume);
         await populateDialogueExamples(prompts, chatCompletion, messageExamples);
     }
 
@@ -2414,35 +2495,50 @@ function getChatCompletionErrorMessage(data, response) {
  * @param {boolean?} [options.quiet=false] Suppress toast messages
  */
 export function tryParseStreamingError(response, decoded, { quiet = false } = {}) {
+    let data;
     try {
-        const data = JSON.parse(decoded);
-
-        if (!data) {
-            return;
-        }
-
-        checkQuotaError(data, { quiet });
-        checkModerationError(data, { quiet });
-
-        // these do not throw correctly (equiv to Error("[object Object]"))
-        // if trying to fix "[object Object]" displayed to users, start here
-
-        if (data.error) {
-            !quiet && toastr.error(getChatCompletionErrorMessage(data, response), 'Chat Completion API');
-            throw new Error(data);
-        }
-
-        if (data.message) {
-            !quiet && toastr.error(data.message, 'Chat Completion API');
-            throw new Error(data);
-        }
-
-        if (data.detail) {
-            !quiet && toastr.error(getChatCompletionErrorMessage(data, response), 'Chat Completion API');
-            throw new Error(data);
-        }
+        data = JSON.parse(decoded);
     } catch {
-        // No JSON. Do nothing.
+        // Non-JSON payload; not a structured error frame.
+        return;
+    }
+
+    if (!data || typeof data !== 'object') {
+        return;
+    }
+
+    checkQuotaError(data, { quiet });
+    checkModerationError(data, { quiet });
+
+    if (data.type === 'error' || data.error) {
+        const message = getChatCompletionErrorMessage(data, response);
+        !quiet && toastr.error(message, 'Chat Completion API');
+        const err = /** @type {any} */ (new Error(message));
+        if (response?.status) err.status = response.status;
+        if (data.error?.non_retryable === true || data.error?.type === 'capability_conflict') {
+            err.nonRetryable = true;
+            err.code = data.error.type === 'capability_conflict' ? 'capability_conflict' : (data.error.code || 'non_retryable');
+            if (data.error.code) err.conflictCode = data.error.code;
+        }
+        err.cause = data;
+        throw err;
+    }
+
+    if (typeof data.message === 'string' && data.message.length > 0) {
+        !quiet && toastr.error(data.message, 'Chat Completion API');
+        const err = /** @type {any} */ (new Error(data.message));
+        if (response?.status) err.status = response.status;
+        err.cause = data;
+        throw err;
+    }
+
+    if (data.detail) {
+        const message = getChatCompletionErrorMessage(data, response);
+        !quiet && toastr.error(message, 'Chat Completion API');
+        const err = /** @type {any} */ (new Error(message));
+        if (response?.status) err.status = response.status;
+        err.cause = data;
+        throw err;
     }
 }
 
@@ -2452,7 +2548,7 @@ export function tryParseStreamingError(response, decoded, { quiet = false } = {}
  * @param {object} [options]
  * @param {boolean?} [options.quiet=false] Suppress toast messages
  * @returns {void}
- * @throws {object} - response JSON
+ * @throws {Error}
  */
 function checkQuotaError(data, { quiet = false } = {}) {
     if (!data) {
@@ -2461,10 +2557,9 @@ function checkQuotaError(data, { quiet = false } = {}) {
 
     if (data.quota_error) {
         !quiet && renderTemplateAsync('quotaError').then((html) => Popup.show.text('Quota Error', html));
-
-        // this does not throw correctly (equiv to Error("[object Object]"))
-        // if trying to fix "[object Object]" displayed to users, start here
-        throw new Error(data);
+        const err = /** @type {any} */ (new Error(typeof data.quota_error === 'string' ? data.quota_error : 'Quota error'));
+        err.cause = data;
+        throw err;
     }
 }
 
@@ -3682,12 +3777,15 @@ function getVerbosity(settings = null) {
  * @param {import('../script.js').AdditionalRequestOptions} options Additional request options
  * @returns {Promise<object>} Final generation parameters object appropriate for the chat completion source
  */
-export async function createGenerationParameters(settings, model, type, messages, { jsonSchema = null, tools = null, toolChoice = null, replaceTools = false, responseLength = null, allowStreamingForQuiet = false, promptNames = null } = {}) {
+export async function createGenerationParameters(settings, model, type, messages, { jsonSchema = null, tools = null, toolChoice = null, replaceTools = false, responseLength = null, allowStreamingForQuiet = false, promptNames = null, pauseTurnContinuation = false, plainTextFunctionCalling = null } = {}) {
     // HACK: Filter out null and non-object messages
     if (!Array.isArray(messages)) {
         throw new Error('messages must be an array');
     }
     messages = messages.filter(msg => msg && typeof msg === 'object');
+    const isPlainTextTools = plainTextFunctionCalling !== null
+        ? Boolean(plainTextFunctionCalling)
+        : Boolean(settings?.function_calling_plain_text);
 
     // DeepSeek only accepts image blocks in user messages. Media can also be
     // attached to system and assistant messages by the shared inlining path.
@@ -3902,8 +4000,20 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.top_k = Number(settings.top_k_openai);
         generate_data.use_sysprompt = settings.use_sysprompt;
         generate_data.stop = getCustomStoppingStrings(); // Claude shouldn't have limits on stop strings.
-        // Don't add a prefill on quiet gens (summarization) and when using continue prefill.
-        if (type !== 'quiet' && !(type === 'continue' && settings.continue_prefill)) {
+        const lastPromptMessage = Array.isArray(messages) && messages.length > 0 ? messages[messages.length - 1] : null;
+        const liveChat = getContext?.()?.chat;
+        const lastLiveChatMessage = Array.isArray(liveChat) && liveChat.length > 0 ? liveChat[liveChat.length - 1] : null;
+        const isClaudePauseTurnResume = type === 'continue'
+            && lastPromptMessage?.role === 'assistant'
+            && Array.isArray(lastPromptMessage?.native_content_blocks)
+            && lastPromptMessage.native_content_blocks.length > 0
+            && (Boolean(pauseTurnContinuation)
+                || lastLiveChatMessage?.extra?.finish_reason === 'pause_turn');
+        if (isClaudePauseTurnResume) {
+            generate_data.claude_pause_turn_continuation = true;
+        }
+        // Don't add a prefill on quiet gens (summarization), continue prefill, or pause_turn continuation.
+        if (type !== 'quiet' && !isClaudePauseTurnResume && !(type === 'continue' && settings.continue_prefill)) {
             generate_data.assistant_prefill = type === 'impersonate'
                 ? substituteParams(settings.assistant_impersonation)
                 : substituteParams(settings.assistant_prefill);
@@ -3954,9 +4064,9 @@ export async function createGenerationParameters(settings, model, type, messages
     }
 
     if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(settings.chat_completion_source)) {
-        const stopStringsLimit = 5;
+        const stopStringsLimit = 5; // cap-ok: Gemini API allows up to 5 stopSequences
         generate_data.top_k = Number(settings.top_k_openai);
-        generate_data.stop = getCustomStoppingStrings(stopStringsLimit).slice(0, stopStringsLimit).filter(x => x.length >= 1 && x.length <= 16);
+        generate_data.stop = getCustomStoppingStrings(stopStringsLimit).slice(0, stopStringsLimit).filter(x => x.length >= 1);
         generate_data.use_sysprompt = settings.use_sysprompt;
         if (settings.chat_completion_source === chat_completion_sources.VERTEXAI) {
             generate_data.vertexai_auth_mode = settings.vertexai_auth_mode;
@@ -3983,14 +4093,14 @@ export async function createGenerationParameters(settings, model, type, messages
     generate_data.custom_exclude_body = substituteParams(settings.custom_exclude_body);
     generate_data.custom_include_headers = substituteParams(settings.custom_include_headers);
 
+    // https://docs.cohere.com/reference/chat (verified 2026-11-25):
+    // p in [0.01, 0.99], frequency_penalty & presence_penalty in [0.0, 1.0], up to 5 stop_sequences.
     if (settings.chat_completion_source === chat_completion_sources.COHERE) {
-        // Clamp to 0.01 -> 0.99
-        generate_data.top_p = Math.min(Math.max(Number(settings.top_p_openai), 0.01), 0.99);
+        generate_data.top_p = Math.min(Math.max(Number(settings.top_p_openai), 0.01), 0.99); // cap-ok: Cohere v2 documented p range [0.01, 0.99]
         generate_data.top_k = Number(settings.top_k_openai);
-        // Clamp to 0 -> 1
-        generate_data.frequency_penalty = Math.min(Math.max(Number(settings.freq_pen_openai), 0), 1);
-        generate_data.presence_penalty = Math.min(Math.max(Number(settings.pres_pen_openai), 0), 1);
-        generate_data.stop = getCustomStoppingStrings(5);
+        generate_data.frequency_penalty = Math.min(Math.max(Number(settings.freq_pen_openai), 0), 1); // cap-ok: Cohere v2 documented penalty range [0, 1]
+        generate_data.presence_penalty = Math.min(Math.max(Number(settings.pres_pen_openai), 0), 1); // cap-ok: Cohere v2 documented penalty range [0, 1]
+        generate_data.stop = getCustomStoppingStrings(5); // cap-ok: Cohere v2 documented maximum of 5 stop_sequences
     }
 
     if (settings.chat_completion_source === chat_completion_sources.PERPLEXITY) {
@@ -4014,11 +4124,10 @@ export async function createGenerationParameters(settings, model, type, messages
         // DeepSeek deprecated presence/frequency penalty; the API ignores them.
         delete generate_data.frequency_penalty;
         delete generate_data.presence_penalty;
-        // DeepSeek thinking mode rejects `tool_choice` (returns 400). When reasoning_effort
-        // is set the backend enables thinking, so strip tool_choice here. `tools` stays,
-        // service falls back to auto behavior; callers that forced a named function
-        // (e.g. orchestrator agenda planner) must handle non-call via retry.
-        if (generate_data.reasoning_effort && generate_data.reasoning_effort !== 'off') {
+        // DeepSeek thinking mode rejects native `tool_choice` (returns 400). Only explicit
+        // non-auto/non-off reasoning_effort enables thinking on the backend. Plain-text
+        // function calling never sends native `tool_choice` upstream.
+        if (!isPlainTextTools && generate_data.reasoning_effort && generate_data.reasoning_effort !== 'off' && generate_data.reasoning_effort !== 'auto') {
             delete generate_data.tool_choice;
         }
     }
@@ -4029,11 +4138,6 @@ export async function createGenerationParameters(settings, model, type, messages
             delete generate_data.presence_penalty;
             delete generate_data.frequency_penalty;
             delete generate_data.stop;
-        }
-
-        // Only grok-3-mini accepts reasoning_effort.
-        if (!model.includes('grok-3-mini')) {
-            delete generate_data.reasoning_effort;
         }
 
         if (model.includes('grok-4') || model.includes('grok-code')) {
@@ -4138,8 +4242,11 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.seed = settings.seed;
     }
 
-    if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source) && /^(o1|o3|o4)/.test(model) ||
-        (chat_completion_sources.OPENROUTER === settings.chat_completion_source && /^openai\/(o1|o3|o4)/.test(model))) {
+    const openaiCaps = resolveOpenAIModelCapabilities(model);
+    const isDirectOrOpenRouterOSeries = ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source) && openaiCaps.isOSeries)
+        || (chat_completion_sources.OPENROUTER === settings.chat_completion_source && /^openai\/(o1|o3|o4)/.test(model));
+
+    if (isDirectOrOpenRouterOSeries) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -4149,26 +4256,30 @@ export async function createGenerationParameters(settings, model, type, messages
         delete generate_data.top_p;
         delete generate_data.frequency_penalty;
         delete generate_data.presence_penalty;
-        if (/^(openai\/)?(o1)/.test(model)) {
+        if (openaiCaps.isO1) {
             generate_data.messages.forEach((msg) => {
                 if (msg.role === 'system') {
                     msg.role = 'user';
                 }
             });
             delete generate_data.n;
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
+            if (!isPlainTextTools) {
+                delete generate_data.tools;
+                delete generate_data.tool_choice;
+            }
         }
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /gpt-5/.test(model)) {
+    if (gptSources.includes(settings.chat_completion_source) && openaiCaps.isGpt5) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
-        if (/gpt-5-chat-latest/.test(model)) {
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
-        } else if (/gpt-5\.(1|2|3|4)/.test(model) && !/chat-latest/.test(model) && (!generate_data.reasoning_effort || generate_data.reasoning_effort === 'off')) {
+        if (openaiCaps.isChatLatestGpt5) {
+            if (!isPlainTextTools) {
+                delete generate_data.tools;
+                delete generate_data.tool_choice;
+            }
+        } else if (openaiCaps.isGpt51To54NonChat && (!generate_data.reasoning_effort || generate_data.reasoning_effort === 'off')) {
             delete generate_data.frequency_penalty;
             delete generate_data.presence_penalty;
             delete generate_data.logit_bias;
@@ -4181,44 +4292,42 @@ export async function createGenerationParameters(settings, model, type, messages
             delete generate_data.logit_bias;
             delete generate_data.stop;
         }
-        // Azure documents that gpt-5.6 cannot combine tools with reasoning on
+        // Azure documents that gpt-5.6 cannot combine native tools with reasoning on
         // Chat Completions: the request fails even without an explicit effort.
-        // Disable reasoning when tools are present (the documented workaround).
-        if (settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI
+        // Disable reasoning when native tools are present (plain-text tools are never
+        // sent as native `tools` upstream).
+        if (!isPlainTextTools
+            && settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI
             && /gpt-5\.6/.test(model)
             && Array.isArray(generate_data.tools) && generate_data.tools.length > 0) {
             generate_data.reasoning_effort = 'off';
         }
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /gpt-6-astra/.test(model)) {
+    if (gptSources.includes(settings.chat_completion_source) && openaiCaps.isGpt6) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.temperature;
         delete generate_data.top_p;
         delete generate_data.logprobs;
-        // GPT-6 Astra supports Chat Completions but not tool calling there;
-        // function tools require the Responses API, a separate source
-        // (openai_responses) that this block never runs for.
-        delete generate_data.tools;
-        delete generate_data.tool_choice;
-        // `none` reasoning effort is rejected; fall back to `low`.
-        if (generate_data.reasoning_effort === 'off') {
+        // `none` reasoning effort is rejected on GPT-6 Astra / Sol models; fall back to `low`.
+        if (openaiCaps.rejectsReasoningNone && generate_data.reasoning_effort === 'off') {
             generate_data.reasoning_effort = 'low';
         }
     }
 
     // OpenAI Responses API: reasoning models reject temperature and top_p.
     if (settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES
-        && (/^(o1|o3|o4)/.test(model) || /gpt-5/.test(model) || /gpt-6/.test(model))) {
+        && openaiCaps.isReasoningModel
+        && !(openaiCaps.isGpt51To54NonChat && generate_data.reasoning_effort === 'off')) {
         delete generate_data.temperature;
         delete generate_data.top_p;
     }
 
-    // Claude Fable / Claude 5 models removed sampling parameters and reject them with HTTP 400,
-    // including via OpenAI-compatible proxies. Unanchored to also match prefixed ids
-    // like 'anthropic/claude-fable-5' or 'anthropic/claude-opus-5'.
-    if (/claude-(fable|opus-5|sonnet-5)/.test(model)) {
+    // Claude models that removed sampling parameters (Opus 4.7+, Fable 5, Mythos 5,
+    // Opus 5, Sonnet 5, Haiku 5.5) reject them with HTTP 400, including via proxies.
+    const claudeCaps = resolveClaudeModelCapabilities(model);
+    if (claudeCaps.noSampling) {
         delete generate_data.temperature;
         delete generate_data.top_p;
         delete generate_data.top_k;
@@ -4244,7 +4353,7 @@ function getPlainTextFunctionCallRetryConfig(settings = null) {
     if (!Number.isFinite(maxAttempts)) {
         maxAttempts = Number(default_settings.function_calling_plain_text_error_retry_max_attempts);
     }
-    maxAttempts = Math.min(Math.max(Math.round(maxAttempts || 0), 1), 10);
+    maxAttempts = Math.max(Math.round(maxAttempts || 0), 1);
 
     return {
         enabled: Boolean(settings.function_calling_plain_text_error_retry),
@@ -4252,124 +4361,162 @@ function getPlainTextFunctionCallRetryConfig(settings = null) {
     };
 }
 
-function inspectPlainTextFunctionCallResponse(responseData, runtimeFunctionCallContext = null) {
-    const triggerSignal = String(runtimeFunctionCallContext?.triggerSignal || '').trim();
-    const triggerRequired = Boolean(triggerSignal);
-    const assistantTextRaw = getResponseMessageContent(responseData);
-    const assistantTextDisplay = extractDisplayTextFromPlainTextFunctionResponse(
-        assistantTextRaw,
-        { triggerSignal },
-    );
-    const hasTrigger = triggerRequired
-        && findLastTriggerSignalOutsideThought(assistantTextRaw, triggerSignal) >= 0;
-
-    let parsedCalls = [];
-    let error = null;
-    try {
-        parsedCalls = extractAllFunctionCallsFromText(responseData, null, {
-            triggerSignal,
-            triggerRequired,
-        });
-        const validationError = validateParsedToolCalls(parsedCalls, runtimeFunctionCallContext?.tools);
-        if (validationError) {
-            throw new Error(validationError);
-        }
-    } catch (reason) {
-        error = reason instanceof Error ? reason : new Error(String(reason));
+/**
+ * Apply the authoritative backend plain-text function-call result (delivered
+ * out-of-band via WS `meta.plain_text_function_call`) to a non-streaming
+ * chat-completion object. Throws on parse/network/abort failure without
+ * splicing broken XML into visible text.
+ * @param {object} responseData
+ * @param {object} ptMeta
+ */
+function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
+    if (!ptMeta?.enabled) return responseData;
+    if (ptMeta.status === 'aborted') {
+        throw new DOMException(ptMeta.error || 'Aborted', 'AbortError');
+    }
+    if (ptMeta.status === 'parse_failed' || ptMeta.status === 'network_error') {
+        throw new Error(ptMeta.error || 'Plain-text function call parsing failed.');
+    }
+    const hasReplacedTurn = Boolean(ptMeta.replacedTurn && typeof ptMeta.replacedTurn === 'object');
+    if (ptMeta.status !== 'parsed' && !hasReplacedTurn) {
+        return responseData;
     }
 
-    const diagnostic = error
-        ? diagnosePlainTextFunctionCallError(assistantTextRaw, {
-            triggerSignal,
-            triggerRequired,
-        })
-        : '';
-    const errorDetails = error
-        ? (error.message === 'Model text output did not contain parseable function-call XML.'
-            ? diagnostic || error.message
-            : error.message || diagnostic || t`Unknown error`)
-        : '';
-
-    return {
-        assistantTextRaw,
-        assistantTextDisplay,
-        parsedCalls,
-        error,
-        errorDetails,
-        hasTrigger,
-    };
-}
-
-function applyParsedPlainTextToolCallsToResponse(responseData, inspection) {
     const firstChoice = Array.isArray(responseData?.choices) ? responseData.choices[0] : null;
     if (!firstChoice || typeof firstChoice !== 'object') {
         return responseData;
     }
-
     if (!firstChoice.message || typeof firstChoice.message !== 'object') {
         firstChoice.message = { role: 'assistant', content: '' };
     }
 
-    firstChoice.message.tool_calls = inspection.parsedCalls.map((call) => ({
-        id: String(call?.id || `call_${uuidv4().replaceAll('-', '')}`),
-        type: 'function',
-        function: {
-            name: String(call?.name || ''),
-            arguments: JSON.stringify(call?.args ?? {}),
-        },
-    }));
-    firstChoice.message.content = inspection.assistantTextDisplay;
+    if (hasReplacedTurn) {
+        const rt = ptMeta.replacedTurn;
+        if (typeof rt.reasoning === 'string' && rt.reasoning) {
+            firstChoice.message.reasoning_content = rt.reasoning;
+        } else {
+            delete firstChoice.message.reasoning_content;
+        }
+        if (rt.signature) {
+            firstChoice.message.signature = rt.signature;
+        } else {
+            delete firstChoice.message.signature;
+        }
+        if (Array.isArray(rt.reasoningBlocks) && rt.reasoningBlocks.length > 0) {
+            firstChoice.message.reasoning_blocks = rt.reasoningBlocks;
+        } else {
+            delete firstChoice.message.reasoning_blocks;
+        }
+        if (Array.isArray(rt.reasoningDetails) && rt.reasoningDetails.length > 0) {
+            firstChoice.message.reasoning_details = rt.reasoningDetails;
+        } else {
+            delete firstChoice.message.reasoning_details;
+        }
+        if (Array.isArray(rt.nativeParts) && rt.nativeParts.length > 0) {
+            firstChoice.message.native_parts = rt.nativeParts;
+        } else {
+            delete firstChoice.message.native_parts;
+        }
+        if (Array.isArray(rt.nativeContentBlocks) && rt.nativeContentBlocks.length > 0) {
+            firstChoice.message.native_content_blocks = rt.nativeContentBlocks;
+        } else {
+            delete firstChoice.message.native_content_blocks;
+        }
+        if (Array.isArray(rt.responsesOutputItems) && rt.responsesOutputItems.length > 0) {
+            firstChoice.message.responses_output_items = rt.responsesOutputItems;
+        } else {
+            delete firstChoice.message.responses_output_items;
+        }
+        if (Array.isArray(rt.citations) && rt.citations.length > 0) {
+            firstChoice.message.citations = rt.citations;
+        } else {
+            delete firstChoice.message.citations;
+        }
+        if (Array.isArray(rt.images) && rt.images.length > 0) {
+            firstChoice.message.images = rt.images.map(img => (
+                typeof img === 'string'
+                    ? { type: 'image_url', image_url: { url: img } }
+                    : img
+            ));
+        } else {
+            delete firstChoice.message.images;
+        }
+        if (typeof rt.refusal === 'string' && rt.refusal) {
+            firstChoice.message.refusal = rt.refusal;
+        } else {
+            delete firstChoice.message.refusal;
+        }
+        if (rt.stopSequence != null) {
+            firstChoice.stop_sequence = rt.stopSequence;
+        } else {
+            delete firstChoice.stop_sequence;
+        }
+        if (rt.stopDetails != null) {
+            firstChoice.stop_details = rt.stopDetails;
+        } else {
+            delete firstChoice.stop_details;
+        }
+        if (rt.nativeFinishReason != null) {
+            firstChoice.native_finish_reason = rt.nativeFinishReason;
+        } else {
+            delete firstChoice.native_finish_reason;
+        }
+        if (rt.usage) {
+            responseData.usage = rt.usage;
+        } else {
+            delete responseData.usage;
+        }
+    }
+
+    if (ptMeta.status === 'parsed') {
+        firstChoice.message.content = ptMeta.displayText ?? '';
+        firstChoice.message.tool_calls = Array.isArray(ptMeta.toolCalls) ? ptMeta.toolCalls : [];
+        delete firstChoice.message.native_parts;
+        delete firstChoice.message.native_content_blocks;
+        delete firstChoice.message.responses_output_items;
+        firstChoice.finish_reason = 'tool_calls';
+    } else if (hasReplacedTurn) {
+        firstChoice.message.content = ptMeta.displayText ?? '';
+        delete firstChoice.message.tool_calls;
+        firstChoice.finish_reason = ptMeta.replacedTurn.finishReason ?? 'stop';
+    }
     return responseData;
 }
 
 /**
- * Detect a semantically-empty non-streaming chat-completion response.
- * Empty iff every choice has no text content AND no tool_calls, and (for
- * Claude native shape) `data.content[]` has no non-empty text block either.
- * `data.error` responses are handled upstream (`if (data.error)` in
- * `sendOpenAIRequest`) and are explicitly NOT treated as empty here.
+ * Detect a semantically-empty non-streaming chat-completion response strictly
+ * under the declared wire protocol via the shared protocol parser. Provider
+ * errors (e.g. `{error}`, Gemini `promptFeedback.blockReason`, `BLOCKLIST`/`SPII`)
+ * and protocol errors are NOT treated as retriable empties so the caller
+ * surfaces the real failure.
  * @param {any} data
+ * @param {string|null} [chatCompletionSource]
  * @returns {boolean}
  */
-function isChatCompletionResponseEmpty(data) {
+export function isChatCompletionResponseEmpty(data, chatCompletionSource = null) {
     if (!data || typeof data !== 'object') return true;
     if (data.error) return false;
+    if (Array.isArray(data) && data[0]?.error) return false;
 
-    // Claude native shape: { content: [{type:'text', text:'...'}, ...] }
-    if (Array.isArray(data.content) && data.content.length > 0) {
-        const hasText = data.content.some(p => p?.type === 'text' && typeof p.text === 'string' && p.text.length > 0);
-        const hasToolUse = data.content.some(p => p?.type === 'tool_use');
-        if (hasText || hasToolUse) return false;
+    const declaredProtocol = chatCompletionSource ? resolveWireProtocol(chatCompletionSource) : null;
+    if (!declaredProtocol) return false;
+
+    try {
+        const turn = parseProtocolResponse(declaredProtocol, data);
+        return isParsedTurnEmpty(turn);
+    } catch {
+        // Provider errors and protocol mismatches must NOT be retried as
+        // transient empty replies.
+        return false;
     }
-
-    const choices = Array.isArray(data.choices) ? data.choices : [];
-    if (choices.length === 0) {
-        // No choices AND no Claude-shape content → empty
-        return !(Array.isArray(data.content) && data.content.length > 0);
-    }
-
-    return choices.every(choice => {
-        const msg = choice?.message ?? {};
-        const rawContent = msg.content ?? choice?.text;
-        let contentEmpty;
-        if (typeof rawContent === 'string') {
-            contentEmpty = rawContent.length === 0;
-        } else if (Array.isArray(rawContent)) {
-            contentEmpty = !rawContent.some(p => (typeof p?.text === 'string' && p.text.length > 0));
-        } else {
-            contentEmpty = !rawContent;
-        }
-        const noToolCalls = !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0;
-        return contentEmpty && noToolCalls;
-    });
 }
 
 /**
  * @typedef {object} PostChatCompletionResult
  * @property {Response} response The raw fetch Response, body unconsumed. The
  *   caller must read it through `response.json()` so instance-level wrappers
- *   installed by third-party scripts (e.g. SPreset's non-streaming tool-call
- *   consumption hook) transform the payload. The empty-response peek inside
+ *   installed by third-party scripts (non-streaming tool-call consumption
+ *   hooks, etc.) transform the payload. The empty-response peek inside
  *   the fetcher parses a clone and must never feed the caller.
  */
 
@@ -4423,7 +4570,9 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
         });
         if (!shouldDetectEmpty || !r.ok) return r;
 
-        // Clone before reading so the caller can still consume the original body.
+        // Clone and await body completion FIRST so the WS `meta` frame (emitted
+        // right before terminal `end`) has been received before inspecting
+        // `plain_text_function_call` status. The caller still consumes `r`.
         let parsed;
         try {
             parsed = await r.clone().json();
@@ -4432,7 +4581,24 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
             return r;
         }
 
-        if (isChatCompletionResponseEmpty(parsed)) {
+        // When backend plain-text orchestration ran on this request, respect
+        // its authoritative out-of-band WS meta instead of inspecting Attempt 1's
+        // raw HTTP body (which may have been repaired by a backend retry or
+        // explicitly rejected with a parse/abort/network error).
+        const ptMeta = getLukerResponseMeta(r)?.plain_text_function_call;
+        if (ptMeta?.enabled) {
+            if (ptMeta.status === 'parsed'
+                || ptMeta.status === 'parse_failed'
+                || ptMeta.status === 'aborted'
+                || ptMeta.status === 'network_error') {
+                return r;
+            }
+            if (ptMeta.status === 'none' && ptMeta.replacedTurn && String(ptMeta.displayText || '').length > 0) {
+                return r;
+            }
+        }
+
+        if (isChatCompletionResponseEmpty(parsed, requestBody?.chat_completion_source)) {
             const err = new Error('Empty response body (no content and no tool_calls)');
             // No `err.status` and no `err.skipRetry` → withRetry treats this
             // as a retriable network-class error.
@@ -4463,105 +4629,29 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
             responseHeaders: Object.fromEntries(response.headers.entries()),
             body: responseBody.substring(0, 500),
         });
-        throw new Error(`Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`);
+        let parsedError = null;
+        try {
+            const parsed = JSON.parse(responseBody);
+            if (parsed && typeof parsed === 'object' && parsed.error && typeof parsed.error === 'object') {
+                parsedError = parsed.error;
+            }
+        } catch {
+            // Non-JSON error body
+        }
+        const message = parsedError?.message
+            ? String(parsedError.message)
+            : `Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`;
+        const err = /** @type {any} */ (new Error(message));
+        err.status = response.status;
+        if (parsedError?.non_retryable === true || parsedError?.type === 'capability_conflict') {
+            err.nonRetryable = true;
+            err.code = parsedError.type === 'capability_conflict' ? 'capability_conflict' : (parsedError.code || 'non_retryable');
+            if (parsedError.code) err.conflictCode = parsedError.code;
+        }
+        throw err;
     }
 
     return { response };
-}
-
-async function attemptPlainTextFunctionCallRetry({
-    initialResponseData,
-    type,
-    requestMessages,
-    requestSettings,
-    runtimeFunctionCallContext,
-    model,
-    signal,
-    jsonSchema = null,
-    responseLength = null,
-    requestSecretId = '',
-    apiPresetName = '',
-    transientSessionId = undefined,
-    onPreparedRequest = null,
-} = {}) {
-    let currentResponseData = initialResponseData;
-    let currentInspection = inspectPlainTextFunctionCallResponse(initialResponseData, runtimeFunctionCallContext);
-    const retryConfig = getPlainTextFunctionCallRetryConfig(requestSettings);
-    const requiresToolCall = Boolean(runtimeFunctionCallContext?.requiresToolCall);
-
-    if (!retryConfig.enabled || !currentInspection.error || (!currentInspection.hasTrigger && !requiresToolCall) || retryConfig.maxAttempts <= 1) {
-        return { responseData: currentResponseData, inspection: currentInspection };
-    }
-
-    let currentMessages = structuredClone(Array.isArray(requestMessages) ? requestMessages : []);
-    for (let attempt = 1; attempt < retryConfig.maxAttempts; attempt += 1) {
-        const retryPrompt = buildFunctionCallRetryAddendum({
-            rawResponse: currentInspection.assistantTextRaw,
-            errorDetails: currentInspection.errorDetails,
-            triggerSignal: runtimeFunctionCallContext?.triggerSignal,
-            requiredFunctionName: runtimeFunctionCallContext?.requiredFunctionName,
-            plainTextMode: true,
-        });
-        const retryMessages = currentMessages.concat([
-            { role: 'assistant', content: currentInspection.assistantTextRaw },
-            { role: 'user', content: retryPrompt },
-        ]);
-
-        console.info(`[openai] Plain-text function call parsing failed, attempting retry ${attempt + 1}/${retryConfig.maxAttempts}`);
-
-        try {
-            const retrySettings = {
-                ...requestSettings,
-                stream_openai: false,
-                n: 1,
-            };
-            const { generate_data } = await createGenerationParameters(retrySettings, model, type, retryMessages, {
-                jsonSchema,
-                tools: [],
-                toolChoice: 'auto',
-                replaceTools: true,
-                responseLength,
-            });
-            let requestBody = structuredClone(generate_data);
-            if (requestSecretId) {
-                requestBody.secret_id = requestSecretId;
-            }
-
-            const { response: retryResponse } = await postChatCompletionGenerateRequest(requestBody, signal, {
-                quietErrors: true,
-                apiPresetName,
-                transientSessionId,
-                onPreparedRequest,
-            });
-            const retryData = await retryResponse.json();
-            checkQuotaError(retryData, { quiet: true });
-            checkModerationError(retryData, { quiet: true });
-
-            if (retryData.error) {
-                console.warn('[openai] Plain-text function-call retry returned an error response', retryData.error);
-                return { responseData: currentResponseData, inspection: currentInspection };
-            }
-
-            currentResponseData = retryData;
-            currentInspection = inspectPlainTextFunctionCallResponse(retryData, runtimeFunctionCallContext);
-            currentMessages = retryMessages;
-
-            if (!currentInspection.error || (!currentInspection.hasTrigger && !requiresToolCall)) {
-                return { responseData: currentResponseData, inspection: currentInspection };
-            }
-        } catch (error) {
-            // An abort is terminal. Returning the previous response here
-            // would swallow a user stop (or a request-inspector abort) and
-            // let the caller persist a reply the user already cancelled.
-            if (error?.name === 'AbortError' || signal?.aborted) {
-                throw error;
-            }
-            console.warn('[openai] Plain-text function-call retry request failed', error);
-            return { responseData: currentResponseData, inspection: currentInspection };
-        }
-    }
-
-    return { responseData: currentResponseData, inspection: currentInspection };
 }
 
 /**
@@ -4633,71 +4723,19 @@ async function sendOpenAIRequest(type, messages, signal, {
         requestedMode: functionCallMode,
         plainTextEnabled: Boolean(requestSettings?.function_calling_plain_text),
     });
-    const usePromptXmlFunctionCalls =
-        resolvedFunctionCallMode === 'prompt_xml'
-        || resolvedFunctionCallMode === 'prompt_json';
-    const normalizedTools = Array.isArray(tools) ? tools : [];
-    const normalizedToolChoice = toolChoice ?? 'auto';
+    const usePromptXmlFunctionCalls = resolvedFunctionCallMode === 'prompt_xml';
     const modeOptions = functionCallOptions && typeof functionCallOptions === 'object' ? functionCallOptions : {};
-    let requestMessages = messages;
-    let effectiveTools = tools;
-    let effectiveToolChoice = toolChoice;
-    let effectiveReplaceTools = replaceTools;
-    let runtimeFunctionCallContext = null;
-
-    if (usePromptXmlFunctionCalls && normalizedTools.length > 0) {
-        const triggerSignal = String(modeOptions.triggerSignal || generateRandomTriggerSignal()).trim();
-        if (Array.isArray(requestMessages)) {
-            requestMessages = normalizeToolMessagesForPlainTextFunctionCalling(
-                requestMessages.map(message => ({ ...message })),
-                { triggerSignal },
-            );
-        }
-
-        const protocolStyle = modeOptions.protocolStyle === TOOL_PROTOCOL_STYLE.TABLE
-            ? TOOL_PROTOCOL_STYLE.TABLE
-            : TOOL_PROTOCOL_STYLE.JSON_SCHEMA;
-        const requiredFunctionName = String(
-            modeOptions.requiredFunctionName
-            || normalizedToolChoice?.function?.name
-            || normalizedToolChoice?.name
-            || '',
-        ).trim();
-        const requiresToolCall = isToolCallMandatory({
-            toolChoice: normalizedToolChoice,
-            requiredFunctionName,
-        });
-
-        requestMessages = mergeSystemAddendumIntoPromptMessages(
-            requestMessages,
-            buildPlainTextToolProtocolMessage(normalizedTools, {
-                requiredFunctionName,
-                style: protocolStyle,
-                triggerSignal,
-                toolChoice: normalizedToolChoice,
-            }),
-        );
-
-        effectiveTools = [];
-        effectiveToolChoice = 'auto';
-        effectiveReplaceTools = true;
-        runtimeFunctionCallContext = {
-            triggerSignal,
-            tools: normalizedTools,
-            requiredFunctionName,
-            requiresToolCall,
-        };
-    }
 
     const model = getChatCompletionModel(requestSettings);
-    const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(requestSettings, model, type, requestMessages, {
+    const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(requestSettings, model, type, messages, {
         jsonSchema,
-        tools: effectiveTools,
-        toolChoice: effectiveToolChoice,
-        replaceTools: effectiveReplaceTools,
+        tools,
+        toolChoice,
+        replaceTools,
         responseLength,
         allowStreamingForQuiet,
         promptNames,
+        plainTextFunctionCalling: usePromptXmlFunctionCalls,
     });
     const shouldRunChatCompletionHooks = requestScope !== 'extension_internal';
     if (shouldRunChatCompletionHooks) {
@@ -4705,6 +4743,36 @@ async function sendOpenAIRequest(type, messages, signal, {
     }
 
     let requestBody = structuredClone(generate_data);
+    // Delegate plain-text function-calling orchestration (trigger generation,
+    // prompt injection, tool history normalization, parsing, validation, and
+    // configured format-correction retries) entirely to the backend runner via
+    // the internal `luker_plain_text_tools` envelope (stripped before upstream).
+    const plainTextActive = usePromptXmlFunctionCalls && Array.isArray(requestBody.tools) && requestBody.tools.length > 0;
+    if (plainTextActive) {
+        const protocolStyle = modeOptions.protocolStyle === TOOL_PROTOCOL_STYLE.TABLE
+            ? TOOL_PROTOCOL_STYLE.TABLE
+            : TOOL_PROTOCOL_STYLE.JSON_SCHEMA;
+        const requiredFunctionName = String(
+            modeOptions.requiredFunctionName
+            || requestBody.tool_choice?.function?.name
+            || requestBody.tool_choice?.name
+            || '',
+        ).trim();
+        const explicitTrigger = typeof modeOptions.triggerSignal === 'string'
+            ? modeOptions.triggerSignal.trim()
+            : '';
+        requestBody.luker_plain_text_tools = {
+            mode: resolvedFunctionCallMode,
+            tools: structuredClone(requestBody.tools),
+            toolChoice: requestBody.tool_choice !== undefined ? structuredClone(requestBody.tool_choice) : 'auto',
+            protocolStyle,
+            requiredFunctionName,
+            ...(explicitTrigger ? { triggerSignal: explicitTrigger } : {}),
+            retry: getPlainTextFunctionCallRetryConfig(requestSettings),
+        };
+        delete requestBody.tools;
+        delete requestBody.tool_choice;
+    }
     const requestSecretId = String(
         apiSettingsOverride?.secret_id
         || apiSettingsOverride?.['secret-id']
@@ -4714,13 +4782,19 @@ async function sendOpenAIRequest(type, messages, signal, {
     if (requestSecretId) {
         requestBody.secret_id = requestSecretId;
     }
-    const shouldTrackLukerGenerationState = !transientSessionId && shouldUseLukerServerPersistence(type, requestSettings.chat_completion_source);
+    const shouldTrackLukerGenerationState = !transientSessionId && main_api === 'openai' && shouldUseLukerServerPersistence(type, requestSettings.chat_completion_source);
+    let trackedGenerationToken = 0;
+    let trackedGenerationId = '';
     if (shouldTrackLukerGenerationState) {
+        trackedGenerationToken = ++activeOpenAILukerGenerationToken;
+        disposeOpenAILukerResponseMetaListener?.();
+        disposeOpenAILukerResponseMetaListener = null;
         lastOpenAIReplyPersistedByServer = false;
         lastOpenAIGenerationId = '';
         const persistTarget = buildLukerPersistTarget();
         if (persistTarget) {
             const generationId = uuidv4();
+            trackedGenerationId = generationId;
             requestBody = {
                 ...requestBody,
                 luker_generation: {
@@ -4741,381 +4815,435 @@ async function sendOpenAIRequest(type, messages, signal, {
         transientSessionId,
         onPreparedRequest,
     });
-    const generationIdHeader = response.headers.get('x-luker-generation-id');
-    if (shouldTrackLukerGenerationState && generationIdHeader) {
-        lastOpenAIGenerationId = generationIdHeader;
-        logOpenAILukerPersistenceDebug('response_header_meta', {
-            generation_id: generationIdHeader,
+    let disposeGenerationMeta = null;
+    const cleanupGenerationMeta = () => {
+        signal?.removeEventListener?.('abort', cleanupGenerationMeta);
+        if (disposeOpenAILukerResponseMetaListener === cleanupGenerationMeta) {
+            disposeOpenAILukerResponseMetaListener = null;
+        }
+        if (!disposeGenerationMeta) {
+            return;
+        }
+        const dispose = disposeGenerationMeta;
+        disposeGenerationMeta = null;
+        dispose();
+    };
+    const generationIdHeader = response.headers.get('x-luker-generation-id') || '';
+    const persistedHeader = response.headers.get('x-luker-server-persisted');
+    const hasMismatchedGenerationIdHeader = Boolean(
+        generationIdHeader && trackedGenerationId && generationIdHeader !== trackedGenerationId,
+    );
+    if (shouldTrackLukerGenerationState && trackedGenerationToken === activeOpenAILukerGenerationToken && main_api === 'openai' && !hasMismatchedGenerationIdHeader) {
+        if (generationIdHeader && (!trackedGenerationId || generationIdHeader === trackedGenerationId)) {
+            trackedGenerationId = generationIdHeader;
+            lastOpenAIGenerationId = generationIdHeader;
+        }
+        if (persistedHeader === '1') {
+            lastOpenAIReplyPersistedByServer = true;
+        } else if (persistedHeader === '0') {
+            lastOpenAIReplyPersistedByServer = false;
+        }
+        if (generationIdHeader || persistedHeader === '0' || persistedHeader === '1') {
+            logOpenAILukerPersistenceDebug('response_header_meta', {
+                ...(generationIdHeader ? { generation_id: generationIdHeader } : {}),
+                ...(persistedHeader === '0' || persistedHeader === '1' ? { persisted: persistedHeader === '1' } : {}),
+            });
+        }
+        disposeOpenAILukerResponseMetaListener?.();
+        const tokenForListener = trackedGenerationToken;
+        const dispose = onLukerResponseMeta(response, (meta) => {
+            if (tokenForListener !== activeOpenAILukerGenerationToken || main_api !== 'openai') {
+                return;
+            }
+            const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
+            if (trackedGenerationId && lastOpenAIGenerationId && lastOpenAIGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (metaGenerationId && !trackedGenerationId) {
+                trackedGenerationId = metaGenerationId;
+            }
+            const logPayload = {};
+            if (metaGenerationId) {
+                lastOpenAIGenerationId = metaGenerationId;
+                logPayload.generation_id = metaGenerationId;
+            }
+            if (typeof meta?.persisted === 'boolean') {
+                lastOpenAIReplyPersistedByServer = meta.persisted;
+                logPayload.persisted = meta.persisted;
+            }
+            if (Object.keys(logPayload).length > 0) {
+                logOpenAILukerPersistenceDebug(stream ? 'stream_meta' : 'response_meta', logPayload);
+            }
         });
+        disposeGenerationMeta = dispose;
+        disposeOpenAILukerResponseMetaListener = cleanupGenerationMeta;
+        if (signal && disposeGenerationMeta) {
+            if (signal.aborted) {
+                cleanupGenerationMeta();
+            } else {
+                signal.addEventListener('abort', cleanupGenerationMeta, { once: true });
+            }
+        }
     }
 
     if (stream) {
-        const eventStream = getEventSourceStream();
-        response.body.pipeThrough(eventStream);
-        const reader = eventStream.readable.getReader();
-        const responsesAdapter = requestSettings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES
-            ? createResponsesEventAdapter()
-            : null;
+        let eventStream;
+        let reader;
+        let streamParser;
+        try {
+            eventStream = getEventSourceStream();
+            response.body.pipeThrough(eventStream);
+            reader = eventStream.readable.getReader();
+            streamParser = createProtocolStreamParser(requestSettings.chat_completion_source);
+        } catch (error) {
+            cleanupGenerationMeta();
+            throw error;
+        }
+        const showThoughts = Boolean(requestSettings.show_thoughts ?? oai_settings.show_thoughts);
         return async function* streamData() {
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], reasoningDetails: [], usage: null, finishReason: null };
-            const plainTextToolCallDetector = runtimeFunctionCallContext
-                ? new PlainTextFunctionCallStreamDetector({ triggerSignal: runtimeFunctionCallContext.triggerSignal })
-                : null;
+            const state = {
+                reasoning: '',
+                images: [],
+                signature: '',
+                reasoningBlocks: [],
+                reasoningDetails: [],
+                nativeParts: [],
+                nativeContentBlocks: [],
+                responsesOutputItems: null,
+                citations: [],
+                refusal: '',
+                usage: null,
+                finishReason: null,
+                nativeFinishReason: null,
+                stopSequence: null,
+                stopDetails: null,
+            };
+            const applyReplacedTurnIntoState = (rt) => {
+                state.reasoning = (showThoughts && typeof rt.reasoning === 'string') ? rt.reasoning : '';
+                state.images = Array.isArray(rt.images) ? rt.images.filter(isDataURL) : [];
+                state.signature = rt.signature || '';
+                state.reasoningBlocks = Array.isArray(rt.reasoningBlocks) ? rt.reasoningBlocks : [];
+                state.reasoningDetails = Array.isArray(rt.reasoningDetails) ? rt.reasoningDetails : [];
+                state.nativeParts = Array.isArray(rt.nativeParts) ? rt.nativeParts : [];
+                state.nativeContentBlocks = Array.isArray(rt.nativeContentBlocks) ? rt.nativeContentBlocks : [];
+                state.responsesOutputItems = Array.isArray(rt.responsesOutputItems) && rt.responsesOutputItems.length > 0
+                    ? rt.responsesOutputItems
+                    : null;
+                state.citations = Array.isArray(rt.citations) ? rt.citations : [];
+                state.refusal = rt.refusal || '';
+                state.usage = rt.usage || null;
+                state.finishReason = rt.finishReason || null;
+                state.nativeFinishReason = rt.nativeFinishReason || null;
+                state.stopSequence = rt.stopSequence || null;
+                state.stopDetails = rt.stopDetails || null;
+                toolCalls.length = 0;
+                if (Array.isArray(rt.toolCalls) && rt.toolCalls.length > 0) {
+                    toolCalls[0] = rt.toolCalls;
+                }
+            };
+            // Display-only masking using the backend-owned trigger signal
+            // delivered out-of-band on WS `meta` so raw call markup never
+            // flashes into the chat bubble while streaming. Parsing, validation,
+            // and retries run exclusively on the backend.
+            let streamDisplayMask = null;
+            let latestPlainTextMeta = getLukerResponseMeta(response)?.plain_text_function_call || null;
+            const ensureDisplayMask = (ptMeta) => {
+                if (ptMeta && typeof ptMeta === 'object') {
+                    latestPlainTextMeta = ptMeta;
+                    if (!streamDisplayMask && typeof ptMeta.triggerSignal === 'string' && ptMeta.triggerSignal) {
+                        streamDisplayMask = new PlainTextFunctionCallStreamDetector({
+                            triggerSignal: ptMeta.triggerSignal,
+                        });
+                    }
+                }
+            };
+            ensureDisplayMask(latestPlainTextMeta);
+            const unsubscribePlainTextMeta = plainTextActive
+                ? onLukerResponseMeta(response, (meta) => {
+                    if (meta?.plain_text_function_call) {
+                        ensureDisplayMask(meta.plain_text_function_call);
+                    }
+                })
+                : () => {};
+
             let plainTextToolCallFinalized = false;
-            const finalizePlainTextToolCalls = async () => {
-                if (!plainTextToolCallDetector || plainTextToolCallFinalized) {
+            const finalizePlainTextToolCalls = () => {
+                if (!plainTextActive || plainTextToolCallFinalized) {
                     return false;
                 }
-
                 plainTextToolCallFinalized = true;
-                const finalState = plainTextToolCallDetector.finalize();
-                const requiresToolCall = Boolean(runtimeFunctionCallContext?.requiresToolCall);
+                const ptMeta = getLukerResponseMeta(response)?.plain_text_function_call || latestPlainTextMeta;
+                if (!ptMeta?.enabled) {
+                    if (streamDisplayMask) {
+                        const tail = streamDisplayMask.finalize();
+                        if (tail.displayDelta) {
+                            text += tail.displayDelta;
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if (ptMeta.status === 'aborted') {
+                    throw new DOMException(ptMeta.error || 'Aborted', 'AbortError');
+                }
+                if (ptMeta.status === 'parse_failed' || ptMeta.status === 'network_error') {
+                    // Never splice broken call syntax into visible assistant text.
+                    throw new Error(ptMeta.error || 'Plain-text function call parsing failed.');
+                }
+                const hasReplacedTurn = Boolean(ptMeta.replacedTurn && typeof ptMeta.replacedTurn === 'object');
+                if (ptMeta.status === 'parsed') {
+                    if (hasReplacedTurn) {
+                        applyReplacedTurnIntoState(ptMeta.replacedTurn);
+                    }
+                    state.nativeParts = [];
+                    state.nativeContentBlocks = [];
+                    state.responsesOutputItems = null;
+                    text = ptMeta.displayText ?? '';
+                    toolCalls[0] = Array.isArray(ptMeta.toolCalls) ? ptMeta.toolCalls : [];
+                    state.finishReason = 'tool_calls';
+                    return true;
+                }
+                // Normal prose (`status === 'none'`): if a backend retry replaced
+                // Attempt 1 with prose, apply the retry turn completely without
+                // flushing Attempt 1's display mask buffer.
+                if (hasReplacedTurn) {
+                    applyReplacedTurnIntoState(ptMeta.replacedTurn);
+                    text = ptMeta.displayText ?? '';
+                    toolCalls.length = 0;
+                    return true;
+                }
                 let changed = false;
-
-                if (finalState.displayDelta) {
-                    text += finalState.displayDelta;
+                if (streamDisplayMask) {
+                    const tail = streamDisplayMask.finalize();
+                    if (tail.displayDelta) {
+                        text += tail.displayDelta;
+                        changed = true;
+                    }
+                }
+                if (typeof ptMeta.displayText === 'string' && ptMeta.displayText !== text) {
+                    text = ptMeta.displayText;
                     changed = true;
                 }
-
-                if (finalState.detected || requiresToolCall) {
-                    try {
-                        const retryOutcome = await attemptPlainTextFunctionCallRetry({
-                            initialResponseData: finalState.rawText,
-                            type,
-                            requestMessages,
-                            requestSettings,
-                            runtimeFunctionCallContext,
-                            model,
-                            signal,
-                            jsonSchema,
-                            responseLength,
-                            requestSecretId,
-                            apiPresetName,
-                            transientSessionId,
-                            onPreparedRequest,
-                        });
-                        const inspection = retryOutcome.inspection;
-                        if (inspection.error) {
-                            throw inspection.error;
-                        }
-
-                        text = inspection.assistantTextDisplay;
-                        toolCalls[0] = inspection.parsedCalls.map((call) => ({
-                            id: String(call?.id || `call_${uuidv4().replaceAll('-', '')}`),
-                            type: 'function',
-                            function: {
-                                name: String(call?.name || ''),
-                                arguments: JSON.stringify(call?.args ?? {}),
-                            },
-                        }));
-                        changed = true;
-                    } catch (error) {
-                        // Abort is terminal even when the caller did not
-                        // require a tool call. Swallowing it here would let
-                        // the partial reply be treated as a successful turn.
-                        if (error?.name === 'AbortError' || signal?.aborted) {
-                            throw error;
-                        }
-                        console.warn('[openai] Failed to parse plain-text function calls from streaming response', error);
-                        if (requiresToolCall) {
-                            throw error;
-                        }
-                        if (finalState.hiddenText) {
-                            text += finalState.hiddenText;
-                            changed = true;
-                        }
-                    }
-                }
-
                 return changed;
             };
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    if (await finalizePlainTextToolCalls()) {
-                        yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
-                    }
-                    setLastUsage(state.usage);
-                    return;
+            const syncTurnIntoState = (turn) => {
+                let changed = false;
+                if (turn.signature && state.signature !== turn.signature) {
+                    state.signature = turn.signature;
+                    changed = true;
                 }
-                const rawData = value.data;
-                if (rawData === '[DONE]') {
-                    if (await finalizePlainTextToolCalls()) {
-                        yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
-                    }
-                    continue;
+                if (Array.isArray(turn.reasoningBlocks) && turn.reasoningBlocks.length > 0) {
+                    if (state.reasoningBlocks.length !== turn.reasoningBlocks.length) changed = true;
+                    state.reasoningBlocks = turn.reasoningBlocks;
                 }
-                tryParseStreamingError(response, rawData);
-                let parsed = JSON.parse(rawData);
-                if (parsed?.luker && typeof parsed.luker === 'object') {
-                    if (shouldTrackLukerGenerationState) {
-                        const logPayload = {};
-                        if (typeof parsed.luker.generation_id === 'string' && parsed.luker.generation_id) {
-                            lastOpenAIGenerationId = parsed.luker.generation_id;
-                            logPayload.generation_id = parsed.luker.generation_id;
+                if (Array.isArray(turn.reasoningDetails) && turn.reasoningDetails.length > 0) {
+                    if (state.reasoningDetails.length !== turn.reasoningDetails.length) changed = true;
+                    state.reasoningDetails = turn.reasoningDetails;
+                }
+                if (Array.isArray(turn.nativeParts) && turn.nativeParts.length > 0) {
+                    if (state.nativeParts.length !== turn.nativeParts.length) changed = true;
+                    state.nativeParts = turn.nativeParts;
+                }
+                if (Array.isArray(turn.nativeContentBlocks) && turn.nativeContentBlocks.length > 0) {
+                    if (state.nativeContentBlocks.length !== turn.nativeContentBlocks.length) changed = true;
+                    state.nativeContentBlocks = turn.nativeContentBlocks;
+                }
+                if (Array.isArray(turn.responsesOutputItems) && turn.responsesOutputItems.length > 0) {
+                    if ((state.responsesOutputItems?.length || 0) !== turn.responsesOutputItems.length) changed = true;
+                    state.responsesOutputItems = turn.responsesOutputItems;
+                }
+                if (Array.isArray(turn.citations) && turn.citations.length > 0) {
+                    if (state.citations.length !== turn.citations.length) changed = true;
+                    state.citations = turn.citations;
+                }
+                if (turn.refusal && state.refusal !== turn.refusal) {
+                    state.refusal = turn.refusal;
+                    changed = true;
+                }
+                if (turn.usage) {
+                    if (state.usage !== turn.usage) changed = true;
+                    state.usage = turn.usage;
+                }
+                if (turn.finishReason && state.finishReason !== turn.finishReason) {
+                    state.finishReason = turn.finishReason;
+                    changed = true;
+                }
+                if (turn.nativeFinishReason && state.nativeFinishReason !== turn.nativeFinishReason) {
+                    state.nativeFinishReason = turn.nativeFinishReason;
+                    changed = true;
+                }
+                if (turn.stopSequence && state.stopSequence !== turn.stopSequence) {
+                    state.stopSequence = turn.stopSequence;
+                    changed = true;
+                }
+                if (turn.stopDetails && state.stopDetails !== turn.stopDetails) {
+                    state.stopDetails = turn.stopDetails;
+                    changed = true;
+                }
+                if (Array.isArray(turn.toolCalls) && turn.toolCalls.length > 0) {
+                    const prevJson = Array.isArray(toolCalls[0]) ? JSON.stringify(toolCalls[0]) : '';
+                    const nextJson = JSON.stringify(turn.toolCalls);
+                    if (prevJson !== nextJson) changed = true;
+                    toolCalls[0] = turn.toolCalls;
+                }
+                return changed;
+            };
+            let sawDirectText = false;
+            let sawAnyFrame = false;
+            let finishedNormally = false;
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        if (!signal?.aborted) {
+                            const invalidSse = eventStream.getInvalidDiagnostic?.();
+                            if (!sawAnyFrame && invalidSse) {
+                                const sseErr = new ProtocolParseError({
+                                    protocol: streamParser.protocol,
+                                    stage: 'sse',
+                                    location: 'stream',
+                                    message: 'Expected text/event-stream SSE frames, received non-SSE response body.',
+                                    rawDiagnostic: invalidSse,
+                                });
+                                toastr.error(sseErr.message, t`API returned an error`);
+                                throw sseErr;
+                            }
+                            const finalTurn = streamParser.finish();
+                            const stateUpdated = syncTurnIntoState(finalTurn);
+                            const ptUpdated = finalizePlainTextToolCalls();
+                            if (stateUpdated || ptUpdated) {
+                                yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
+                            }
+                        } else {
+                            syncTurnIntoState(streamParser.getSnapshot());
                         }
-                        if (typeof parsed.luker.persisted === 'boolean') {
-                            lastOpenAIReplyPersistedByServer = parsed.luker.persisted;
-                            logPayload.persisted = parsed.luker.persisted;
+                        setLastUsage(state.usage);
+                        finishedNormally = true;
+                        return;
+                    }
+                    sawAnyFrame = true;
+                    const rawData = value.data;
+                    if (rawData === '[DONE]') {
+                        streamParser.feedFrame('[DONE]');
+                        continue;
+                    }
+
+                    let frameDelta;
+                    try {
+                        frameDelta = streamParser.feedFrame(rawData, value.event);
+                    } catch (err) {
+                        if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
+                            tryParseStreamingError(response, rawData);
+                            toastr.error(err.message, t`API returned an error`);
                         }
-                        if (Object.keys(logPayload).length > 0) {
-                            logOpenAILukerPersistenceDebug('stream_meta', logPayload);
+                        throw err;
+                    }
+
+                    if (showThoughts && frameDelta.reasoningDelta) {
+                        state.reasoning += frameDelta.reasoningDelta;
+                    }
+                    if (Array.isArray(frameDelta.imagesDelta) && frameDelta.imagesDelta.length > 0) {
+                        state.images.push(...frameDelta.imagesDelta.filter(isDataURL));
+                    }
+                    if (canMultiSwipe && frameDelta.choiceTextDeltas) {
+                        for (const [choiceIndexKey, deltaStr] of Object.entries(frameDelta.choiceTextDeltas)) {
+                            const swipeIndex = Number(choiceIndexKey) - 1;
+                            if (swipeIndex >= 0 && deltaStr) {
+                                swipes[swipeIndex] = (swipes[swipeIndex] || '') + deltaStr;
+                            }
                         }
                     }
-                    continue;
-                }
-
-                if (responsesAdapter) {
-                    parsed = responsesAdapter(parsed);
-                    if (!parsed) continue;
-                }
-
-                if (canMultiSwipe && Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
-                    const swipeIndex = parsed.choices[0].index - 1;
-                    // FIXME: state.reasoning should be an array to support multi-swipe
-                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + getStreamingReply(parsed, state, { chatCompletionSource: requestSettings.chat_completion_source, overrideShowThoughts: false });
-                } else {
-                    const replyDelta = getStreamingReply(parsed, state, { chatCompletionSource: requestSettings.chat_completion_source });
-                    if (plainTextToolCallDetector) {
-                        const processed = plainTextToolCallDetector.processTextDelta(replyDelta);
-                        text += processed.displayDelta;
-                    } else {
-                        text += replyDelta;
+                    if (frameDelta.textDelta) {
+                        sawDirectText = true;
+                        if (streamDisplayMask) {
+                            const processed = streamDisplayMask.processTextDelta(frameDelta.textDelta);
+                            text += processed.displayDelta;
+                        } else {
+                            text += frameDelta.textDelta;
+                        }
+                    } else if (!sawDirectText && frameDelta.refusalDelta) {
+                        if (streamDisplayMask) {
+                            const processed = streamDisplayMask.processTextDelta(frameDelta.refusalDelta);
+                            text += processed.displayDelta;
+                        } else {
+                            text += frameDelta.refusalDelta;
+                        }
                     }
-                }
-
-                ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures, { force: normalizedTools.length > 0 });
-
-                const usageDelta = extractStreamingUsage(parsed, requestSettings.chat_completion_source);
-                if (usageDelta) {
-                    state.usage = mergeStreamingUsage(state.usage, usageDelta);
-                }
-
-                // Per-source terminal-frame finish/stop reason extraction.
-                // Server-side non-streaming normalizers
-                // (src/endpoints/backends/chat-completions.js) rewrite Claude
-                // stop_reason / Gemini finishReason / Cohere finish_reason into
-                // OAI finish_reason before returning, but streaming SSE frames
-                // pass through unchanged (see
-                // src/luker-dispatch/providers/chat-completions/claude.js:346-347
-                // for the Claude pipe-through). So this loop must locate the
-                // provider-native field AND remap to OAI vocabulary
-                // (stop/length/content_filter/tool_calls) so consumers stay
-                // symmetric with the non-streaming path.
-                //
-                // Fields checked (in priority order):
-                //   Claude:  event.type === 'message_delta' → delta.stop_reason
-                //            (also read message_start.message.stop_reason as a
-                //            defensive fallback for providers that surface it
-                //            early)
-                //   Gemini:  candidates[0].finishReason on the terminal frame
-                //   OAI/others: choices[0].finish_reason or delta.finish_reason
-                //   Cohere:  message-end event with delta.finish_reason
-                const src = String(requestSettings.chat_completion_source || '').toLowerCase();
-                let rawFinish = null;
-                if (src === 'claude') {
-                    // Anthropic Messages API SSE spec: the terminal event is
-                    // `message_delta` with { delta: { stop_reason, ... }, usage }.
-                    if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
-                        rawFinish = parsed.delta.stop_reason;
-                    } else if (parsed?.type === 'message_start' && parsed?.message?.stop_reason) {
-                        rawFinish = parsed.message.stop_reason;
+                    if (frameDelta.hasMetadataUpdate) {
+                        syncTurnIntoState(streamParser.getSnapshot());
                     }
-                } else if (src === 'makersuite' || src === 'google_ai_studio' || src === 'vertexai') {
-                    // Google generateContent SSE: each frame is a full candidate object
-                    // with `finishReason` populated only on the terminal chunk.
-                    const cand = Array.isArray(parsed?.candidates) ? parsed.candidates[0] : null;
-                    if (cand?.finishReason) rawFinish = cand.finishReason;
-                } else {
-                    // OpenAI-native / OpenRouter / DeepSeek / xAI / Cohere v2:
-                    // finish_reason on choices[0] (or under delta for Cohere).
-                    rawFinish = parsed?.choices?.[0]?.finish_reason
-                        ?? parsed?.choices?.[0]?.delta?.finish_reason
-                        ?? parsed?.delta?.finish_reason
-                        ?? null;
-                }
-                const normalized = normalizeStreamingFinishReason(src, rawFinish);
-                if (normalized) {
-                    state.finishReason = normalized;
-                }
 
-                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
+                    yield {
+                        text,
+                        swipes: swipes,
+                        logprobs: frameDelta.logprobsPayload ? parseChatCompletionLogprobs(frameDelta.logprobsPayload) : null,
+                        toolCalls: toolCalls,
+                        state: state,
+                    };
+                }
+            } finally {
+                cleanupGenerationMeta();
+                unsubscribePlainTextMeta();
+                if (!finishedNormally) {
+                    try { await reader.cancel(); } catch { /* ignore cancel failure */ }
+                }
+                try { reader.releaseLock(); } catch { /* already released */ }
             }
         };
     } else {
-        if (shouldTrackLukerGenerationState) {
-            lastOpenAIReplyPersistedByServer = response.headers.get('x-luker-server-persisted') === '1';
-            logOpenAILukerPersistenceDebug('response_header_meta', {
-                generation_id: generationIdHeader || lastOpenAIGenerationId || '',
-                persisted: lastOpenAIReplyPersistedByServer,
-            });
-        }
-        // Read through the response instance's own json(): third-party hooks
-        // (e.g. SPreset's non-streaming tool-call consumption) patch it to
-        // transform the payload before ST sees it. The retry empty-body peek
-        // must not short-circuit this — its clone-based parse bypasses those
-        // instance patches.
-        let data = await response.json();
+        try {
+            // Read through the response instance's own json(): third-party hooks
+            // (non-streaming tool-call consumption, etc.) patch it to observe or
+            // transform the native upstream payload before Luker parses it. The
+            // retry empty-body peek must not short-circuit this — its clone-based
+            // parse bypasses those instance patches.
+            let data = await response.json();
 
-        if (requestSettings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES && !data.error) {
-            data = responsesResultToChatCompletion(data);
-        }
+            checkQuotaError(data);
+            checkModerationError(data);
 
-        checkQuotaError(data);
-        checkModerationError(data);
-
-        if (data.error) {
-            const message = getChatCompletionErrorMessage(data, response);
-            toastr.error(message, t`API returned an error`);
-            throw new Error(message);
-        }
-
-        if (runtimeFunctionCallContext) {
-            const retryOutcome = await attemptPlainTextFunctionCallRetry({
-                initialResponseData: data,
-                type,
-                requestMessages,
-                requestSettings,
-                runtimeFunctionCallContext,
-                model,
-                signal,
-                jsonSchema,
-                responseLength,
-                requestSecretId,
-                apiPresetName,
-                transientSessionId,
-                onPreparedRequest,
-            });
-            data = retryOutcome.responseData;
-            const inspection = retryOutcome.inspection;
-
-            if (inspection.error && (inspection.hasTrigger || runtimeFunctionCallContext?.requiresToolCall)) {
-                throw inspection.error;
+            if (data?.error) {
+                const message = getChatCompletionErrorMessage(data, response);
+                toastr.error(message, t`API returned an error`);
+                throw new Error(message);
             }
 
-            applyParsedPlainTextToolCallsToResponse(data, inspection);
-        }
-
-        if (type !== 'quiet') {
-            const logprobs = parseChatCompletionLogprobs(data);
-            // Delay is required to allow the active message to be updated to
-            // the one we are generating (happens right after sendOpenAIRequest)
-            delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
-        }
-
-        setLastUsage(data?.usage);
-        return data;
-    }
-}
-
-/**
- * Extracts the reply from the response data from a chat completions-like source
- * @param {object} data Response data from the chat completions-like source
- * @param {object} state Additional state to keep track of
- * @param {object} [options] Additional options
- * @param {string?} [options.chatCompletionSource] Chat completion source
- * @param {boolean?} [options.overrideShowThoughts] Override show thoughts
- * @returns {string} The reply extracted from the response data
- */
-export function getStreamingReply(data, state, { chatCompletionSource = null, overrideShowThoughts = null } = {}) {
-    const chat_completion_source = chatCompletionSource ?? oai_settings.chat_completion_source;
-    const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
-
-    if (chat_completion_source === chat_completion_sources.CLAUDE) {
-        // Anthropic streaming events (content_block_start / content_block_delta) preserve
-        // thinking and redacted_thinking blocks with signatures so the assistant turn can
-        // be replayed unchanged on the next request as Extended Thinking requires.
-        if (data?.type === 'content_block_start' && data?.content_block && Number.isInteger(data?.index)) {
-            const block = data.content_block;
-            if (block.type === 'thinking') {
-                state.reasoningBlocks[data.index] = { type: 'thinking', thinking: String(block.thinking || '') };
-            } else if (block.type === 'redacted_thinking') {
-                state.reasoningBlocks[data.index] = { type: 'redacted_thinking', data: String(block.data || '') };
-            }
-        } else if (data?.type === 'content_block_delta' && data?.delta && Number.isInteger(data?.index)) {
-            const existing = state.reasoningBlocks[data.index];
-            if (existing) {
-                if (data.delta.type === 'thinking_delta' && existing.type === 'thinking') {
-                    existing.thinking += String(data.delta.thinking || '');
-                } else if (data.delta.type === 'signature_delta' && existing.type === 'thinking') {
-                    existing.signature = (existing.signature || '') + String(data.delta.signature || '');
+            const declaredProtocol = resolveWireProtocol(requestSettings.chat_completion_source);
+            if (declaredProtocol) {
+                try {
+                    const turn = parseProtocolResponse(declaredProtocol, data);
+                    data = parsedTurnToChatCompletion(turn, data);
+                } catch (err) {
+                    if (err instanceof ProtocolParseError) {
+                        toastr.error(err.message, t`API returned an error`);
+                    }
+                    throw err;
                 }
             }
-        }
-        if (show_thoughts) {
-            state.reasoning += data?.delta?.thinking || '';
-        }
-        return data?.delta?.text || '';
-    } else if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(chat_completion_source)) {
-        const inlineData = data?.candidates?.[0]?.content?.parts?.filter(x => x.inlineData && !x.thought)?.map(x => x.inlineData) || [];
-        if (Array.isArray(inlineData) && inlineData.length > 0) {
-            state.images.push(...inlineData.map(x => `data:${x.mimeType};base64,${x.data}`).filter(isDataURL));
-        }
-        if (show_thoughts) {
-            state.reasoning += (data?.candidates?.[0]?.content?.parts?.filter(x => x.thought)?.map(x => x.text)?.[0] || '');
-        }
-        // Extract thought signatures from streaming chunks (typically in final chunk)
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        parts.forEach((part) => {
-            if (part.thoughtSignature && typeof part.text === 'string') {
-                state.signature = part.thoughtSignature;
+
+            if (plainTextActive) {
+                const ptMeta = getLukerResponseMeta(response)?.plain_text_function_call || null;
+                data = applyBackendPlainTextResultToNonStreamData(data, ptMeta);
             }
-        });
-        return data?.candidates?.[0]?.content?.parts?.filter(x => !x.thought)?.map(x => x.text)?.[0] || '';
-    } else if (chat_completion_source === chat_completion_sources.COHERE) {
-        return data?.delta?.message?.content?.text || data?.delta?.message?.tool_plan || '';
-    } else if (chat_completion_source === chat_completion_sources.DEEPSEEK) {
-        if (show_thoughts) {
-            state.reasoning += (data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content || '');
+
+            if (type !== 'quiet') {
+                const logprobs = parseChatCompletionLogprobs(data);
+                // Delay is required to allow the active message to be updated to
+                // the one we are generating (happens right after sendOpenAIRequest)
+                delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
+            }
+
+            setLastUsage(data?.usage);
+            return data;
+        } finally {
+            cleanupGenerationMeta();
         }
-        return data.choices?.[0]?.delta?.content || '';
-    } else if (chat_completion_source === chat_completion_sources.XAI) {
-        if (show_thoughts) {
-            state.reasoning += (data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content || '');
-        }
-        return data.choices?.[0]?.delta?.content || '';
-    } else if (chat_completion_source === chat_completion_sources.OPENROUTER) {
-        const imageUrls = data?.choices?.[0]?.delta?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url) || [];
-        if (Array.isArray(imageUrls) && imageUrls.length > 0) {
-            state.images.push(...imageUrls.filter(isDataURL));
-        }
-        if (show_thoughts) {
-            state.reasoning +=
-                data.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
-                data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
-                data.choices?.filter(x => x?.message?.reasoning)?.[0]?.message?.reasoning ??
-                data.choices?.filter(x => x?.message?.reasoning_content)?.[0]?.message?.reasoning_content ??
-                '';
-        }
-        // OpenRouter emits reasoning_details as an ordered array; a single assistant turn
-        // may contain multiple encrypted entries (interleaved thinking blocks on Claude,
-        // multiple reasoning entries on other providers). Accumulate with the provider's
-        // own merging semantics — consecutive reasoning.text / reasoning.summary deltas
-        // concatenate into one entry — so the stored array stays round-trippable upstream.
-        pushReasoningDetails(state, [
-            ...(data?.choices?.[0]?.delta?.reasoning_details || []),
-            ...(data?.choices?.[0]?.message?.reasoning_details || []),
-        ]);
-        return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI, chat_completion_sources.FIREWORKS].includes(chat_completion_source)) {
-        if (show_thoughts) {
-            state.reasoning +=
-                data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
-                data.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
-                '';
-        }
-        return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if (chat_completion_source === chat_completion_sources.MISTRALAI) {
-        if (show_thoughts) {
-            state.reasoning += (data.choices?.filter(x => x?.delta?.content?.[0]?.thinking)?.[0]?.delta?.content?.[0]?.thinking?.[0]?.text || '');
-        }
-        const content = data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-        return Array.isArray(content) ? content.map(x => x.text).filter(x => x).join('') : content;
-    } else {
-        return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
     }
 }
 
@@ -5387,6 +5515,12 @@ class Message {
     reasoning_blocks = null;
     /** @type {object[]?} */
     reasoning_details = null;
+    /** @type {object[]?} */
+    native_parts = null;
+    /** @type {object[]?} */
+    native_content_blocks = null;
+    /** @type {object[]?} */
+    responses_output_items = null;
 
     /**
      * @constructor
@@ -5427,7 +5561,7 @@ class Message {
      * @returns {Promise<Message[]>} Message instances
      */
     static async createManyAsync(definitions) {
-        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning, reasoning_blocks, reasoning_details }) => {
+        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning, reasoning_blocks, reasoning_details, native_parts, native_content_blocks, responses_output_items }) => {
             const message = new Message(role, content, identifier);
             message.name = name;
             message.tool_calls = tool_calls;
@@ -5435,6 +5569,9 @@ class Message {
             message.reasoning = typeof reasoning === 'string' && reasoning.length > 0 ? reasoning : null;
             message.reasoning_blocks = Array.isArray(reasoning_blocks) && reasoning_blocks.length > 0 ? reasoning_blocks : null;
             message.reasoning_details = Array.isArray(reasoning_details) && reasoning_details.length > 0 ? reasoning_details : null;
+            message.native_parts = Array.isArray(native_parts) && native_parts.length > 0 ? native_parts : null;
+            message.native_content_blocks = Array.isArray(native_content_blocks) && native_content_blocks.length > 0 ? native_content_blocks : null;
+            message.responses_output_items = Array.isArray(responses_output_items) && responses_output_items.length > 0 ? responses_output_items : null;
             return message;
         });
 
@@ -5479,6 +5616,7 @@ class Message {
                 name: i.name,
             },
             ...(includeSignature && i.signature ? { signature: i.signature } : {}),
+            ...(i.extra_content && typeof i.extra_content === 'object' ? { extra_content: structuredClone(i.extra_content) } : {}),
         }));
     }
 
@@ -5498,6 +5636,7 @@ class Message {
                 name: i.name,
             },
             ...(includeSignature && i.signature ? { signature: i.signature } : {}),
+            ...(i.extra_content && typeof i.extra_content === 'object' ? { extra_content: structuredClone(i.extra_content) } : {}),
         }));
         const fallbackReasoning = invocations.find(i => typeof i.reasoning === 'string' && i.reasoning.length > 0)?.reasoning || null;
         this.reasoning = includeReasoning ? fallbackReasoning : null;
@@ -5777,7 +5916,7 @@ class MessageCollection {
         // in chat-message-shape.js — see shapeChatMessagePayload for the rationale.
         const isClaude = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
         return this.collection.reduce((acc, message) => {
-            if (message.content || message.tool_calls) {
+            if (message.content || message.tool_calls || hasNativeReplayPayload(message)) {
                 acc.push(shapeChatMessagePayload(message, isClaude));
             }
             return acc;
@@ -5982,7 +6121,7 @@ export class ChatCompletion {
         this.checkTokenBudget(message, message.identifier);
 
         const index = this.findMessageIndex(identifier);
-        if (message.content || message.tool_calls) {
+        if (message.content || message.tool_calls || hasNativeReplayPayload(message)) {
             if ('start' === position) this.messages.collection[index].collection.unshift(message);
             else if ('end' === position) this.messages.collection[index].collection.push(message);
             else if (typeof position === 'number') this.messages.collection[index].collection.splice(position, 0, message);
@@ -6065,7 +6204,7 @@ export class ChatCompletion {
         for (let item of this.messages.collection) {
             if (item instanceof MessageCollection) {
                 chat.push(...item.getChat());
-            } else if (item instanceof Message && (item.content || item.tool_calls)) {
+            } else if (item instanceof Message && (item.content || item.tool_calls || hasNativeReplayPayload(item))) {
                 chat.push(shapeChatMessagePayload(item, isClaude));
             } else {
                 this.log(`Skipping invalid or empty message in collection: ${JSON.stringify(item)}`);
@@ -6729,19 +6868,31 @@ function restoreOpenAIPresetAfterCharacterBound(preferredName = '') {
  * @returns {boolean} true if at least one option was rendered
  */
 function upsertCharacterBoundRuntimeOptions(character, presets) {
-    removeCharacterBoundRuntimeOptions();
     if (!character || !character.avatar || !Array.isArray(presets) || presets.length === 0) {
+        removeCharacterBoundRuntimeOptions();
         return false;
     }
     const $sel = $('#settings_preset_openai');
+    // Rebuild the DOM options, but re-use the cached body objects. Callers
+    // hold `getPresetList().presets[i]` across a save, so replacing a body
+    // would make their mutations invisible.
+    const previousBodies = new Map(characterBoundPresetState.runtimeOptions);
+    $('#settings_preset_openai option[data-luker-char-bound="1"]').remove();
+    $('#settings_preset_openai optgroup[data-luker-card-bound="1"]').remove();
+    characterBoundPresetState.runtimeOptions.clear();
+    updateCharacterBoundPresetBadge(false);
     const optgroup = document.createElement('optgroup');
     optgroup.label = t`Card-bound`;
     optgroup.setAttribute('data-luker-card-bound', '1');
     for (const p of presets) {
         const name = String(p?.name || '').trim();
         if (!name || !p?.preset || typeof p.preset !== 'object') continue;
-        const body = stripOpenAIConnectionFieldsFromPreset(structuredClone(p.preset));
         const value = encodeCardBoundOptionValue(character.avatar, name);
+        const cached = previousBodies.get(value);
+        const body = cached?.body && typeof cached.body === 'object' ? cached.body : {};
+        const nextBody = stripOpenAIConnectionFieldsFromPreset(structuredClone(p.preset));
+        for (const key of Object.keys(body)) delete body[key];
+        Object.assign(body, nextBody);
         const opt = document.createElement('option');
         opt.value = value;
         opt.textContent = name;
@@ -6899,8 +7050,63 @@ async function maybeApplyCharacterBoundPreset() {
     }
 }
 
-let syncCharacterBoundPresetFromSettingsInFlight = false;
-let syncCharacterBoundPresetFromSettingsQueued = false;
+const cardCacheLineage = createPresetLineage();
+const cardBodyLineage = createPresetLineage();
+
+export function captureCharacterBoundSettingsSave(settings, owner = null) {
+    const ghost = getActiveCardBoundGhostSnapshot();
+    const character = characters[Number(this_chid)];
+    const name = ghost?.name;
+    const slot = character?.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === name);
+    if (!ghost || !slot) return null;
+    const cached = characterBoundPresetState.runtimeOptions.get(ghost.ghostValue);
+    return {
+        character, id: Number(this_chid), name, ghostValue: ghost.ghostValue, cached, cacheIdentity: cardCacheLineage.capture(cached.body), bodyIdentity: cardBodyLineage.capture(slot.preset),
+        before: cloneAsJsonWire(slot.preset),
+        body: cloneAsJsonWire(stripOpenAIConnectionFieldsFromPreset(getChatCompletionPreset(settings, { includeConnectionFields: false }))),
+        owner: owner ? { source: structuredClone(owner.source) } : null,
+    };
+}
+
+export function refreshCharacterBoundPresetCache(target, body) {
+    const cached = characterBoundPresetState.runtimeOptions.get(target.ghostValue);
+    if (characters[target.id] === target.character && cached === target.cached && cached?.name === target.name && cardCacheLineage.owns(cached.body, target.cacheIdentity)) {
+        // Keep the cached object identity: callers hold it through
+        // getPresetList(). Replacing the reference would hide the saved
+        // values from consumers that mutate and save the same body.
+        const next = structuredClone(body);
+        const live = cached.body;
+        for (const key of Object.keys(live)) delete live[key];
+        Object.assign(live, next);
+        cardCacheLineage.acknowledge(live, target.cacheIdentity);
+    }
+}
+
+export async function persistCapturedCharacterBoundSettings(target, { path, value } = {}) {
+    if (characters[target.id] !== target.character) throw new Error('Character-bound preset target changed');
+    const before = structuredClone(target.before);
+    const desired = structuredClone(target.body);
+    let written;
+    const ok = await getContext().writeExtensionField(target.id, 'luker', current => {
+        const binding = current?.chat_completion_preset;
+        const index = binding?.presets?.findIndex(preset => preset.name === target.name) ?? -1;
+        if (index < 0) throw new Error('Character-bound preset no longer exists');
+        if (target.owner && binding.defaultPresetName !== target.owner.source.defaultPresetName) throw new Error('Character-bound preset source changed');
+        const live = binding.presets[index].preset;
+        const actual = target.character.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === target.name)?.preset;
+        written = preparePresetMutation(before, desired, live, { ownedPath: target.owner ? (path || '') : null, ownedValue: value, acknowledged: cardBodyLineage.owns(actual, target.bodyIdentity), normalize: cloneAsJsonWire });
+        written = cloneAsJsonWire(written);
+        const presets = binding.presets.slice();
+        presets[index] = { ...presets[index], preset: written };
+        return { ...current, chat_completion_preset: { ...binding, presets } };
+    });
+    if (!ok) throw new Error('Failed to save character-bound preset extensions');
+    const liveSlot = target.character.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === target.name);
+    if (JSON.stringify(liveSlot?.preset) === JSON.stringify(written)) {
+        cardBodyLineage.acknowledge(liveSlot.preset, target.bodyIdentity);
+        refreshCharacterBoundPresetCache(target, written);
+    }
+}
 
 /**
  * Mirror the current oai_settings back into the selected card-bound preset
@@ -6911,79 +7117,22 @@ let syncCharacterBoundPresetFromSettingsQueued = false;
  * card and overwrites oai_settings.extensions, silently dropping the
  * user's work.
  *
- * Multi-slot (Task 3): writes to the specific preset the user has selected
- * in the ghost optgroup via Layer 1's updateCharacterBoundPreset. Sibling
- * slots and defaultPresetName are preserved by Layer 1's read-spread-overlay.
- *
- * Safe to call from SETTINGS_UPDATED: Layer 1 short-circuits equal-body
- * writes so the round-trip after onSettingsPresetChange does not loop.
+ * Settings events carry their invocation-time source and body. Conditional
+ * patches compose in the core character namespace queue without reacquiring
+ * the selected target after persistence. Field-owned operations perform their
+ * own combined card mutation after their remaining prerequisites.
  */
-async function syncCharacterBoundPresetFromSettings() {
-    if (!characterBoundPresetState.active) {
+async function syncCharacterBoundPresetFromSettings(outcome = null) {
+    if (outcome && Object.hasOwn(outcome, 'cardPresetSave')) {
+        const captured = outcome.cardPresetSave;
+        if (captured && !captured.owner) {
+            try { await persistCapturedCharacterBoundSettings(captured); } catch (error) { console.error('Failed to sync character-bound chat completion preset from settings', error); }
+        }
         return;
     }
-    if (!isCharacterBoundPresetOptionSelected()) {
-        return;
-    }
-    const presetName = getSelectedCardBoundName();
-    if (!presetName) {
-        return;
-    }
-    const characterId = Number(this_chid);
-    if (!Number.isInteger(characterId)) {
-        return;
-    }
-    // Layer 1's persistCharacterBoundState calls context.characters.indexOf
-    // to route the write through writeExtensionField(id, …). context.characters
-    // is a Proxy that yields per-item wrapping proxies with identity caching;
-    // indexOf compares by strict equality against those wrapped items. A raw
-    // `characters[id]` reference from the module scope would miss (indexOf
-    // returns -1 → Layer 1 throws), so grab the wrapped element through the
-    // context accessor instead.
-    const ctx = getContext();
-    const character = ctx.characters?.[characterId];
-    if (!character) {
-        return;
-    }
-
-    if (syncCharacterBoundPresetFromSettingsInFlight) {
-        syncCharacterBoundPresetFromSettingsQueued = true;
-        return;
-    }
-    syncCharacterBoundPresetFromSettingsInFlight = true;
-    try {
-        do {
-            syncCharacterBoundPresetFromSettingsQueued = false;
-            const presetBody = getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
-            const stripped = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
-            // Confirm the target slot still exists on the card (may have
-            // been removed by another window / a card reimport). Layer 1
-            // throws if not — swallow that specific failure without
-            // clobbering settings, since the state has diverged from the
-            // card and re-applying the card would drop the user's live edits.
-            const before = getCharacterBoundPreset(character, presetName);
-            if (!before) {
-                console.warn(`syncCharacterBoundPresetFromSettings: preset '${presetName}' not present on card ${character.avatar}; skipping`);
-                break;
-            }
-            if (JSON.stringify(before.preset || null) !== JSON.stringify(stripped || null)) {
-                await updateCharacterBoundPreset(character, presetName, stripped);
-            }
-            // Refresh the runtime cache in place so consumers that already
-            // hold `getPresetList().presets[i]` keep observing the live body.
-            const selectedValue = String($('#settings_preset_openai').val() ?? '');
-            const cached = characterBoundPresetState.runtimeOptions.get(selectedValue);
-            if (cached?.body && typeof cached.body === 'object') {
-                for (const key of Object.keys(cached.body)) {
-                    delete cached.body[key];
-                }
-                Object.assign(cached.body, stripped);
-            }
-        } while (syncCharacterBoundPresetFromSettingsQueued);
-    } catch (error) {
-        console.error('Failed to sync character-bound chat completion preset from settings', error);
-    } finally {
-        syncCharacterBoundPresetFromSettingsInFlight = false;
+    const captured = captureCharacterBoundSettingsSave(oai_settings);
+    if (captured) {
+        try { await persistCapturedCharacterBoundSettings(captured); } catch (error) { console.error('Failed to sync character-bound chat completion preset from settings', error); }
     }
 }
 
@@ -6993,10 +7142,10 @@ async function bindCurrentChatCompletionPresetToCharacter(characterId = this_chi
         toastr.warning(t`No character selected.`);
         return;
     }
-    // Layer 1's persistCharacterBoundState calls context.characters.indexOf,
+    // Layer 1's mutateCharacterBoundState calls context.characters.indexOf,
     // which compares by strict equality against the proxy-wrapped items the
     // context accessor yields. A raw `characters[id]` module-scope reference
-    // would miss (see the matching comment in syncCharacterBoundPresetFromSettings).
+    // would miss.
     const ctx = getContext();
     const character = ctx.characters?.[id];
     if (!character) {
@@ -7433,7 +7582,7 @@ async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
  * @returns {Promise<void>}
  */
 async function saveOpenAIPreset(name, settings, triggerUi = true) {
-    const presetBody = getChatCompletionPreset(settings, { clone: false, includeConnectionFields: false });
+    const presetBody = cloneAsJsonWire(getChatCompletionPreset(settings, { clone: false, includeConnectionFields: false }));
 
     // Origin dispatch: when the DOM selector currently points at a
     // card-bound ghost option AND the caller asked to save under the same
@@ -7456,9 +7605,10 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         // internally, so we don't strip again here. It also read-spread-overlays
         // sibling luker.* fields so writeExtensionField's REPLACE semantics
         // don't clobber e.g. luker.prompt_groups (see public/scripts/character/
-        // presets.js:persistCharacterBoundState).
+        // presets.js:mutateCharacterBoundState).
+        const snapshot = getActiveCardBoundGhostSnapshot();
         await updateCharacterBoundPreset(character, decision.name, presetBody);
-        refreshCharacterBoundPresetRuntimeBody(decision.name, presetBody);
+        refreshCharacterBoundPresetRuntimeBody(snapshot, presetBody);
         // Skip the selector `.trigger('change')` — the card-bound option is
         // already the current selection, and firing change would re-enter
         // onSettingsPresetChange → getSelectedCardBoundBody → re-apply loop.
@@ -8295,7 +8445,7 @@ function getMaxContextOpenAI(value) {
 
     /** @type {[RegExp, number][]} */
     const contextMap = [
-        [/^gpt-6-astra/, max_1050k],
+        [/^gpt-6/, max_1050k],
         [/^gpt-5\.6/, max_1050k],
         [/^gpt-5\.[45]/, max_1mil],
         [/^gpt-5/, max_400k],
@@ -8345,7 +8495,7 @@ function getGeminiMaxContext(model, isUnlocked) {
     /** @type {[RegExp, number][]} */
     const contextMap = [
         [/gemini-2\.5-flash-image/, max_32k],
-        [/gemini-3\.1-flash-image/, max_128k],
+        [/gemini-nano-banana|gemini-3\.1-flash-lite-image|gemini-3\.1-flash-image/, max_128k],
         [/gemini-3-pro-image/, max_64k],
         [/gemini-(?:3[.\d]*|2\.(?:5|0))-(pro|flash)/, max_1mil],
         [/gemini-4/, max_1mil],
@@ -8943,15 +9093,10 @@ async function onModelChange() {
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.CLAUDE) {
-        if (oai_settings.max_context_unlocked) {
-            $('#openai_max_context').attr('max', unlocked_max);
-        } else if (/^claude-(sonnet-4-5|sonnet-4-6|sonnet-5|opus-4-6|opus-4-7|opus-4-8|opus-5|fable)/.test(value)) {
-            $('#openai_max_context').attr('max', max_1mil);
-        } else if (/^claude-(3|opus|haiku|sonnet)/.test(value)) {
-            $('#openai_max_context').attr('max', max_200k);
-        } else {
-            $('#openai_max_context').attr('max', max_200k);
-        }
+        const claudeMaxContext = oai_settings.max_context_unlocked
+            ? unlocked_max
+            : resolveClaudeModelCapabilities(value).maxContextTokens;
+        $('#openai_max_context').attr('max', claudeMaxContext);
 
         oai_settings.openai_max_context = Math.min(oai_settings.openai_max_context, Number($('#openai_max_context').attr('max')));
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
@@ -9206,7 +9351,9 @@ async function onModelChange() {
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.MINIMAX) {
-        const maxContext = oai_settings.minimax_model === 'M2-her' ? 65536 : 204800;
+        const maxContext = oai_settings.max_context_unlocked
+            ? unlocked_max
+            : resolveMinimaxModelCapabilities(oai_settings.minimax_model).maxContextTokens;
         $('#openai_max_context').attr('max', maxContext);
         oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
@@ -9473,6 +9620,7 @@ export function isImageInliningSupported() {
         'gpt-4.5-preview',
         'gpt-4o',
         'gpt-6-astra',
+        'gpt-6.1-sol',
         'gpt-5',
         'o1',
         'o3',
@@ -9485,10 +9633,12 @@ export function isImageInliningSupported() {
         'claude-sonnet-4',
         'claude-sonnet-5',
         'claude-haiku-4',
+        'claude-haiku-5',
         // Cohere
         'c4ai-aya-vision',
         'command-a-vision',
         // Google AI Studio
+        'gemini-nano-banana',
         'gemini-2.0',
         'gemini-2.5',
         'gemini-3',
@@ -10200,10 +10350,10 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
     };
     const clampPlainTextRetryAttempts = (value) => {
         const numeric = Number(value);
-        if (!Number.isFinite(numeric)) {
-            throw new Error(t`Value must be a number between 1 and 10.`);
+        if (!Number.isFinite(numeric) || numeric < 1) {
+            throw new Error(t`Value must be a number of at least 1.`);
         }
-        return Math.min(Math.max(Math.round(numeric), 1), 10);
+        return Math.max(Math.round(numeric), 1);
     };
 
     for (const definition of definitions) {

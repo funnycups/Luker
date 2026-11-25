@@ -4,6 +4,7 @@ import {
     coerceContainer,
     resolveEachContainer,
     walkLoopValuePath,
+    splitEachCollectionAndBody,
 } from '../../public/scripts/macros/util/iteration.js';
 
 describe('tryParseJsonContainer', () => {
@@ -170,5 +171,42 @@ describe('walkLoopValuePath', () => {
         // technically work in JS, but author intent for {{loop_value::x}}
         // on a primitive is "no field" — ensure that's the behavior.
         expect(walkLoopValuePath(42, 'foo')).toBeUndefined();
+    });
+});
+
+describe('splitEachCollectionAndBody', () => {
+    const resolve = (ref) => tryParseJsonContainer(ref);
+
+    test('keeps a collection that already resolves', () => {
+        expect(splitEachCollectionAndBody('["x"]', '}tail', resolve)).toEqual({ container: ['x'], body: '}tail' });
+    });
+
+    test('moves the closing braces the macro end consumed back onto an object literal', () => {
+        expect(splitEachCollectionAndBody('{"a":1,"b":2', '}{{loop_key}};', resolve))
+            .toEqual({ container: { a: 1, b: 2 }, body: '{{loop_key}};' });
+    });
+
+    test('moves as many braces as the nested literal needs', () => {
+        expect(splitEachCollectionAndBody('{"a":{"hp":5', '}}x', resolve))
+            .toEqual({ container: { a: { hp: 5 } }, body: 'x' });
+    });
+
+    test('takes in a closing pair that sits inside the literal', () => {
+        expect(splitEachCollectionAndBody('[{"n":"A","s":{"atk":7', ',{"n":"B","s":{"atk":9}}]}}{{loop_value::n}};', resolve))
+            .toEqual({ container: [{ n: 'A', s: { atk: 7 } }, { n: 'B', s: { atk: 9 } }], body: '{{loop_value::n}};' });
+    });
+
+    test('stops before a nested macro in the body', () => {
+        expect(splitEachCollectionAndBody('{"a":1', '{{user}}}}x', resolve)).toEqual({ container: null, body: '{{user}}}}x' });
+    });
+
+    test('leaves the body alone when no split resolves', () => {
+        expect(splitEachCollectionAndBody('{not json', '}x', resolve)).toEqual({ container: null, body: '}x' });
+    });
+
+    test('does not move braces onto a non-literal reference', () => {
+        const calls = [];
+        splitEachCollectionAndBody('roster', '}x', (ref) => { calls.push(ref); return null; });
+        expect(calls).toEqual(['roster']);
     });
 });

@@ -25,7 +25,7 @@
 // "New Preset" dialog while a card-bound entry was active — the intent is
 // to create a new GLOBAL preset, not to overwrite the card slot.
 
-import { decodeCardBoundOptionValue } from './preset-ref-codec.js';
+import { decodeCardBoundOptionValue } from '../lib/preset-ref-codec.js';
 
 /**
  * @typedef {{kind: 'global'} | {kind: 'character', avatar: string}} PresetOrigin

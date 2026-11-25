@@ -233,6 +233,75 @@ test.each(['missing', 'changed'])('a %s field stops the remaining directory from
     expect(requested.length).toBeLessThanOrEqual(64);
 });
 
+test('aborts sibling in-flight fields on conflict so a fresh assembly reads new validators', async () => {
+    let version = 1;
+    let slowRequests = 0;
+    let firstSlowStarted;
+    const slowEntered = new Promise(resolve => { firstSlowStarted = resolve; });
+    let releaseFirstSlow;
+    const firstSlowGate = new Promise(resolve => { releaseFirstSlow = resolve; });
+
+    const app = express();
+    app.get('/directory', (request, response) => {
+        response.json({
+            containers: [{ path: '', keys: ['fast', 'slow'] }],
+            fields: [
+                { path: '/fast', etag: `W/"fast-v${version}"` },
+                { path: '/slow', etag: `W/"slow-v${version}"` },
+            ],
+        });
+    });
+    app.get('/fast', async (request, response) => {
+        await slowEntered;
+        if (version === 1) {
+            version = 2;
+        }
+        response.set('Cache-Control', 'private, no-cache');
+        response.set('ETag', `W/"fast-v${version}"`);
+        response.type('application/json').send(`"fast-${version}"`);
+    });
+    app.get('/slow', async (request, response) => {
+        slowRequests += 1;
+        if (slowRequests === 1) {
+            firstSlowStarted();
+            await firstSlowGate;
+            response.set('Cache-Control', 'private, no-cache');
+            response.set('ETag', 'W/"slow-v1"');
+            response.type('application/json').send('"slow-1"');
+            return;
+        }
+        response.set('Cache-Control', 'private, no-cache');
+        response.set('ETag', `W/"slow-v${version}"`);
+        response.type('application/json').send(`"slow-${version}"`);
+    });
+
+    const { server, baseURL } = await listen(app);
+    try {
+        await expect(assembleResourceFields({
+            directoryUrl: `${baseURL}/directory`,
+            fieldUrl: path => `${baseURL}${path}`,
+        })).rejects.toMatchObject({
+            code: 'read_conflict',
+            path: '/fast',
+            expected: 'W/"fast-v1"',
+            actual: 'W/"fast-v2"',
+        });
+
+        const fresh = await assembleResourceFields({
+            directoryUrl: `${baseURL}/directory`,
+            fieldUrl: path => `${baseURL}${path}`,
+        });
+        expect(fresh.values.get('/fast')).toBe('fast-2');
+        expect(fresh.values.get('/slow')).toBe('slow-2');
+        expect(slowRequests).toBe(2);
+    } finally {
+        releaseFirstSlow();
+        resetResourceReads();
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+    }
+});
+
 test('preserves each subscriber when one caller cancels a shared request', async () => {
     let requests = 0;
     const app = express();

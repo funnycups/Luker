@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { installDomReadyJQuery } from '../util/browser-module-context.js';
 import {
     getActiveActivities,
     hasUnloadGuard,
@@ -89,7 +90,7 @@ beforeAll(async () => {
         'prepareOpenAIMessages', 'isLastOpenAIReplyPersistedByServer',
         'getLastOpenAIGenerationId', 'hydrateOpenAIPresetData', 'loadOpenAISettings',
         'getChatCompletionModel', 'loadProxyPresets', 'bindCurrentChatCompletionPresetToCharacter',
-        'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'initOpenAI',
+        'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'captureCharacterBoundSettingsSave', 'initOpenAI',
     ], {
         sendOpenAIRequest: sendOpenAIRequestMock,
         oai_settings: {},
@@ -250,7 +251,11 @@ beforeAll(async () => {
         'extractReasoningBlocksFromData', 'extractReasoningDetailsFromData', 'extractReasoningFromData',
         'extractReasoningSignatureFromData', 'initReasoning', 'parseReasoningInSwipes', 'PromptReasoning',
         'registerReasoningSlashCommands', 'removeReasoningFromString', 'updateReasoningUI',
-    ], { ReasoningHandler: StubClass, ReasoningType: {} }));
+    ], {
+        extractNativeTurnFromData: () => ({ nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null }),
+        ReasoningHandler: StubClass,
+        ReasoningType: {},
+    }));
     jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
         accountStorage: { getState: () => ({}), init: noop, getItem: () => null, setItem: noop, removeItem: noop },
     }));
@@ -293,9 +298,11 @@ beforeAll(async () => {
     jest.unstable_mockModule('../../public/scripts/self-profiler.js', () => ({ bootSelfProfilerFromStorage: noop }));
     jest.unstable_mockModule('../../public/scripts/ws-delivery.js', () => ({
         createLukerDelivery: noop,
+        getLukerResponseMeta: () => null,
         installFetchProxy: noop,
         installFetchProxyForAllIframes: noop,
         installLifecycleHooks: noop,
+        onLukerResponseMeta: () => noop,
     }));
     jest.unstable_mockModule('../../public/scripts/settings-resource-read.js', () => ({ loadSettingsEnvelope: asyncNoop }));
     jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
@@ -319,7 +326,29 @@ beforeAll(async () => {
         removeEventListener: noop,
     });
     globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
-    globalThis.$.ajaxPrefilter = noop;
+    installDomReadyJQuery({
+        selectionMethods: {
+            val: (sel, v) => (v !== undefined ? sel : ''),
+            attr: (sel, ...args) => (args.length >= 2 ? sel : undefined),
+            css: (sel, ...args) => (args.length >= 2 ? sel : 'none'),
+            text: (sel, ...args) => (args.length >= 1 ? sel : ''),
+            html: (sel, ...args) => (args.length >= 1 ? sel : ''),
+            prop: (sel, ...args) => (args.length >= 2 ? sel : false),
+            is: () => false,
+            hasClass: () => false,
+            addClass: (sel) => sel,
+            removeClass: (sel) => sel,
+            toggleClass: (sel) => sel,
+            show: (sel) => sel,
+            hide: (sel) => sel,
+            append: (sel) => sel,
+            empty: (sel) => sel,
+            remove: (sel) => sel,
+            find: (sel) => sel,
+            trigger: (sel) => sel,
+        },
+        staticProperties: { ajaxPrefilter: noop },
+    });
     Object.defineProperty(globalThis, 'localStorage', {
         configurable: true,
         value: { getItem: () => null, setItem: noop, removeItem: noop },

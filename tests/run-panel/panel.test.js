@@ -241,6 +241,72 @@ describe('createRunPanel', () => {
         panel.destroy();
     });
 
+    describe('layout from the chat column gutter', () => {
+        const originalWidth = window.innerWidth;
+        function setViewport(width, sheldWidth) {
+            Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+            if (sheldWidth) document.documentElement.style.setProperty('--sheldWidth', sheldWidth);
+            else document.documentElement.style.removeProperty('--sheldWidth');
+        }
+        afterEach(() => setViewport(originalWidth, null));
+
+        test('desktop with a gutter that fits the sidebar auto-opens the sidebar', () => {
+            setViewport(1280, '50vw');
+            const store = createRunStore();
+            const panel = createRunPanel({ store, t, idPrefix: 'test-run-panel-wide' });
+            panel.init();
+            store.startRun({ mode: 'search' });
+            const root = document.getElementById('test-run-panel-wide');
+            expect(root.dataset.layout).toBe('sidebar');
+            expect(root.dataset.state).toBe('open');
+            expect(document.getElementById('test-run-panel-wide-pill').hidden).toBe(true);
+            panel.destroy();
+        });
+
+        test('desktop with a gutter narrower than the sidebar uses the drawer, stays closed and shows the pill', async () => {
+            setViewport(1280, '70vw');
+            const store = createRunStore();
+            const panel = createRunPanel({ store, t, idPrefix: 'test-run-panel-narrow' });
+            panel.init();
+            store.startRun({ mode: 'search' });
+            const root = document.getElementById('test-run-panel-narrow');
+            expect(root.dataset.layout).toBe('drawer');
+            expect(root.dataset.state).toBe('closed');
+            const pill = document.getElementById('test-run-panel-narrow-pill');
+            expect(pill.hidden).toBe(false);
+            pill.click();
+            await Promise.resolve();
+            expect(root.dataset.state).toBe('open');
+            panel.destroy();
+        });
+
+        test('mobile viewports keep auto-opening the drawer', () => {
+            setViewport(800, '100vw');
+            const store = createRunStore();
+            const panel = createRunPanel({ store, t, idPrefix: 'test-run-panel-mobile' });
+            panel.init();
+            store.startRun({ mode: 'search' });
+            const root = document.getElementById('test-run-panel-mobile');
+            expect(root.dataset.layout).toBe('drawer');
+            expect(root.dataset.state).toBe('open');
+            panel.destroy();
+        });
+
+        test('changing Chat Width while mounted recomputes the layout', async () => {
+            setViewport(1280, '50vw');
+            const store = createRunStore();
+            const panel = createRunPanel({ store, t, idPrefix: 'test-run-panel-recompute' });
+            panel.init();
+            store.startRun({ mode: 'search' });
+            const root = document.getElementById('test-run-panel-recompute');
+            expect(root.dataset.layout).toBe('sidebar');
+            document.documentElement.style.setProperty('--sheldWidth', '70vw');
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(root.dataset.layout).toBe('drawer');
+            panel.destroy();
+        });
+    });
+
     test('pillOnStart keeps a closed panel and exposes capsule state across run lifecycle', async () => {
         const store = createRunStore();
         const pillFormatter = (run) => {

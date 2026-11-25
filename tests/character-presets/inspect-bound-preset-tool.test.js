@@ -43,7 +43,7 @@ const {
     runCharacterPresetReadTool,
 } = await import('/scripts/iteration-library/tools/character-presets-reads.js');
 
-const { STATE_ERROR_REASONS } = await import('/scripts/state-errors.js');
+const { STATE_ERROR_REASONS } = await import('/scripts/lib/state-errors.js');
 
 beforeEach(() => {
     ctx.character.presets.list.mockClear();

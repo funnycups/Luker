@@ -578,7 +578,7 @@ async function authorizeOpenRouter() {
     const codeVerifier = uuidv4() + uuidv4();
     const codeChallenge = generateChallenge(codeVerifier);
     accountStorage.setItem(getVerifierKey('openrouter'), codeVerifier);
-    await saveSettings();
+    if (!(await saveSettings()).ok) return;
 
     // Redirect to OpenRouter authorization URL with the code challenge and callback URL
     const redirectUrl = new URL('/callback/openrouter', window.location.origin);

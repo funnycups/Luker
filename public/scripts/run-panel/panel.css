@@ -32,50 +32,61 @@
     color: var(--panel-fg);
 }
 
-/* Sidebar layout (>=1024px) */
-@media (min-width: 1024px) {
-    .luker-run-panel[data-layout="sidebar"] .panel-shell {
-        top: 0;
-        right: 0;
-        width: 420px;
-        height: 100dvh;
-        border-left: 1px solid rgba(255,255,255,0.08);
-    }
+/* panel.js picks data-layout: "sidebar" on viewports of 1024px and up
+   whose gutter right of the chat column fits the narrowest sidebar,
+   "drawer" otherwise. Below 1024px the mobile layout widens the chat
+   column to the full viewport at <=1000px, so no gutter is left. */
+.luker-run-panel[data-layout="sidebar"] .panel-shell {
+    top: 0;
+    right: 0;
+    /* Fill the gutter to the right of the chat column (#sheld is
+       var(--sheldWidth) wide and centred) so the panel does not cover
+       the Send button. The -1px matches the other gutter panels in
+       style.css and leaves the column's last pixel uncovered.
+       Lower bound 255px: the gutter the default 50vw chat width leaves
+       at the 1024px breakpoint ((1024px - 512px) / 2 - 1px). panel.js
+       switches to the drawer when the gutter is narrower, so the
+       sidebar never overlaps the column.
+       Upper bound 420px: the panel's design width; wider gutters
+       leave the extra space empty. */
+    /* 100vw first for browsers without dvw, as style.css does. */
+    width: clamp(255px, calc((100vw - var(--sheldWidth)) / 2 - 1px), 420px);
+    width: clamp(255px, calc((100dvw - var(--sheldWidth)) / 2 - 1px), 420px);
+    height: 100dvh;
+    border-left: 1px solid rgba(255,255,255,0.08);
 }
 
-/* Drawer layout (<1024px) */
-@media (max-width: 1023px) {
-    .luker-run-panel[data-layout="drawer"] .panel-backdrop {
-        display: block;
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100dvh;
-        background: rgba(0,0,0,0.4);
-        pointer-events: auto;
-        z-index: 8999;
-    }
-    .luker-run-panel[data-layout="drawer"] .panel-shell {
-        left: 0;
-        right: 0;
-        width: 100vw;
-        top: 30dvh;
-        height: 70dvh;
-        max-height: 70dvh;
-        border-top-left-radius: 18px;
-        border-top-right-radius: 18px;
-        border-top: 1px solid rgba(255,255,255,0.08);
-    }
-    .luker-run-panel[data-layout="drawer"] .panel-shell::before {
-        content: '';
-        display: block;
-        width: 40px;
-        height: 4px;
-        margin: 8px auto 4px;
-        background: rgba(255,255,255,0.25);
-        border-radius: 4px;
-    }
+/* Drawer layout: bottom sheet over a backdrop. */
+.luker-run-panel[data-layout="drawer"] .panel-backdrop {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
+    background: rgba(0,0,0,0.4);
+    pointer-events: auto;
+    z-index: 8999;
+}
+.luker-run-panel[data-layout="drawer"] .panel-shell {
+    left: 0;
+    right: 0;
+    width: 100vw;
+    top: 30dvh;
+    height: 70dvh;
+    max-height: 70dvh;
+    border-top-left-radius: 18px;
+    border-top-right-radius: 18px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+.luker-run-panel[data-layout="drawer"] .panel-shell::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 8px auto 4px;
+    background: rgba(255,255,255,0.25);
+    border-radius: 4px;
 }
 
 .luker-run-panel .panel-header {

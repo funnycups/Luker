@@ -8,7 +8,7 @@ import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../engine/MacroLexer.js';
 import { MacroParser } from '../engine/MacroParser.js';
 import { MacroCstWalker } from '../engine/MacroCstWalker.js';
 import { MacroEngine } from '../engine/MacroEngine.js';
-import { resolveEachContainer, walkLoopValuePath } from '../util/iteration.js';
+import { resolveEachContainer, splitEachCollectionAndBody, walkLoopValuePath } from '../util/iteration.js';
 
 /**
  * Marker used by {{else}} to split content in {{if}} blocks.
@@ -269,18 +269,17 @@ export function registerCoreMacros(MacroRegistry = activeMacroRegistry, context 
             // can't use the resolve callback because we need to inject our
             // own loop_key / loop_value via env.dynamicMacros below; calling
             // MacroEngine directly is the existing way to do that.
-            const resolvedRef = MacroEngine.evaluate(
-                String(rawCollection ?? '').trim(),
-                env,
-                { contextOffset: globalOffset },
-            );
-
-            const container = resolveEachContainer(resolvedRef, {
+            const getters = {
                 local: (n) => ctx.variables.local.get(n),
                 global: (n) => ctx.variables.global.get(n),
-            });
+            };
+            const { container, body } = splitEachCollectionAndBody(
+                String(rawCollection ?? '').trim(),
+                rawBody,
+                (ref) => resolveEachContainer(MacroEngine.evaluate(ref, env, { contextOffset: globalOffset }), getters),
+            );
 
-            if (!container || !rawBody) return '';
+            if (!container || !body) return '';
 
             const baseDynamics = env.dynamicMacros || {};
             const segments = [];
@@ -293,7 +292,7 @@ export function registerCoreMacros(MacroRegistry = activeMacroRegistry, context 
                         loop_value: makeLoopValueDef(value),
                     },
                 };
-                segments.push(MacroEngine.evaluate(rawBody, childEnv, { contextOffset: globalOffset }));
+                segments.push(MacroEngine.evaluate(body, childEnv, { contextOffset: globalOffset }));
             }
 
             let result = segments.join('');

@@ -19,11 +19,11 @@ function between(start, end) {
 // takeover finalizer, placeholder acquisition and saveReply bodies intact.
 const initializationSource = between('async function generateInternal(', '\n    if (!(dryRun || depth || type == \'regenerate\'')
     + '\nconst lastMessage = chat[chat.length - 1];\n'
-    + between('    const isContinue = type == \'continue\';', '\n    if (!dryRun) {\n        deactivateSendButtons();')
+    + between('    const isContinue = type == \'continue\';', '\n    if (!dryRun && !sharesInFlightController) {\n        deactivateSendButtons();')
     + between('    const wiScanPayload = {', '\n    await eventSource.emit(event_types.GENERATION_BEFORE_WORLD_INFO_SCAN, wiScanPayload);')
     + '\nreturn { signal: wiScanPayload.signal, aborted: isGenerationAborted(), exited: exitAbortedGenerationIfNeeded() };\n}';
 const takeoverSource = between('                const handle = dispatchEvent.takeoverHandle;', '\n            }\n        }\n\n        if (isStreamingEnabled()');
-const saveReplySource = between('export async function saveReply(', '\n/**\n * Creates a message\'s').replace('export ', '');
+const saveReplySource = between('function clearPerSwipeExtraFields(', '\n/**\n * Creates a message\'s').replace('export async function saveReply(', 'async function saveReply(');
 const acquireSource = between('async function acquireTakeoverPlaceholder(', '\n/**\n * Roll back the placeholder');
 const stopSource = between('export function stopGeneration() {', '\n/**\n * Injects extension prompts').replace('export ', '');
 
@@ -40,6 +40,7 @@ function createHost() {
         event_types,
         eventSource: { emit: async (event) => { effects.push(event); } },
         abortController: new AbortController(),
+        is_send_press: false,
         quietAbortController: null,
         generation_started: new Date('2026-01-01T00:00:00.000Z'),
         chat: [{ is_user: true, mes: 'input', extra: {} }],
@@ -80,6 +81,7 @@ function createHost() {
             const genEpoch = getChatTransitionEpoch();
             const isStaleEpoch = () => getChatTransitionEpoch() !== genEpoch;
             const isContinue = type === 'continue', isImpersonate = false;
+            const unblockThisGeneration = (generationType) => unblockGeneration(generationType);
             ${takeoverSource}
         })(takeoverType)`, context);
         await attached;

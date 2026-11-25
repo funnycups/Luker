@@ -139,61 +139,78 @@ export async function readResourceJson(url, { signal } = {}) {
  * field's validator against the directory before returning any values.
  */
 export async function assembleResourceFields({ directoryUrl, fieldUrl, signal }) {
-    const directory = await readResourceJson(directoryUrl, { signal });
-    const fields = Array.isArray(directory.value?.fields) ? directory.value.fields : null;
-    if (!fields) {
-        throw resourceError('invalid_resource', directoryUrl, 'Field directory has no fields array.');
+    const assemblyController = new AbortController();
+    const onExternalAbort = () => assemblyController.abort();
+    if (signal) {
+        if (signal.aborted) {
+            throw abortError();
+        }
+        signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
-    const values = new Map();
-    const readField = async (field) => {
-        if (typeof field?.path !== 'string' || typeof field?.etag !== 'string') {
-            throw resourceError('invalid_resource', directoryUrl, 'Field directory entry is invalid.');
+    try {
+        const assemblySignal = assemblyController.signal;
+        const directory = await readResourceJson(directoryUrl, { signal: assemblySignal });
+        const fields = Array.isArray(directory.value?.fields) ? directory.value.fields : null;
+        if (!fields) {
+            throw resourceError('invalid_resource', directoryUrl, 'Field directory has no fields array.');
         }
-        const url = fieldUrl(field.path);
-        let fieldResult;
-        try {
-            fieldResult = await readResourceText(url, { signal });
-        } catch (error) {
-            if (error?.status === 404) {
-                throw resourceError('read_conflict', url, 'Field disappeared after the directory was read.', {
-                    path: field.path,
-                    expected: field.etag,
-                    actual: null,
-                });
-            }
-            throw error;
-        }
-        if (fieldResult.etag !== field.etag) {
-            throw resourceError('read_conflict', url, 'Field validator does not match the directory.', {
-                path: field.path,
-                expected: field.etag,
-                actual: fieldResult.etag,
-            });
-        }
-        try {
-            values.set(field.path, JSON.parse(fieldResult.text));
-        } catch {
-            throw resourceError('invalid_resource', url, 'Field body is not valid JSON.');
-        }
-    };
 
-    let nextField = 0;
-    let failed = false;
-    const readNextFields = async () => {
-        while (!failed && nextField < fields.length) {
+        const values = new Map();
+        const readField = async (field) => {
+            if (typeof field?.path !== 'string' || typeof field?.etag !== 'string') {
+                throw resourceError('invalid_resource', directoryUrl, 'Field directory entry is invalid.');
+            }
+            const url = fieldUrl(field.path);
+            let fieldResult;
             try {
-                if (signal?.aborted) throw abortError();
-                await readField(fields[nextField++]);
+                fieldResult = await readResourceText(url, { signal: assemblySignal });
             } catch (error) {
-                failed = true;
+                if (error?.status === 404) {
+                    throw resourceError('read_conflict', url, 'Field disappeared after the directory was read.', {
+                        path: field.path,
+                        expected: field.etag,
+                        actual: null,
+                    });
+                }
                 throw error;
             }
-        }
-    };
-    await Promise.all(Array.from({ length: Math.min(FIELD_READ_CONCURRENCY, fields.length) }, readNextFields));
+            if (fieldResult.etag !== field.etag) {
+                throw resourceError('read_conflict', url, 'Field validator does not match the directory.', {
+                    path: field.path,
+                    expected: field.etag,
+                    actual: fieldResult.etag,
+                });
+            }
+            try {
+                values.set(field.path, JSON.parse(fieldResult.text));
+            } catch {
+                throw resourceError('invalid_resource', url, 'Field body is not valid JSON.');
+            }
+        };
 
-    return { directory: directory.value, values };
+        let nextField = 0;
+        let firstError = null;
+        const readNextFields = async () => {
+            while (!firstError && nextField < fields.length) {
+                try {
+                    if (assemblySignal.aborted) throw abortError();
+                    await readField(fields[nextField++]);
+                } catch (error) {
+                    if (!firstError) {
+                        firstError = error;
+                        assemblyController.abort();
+                    }
+                    throw firstError;
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(FIELD_READ_CONCURRENCY, fields.length) }, readNextFields));
+
+        return { directory: directory.value, values };
+    } finally {
+        signal?.removeEventListener('abort', onExternalAbort);
+    }
 }
 
 export async function loadResourceBootstrap({ signal, url = '/api/bootstrap/metadata' } = {}) {

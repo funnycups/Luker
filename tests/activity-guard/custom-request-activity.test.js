@@ -83,7 +83,6 @@ beforeAll(async () => {
         getInstructStoppingSequences: jest.fn(() => []),
     }));
     jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
-        getStreamingReply: jest.fn((parsed) => parsed?.choices?.[0]?.delta?.content ?? parsed?.choices?.[0]?.text ?? ''),
         tryParseStreamingError: jest.fn(noop),
         createGenerationParameters: jest.fn(async () => ({ generate_data: {} })),
         isOpenAIConnectionPresetField: jest.fn(() => false),

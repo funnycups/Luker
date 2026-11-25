@@ -661,8 +661,7 @@ td) {
    12 · PENDING APPROVAL BLOCK
    ═════════════════════════════════════════════════════════════════════ */
 
-.luker-studio .luker-studio-pending,
-.popup .cea_editor_pending {
+.luker-studio .luker-studio-pending {
     margin-top: var(--ls-space-xs);
     padding: var(--ls-space-md);
     border-radius: var(--ls-radius-md);
@@ -672,8 +671,7 @@ td) {
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-.luker-studio .luker-studio-pending-hint,
-.popup .cea_editor_pending_hint {
+.luker-studio .luker-studio-pending-hint {
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
@@ -686,8 +684,7 @@ td) {
     padding: 6px 8px;
     background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 85%, transparent);
 }
-.luker-studio .luker-studio-pending-actions,
-.popup .cea_editor_pending_actions {
+.luker-studio .luker-studio-pending-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
@@ -2690,7 +2687,6 @@ not a wall of unlabeled inputs.
     opacity: 0.75;
     font-style: italic;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    R · LIVE BEHAVIORAL SUMMARY CARDS (.luker-bsum*)
    Shared across Lens/Workbench views (--lw-*) and classic ST drawers/

@@ -2119,7 +2119,7 @@
                                             <input id="openai_request_images" type="checkbox" />
                                             <span>
                                                 <span data-i18n="Request inline images">Request inline images</span>
-                                                <i class="opacity50p fa-solid fa-circle-info" title="Gemini 2.5 Flash Image / Gemini 3 Pro Image"></i>
+                                                <i class="opacity50p fa-solid fa-circle-info" title="Gemini Nano Banana 2.1 / Gemini 3 Pro Image / Gemini 3.1 Flash Image / Gemini 2.5 Flash Image"></i>
                                             </span>
                                         </label>
                                         <div class="toggle-description justifyLeft marginBot5">
@@ -2127,7 +2127,7 @@
                                                 Allows the model to return image attachments.
                                             </span>
                                             <em data-source="makersuite,vertexai" data-i18n="Request inline images_desc_2">
-                                                Incompatible with the following features: function calling, web search, system prompt.
+                                                Incompatible with function calling. Web search support depends on the selected image model.
                                             </em>
                                         </div>
                                         <div id="request_images_settings" class="flex-container wide100p textAlignCenter">
@@ -3132,6 +3132,7 @@
                                 <select id="model_openai_select">
                                     <optgroup label="GPT-6">
                                         <option value="gpt-6-astra">gpt-6-astra</option>
+                                        <option value="gpt-6.1-sol">gpt-6.1-sol</option>
                                     </optgroup>
                                     <optgroup label="GPT-5.6">
                                         <option value="gpt-5.6">gpt-5.6</option>
@@ -3393,6 +3394,10 @@
                                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                                         <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
                                         <option value="gemini-3.1-flash-image">gemini-3.1-flash-image</option>
+                                        <option value="gemini-3.1-flash-lite-image">gemini-3.1-flash-lite-image</option>
+                                    </optgroup>
+                                    <optgroup label="Gemini Image">
+                                        <option value="gemini-nano-banana-2.1">gemini-nano-banana-2.1</option>
                                     </optgroup>
                                     <optgroup label="Gemini 3.0">
                                         <option value="gemini-3-pro-image">gemini-3-pro-image</option>
@@ -3568,6 +3573,10 @@
                                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                                         <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
                                         <option value="gemini-3.1-flash-image">gemini-3.1-flash-image</option>
+                                        <option value="gemini-3.1-flash-lite-image">gemini-3.1-flash-lite-image</option>
+                                    </optgroup>
+                                    <optgroup label="Gemini Image">
+                                        <option value="gemini-nano-banana-2.1">gemini-nano-banana-2.1</option>
                                     </optgroup>
                                     <optgroup label="Gemini 3.0">
                                         <option value="gemini-3-pro-image">gemini-3-pro-image</option>
@@ -7869,6 +7878,7 @@
                         <div class="mes_reasoning"></div>
                     </details>
                     <div class="mes_text"></div>
+                    <div class="mes_citations_wrapper"></div>
                     <div class="mes_media_wrapper"></div>
                     <div class="mes_file_wrapper"></div>
                     <div class="mes_bias"></div>

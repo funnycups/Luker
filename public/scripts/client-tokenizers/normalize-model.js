@@ -16,7 +16,7 @@ export function normalizeTokenizerModel(model) {
     if (typeof model !== 'string' || !model) return model;
 
     if (model === 'o1' || model.includes('o1-preview') || model.includes('o1-mini') || model.includes('o3-mini')) return 'o1';
-    if (model.includes('gpt-5') || model.includes('o3') || model.includes('o4-mini')) return 'o1';
+    if (model.includes('gpt-5') || model.includes('gpt-6') || model.includes('o3') || model.includes('o4-mini')) return 'o1';
     if (model.includes('gpt-4o') || model.includes('chatgpt-4o-latest')) return 'gpt-4o';
     if (model.includes('gpt-4.1') || model.includes('gpt-4.5')) return 'gpt-4o';
     if (model.includes('gpt-4-32k')) return 'gpt-4-32k';

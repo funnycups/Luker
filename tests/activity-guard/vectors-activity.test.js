@@ -85,14 +85,12 @@ beforeAll(async () => {
         clear: jest.fn(),
     };
 
-    const jqChain = new Proxy(function () {}, {
-        get(_t, prop) {
-            if (prop === 'then') return undefined;
-            if (prop === 'length') return 0;
-            return () => jqChain;
-        },
-        apply() { return jqChain; },
-    });
+    const jqChain = { length: 0 };
+    for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'find', 'closest', 'children', 'parent', 'filter', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data']) {
+        jqChain[method] = () => jqChain;
+    }
+    jqChain.is = () => false;
+    jqChain.hasClass = () => false;
     globalThis.jQuery = Object.assign(() => jqChain, { __chain: jqChain });
     globalThis.$ = globalThis.jQuery;
 
@@ -239,6 +237,7 @@ beforeAll(async () => {
 
     jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
         t: (strings, ...values) => strings.reduce((out, str, idx) => out + str + (values[idx] ?? ''), ''),
+        translate: (text) => String(text ?? ''),
     }));
 
     const vectorsMod = await import('../../public/scripts/extensions/vectors/index.js');

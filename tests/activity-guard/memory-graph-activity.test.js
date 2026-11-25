@@ -2,6 +2,11 @@
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 import { createActivityGuardRegistry } from '../../public/scripts/activity-guard.js';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 
 globalThis.window = globalThis.window || globalThis;
 globalThis.document = globalThis.document || {
@@ -20,23 +25,22 @@ function deferred() {
 }
 
 const domReadyCallbacks = [];
+const jqChain = { length: 0 };
+for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'find', 'closest', 'children', 'parent', 'filter', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data']) {
+    jqChain[method] = () => jqChain;
+}
+jqChain.is = () => false;
+jqChain.hasClass = () => false;
 globalThis.jQuery = Object.assign(
     function (selectorOrFn) {
         if (typeof selectorOrFn === 'function') {
             domReadyCallbacks.push(selectorOrFn);
             return;
         }
-        return globalThis.jQuery.__chain;
+        return jqChain;
     },
     {
-        __chain: new Proxy(function () {}, {
-            get(_t, prop) {
-                if (prop === 'then') return undefined;
-                if (prop === 'length') return 0;
-                return () => globalThis.jQuery.__chain;
-            },
-            apply() { return globalThis.jQuery.__chain; },
-        }),
+        __chain: jqChain,
         escapeSelector: (s) => String(s),
     },
 );
@@ -96,8 +100,9 @@ const fakeEmbeddingService = {
 let currentChatFile = 'chat-activity-test-0';
 let chatFileSeq = 0;
 let embeddingProfileMock = null;
-const baseLukerCtx = globalThis.Luker.getContext();
-const customLukerCtx = new Proxy({
+const stateErrors = await loadStateErrorsApi();
+const extensionRegistry = createExtensionRegistry();
+const customLukerCtx = {
     constants: {
         promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
         promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
@@ -127,10 +132,14 @@ const customLukerCtx = new Proxy({
         template: {},
         setGlobalSelection: () => {},
     },
-    stateErrors: baseLukerCtx.stateErrors,
-    regex: baseLukerCtx.regex,
-    getExtensionApi: baseLukerCtx.getExtensionApi,
-    registerExtensionApi: () => {},
+    stateErrors,
+    regex: {
+        getScripts: () => [],
+        saveScripts: () => {},
+        registerManagedRegexProvider: () => ({ setScripts: () => {}, clear: () => {}, dispose: () => {} }),
+    },
+    getExtensionApi: extensionRegistry.getExtensionApi,
+    registerExtensionApi: extensionRegistry.registerExtensionApi,
     registerCardBindingSlot: () => {},
     embeddingService: fakeEmbeddingService,
     translate: (s) => String(s ?? ''),
@@ -175,16 +184,9 @@ const customLukerCtx = new Proxy({
     generateTask(...args) {
         return activeRuntimeContext?.generateTask?.(...args);
     },
-}, {
-    get(target, prop) {
-        if (prop in target) return target[prop];
-        return baseLukerCtx[prop];
-    },
-});
+};
 
-globalThis.Luker = { getContext: () => customLukerCtx };
-globalThis.st = globalThis.Luker;
-globalThis.SillyTavern = globalThis.Luker;
+installBrowserModuleContext(() => customLukerCtx);
 
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');

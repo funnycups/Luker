@@ -145,7 +145,7 @@ beforeAll(async () => {
         'isLastOpenAIReplyPersistedByServer',
         'getLastOpenAIGenerationId', 'hydrateOpenAIPresetData', 'loadOpenAISettings',
         'getChatCompletionModel', 'loadProxyPresets', 'bindCurrentChatCompletionPresetToCharacter',
-        'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'initOpenAI',
+        'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'captureCharacterBoundSettingsSave', 'initOpenAI',
     ], {
         setOpenAIMessageExamples: () => [],
         setOpenAIMessages: () => [],
@@ -361,6 +361,7 @@ beforeAll(async () => {
         'extractReasoningSignatureFromData', 'initReasoning', 'parseReasoningInSwipes',
         'registerReasoningSlashCommands', 'removeReasoningFromString', 'updateReasoningUI',
     ], {
+        extractNativeTurnFromData: () => ({ nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null }),
         PromptReasoning: class {
             addToMessage(m) { return m; }
             isLimitReached() { return false; }
@@ -433,9 +434,11 @@ beforeAll(async () => {
     jest.unstable_mockModule('../../public/scripts/self-profiler.js', () => ({ bootSelfProfilerFromStorage: noop }));
     jest.unstable_mockModule('../../public/scripts/ws-delivery.js', () => ({
         createLukerDelivery: noop,
+        getLukerResponseMeta: () => null,
         installFetchProxy: noop,
         installFetchProxyForAllIframes: noop,
         installLifecycleHooks: noop,
+        onLukerResponseMeta: () => noop,
     }));
     jest.unstable_mockModule('../../public/scripts/settings-resource-read.js', () => ({ loadSettingsEnvelope: asyncNoop }));
     jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
@@ -467,26 +470,43 @@ beforeAll(async () => {
     globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
     globalThis.fetch = fetchMock;
 
-    const baseJQuery = globalThis.jQuery;
+    const baseJQuery = globalThis.jQuery || { escapeSelector: (s) => String(s ?? '') };
     const makeSafeChain = () => {
-        const chain = new Proxy(function () {}, {
-            get(_, prop) {
-                if (prop === 'then') return undefined;
-                if (prop === '__isSafeChain') return true;
-                if (prop === Symbol.toPrimitive) return () => '';
-                if (prop === 'length') return 0;
-                if (prop === '0') return { dispatchEvent: noop };
-                if (prop === 'val') return (v) => (v !== undefined ? chain : '');
-                if (prop === 'attr') return (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : undefined);
-                if (prop === 'css') return (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : 'none');
-                if (prop === 'text') return (...args) => (args.length >= 1 ? chain : '');
-                if (prop === 'html') return (...args) => (args.length >= 1 ? chain : '');
-                if (prop === 'prop') return (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : false);
-                if (prop === 'is') return () => false;
-                return () => chain;
-            },
-            apply() { return chain; },
-        });
+        const chain = {
+            __isSafeChain: true,
+            length: 0,
+            0: { dispatchEvent: noop },
+            [Symbol.toPrimitive]: () => '',
+            val: (v) => (v !== undefined ? chain : ''),
+            attr: (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : undefined),
+            css: (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : 'none'),
+            text: (...args) => (args.length >= 1 ? chain : ''),
+            html: (...args) => (args.length >= 1 ? chain : ''),
+            prop: (...args) => (args.length >= 2 || (typeof args[0] === 'object' && args[0] !== null) ? chain : false),
+            is: () => false,
+            hasClass: () => false,
+            toArray: () => [],
+            get: () => [],
+            index: () => -1,
+            height: () => 0,
+            width: () => 0,
+            outerHeight: () => 0,
+            outerWidth: () => 0,
+            scrollTop: (...args) => (args.length >= 1 ? chain : 0),
+        };
+        for (const method of [
+            'on', 'off', 'one', 'trigger', 'triggerHandler', 'addClass', 'removeClass', 'toggleClass',
+            'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'detach', 'find',
+            'closest', 'children', 'parent', 'parents', 'siblings', 'next', 'prev', 'filter', 'not',
+            'first', 'last', 'eq', 'each', 'map', 'data', 'removeAttr', 'removeData', 'focus', 'blur',
+            'click', 'stop', 'fadeIn', 'fadeOut', 'animate', 'slideUp', 'slideDown', 'clone',
+            'replaceWith', 'after', 'before', 'insertAfter', 'insertBefore', 'wrap', 'unwrap',
+            'submit', 'change', 'input', 'keydown', 'keyup', 'keypress', 'mousedown', 'mouseup',
+            'mouseenter', 'mouseleave', 'scroll', 'resize', 'ready', 'bind', 'unbind',
+            'pagination', 'sortable', 'select2', 'draggable', 'resizable', 'autocomplete', 'tooltip',
+        ]) {
+            chain[method] = () => chain;
+        }
         return chain;
     };
     const safeChain = makeSafeChain();

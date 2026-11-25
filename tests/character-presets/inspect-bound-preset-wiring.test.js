@@ -10,13 +10,11 @@
 //
 //   2. CEA's editor-iteration tool catalog advertises `inspect_bound_preset`
 //      and classifies it as a read tool (so the unified editor routes calls
-//      through `runCeaEditorReadTool`, which then reaches the helper API).
+//      through `runCeaEditorReadTool`, which hands it to the shared executor).
 //
 // The shared executor itself is covered exhaustively in
 // `inspect-bound-preset-tool.test.js`; this file only proves both consumer
 // surfaces see the tool.
-
-import { jest } from '@jest/globals';
 
 // -- 1. iteration-library/tools/index.js aggregation --
 
@@ -31,16 +29,8 @@ test('iteration-library/tools/index.js re-exports characterPresetsReads namespac
 
 // -- 2. CEA editor-iteration tool catalog --
 
-// tools.js imports `runCharacterEditorHelperToolCall` from ../main.js, which
-// transitively hits the whole ST bootstrap graph. Mock ../main.js and the
-// shared preset-reads module before importing tools.js so we can drive the
-// catalog without loading production main.js.
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: jest.fn(),
-}));
-
 const { buildCeaEditorToolSet, isCeaEditorReadTool } = await import(
-    '/scripts/extensions/character-editor-assistant/editor-iteration/tools.js'
+    '/scripts/workbench/targets/card-tools.js'
 );
 
 test('CEA editor tool catalog advertises inspect_bound_preset', () => {

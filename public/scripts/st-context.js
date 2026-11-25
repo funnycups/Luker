@@ -138,7 +138,7 @@ import {
     writeExtensionFieldBulk,
 } from './extensions.js';
 import { groups, openGroupChat, selected_group, unshallowGroupMembers } from './group-chats.js';
-import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
+import { addLocaleData, createScopedI18n, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
@@ -155,21 +155,22 @@ import {
     importEmbeddedBookForCharacter,
     rebindPreviousPrimaryBook,
 } from './character/post-replace-actions.js';
-import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import { decodeCardBoundOptionValue } from './lib/preset-ref-codec.js';
 import {
     STATE_ERROR_REASONS,
+    CONFLICT_CODES,
     STATE_HINT_MAX_LENGTH,
     isValidReason,
     makeStateError,
     makeStateOk,
-} from './state-errors.js';
+} from './lib/state-errors.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
     formatConflictHint,
     formatValidationArgsHint,
     formatValidationTargetHint,
-} from './state-errors/format.js';
+} from './lib/state-errors-format.js';
 import { humanizedDateTime, isMobile, shouldSendOnEnter } from './RossAscends-mods.js';
 import { ScraperManager } from './scrapers.js';
 import { executeSlashCommands, executeSlashCommandsWithOptions, registerSlashCommand } from './slash-commands.js';
@@ -245,10 +246,9 @@ import { accountsEnabled, currentUser } from './user.js';
 import * as LIB_BUNDLE from '../lib.js';
 
 /**
- * Layer 2 / Layer 3 export of the iteration-library surface.
- * Plugin-owned popups (CEA Character, CPA, MG Schema, Orchestrator) consume
- * this directly. The shell-era `iterationStudio` field was removed when the
- * iter-studio shell was retired.
+ * Layer 2 / Layer 3 export of the iteration-library surface, documented in
+ * docs/development/extension-api/iteration-studio.md. Plugin-owned
+ * iteration studios import the same modules at Layer 1.
  */
 const ITERATION_LIBRARY_API = Object.freeze({
     applyEdits: ITERATION_LIBRARY_API_NS.applyEdits,
@@ -258,7 +258,6 @@ const ITERATION_LIBRARY_API = Object.freeze({
     showConflictResolution: ITERATION_LIBRARY_API_NS.showConflictResolution,
     render: ITERATION_LIBRARY_API_NS.render,
     runner: ITERATION_LIBRARY_API_NS.runner,
-    storage: ITERATION_LIBRARY_API_NS.storage,
     textDiff: ITERATION_LIBRARY_API_NS.textDiff,
     zoomOverlay: ITERATION_LIBRARY_API_NS.zoomOverlay,
     ui: ITERATION_LIBRARY_API_NS.ui,
@@ -393,6 +392,7 @@ function isPlainObject(value) {
 
 // Extension-facing character compatibility layer:
 // keep getContext().characters usable for legacy root-field reads/writes while routing data through V2-shaped fields.
+const CHARACTER_API_PROXY_TARGET = Symbol.for('luker.characterApiProxyTarget');
 const characterApiProxyTargetMap = new WeakMap();
 const characterApiArrayProxyCache = new WeakMap();
 const characterApiProxyCache = new WeakMap();
@@ -405,7 +405,7 @@ function rememberCharacterApiProxy(proxy, target) {
     return proxy;
 }
 
-function unwrapCharacterApiProxy(value) {
+export function unwrapCharacterApiProxy(value) {
     return characterApiProxyTargetMap.get(value) ?? value;
 }
 
@@ -697,6 +697,12 @@ function getCharacterApiExtensionsProxy(character) {
     }
 
     const proxy = rememberCharacterApiProxy(new Proxy(extensions, {
+        get(target, prop, receiver) {
+            if (prop === CHARACTER_API_PROXY_TARGET) {
+                return target;
+            }
+            return Reflect.get(target, prop, receiver);
+        },
         set(target, prop, value, receiver) {
             if (typeof prop === 'string' && characterExtensionsMirrorSpecs[prop]) {
                 const normalized = characterExtensionsMirrorSpecs[prop].normalize(unwrapCharacterApiProxy(value));
@@ -738,6 +744,10 @@ function getCharacterApiDataProxy(character) {
 
     const proxy = rememberCharacterApiProxy(new Proxy(data, {
         get(target, prop, receiver) {
+            if (prop === CHARACTER_API_PROXY_TARGET) {
+                return target;
+            }
+
             if (prop === 'extensions') {
                 return getCharacterApiExtensionsProxy(character);
             }
@@ -823,6 +833,10 @@ function getCharacterApiProxy(character) {
 
     const proxy = rememberCharacterApiProxy(new Proxy(character, {
         get(target, prop, receiver) {
+            if (prop === CHARACTER_API_PROXY_TARGET) {
+                return target;
+            }
+
             if (typeof prop === 'string' && legacyCharacterRootFieldSpecs[prop]) {
                 return legacyCharacterRootFieldSpecs[prop].read(target);
             }
@@ -932,6 +946,21 @@ function getCharacterArrayApiProxy(characterList) {
 
     const proxy = rememberCharacterApiProxy(new Proxy(characterList, {
         get(target, prop, receiver) {
+            if (prop === CHARACTER_API_PROXY_TARGET) {
+                return target;
+            }
+            if (prop === 'indexOf') {
+                return (...args) => target.indexOf(unwrapCharacterApiProxy(args[0]), ...args.slice(1));
+            }
+            if (prop === 'lastIndexOf') {
+                return (...args) => (args.length > 1
+                    ? target.lastIndexOf(unwrapCharacterApiProxy(args[0]), args[1])
+                    : target.lastIndexOf(unwrapCharacterApiProxy(args[0])));
+            }
+            if (prop === 'includes') {
+                return (...args) => target.includes(unwrapCharacterApiProxy(args[0]), ...args.slice(1));
+            }
+
             const value = Reflect.get(target, prop, receiver);
             if (isArrayIndexProperty(prop)) {
                 return getCharacterApiProxy(value);
@@ -940,10 +969,6 @@ function getCharacterArrayApiProxy(characterList) {
             return value;
         },
         set(target, prop, value, receiver) {
-            if (isArrayIndexProperty(prop)) {
-                return Reflect.set(target, prop, unwrapCharacterApiProxy(value), receiver);
-            }
-
             return Reflect.set(target, prop, unwrapCharacterApiProxy(value), receiver);
         },
     }), characterList);
@@ -1136,7 +1161,7 @@ function getLivePresetBody(collection = '') {
 // Server (`src/endpoints/presets.js`) sees this as an opaque preset name
 // string and stores it byte-for-byte under `{apiId, name}`. The prefix is
 // intentionally distinct from the DOM selector prefix `__luker_card__::`
-// (see character/preset-ref-codec.js); mixing them would let a naive server
+// (see lib/preset-ref-codec.js); mixing them would let a naive server
 // consumer double-decode and corrupt existing state slots.
 const CARD_BOUND_STATE_KEY_PREFIX = '__lc__::';
 
@@ -2657,7 +2682,7 @@ export function getContext() {
         // updateChatMetadata so it actually replaces module-scope `chat_metadata`.
         set chatMetadata(value) { updateChatMetadata(value, true); },
         saveMetadataDebounced,
-        streamingProcessor,
+        get streamingProcessor() { return streamingProcessor; },
         eventSource,
         eventTypes: event_types,
         generateTask,
@@ -2764,6 +2789,7 @@ export function getContext() {
                 remove: characterPresets.removeCharacterBoundPreset,
                 setDefault: characterPresets.setCharacterBoundDefault,
                 resolveByName: characterPresets.resolveCharacterBoundPresetByName,
+                rename: characterPresets.renameCharacterBoundPreset,
                 clearAll: characterPresets.clearAllCharacterBoundPresets,
             },
         },
@@ -2836,8 +2862,9 @@ export function getContext() {
         translate,
         getCurrentLocale,
         addLocaleData,
-        tags,
-        tagMap: tag_map,
+        createScopedI18n,
+        get tags() { return tags; },
+        get tagMap() { return tag_map; },
         get menuType() { return menu_type; },
         createCharacterData: create_save,
         /** @deprecated Legacy snake-case naming, compatibility with old extensions */
@@ -2971,6 +2998,7 @@ export function getContext() {
         decodeCardBoundOptionValue,
         stateErrors: Object.freeze({
             STATE_ERROR_REASONS,
+            CONFLICT_CODES,
             STATE_HINT_MAX_LENGTH,
             isValidReason,
             makeStateError,

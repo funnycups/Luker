@@ -23,7 +23,7 @@ const {
     decideSavePresetDispatch,
 } = await import('/scripts/character/save-dispatch.js');
 
-const { encodeCardBoundOptionValue } = await import('/scripts/character/preset-ref-codec.js');
+const { encodeCardBoundOptionValue } = await import('/scripts/lib/preset-ref-codec.js');
 
 // ---------- readSelectedPresetRef ----------
 

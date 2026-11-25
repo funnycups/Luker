@@ -387,7 +387,7 @@ body.no-blur #bg_custom {
 
 body.no-blur #top-bar,
 body.no-blur #send_form {
-    background-color: var(--SmartThemeBlurTintColor) !important;
+    background-color: var(--SmartThemeBlurTintColor);
 }
 
 /* wAIfu mode*/

@@ -38,7 +38,7 @@ import {
     isTransientReason,
 } from './floor-state/core.js';
 import { applyPatch } from './util/fast-json-patch.js';
-import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './lib/state-errors.js';
 
 const LOG_SUFFIX = '__floor_log';
 

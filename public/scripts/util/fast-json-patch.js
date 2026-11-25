@@ -15,7 +15,11 @@ function cloneJsonValue(value) {
 }
 
 function cloneComparableJsonValue(value) {
-    const serialized = JSON.stringify(value, (_, nextValue) => {
+    // Two siblings may legitimately share one object (the runtime character
+    // aliases root `tags` to `data.tags`); JSON transport serializes that
+    // value at both positions, while native `JSON.stringify` rejects a true
+    // ancestor cycle with `TypeError`.
+    const serialized = JSON.stringify(value, function replacer(key, nextValue) {
         if (typeof nextValue === 'function' || typeof nextValue === 'symbol') {
             return undefined;
         }

@@ -5,12 +5,9 @@ import { jest } from '@jest/globals';
 
 const mockConfirm = jest.fn(async () => null);
 const mockGetWorldInfoNames = jest.fn(() => []);
-const mockImportEmbeddedWorldInfo = jest.fn(async () => {});
-const mockCharUpdatePrimaryWorld = jest.fn(async () => {});
-const mockSelectCharacterById = jest.fn(async () => {});
-const mockSetButtonClass = jest.fn();
+const mockImportEmbeddedWorldInfo = jest.fn(async () => ({ imported: true, bound: true, bookName: 'new-book' }));
+const mockCharUpdatePrimaryWorld = jest.fn(async () => true);
 const mockAccountStorageSet = jest.fn();
-const mockDeleteWorldBook = jest.fn(async () => {});
 
 const localCharacter = () => ({
     avatar: 'ash.png',
@@ -23,10 +20,7 @@ const mockContext = {
     getWorldInfoNames: (...args) => mockGetWorldInfoNames(...args),
     importEmbeddedWorldInfo: (...args) => mockImportEmbeddedWorldInfo(...args),
     charUpdatePrimaryWorld: (...args) => mockCharUpdatePrimaryWorld(...args),
-    selectCharacterById: (...args) => mockSelectCharacterById(...args),
-    worldInfoEntry: { setButtonClass: (...args) => mockSetButtonClass(...args) },
     accountStorage: { setItem: (...args) => mockAccountStorageSet(...args) },
-    deleteWorldBook: (...args) => mockDeleteWorldBook(...args),
 };
 
 jest.unstable_mockModule('/scripts/st-context.js', () => ({
@@ -43,8 +37,6 @@ jest.unstable_mockModule('/scripts/popup.js', () => ({
     Popup: { show: { confirm: (...args) => mockConfirm(...args) } },
 }));
 
-const jqStub = { data: () => jqStub, show: () => jqStub, val: () => jqStub, trigger: () => jqStub };
-globalThis.jQuery = () => jqStub;
 globalThis.toastr = { error: () => {}, success: () => {}, warning: () => {}, info: () => {} };
 globalThis.HTMLElement = globalThis.HTMLElement || class HTMLElement {};
 globalThis.document = globalThis.document || { querySelectorAll: () => [] };
@@ -79,12 +71,9 @@ const embeddedCharacter = () => ({
 beforeEach(() => {
     mockConfirm.mockReset().mockResolvedValue(null);
     mockGetWorldInfoNames.mockReset().mockReturnValue([]);
-    mockImportEmbeddedWorldInfo.mockReset().mockResolvedValue(undefined);
-    mockCharUpdatePrimaryWorld.mockReset().mockResolvedValue(undefined);
-    mockSelectCharacterById.mockReset().mockResolvedValue(undefined);
-    mockSetButtonClass.mockReset();
+    mockImportEmbeddedWorldInfo.mockReset().mockResolvedValue({ imported: true, bound: true, bookName: 'new-book' });
+    mockCharUpdatePrimaryWorld.mockReset().mockResolvedValue(true);
     mockAccountStorageSet.mockReset();
-    mockDeleteWorldBook.mockReset().mockResolvedValue(undefined);
     mockContext.characters = [localCharacter()];
 });
 
@@ -147,7 +136,7 @@ test('import action is offered for a new embedded book and runs the import helpe
     const result = await handlePostReplaceWorldBook({
         characterId: 0,
         previousCharacter: null,
-        newCharacter: embeddedCharacter(),
+        newCharacter: mockContext.characters[0],
         previousLorebookSnapshot: null,
     });
     expect(result).toEqual({ actionId: 'world-book-import' });
@@ -156,8 +145,8 @@ test('import action is offered for a new embedded book and runs the import helpe
     expect(options.cancelButton).toBe('Cancel');
     expect(options.customButtons.map(button => button.text)).toEqual(['Import new book']);
     expect(options.defaultResult).toBe(1001);
-    expect(mockImportEmbeddedWorldInfo).toHaveBeenCalledWith(true);
-    expect(mockCharUpdatePrimaryWorld).toHaveBeenCalledWith('new-book');
+    expect(mockImportEmbeddedWorldInfo).toHaveBeenCalledWith(true, mockContext.characters[0], undefined);
+    expect(mockCharUpdatePrimaryWorld).not.toHaveBeenCalled();
 });
 
 test('keep action re-binds the previous book when it still exists', async () => {
@@ -166,12 +155,12 @@ test('keep action re-binds the previous book when it still exists', async () => 
     const result = await handlePostReplaceWorldBook({
         characterId: 0,
         previousCharacter: { avatar: 'ash.png', data: { extensions: { world: 'old-book' } } },
-        newCharacter: localCharacter(),
+        newCharacter: mockContext.characters[0],
         previousLorebookSnapshot: null,
     });
     expect(result).toEqual({ actionId: 'world-book-keep' });
     expect(mockConfirm.mock.calls[0][2].customButtons.map(button => button.text)).toEqual(['Keep old book']);
-    expect(mockCharUpdatePrimaryWorld).toHaveBeenCalledWith('old-book');
+    expect(mockCharUpdatePrimaryWorld).toHaveBeenCalledWith('old-book', mockContext.characters[0], undefined);
 });
 
 test('cancel runs nothing', async () => {
@@ -215,11 +204,12 @@ test('a throwing availability check is skipped and does not block other actions'
         isAvailable: () => { if (shouldThrow) throw new Error('boom'); return false; },
     }));
     mockConfirm.mockResolvedValue(1001);
+    mockContext.characters = [embeddedCharacter()];
     try {
         const result = await handlePostReplaceWorldBook({
             characterId: 0,
             previousCharacter: null,
-            newCharacter: embeddedCharacter(),
+            newCharacter: mockContext.characters[0],
             previousLorebookSnapshot: null,
         });
         expect(result).toEqual({ actionId: 'world-book-import' });
@@ -329,5 +319,5 @@ test('importEmbeddedBookForCharacter throws for a missing character', async () =
 
 test('rebindPreviousPrimaryBook writes the binding through the context', async () => {
     await rebindPreviousPrimaryBook(0, 'old-book');
-    expect(mockCharUpdatePrimaryWorld).toHaveBeenCalledWith('old-book');
+    expect(mockCharUpdatePrimaryWorld).toHaveBeenCalledWith('old-book', mockContext.characters[0], undefined);
 });

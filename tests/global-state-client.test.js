@@ -4,7 +4,7 @@
 import { jest } from '@jest/globals';
 import { applyPatch as applyJsonPatch, compare as compareJsonPatch } from '../public/scripts/util/fast-json-patch.js';
 import { cloneAsJsonWire } from '../public/scripts/util/json-clone.js';
-import { STATE_ERROR_REASONS } from '../public/scripts/state-errors.js';
+import { STATE_ERROR_REASONS } from '../public/scripts/lib/state-errors.js';
 import { resetResourceReads } from '../public/scripts/resource-read.js';
 
 function isPlainObject(value) {
@@ -205,18 +205,8 @@ jest.unstable_mockModule('../public/script.js', () => ({
     settingsReady: false,
 }));
 
-const noop = () => undefined;
 function nsStub(extra = {}) {
-    return new Proxy({ ...extra }, {
-        get(t, prop) {
-            if (prop in t) return t[prop];
-            if (prop === '__esModule') return true;
-            if (prop === 'then') return undefined;
-            if (prop === Symbol.toStringTag) return 'Module';
-            if (typeof prop === 'symbol') return undefined;
-            return noop;
-        },
-    });
+    return Object.assign(Object.create(null), { __esModule: true, ...extra });
 }
 
 jest.unstable_mockModule('../public/scripts/lib/edits/index.js', () => nsStub());
@@ -254,7 +244,6 @@ jest.unstable_mockModule('../public/scripts/openai.js', () => ({
     SILICONFLOW_ENDPOINT: '',
     model_list: [],
     custom_prompt_post_processing_types: {},
-    getStreamingReply: () => '',
     tryParseStreamingError: () => null,
     createGenerationParameters: () => ({}),
     isOpenAIConnectionPresetField: () => false,
@@ -277,7 +266,11 @@ jest.unstable_mockModule('../public/scripts/group-chats.js', () => ({
     groups: [], openGroupChat: () => Promise.resolve(), selected_group: null, unshallowGroupMembers: () => Promise.resolve(),
 }));
 jest.unstable_mockModule('../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {}, getCurrentLocale: () => 'en-US', t: (k) => k, translate: (k) => k,
+    addLocaleData: () => {},
+    getCurrentLocale: () => 'en-US',
+    t: (k) => k,
+    translate: (k) => k,
+    createScopedI18n: () => ({ i18n: (k) => String(k ?? ''), i18nFormat: (k) => String(k ?? '') }),
 }));
 jest.unstable_mockModule('../public/scripts/loader.js', () => ({
     hideLoader: () => {}, showLoader: () => {},

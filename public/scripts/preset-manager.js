@@ -4,6 +4,7 @@ import {
     amount_gen,
     buildObjectPatchOperationsAsync,
     characters,
+    cloneAsJsonWire,
     eventSource,
     event_types,
     getRequestHeaders,
@@ -26,9 +27,10 @@ import { t } from './i18n.js';
 import { instruct_presets } from './instruct-mode.js';
 import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
-import { applyPresetBodyChangesToSettings, getActiveCardBoundGhostSnapshot, getChatCompletionPreset, getPresetApplicationPromise, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings, refreshCharacterBoundPresetRuntimeBody } from './openai.js';
-import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
-import { getCharacterBoundPreset, renameCharacterBoundPreset, updateCharacterBoundPreset } from './character/presets.js';
+import { applyPresetBodyChangesToSettings, captureCharacterBoundSettingsSave, persistCapturedCharacterBoundSettings, getActiveCardBoundGhostSnapshot, getChatCompletionPreset, getPresetApplicationPromise, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { decodeCardBoundOptionValue } from './lib/preset-ref-codec.js';
+import { renameCharacterBoundPreset } from './character/presets.js';
+import { createPresetLineage } from './character/preset-mutation.js';
 import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
@@ -63,6 +65,8 @@ import { buildBulkDeleteConfirmBody } from './select2-multiselect.js';
 import { downloadTextFilesAsZip } from './zip-export.js';
 
 const presetManagers = {};
+const presetExtensionWrites = new WeakMap();
+const presetExtensionLineage = createPresetLineage();
 const PRESET_LOREBOOK_BINDABLE_APIS = new Set(['kobold', 'novel', 'openai', 'textgenerationwebui']);
 
 function shouldShowPresetLinkedLorebookButton(apiId) {
@@ -337,71 +341,13 @@ export function getPresetManager(apiId = '') {
  * This keeps character-bound preset payloads in sync when extensions such as preset regex scripts mutate.
  *
  * @param {object} options
- * @param {string} options.presetName
- * @param {string} options.path
+ * @param {object} options.target
+ * @param {string|Array<string|number>} options.path
  * @param {any} options.value
  * @returns {Promise<void>}
  */
-async function syncCharacterBoundOpenAIPresetExtensionField({ presetName, path, value }) {
-    const chid = Number(this_chid);
-    if (!Number.isInteger(chid)) {
-        return;
-    }
-
-    const character = characters?.[chid];
-    if (!character?.avatar) {
-        return;
-    }
-
-    const nextExtensions = structuredClone(character?.data?.extensions ?? {});
-    const lukerExtensions = ensurePlainObject(nextExtensions.luker);
-    const boundPreset = ensurePlainObject(lukerExtensions.chat_completion_preset);
-    const boundName = String(boundPreset.name || '').trim();
-    const resolvedPresetName = String(presetName || '').trim();
-
-    if (!boundName || !resolvedPresetName || !areLookupNamesEqual(boundName, resolvedPresetName)) {
-        return;
-    }
-
-    const boundPresetBody = ensurePlainObject(boundPreset.preset);
-    const boundPresetExtensions = ensurePlainObject(boundPresetBody.extensions);
-    if (path) {
-        lodash.set(boundPresetExtensions, path, value);
-    }
-    boundPresetBody.extensions = path ? boundPresetExtensions : value;
-    boundPreset.preset = boundPresetBody;
-    lukerExtensions.chat_completion_preset = boundPreset;
-    nextExtensions.luker = lukerExtensions;
-
-    character.data = character.data || {};
-    character.data.extensions = nextExtensions;
-
-    if (Number(this_chid) === chid && character.json_data) {
-        try {
-            const jsonData = JSON.parse(character.json_data);
-            jsonData.data = jsonData.data || {};
-            jsonData.data.extensions = nextExtensions;
-            character.json_data = JSON.stringify(jsonData);
-            $('#character_json_data').val(character.json_data);
-        } catch {
-            // Ignore malformed json_data snapshots.
-        }
-    }
-
-    const response = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            avatar: character.avatar,
-            data: {
-                extensions: nextExtensions,
-            },
-        }),
-    });
-
-    if (!response.ok) {
-        console.error('Failed to sync character-bound OpenAI preset extensions', response.statusText);
-    }
+async function syncCharacterBoundOpenAIPresetExtensionField({ target, path, value }) {
+    return persistCapturedCharacterBoundSettings(target.captured, { path, value });
 }
 
 /**
@@ -914,7 +860,7 @@ class PresetManager {
      *
      * @param {string} name
      * @param {object|undefined} settings
-     * @returns {{character: object, name: string, active: boolean} | null}
+     * @returns {{character: object, name: string, ghostValue: string} | null}
      */
     resolveCharacterBoundSaveTarget(name, settings) {
         if (this.apiId !== 'openai') {
@@ -941,7 +887,7 @@ class PresetManager {
         if (!character) {
             throw new Error(`savePreset: character not found for card-bound preset '${requestedName}'`);
         }
-        return { character, name: ghost.name, active: true };
+        return { character, name: ghost.name, ghostValue: ghost.ghostValue };
     }
 
     /**
@@ -979,13 +925,20 @@ class PresetManager {
 
         const characterBoundTarget = this.resolveCharacterBoundSaveTarget(name, settings);
         if (characterBoundTarget) {
-            const { character, name: cardName, active } = characterBoundTarget;
-            const previousBody = getCharacterBoundPreset(character, cardName)?.preset ?? {};
-            await updateCharacterBoundPreset(character, cardName, preset);
-            refreshCharacterBoundPresetRuntimeBody(cardName, preset);
-            if (active) {
-                applyPresetBodyChangesToSettings(previousBody, preset);
-                await saveSettings();
+            const target = captureCharacterBoundSettingsSave(oai_settings);
+            if (!target || target.ghostValue !== characterBoundTarget.ghostValue) {
+                throw new Error('Character-bound preset target changed before save');
+            }
+            target.body = cloneAsJsonWire(preset);
+            await persistCapturedCharacterBoundSettings(target);
+            const selected = getActiveCardBoundGhostSnapshot();
+            if (characters[target.id] === target.character && Number(this_chid) === target.id
+                && selected?.ghostValue === target.ghostValue && selected.body === target.cached.body) {
+                applyPresetBodyChangesToSettings(target.before, target.body);
+                // Card slot was already persisted above; pass cardPresetOwner so
+                // SETTINGS_UPDATED does not trigger a second card write.
+                const outcome = await saveSettings(0, { cardPresetOwner: { source: {} } });
+                if (!outcome.ok) throw new Error(`Character-bound preset settings save ${outcome.status}`);
             }
             return;
         }
@@ -1113,12 +1066,10 @@ class PresetManager {
      * For `openai` with an active card-bound ghost `<option>`, a
      * synthesized working row is appended so upstream third-party
      * consumers that read `presets[preset_names[name]]` or
-     * `presets[Number(getSelectedPreset())]` (JS-Slash-Runner /
-     * TavernHelper `usePresetSettingsStore`, `usePresetScriptsStore`,
-     * per-preset variable schemas, etc.) resolve to the active card
-     * body instead of `undefined`. Without this row those consumers
-     * silently drop their per-preset state whenever a card-bound
-     * preset is active.
+     * `presets[Number(getSelectedPreset())]` to look up the active
+     * preset body resolve to the card body instead of `undefined`.
+     * Without this row those consumers silently drop their per-preset
+     * state whenever a card-bound preset is active.
      *
      * The synthesized row's `body` is the live runtime body, not a
      * copy. Upstream consumers may mutate `presets[i]` in place; the
@@ -1675,7 +1626,7 @@ class PresetManager {
      * Reads a preset extension field from the preset.
      * @param {object} options
      * @param {string} [options.name] Name of the preset. If not provided, uses the currently selected preset name.
-     * @param {string} options.path Path to the preset extension field, e.g. 'myextension.data'. If empty, reads the entire extensions object.
+     * @param {string|Array<string|number>} options.path Path to the preset extension field, e.g. 'myextension.data'. An empty string reads the entire extensions object.
      * @return {any} The value of the preset extension field, or null if not found.
      */
     readPresetExtensionField({ name, path }) {
@@ -1704,46 +1655,110 @@ class PresetManager {
      * Writes a value to a preset extension field.
      * @param {object} options
      * @param {string} [options.name] Name of the preset. If not provided, uses the currently selected preset name.
-     * @param {string} options.path Path to the preset extension field, e.g. 'myextension.data'. If empty, writes to the root of the extensions object.
+     * @param {string|Array<string|number>} options.path Path to the preset extension field, e.g. 'myextension.data'. An empty string replaces the extensions object; an empty array changes no field.
      * @param {any} options.value Value to write to the preset extension field.
-     * @return {Promise<void>} Resolves when the preset is saved.
+     * @return {Promise<void>} Resolves after all applicable settings, global preset and card writes acknowledge success.
+     * Rejects on a failed stage. Earlier acknowledged storage changes remain saved.
+     * Captured values and acknowledged read caches use the settings JSON-wire representation.
      */
     async writePresetExtensionField({ name, path, value }) {
-        const { settings } = this.getPresetListRaw();
+        const { settings, presets, preset_names } = this.getPresetListRaw();
         const selectedName = this.getSelectedPresetName();
         const presetName = this.resolvePresetName(name || selectedName);
         const selectedOption = $(this.select).find('option:selected');
         const isCharacterBoundOpenAIPreset = this.apiId === 'openai'
             && selectedOption.attr('data-luker-char-bound') === '1'
             && areLookupNamesEqual(selectedName, presetName);
+        // Capture consumer-owned arguments and the original card before any
+        // prerequisite yields. Synthetic read rows are never global save targets.
+        path = Array.isArray(path) ? path.slice() : path;
+        value = cloneAsJsonWire(structuredClone(value));
+        const id = Number(this_chid);
+        const character = characters[id];
+        const ref = isCharacterBoundOpenAIPreset ? decodeCardBoundOptionValue(selectedOption.val()) : null;
+        const binding = character?.data?.extensions?.luker?.chat_completion_preset;
+        const slot = binding?.presets?.find(preset => preset.name === ref?.name);
+        let target;
+        if (isCharacterBoundOpenAIPreset) {
+            if (!slot || ref.avatar !== character?.avatar) throw new Error('Character-bound preset target is unavailable');
+            target = { character, id, name: slot.name, source: { defaultPresetName: binding.defaultPresetName } };
+        }
+        const index = !target ? (Array.isArray(preset_names) ? preset_names.indexOf(presetName) : preset_names[presetName]) : -1;
+        const hasPreset = !target && Boolean(presets[index]);
+        const invokedPreset = hasPreset ? presets[index] : null;
+        const invokedIdentity = invokedPreset ? presetExtensionLineage.capture(invokedPreset) : null;
 
         // Write to settings if the selected preset is the same as the provided name
         if (settings && areLookupNamesEqual(selectedName, presetName)) {
-            // Set the value at the specified path
-            settings.extensions = ensurePlainObject(settings.extensions || {});
-            path ? lodash.set(settings.extensions, path, value) : (settings.extensions = value);
-            await saveSettings();
+            const hadExtensions = Object.hasOwn(settings, 'extensions');
+            const previousExtensions = settings.extensions;
+            // Assemble privately so retained live subtrees cannot reach captured values.
+            const desiredExtensions = structuredClone(ensurePlainObject(settings.extensions || {}));
+            if (path) lodash.set(desiredExtensions, path, value);
+            const intendedExtensions = cloneAsJsonWire(path ? desiredExtensions : value);
+            const assignedExtensions = structuredClone(intendedExtensions);
+            settings.extensions = assignedExtensions;
+            if (target) target.captured = captureCharacterBoundSettingsSave(oai_settings, target);
+            const rollbackSettingsExtensions = () => {
+                if (settings.extensions !== assignedExtensions) return;
+                if (hadExtensions) settings.extensions = previousExtensions;
+                else delete settings.extensions;
+            };
+            let outcome;
+            try {
+                outcome = await saveSettings(0, { cardPresetOwner: target });
+            } catch (error) {
+                rollbackSettingsExtensions();
+                throw error;
+            }
+            if (!outcome?.ok || outcome.status !== 'saved') {
+                rollbackSettingsExtensions();
+                throw new Error('Preset extension settings could not be saved');
+            }
+            const settingsKey = { openai: 'oai_settings', novel: 'nai_settings', kobold: 'kai_settings', textgenerationwebui: 'textgenerationwebui_settings' }[this.apiId];
+            const acknowledged = settingsKey ? outcome.payload?.[settingsKey] : outcome.payload?.power_user?.[this.apiId];
+            if (!lodash.isEqual(acknowledged?.extensions, intendedExtensions)) {
+                rollbackSettingsExtensions();
+                throw new Error('Preset extension settings acknowledgement changed');
+            }
         }
 
-        // Also update the preset by name
-        const preset = this.getCompletionPresetByName(presetName);
-        if (!preset) {
-            if (isCharacterBoundOpenAIPreset) {
-                await syncCharacterBoundOpenAIPresetExtensionField({ presetName, path, value });
-            }
+        // Card-bound OpenAI presets are isolated from same-name global presets.
+        if (target) {
+            await syncCharacterBoundOpenAIPresetExtensionField({ target, path, value });
             return;
         }
 
-        // Set the value at the specified path
-        preset.extensions = ensurePlainObject(preset.extensions || {});
-        path ? lodash.set(preset.extensions, path, value) : (preset.extensions = value);
-
-        // Save the updated preset
-        await this.savePreset(presetName, preset, { skipUpdate: true });
-
-        if (isCharacterBoundOpenAIPreset) {
-            await syncCharacterBoundOpenAIPresetExtensionField({ presetName, path, value });
+        // Also update the global preset by name
+        if (!hasPreset) {
+            throw new Error(`Preset ${presetName} not found`);
         }
+
+        // Compose global field edits after the preceding acknowledged save,
+        // rather than publishing a pending mutation into the shared cache.
+        let writes = presetExtensionWrites.get(this);
+        if (!writes) presetExtensionWrites.set(this, writes = new Map());
+        const previous = writes.get(presetName);
+        const task = (async () => {
+            if (previous) await previous.catch(() => {});
+            const currentNames = this.getPresetListRaw().preset_names;
+            const currentIndex = Array.isArray(currentNames) ? currentNames.indexOf(presetName) : currentNames[presetName];
+            const originalPreset = presets[index];
+            if (!originalPreset || currentIndex !== index || this.getPresetListRaw().presets !== presets) throw new Error('Preset collection changed');
+            if (!presetExtensionLineage.owns(originalPreset, invokedIdentity)) throw new Error('Preset source replaced');
+            const preset = structuredClone(originalPreset);
+            preset.extensions = ensurePlainObject(preset.extensions || {});
+            path ? lodash.set(preset.extensions, path, value) : (preset.extensions = value);
+            const written = cloneAsJsonWire(preset);
+            await this.savePreset(presetName, written, { skipUpdate: true });
+            const latest = this.getPresetListRaw();
+            const latestIndex = Array.isArray(latest.preset_names) ? latest.preset_names.indexOf(presetName) : latest.preset_names[presetName];
+            if (latest.presets !== presets || latestIndex !== index || presets[index] !== originalPreset) throw new Error('Preset saved but target ownership changed');
+            presets[index] = written;
+            presetExtensionLineage.acknowledge(written, invokedIdentity);
+        })();
+        writes.set(presetName, task);
+        try { await task; } finally { if (writes.get(presetName) === task) writes.delete(presetName); }
     }
 
     // ===== Preset Group Methods =====

@@ -10,7 +10,8 @@ import { expect as waitFor, request } from '@playwright/test';
 import WebSocket from 'ws';
 import * as generateTaskModule from '../public/scripts/generate-task.js';
 import { createLukerDelivery, installFetchProxy } from '../public/scripts/ws-delivery.js';
-import { startServer, tearDownServer } from './e2e/_lib/server.js';
+import { ensureRun, trackScope } from './harness/jest-run.js';
+import { startServer } from './harness/server.js';
 import { startMockLLM } from './e2e/_lib/mockLLM.js';
 
 const SESSION_HEADER = 'X-Luker-Transient-Session';
@@ -152,7 +153,10 @@ async function inspectionIds() {
 beforeAll(async () => {
     upstream = await startMockLLM();
     upstream.scriptCompletion(() => ({ text: 'The shoreline is quiet.' }));
+    const run = await ensureRun();
+    const scope = trackScope(await run.scope({ kind: 'scenario', label: 'generate-task-isolation' }));
     server = await startServer({
+        scope,
         batchKey: 'extensions',
         scenarioId: 'generation-isolation',
         extraConfig: {
@@ -164,8 +168,8 @@ beforeAll(async () => {
     });
     client = await request.newContext({ baseURL: server.baseURL });
     csrf = (await (await client.get('/csrf-token')).json()).token;
-    // Matches the existing real-server fixture's startup readiness budget.
-}, 60_000);
+    // Matches the existing real-server fixture's startup readiness budget under parallel workers.
+}, 120_000);
 
 afterEach(async () => {
     try {
@@ -184,7 +188,7 @@ afterEach(async () => {
 
 afterAll(async () => {
     await client?.dispose();
-    await tearDownServer(server);
+    await server?.stop();
     await upstream?.stop();
 });
 

@@ -42,7 +42,7 @@ import {
     clearAllCharacterBoundPresets,
 } from './presets.js';
 import { getCurrentPresetBodyForBinding, maybeApplyCharacterBoundPreset } from '/scripts/openai.js';
-import { decodeCardBoundOptionValue } from './preset-ref-codec.js';
+import { decodeCardBoundOptionValue } from '../lib/preset-ref-codec.js';
 
 const DIALOG_ID = 'luker_manage_bound_presets_dialog';
 const CLEAR_DIALOG_ID = 'luker_clear_bound_presets_dialog';

@@ -131,6 +131,7 @@ import {
     clearCharacterBoundChatCompletionPreset,
     maybeApplyCharacterBoundPreset,
     initOpenAI,
+    captureCharacterBoundSettingsSave,
 } from './scripts/openai.js';
 
 import { openManageBoundPresetsDialog } from './scripts/character/manage-bound-presets-dialog.js';
@@ -216,7 +217,7 @@ import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, 
 import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
-import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/lib/state-errors.js';
 import { invalidateStateResources, normalizeStateNamespace, readStateEnvelope } from './scripts/state-resource.js';
 import {
     formatHttpErrorHint,
@@ -224,7 +225,7 @@ import {
     formatConflictHint,
     formatValidationArgsHint,
     formatValidationTargetHint,
-} from './scripts/state-errors/format.js';
+} from './scripts/lib/state-errors-format.js';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, consumeEphemeralScriptInjectsForMainGeneration, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, processChatSlashCommands, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import {
     tag_map,
@@ -330,6 +331,8 @@ import { registerExtensionSlashCommands as initExtensionSlashCommands } from './
 import { ToolManager } from './scripts/tool-calling.js';
 import { classifyInvocationSummary, getOpenToolTaskTailStart } from './scripts/tool-invocation-hide.js';
 import { registerSkillEmbedLifecycle } from './scripts/skills/embed-lifecycle.js';
+import { confirmCharacterSkillsExport } from './scripts/skills/embed-export-hook.js';
+import { describeCharacterExportWarnings } from './scripts/character/export-warnings.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -340,7 +343,8 @@ import { getContext } from './scripts/st-context.js';
 // that consume ctx off the global.  Must import AFTER st-context.js so
 // getContext() returns a fully-populated object (character.presets et al).
 import './scripts/lukerContext.js';
-import { extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, ReasoningType, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { extractNativeTurnFromData, extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, ReasoningType, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { extractCitationsFromData, mergeCitations, renderMessageCitations } from './scripts/lib/citations.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
@@ -372,7 +376,7 @@ import { showUndoToast } from './scripts/undo-toast.js';
 import { setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
-import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks } from './scripts/ws-delivery.js';
+import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks, onLukerResponseMeta } from './scripts/ws-delivery.js';
 import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
 import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 import { initWorkbench } from './scripts/workbench/index.js';
@@ -500,15 +504,27 @@ const LUKER_RECOVERY_PREVIEW_ID = 'luker_generation_recovery_preview';
 const LUKER_SERVER_PERSISTENCE_APIS = new Set(['openai', 'textgenerationwebui', 'kobold', 'novel']);
 let lastLukerGenerationId = '';
 let lastLukerReplyPersistedByServer = false;
+let lukerGenerationEpoch = 0;
+let disposeLukerResponseMetaListener = null;
 
 function supportsLukerServerPersistence(api = main_api) {
     return LUKER_SERVER_PERSISTENCE_APIS.has(api);
+}
+
+function setLukerResponseMetaDisposer(dispose) {
+    const previous = disposeLukerResponseMetaListener;
+    disposeLukerResponseMetaListener = typeof dispose === 'function' ? dispose : null;
+    if (previous && previous !== dispose) {
+        previous();
+    }
 }
 
 function resetLukerGenerationState(api = main_api) {
     if (api === 'openai') {
         return;
     }
+    lukerGenerationEpoch += 1;
+    setLukerResponseMetaDisposer(null);
     lastLukerGenerationId = '';
     lastLukerReplyPersistedByServer = false;
 }
@@ -569,23 +585,80 @@ function applyLukerGenerationMetaForApi(api = main_api, { generationId = '', per
     }
 }
 
-function applyLukerGenerationMetaFromHeaders(api, response) {
-    if (!response || api === 'openai') {
-        return;
+function applyLukerGenerationMetaFromHeaders(api, response, { expectedEpoch, expectedGenerationId = '', signal = null } = {}) {
+    if (!response || api === 'openai' || main_api !== api) {
+        return null;
     }
-    const generationId = response.headers.get('x-luker-generation-id');
+    if (expectedEpoch !== undefined && expectedEpoch !== lukerGenerationEpoch) {
+        return null;
+    }
+    const generationEpoch = expectedEpoch ?? lukerGenerationEpoch;
+    const headerGenerationId = response.headers.get('x-luker-generation-id') || '';
+    let trackedGenerationId = expectedGenerationId || headerGenerationId;
+    if (headerGenerationId && expectedGenerationId && headerGenerationId !== expectedGenerationId) {
+        return null;
+    }
     const persistedHeader = response.headers.get('x-luker-server-persisted');
     const persisted = persistedHeader === '1' ? true : persistedHeader === '0' ? false : undefined;
     applyLukerGenerationMetaForApi(api, {
-        generationId,
+        generationId: headerGenerationId,
         persisted,
     });
-    if (generationId || typeof persisted === 'boolean') {
+    if (headerGenerationId || typeof persisted === 'boolean') {
         logLukerPersistenceDebug(api, 'response_header_meta', {
-            generation_id: generationId || '',
+            generation_id: headerGenerationId || '',
             ...(typeof persisted === 'boolean' ? { persisted } : {}),
         });
     }
+    const rawDispose = onLukerResponseMeta(response, (meta) => {
+        if (main_api !== api || generationEpoch !== lukerGenerationEpoch) {
+            return;
+        }
+        const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
+        // Ignore stale late metadata from an older generation after a newer one started.
+        if (trackedGenerationId && lastLukerGenerationId && lastLukerGenerationId !== trackedGenerationId) {
+            return;
+        }
+        if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
+            return;
+        }
+        if (metaGenerationId && !trackedGenerationId) {
+            trackedGenerationId = metaGenerationId;
+        }
+        const update = {};
+        if (metaGenerationId) {
+            update.generationId = metaGenerationId;
+        }
+        if (typeof meta?.persisted === 'boolean') {
+            update.persisted = meta.persisted;
+        }
+        if (Object.keys(update).length > 0) {
+            applyLukerGenerationMetaForApi(api, update);
+            logLukerPersistenceDebug(api, 'response_meta', {
+                ...(update.generationId ? { generation_id: update.generationId } : {}),
+                ...(typeof update.persisted === 'boolean' ? { persisted: update.persisted } : {}),
+            });
+        }
+    });
+    let disposed = false;
+    const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        signal?.removeEventListener?.('abort', dispose);
+        if (disposeLukerResponseMetaListener === dispose) {
+            disposeLukerResponseMetaListener = null;
+        }
+        rawDispose?.();
+    };
+    setLukerResponseMetaDisposer(dispose);
+    if (signal) {
+        if (signal.aborted) {
+            dispose();
+        } else {
+            signal.addEventListener('abort', dispose, { once: true });
+        }
+    }
+    return dispose;
 }
 
 export function getLastLukerGenerationIdForApi(api = main_api) {
@@ -1983,8 +2056,6 @@ let this_edit_mes_id = undefined;
 export let settings;
 let settingsSnapshotCache = null;
 let settingsSaveInFlight = null;
-let settingsSaveQueued = false;
-let settingsSaveQueuedOptions = null;
 let settingsSaveBlockedForImport = false;
 let forceAsyncDiffForNextSettingsSave = false;
 let forceAsyncDiffForNextSettingsSaveTimer = null;
@@ -2195,13 +2266,13 @@ async function firstLoadInit() {
             onServerAbort: handleServerAbort,
         });
         // Also patch every same-origin iframe's own fetch, current and future.
-        // TavernHelper (JS-Slash-Runner) sandboxes user scripts inside a
-        // `TH-render` iframe whose `window.fetch` was untouched by the top
-        // proxy above — those scripts calling `/api/backends/*/generate`
-        // would otherwise receive the runner's synthetic `{}` body directly
-        // and bail with "invalid response format". See
-        // public/scripts/ws-delivery.js:installFetchProxyForAllIframes for
-        // the three-step lifecycle (current + MutationObserver + iframe
+        // Script runtimes that sandbox user scripts inside their own
+        // same-origin iframe leave that iframe's `window.fetch` untouched by
+        // the top proxy above — those scripts calling
+        // `/api/backends/*/generate` would otherwise receive the runner's
+        // synthetic `{}` body directly and bail with "invalid response
+        // format". See public/scripts/ws-delivery.js:installFetchProxyForAllIframes
+        // for the three-step lifecycle (current + MutationObserver + iframe
         // `load` re-patch) and per-window idempotency guard.
         installFetchProxyForAllIframes(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
@@ -2242,7 +2313,10 @@ async function firstLoadInit() {
     showLoader();
     const clientVersionPromise = getClientVersion();
     const bootstrapPromise = fetchBootstrapSnapshot();
-    const settingsPayloadPromise = loadSettingsEnvelope({ bootstrap: true });
+    const settingsPayloadPromise = loadSettingsEnvelopeOnFreshSnapshot({ bootstrap: true }).then(
+        value => ({ ok: true, value }),
+        error => ({ ok: false, error }),
+    );
     registerPromptManagerMigration();
     initDomHandlers();
     initStandaloneMode();
@@ -2273,7 +2347,11 @@ async function firstLoadInit() {
     console.debug('[init] calling getSettings...');
     let settingsPayload;
     try {
-        settingsPayload = await settingsPayloadPromise;
+        const settingsPayloadResult = await settingsPayloadPromise;
+        if (!settingsPayloadResult.ok) {
+            throw settingsPayloadResult.error;
+        }
+        settingsPayload = settingsPayloadResult.value;
     } catch (error) {
         console.error('Failed to load settings resources', error);
         if (isLoaderVisible()) {
@@ -2385,11 +2463,10 @@ async function firstLoadInit() {
         () => addDebugFunctions(),
         () => doDailyExtensionUpdatesCheck(),
         () => {
-            // Hook skills lifecycle (CHARACTER_DELETED / PRESET_DELETED
-            // cascade + import dialogs) into the core boot sequence so it
-            // is deterministic — not contingent on the orchestrator
-            // extension loading first.
-            try { registerSkillEmbedLifecycle({ context: getContext() }); } catch (_) { /* best-effort */ }
+            // Hook the skills embed lifecycle (import dialogs, preset export
+            // bundling, delete cascades) into the core boot sequence so it
+            // works whether or not the orchestrator extension is enabled.
+            try { registerSkillEmbedLifecycle({ context: getContext(), t: translate }); } catch (_) { /* best-effort */ }
         },
         () => {
             // Drop the batched preset-state read cache for a preset the
@@ -4646,6 +4723,7 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
     updateReasoningUI(messageElement);
 
     addCopyToCodeBlocks(messageElement);
+    renderMessageCitations(message, messageElement, { sourcesLabel: t`Sources` });
     appendMediaToMessage(message, messageElement);
 }
 
@@ -5533,6 +5611,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         newMessage.find('.mes_text').html(messageText).attr('title', title);
         newMessage.find('.timestamp').text(timestamp).attr('title', `${params.extra.api} - ${params.extra.model}`);
         updateReasoningUI(newMessage);
+        renderMessageCitations(mes, newMessage, { sourcesLabel: t`Sources` });
         appendMediaToMessage(mes, newMessage, scroll ? SCROLL_BEHAVIOR.ADJUST : SCROLL_BEHAVIOR.NONE);
         if (power_user.timestamp_model_icon && params.extra?.api) {
             insertSVGIcon(newMessage, params.extra);
@@ -5547,6 +5626,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         }
     } else {
         newMessage.find('.mes_text').append(messageText);
+        renderMessageCitations(mes, newMessage, { sourcesLabel: t`Sources` });
         appendMediaToMessage(mes, newMessage, scroll ? SCROLL_BEHAVIOR.ADJUST : SCROLL_BEHAVIOR.NONE);
     }
 
@@ -5687,6 +5767,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
     });
 
+    renderMessageCitations(mes, messageElement, { sourcesLabel: t`Sources` });
     appendMediaToMessage(mes, messageElement, adjustMediaScroll);
     messageElement.find('.mes_text').html(messageHTML);
     addCopyToCodeBlocks(messageElement);
@@ -6758,6 +6839,14 @@ class StreamingProcessor {
         this.reasoningBlocks = null;
         /** @type {object[]?} */
         this.reasoningDetails = null;
+        /** @type {object[]?} */
+        this.nativeParts = null;
+        /** @type {object[]?} */
+        this.nativeContentBlocks = null;
+        /** @type {object[]?} */
+        this.responsesOutputItems = null;
+        /** @type {any[]?} */
+        this.citations = null;
         /** @type {number} */
         this.chatEpoch = getChatTransitionEpoch();
     }
@@ -6970,18 +7059,67 @@ class StreamingProcessor {
         }
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
+        const prevFinishReason = message?.extra?.finish_reason ?? null;
+        const isPauseTurnContinue = this.type === 'continue' && prevFinishReason === 'pause_turn';
         // Stamp before swipe_info clones extra. A non-stop reason (`tool_calls`,
-        // `length`) keeps this turn from closing the tool task, so the next
-        // prompt build will not strip the in-progress tail's tool records.
+        // `length`, `pause_turn`) keeps this turn from closing the tool task, so
+        // the next prompt build will not strip the in-progress tail's records.
         // Infer `tool_calls` when the stream carried calls but the provider
         // omitted a finish reason — missing would look like a legacy close.
         if (message) {
+            message.extra = message.extra || {};
             const finishReason = this.finishReason
                 || (Array.isArray(this.toolCalls) && this.toolCalls.length > 0 ? 'tool_calls' : '');
             if (finishReason) {
-                message.extra = message.extra || {};
                 message.extra.finish_reason = String(finishReason);
             }
+            // Persist provider-native replay metadata and citations BEFORE
+            // syncMesToSwipe so swipe_info[swipe_id].extra captures them too.
+            if (this.reasoningSignature) {
+                message.extra.reasoning_signature = this.reasoningSignature;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.reasoning_signature;
+            }
+            if (Array.isArray(this.reasoningBlocks) && this.reasoningBlocks.length > 0) {
+                message.extra.reasoning_blocks = isPauseTurnContinue && Array.isArray(message.extra.reasoning_blocks)
+                    ? [...message.extra.reasoning_blocks, ...this.reasoningBlocks]
+                    : this.reasoningBlocks;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.reasoning_blocks;
+            }
+            if (Array.isArray(this.reasoningDetails) && this.reasoningDetails.length > 0) {
+                message.extra.reasoning_details = this.reasoningDetails;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.reasoning_details;
+            }
+            if (Array.isArray(this.nativeParts) && this.nativeParts.length > 0) {
+                message.extra.native_parts = this.nativeParts;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.native_parts;
+            }
+            if (Array.isArray(this.nativeContentBlocks) && this.nativeContentBlocks.length > 0) {
+                message.extra.native_content_blocks = isPauseTurnContinue && Array.isArray(message.extra.native_content_blocks)
+                    ? [...message.extra.native_content_blocks, ...this.nativeContentBlocks]
+                    : this.nativeContentBlocks;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.native_content_blocks;
+            }
+            if (Array.isArray(this.responsesOutputItems) && this.responsesOutputItems.length > 0) {
+                message.extra.responses_output_items = this.responsesOutputItems;
+            } else if (!isPauseTurnContinue) {
+                delete message.extra.responses_output_items;
+            }
+            if (this.type === 'continue') {
+                const mergedCitations = mergeCitations(message.extra.citations, this.citations);
+                if (mergedCitations) {
+                    message.extra.citations = mergedCitations;
+                }
+            } else if (Array.isArray(this.citations) && this.citations.length > 0) {
+                message.extra.citations = this.citations;
+            } else {
+                delete message.extra.citations;
+            }
+            renderMessageCitations(message, messageElement, { sourcesLabel: t`Sources` });
         }
         addCopyToCodeBlocks(messageElement);
 
@@ -6995,6 +7133,14 @@ class StreamingProcessor {
             delete swipeInfoExtra.token_count;
             delete swipeInfoExtra.reasoning;
             delete swipeInfoExtra.reasoning_duration;
+            delete swipeInfoExtra.reasoning_signature;
+            delete swipeInfoExtra.reasoning_blocks;
+            delete swipeInfoExtra.reasoning_details;
+            delete swipeInfoExtra.native_parts;
+            delete swipeInfoExtra.native_content_blocks;
+            delete swipeInfoExtra.responses_output_items;
+            delete swipeInfoExtra.citations;
+            delete swipeInfoExtra.finish_reason;
             const swipeInfo = {
                 send_date: message.send_date,
                 gen_started: message.gen_started,
@@ -7018,22 +7164,6 @@ class StreamingProcessor {
                 return;
             }
             appendMediaToMessage(message, $(this.messageDom));
-        }
-
-        // Store reasoning signature for models that support multi-turn context
-        if (message && this.reasoningSignature) {
-            message.extra = message.extra || {};
-            message.extra.reasoning_signature = this.reasoningSignature;
-        }
-
-        if (message && Array.isArray(this.reasoningBlocks) && this.reasoningBlocks.length > 0) {
-            message.extra = message.extra || {};
-            message.extra.reasoning_blocks = this.reasoningBlocks;
-        }
-
-        if (message && Array.isArray(this.reasoningDetails) && this.reasoningDetails.length > 0) {
-            message.extra = message.extra || {};
-            message.extra.reasoning_details = this.reasoningDetails;
         }
 
         if (unlockUI) {
@@ -7063,7 +7193,7 @@ class StreamingProcessor {
             await eventSource.emit(event_types.IMPERSONATE_READY, text);
         }
 
-        if (!this.isStaleEpoch()) {
+        if (!deferEmit && !this.isStaleEpoch()) {
             updateSwipeCounter(messageId, { message, messageElement });
         }
     }
@@ -7084,17 +7214,16 @@ class StreamingProcessor {
             return;
         }
 
-        // Defer the MESSAGE_RECEIVED/CHARACTER_MESSAGE_RENDERED emits to AFTER
-        // the persist below so extension listeners can't race us into a
-        // double-write that BE then dedups (producing a snapshot phantom).
-        // See commit 6c99b32d0 (HAR analysis) for the race details.
-        await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true, deferEmit: true });
+        // Keep generation completion and message events behind persistence so
+        // consumers cannot start another turn or read an uncommitted reply.
+        await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: false, deferEmit: true });
         if (this.isStaleEpoch()) {
             return;
         }
 
         const isAborted = this.abortController.signal.aborted;
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
+            this.markUIGenStopped();
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
         // luker_generation_id is a protocol-layer ack/dedup token; it travels in
@@ -7132,6 +7261,7 @@ class StreamingProcessor {
             return;
         }
 
+        this.markUIGenStopped();
         if (this.type !== 'impersonate') {
             await eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
             if (this.isStaleEpoch()) {
@@ -7139,6 +7269,7 @@ class StreamingProcessor {
             }
             await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
         }
+        updateSwipeCounter(this.messageId);
 
         if (!this.isStaleEpoch()) {
             playMessageSound();
@@ -7246,6 +7377,18 @@ class StreamingProcessor {
                 if (Array.isArray(this.reasoningDetails) && this.reasoningDetails.length === 0) {
                     this.reasoningDetails = null;
                 }
+                this.nativeParts = Array.isArray(state?.nativeParts) && state.nativeParts.length > 0
+                    ? state.nativeParts.filter(Boolean)
+                    : null;
+                this.nativeContentBlocks = Array.isArray(state?.nativeContentBlocks) && state.nativeContentBlocks.length > 0
+                    ? state.nativeContentBlocks.filter(Boolean)
+                    : null;
+                this.responsesOutputItems = Array.isArray(state?.responsesOutputItems) && state.responsesOutputItems.length > 0
+                    ? state.responsesOutputItems.filter(Boolean)
+                    : null;
+                this.citations = Array.isArray(state?.citations) && state.citations.length > 0
+                    ? state.citations.filter(Boolean)
+                    : null;
                 if (state?.finishReason) {
                     this.finishReason = String(state.finishReason);
                 }
@@ -7846,7 +7989,18 @@ export async function Generate(type, options = {}, dryRun = false) {
 async function generateInternal(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
     const genEpoch = getChatTransitionEpoch();
-    setGenerationProgress(0);
+    // A quiet generation started while another generation is in flight
+    // leaves the foreground generation's UI and send state alone: the
+    // progress bar, timing, Send/Stop buttons, swipes and `is_send_press`
+    // belong to the generation in flight, which unblocks them once, whether
+    // it ends before or after this quiet generation.
+    const sharesInFlightController = type === 'quiet'
+        && is_send_press
+        && Boolean(abortController)
+        && !abortController.signal.aborted;
+    if (!sharesInFlightController) {
+        setGenerationProgress(0);
+    }
     if (!dryRun && type !== 'quiet') {
         generation_started = new Date();
     }
@@ -7874,6 +8028,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     } else {
         generationAbortController = abortController;
     }
+    const unblockThisGeneration = (generationType) => unblockGeneration(generationType, { suppress: sharesInFlightController });
 
     const isGenerationAborted = () => Boolean(
         generationAbortController?.signal?.aborted
@@ -7889,7 +8044,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
             setExtensionPrompt(inject_ids.QUIET_PROMPT, '', extension_prompt_types.IN_PROMPT, 0, true);
 
             if (!dryRun && type !== 'quiet') {
-                unblockGeneration(type);
+                unblockThisGeneration(type);
             }
         }
 
@@ -7902,7 +8057,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
         if (interruptedByCommand) {
             //$("#send_textarea").val('')[0].dispatchEvent(new Event('input', { bubbles:true }));
             if (getChatTransitionEpoch() === genEpoch) {
-                unblockGeneration(type);
+                unblockThisGeneration(type);
             }
             return Promise.resolve();
         }
@@ -7925,6 +8080,8 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
         genEpoch,
         generationEventParams,
         generationAbortController,
+        sharesInFlightController,
+        unblockThisGeneration,
         exitAbortedGenerationIfNeeded,
     };
 
@@ -7947,7 +8104,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     }, () => generateInternalAfterCommands(generationPayload));
 }
 
-async function generateInternalAfterCommands({ type, automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, dryRun, genEpoch, generationEventParams, generationAbortController, exitAbortedGenerationIfNeeded }) {
+async function generateInternalAfterCommands({ type, automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, dryRun, genEpoch, generationEventParams, generationAbortController, sharesInFlightController, unblockThisGeneration, exitAbortedGenerationIfNeeded }) {
     const isStaleEpoch = () => !dryRun && getChatTransitionEpoch() !== genEpoch;
     if (isStaleEpoch()) {
         return Promise.resolve();
@@ -7982,12 +8139,12 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
     if (main_api == 'kobold' && kai_settings.streaming_kobold && !kai_flags.can_use_streaming) {
         toastr.error(t`Streaming is enabled, but the version of Kobold used does not support token streaming.`, undefined, { timeOut: 10000, preventDuplicates: true });
-        unblockGeneration(type);
+        unblockThisGeneration(type);
         return Promise.resolve();
     }
 
     if (isHordeGenerationNotAllowed()) {
-        unblockGeneration(type);
+        unblockThisGeneration(type);
         return Promise.resolve();
     }
 
@@ -7999,7 +8156,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         }
 
         if (!pingResult) {
-            unblockGeneration(type);
+            unblockThisGeneration(type);
             toastr.error(t`Verify that the server is running and accessible.`, t`ST Server cannot be reached`);
             if (type !== 'quiet') {
                 notifyMessageFailure(t`Server cannot be reached.`, String(name2 || ''));
@@ -8008,7 +8165,9 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         }
 
         // Hide swipes if not in a dry run.
-        hideSwipeButtons();
+        if (!sharesInFlightController) {
+            hideSwipeButtons();
+        }
         // If generated any message, set the flag to indicate it can't be recreated again.
         chat_metadata.tainted = true;
     }
@@ -8038,7 +8197,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             setCharacterName('');
         } else {
             console.log('No enabled members found');
-            unblockGeneration(type);
+            unblockThisGeneration(type);
             return Promise.resolve();
         }
     }
@@ -8055,7 +8214,9 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
     // We can't do anything because we're not in a chat right now. (Unless it's a dry run, in which case we need to
     // assemble the prompt so we can count its tokens regardless of whether a chat is active.)
     if (!dryRun && !hasBackendConnection) {
-        is_send_press = false;
+        if (!sharesInFlightController) {
+            is_send_press = false;
+        }
         return Promise.resolve();
     }
 
@@ -8116,7 +8277,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         }
     }
 
-    if (!dryRun) {
+    if (!dryRun && !sharesInFlightController) {
         deactivateSendButtons();
     }
 
@@ -8350,7 +8511,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
         if (aborted) {
             console.debug('Generation aborted by extension interceptors');
-            unblockGeneration(type);
+            unblockThisGeneration(type);
             return Promise.resolve();
         }
     } else {
@@ -8363,7 +8524,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         try {
             adjustedParams = await adjustHordeGenerationParams(max_context, amount_gen);
         } catch {
-            unblockGeneration(type);
+            unblockThisGeneration(type);
             return Promise.resolve();
         }
         if (horde_settings.auto_adjust_context_length) {
@@ -8952,8 +9113,10 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
     console.debug('calling runGenerate');
 
     if (isContinue) {
-        // Coping mechanism for OAI spacing
-        if (main_api === 'openai' && !cyclePrompt.endsWith(' ')) {
+        const isPauseTurnContinue = chat[chat.length - 1]?.extra?.finish_reason === 'pause_turn';
+        // Coping mechanism for OAI spacing (skip on Claude pause_turn continuation
+        // so server-tool turns with empty initial text do not gain a stray prefix).
+        if (main_api === 'openai' && !isPauseTurnContinue && !cyclePrompt.endsWith(' ')) {
             cyclePrompt += oai_settings.continue_postfix;
             continue_mag += oai_settings.continue_postfix;
         }
@@ -8961,7 +9124,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
     const originalType = type;
 
-    if (!dryRun) {
+    if (!dryRun && !sharesInFlightController) {
         is_send_press = true;
     }
 
@@ -9326,7 +9489,11 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
         console.debug('rungenerate calling API');
 
-        showStopButton(type);
+        // A quiet generation sharing an in-flight one keeps that
+        // generation's Stop button and its generation type.
+        if (!sharesInFlightController) {
+            showStopButton(type);
+        }
 
         //set array object for prompt token itemization of this message
         let currentArrayEntry = Number(thisPromptBits.length - 1);
@@ -9606,7 +9773,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     // so extensions see the same relative timing as the core
                     // streaming path. Persistence still happens above, so
                     // the write race fixed in 497a767824 stays fixed.
-                    unblockGeneration(type);
+                    unblockThisGeneration(type);
 
                     await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
                     if (abortController !== myAbortController || isStaleEpoch()) {
@@ -9677,7 +9844,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     }
                     extractMessageById(placeholderId);
                     redrawMessageBubble(placeholderId);
-                    unblockGeneration(type);
+                    unblockThisGeneration(type);
                     return Object.defineProperties(new String(cleanedText), {
                         'fromTakeover': { value: true },
                     });
@@ -9700,7 +9867,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     });
                 }
                 try { await eventSource.emit(event_types.GENERATION_STOPPED); } catch { /* best-effort */ }
-                unblockGeneration(type);
+                unblockThisGeneration(type);
                 return Object.defineProperties(new String(''), {
                     'fromTakeover': { value: true },
                 });
@@ -9790,7 +9957,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                         if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
                             ToolManager.showToolCallError(invocationResult.errors);
                         }
-                        unblockGeneration(type);
+                        unblockThisGeneration(type);
                         clearStreamingProcessorIfOwned();
                         return;
                     }
@@ -9810,7 +9977,12 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
             if (isStreamFinished) {
                 const streamFinishReason = streamProcessor.finishReason ?? null;
-                const willAutoContinue = shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate);
+                const willContinuePausedTurn = !isImpersonate
+                    && streamFinishReason === 'pause_turn'
+                    && depth < ToolManager.RECURSE_LIMIT
+                    && Array.isArray(streamProcessor.nativeContentBlocks)
+                    && streamProcessor.nativeContentBlocks.length > 0;
+                const willAutoContinue = willContinuePausedTurn || shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate);
                 if (willAutoContinue) {
                     // Middle round of an auto-continue-on-truncated chain.
                     // Finalize DOM / chat[i].mes state locally but do NOT
@@ -9902,7 +10074,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         // saveReply (which would push a second, duplicate chat entry).
         if (data?.fromTakeover) {
             if (!isStaleEpoch()) {
-                unblockGeneration(type);
+                unblockThisGeneration(type);
             }
             return data;
         }
@@ -9915,7 +10087,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
         // if an error was returned in data (textgenwebui), show it and throw it
         if (data.error) {
-            unblockGeneration(type);
+            unblockThisGeneration(type);
 
             if (data?.response) {
                 toastr.error(data.response, t`API Error`, { preventDuplicates: true });
@@ -9924,7 +10096,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         }
 
         if (jsonSchema) {
-            unblockGeneration(type);
+            unblockThisGeneration(type);
             return extractJsonFromData(data, { returnInvalidJson: jsonSchema.returnInvalid ?? false });
         }
 
@@ -9936,6 +10108,8 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         const reasoningSignature = extractReasoningSignatureFromData(data);
         const reasoningBlocks = extractReasoningBlocksFromData(data);
         const reasoningDetails = extractReasoningDetailsFromData(data);
+        const { nativeParts, nativeContentBlocks, responsesOutputItems } = extractNativeTurnFromData(data);
+        const citations = extractCitationsFromData(data);
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -9976,7 +10150,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             await eventSource.emit(event_types.IMPERSONATE_READY, getMessage);
         } else if (type == 'quiet') {
             if (!isStaleEpoch()) {
-                unblockGeneration(type);
+                unblockThisGeneration(type);
             }
             return getMessage;
         } else {
@@ -9986,7 +10160,12 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             // observe one MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED for
             // the merged final message, not one per intermediate round.
             const nonStreamFinishReason = data?.choices?.[0]?.finish_reason ?? null;
-            const willAutoContinue = shouldAutoContinueOnTruncated(nonStreamFinishReason, isImpersonate);
+            const willContinuePausedTurn = !isImpersonate
+                && nonStreamFinishReason === 'pause_turn'
+                && depth < ToolManager.RECURSE_LIMIT
+                && Array.isArray(nativeContentBlocks)
+                && nativeContentBlocks.length > 0;
+            const willAutoContinue = willContinuePausedTurn || shouldAutoContinueOnTruncated(nonStreamFinishReason, isImpersonate);
             // Same contract as the streaming stamp: a tool round with no
             // provider reason must not look like a legacy close.
             const stampedFinishReason = nonStreamFinishReason
@@ -9994,9 +10173,9 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, nativeParts, nativeContentBlocks, responsesOutputItems, citations, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, nativeParts, nativeContentBlocks, responsesOutputItems, citations, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
             }
             if (isStaleEpoch()) {
                 return;
@@ -10032,7 +10211,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     }
                     await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat.length - 1, type);
                     if (!isStaleEpoch()) {
-                        unblockGeneration(type);
+                        unblockThisGeneration(type);
                     }
                     return;
                 }
@@ -10057,7 +10236,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
                         ToolManager.showToolCallError(invocationResult.errors);
                     }
-                    unblockGeneration(type);
+                    unblockThisGeneration(type);
                     return;
                 }
 
@@ -10118,7 +10297,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         if (isStaleEpoch()) {
             return;
         }
-        unblockGeneration(type);
+        unblockThisGeneration(type);
         streamingProcessor = null;
 
         if (type !== 'quiet') {
@@ -10143,7 +10322,9 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             console.log(exception);
             throw exception;
         }
-        clearMessageProgressNotification();
+        if (!sharesInFlightController) {
+            clearMessageProgressNotification();
+        }
 
         const isAbortedError = generationAbortController?.signal?.aborted
             || exception?.name === 'AbortError'
@@ -10172,9 +10353,13 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             toastr.error(exception.error.message, t`Text generation error`, { timeOut: 10000, extendedTimeOut: 20000 });
         }
 
-        unblockGeneration(type);
+        unblockThisGeneration(type);
         console.log(exception);
-        streamingProcessor = null;
+        // A quiet generation never streams, so a sharing one does not own
+        // the processor of the streaming turn it shares with.
+        if (!sharesInFlightController) {
+            streamingProcessor = null;
+        }
         throw exception;
     }
 }
@@ -10297,6 +10482,8 @@ function unblockGeneration(type, { suppress = false } = {}) {
     // is_send_press = true and NOT emit GENERATION_ENDED, otherwise the UI
     // flashes send-enabled and extensions see one "ended" per round instead
     // of one for the whole merged reply.
+    // Quiet generations sharing an outer turn also leave its UI and end
+    // event ownership unchanged.
     if (suppress) {
         return;
     }
@@ -10869,14 +11056,17 @@ export async function sendGenerationRequest(type, data, options = {}, signal = a
         return await generateHorde(data.prompt, data, signal, true);
     }
 
-    const shouldTrackLukerGenerationState = shouldUseLukerServerPersistenceForType(type) && supportsLukerServerPersistence(main_api);
+    const requestApi = main_api;
+    const shouldTrackLukerGenerationState = shouldUseLukerServerPersistenceForType(type) && supportsLukerServerPersistence(requestApi);
     if (shouldTrackLukerGenerationState) {
-        resetLukerGenerationState(main_api);
+        resetLukerGenerationState(requestApi);
     }
+    const generationEpoch = lukerGenerationEpoch;
     const lukerGenerationOptions = shouldTrackLukerGenerationState
-        ? buildLukerGenerationRequestOptions(type, main_api)
+        ? buildLukerGenerationRequestOptions(type, requestApi)
         : null;
-    const requestTimeoutMs = main_api === 'textgenerationwebui' ? getRequestTimeoutMs() : 0;
+    const expectedGenerationId = String(lukerGenerationOptions?.job_id || '');
+    const requestTimeoutMs = requestApi === 'textgenerationwebui' ? getRequestTimeoutMs() : 0;
     let requestData = lukerGenerationOptions
         ? { ...data, luker_generation: lukerGenerationOptions }
         : data;
@@ -10896,7 +11086,7 @@ export async function sendGenerationRequest(type, data, options = {}, signal = a
     // funnels through this fetch, so it must respect the same per-profile
     // retry policy (max-request-retries + retry-status-whitelist) as the rest.
     const response = await withProfileRetry(async () => {
-        return await fetch(getGenerateUrl(main_api), {
+        return await fetch(getGenerateUrl(requestApi), {
             method: 'POST',
             headers: getRequestHeaders(),
             cache: 'no-cache',
@@ -10905,7 +11095,7 @@ export async function sendGenerationRequest(type, data, options = {}, signal = a
         });
     }, {
         signal,
-        label: `generic-non-stream:${main_api}`,
+        label: `generic-non-stream:${requestApi}`,
         onAttempt: (attempt, _err, _delay, maxRetries) => {
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,
@@ -10915,15 +11105,23 @@ export async function sendGenerationRequest(type, data, options = {}, signal = a
         },
     });
 
-    if (shouldTrackLukerGenerationState) {
-        applyLukerGenerationMetaFromHeaders(main_api, response);
-    }
+    const disposeGenerationMeta = shouldTrackLukerGenerationState
+        ? applyLukerGenerationMetaFromHeaders(requestApi, response, {
+            expectedEpoch: generationEpoch,
+            expectedGenerationId,
+            signal,
+        })
+        : null;
 
-    if (!response.ok) {
-        throw await response.json();
-    }
+    try {
+        if (!response.ok) {
+            throw await response.json();
+        }
 
-    return await response.json();
+        return await response.json();
+    } finally {
+        disposeGenerationMeta?.();
+    }
 }
 
 /**
@@ -10948,39 +11146,65 @@ export async function sendStreamingRequest(type, data, options = {}) {
     data = requestPayload.data;
     options = requestPayload.options || options;
 
-    const shouldTrackLukerGenerationState = shouldUseLukerServerPersistenceForType(type) && supportsLukerServerPersistence(main_api);
+    const requestApi = main_api;
+    const shouldTrackLukerGenerationState = shouldUseLukerServerPersistenceForType(type) && supportsLukerServerPersistence(requestApi);
+    let trackedGenerationId = '';
+    if (requestApi !== 'openai') {
+        if (shouldTrackLukerGenerationState) {
+            resetLukerGenerationState(requestApi);
+        }
+        const lukerGenerationOptions = shouldTrackLukerGenerationState
+            ? buildLukerGenerationRequestOptions(type, requestApi)
+            : null;
+        if (lukerGenerationOptions) {
+            trackedGenerationId = String(lukerGenerationOptions.job_id || '');
+            data = { ...data, luker_generation: lukerGenerationOptions };
+        }
+    }
+    const generationEpoch = lukerGenerationEpoch;
     const onLukerMeta = shouldTrackLukerGenerationState
         ? (meta) => {
-            applyLukerGenerationMetaForApi(main_api, meta);
-            if (meta?.generationId || typeof meta?.persisted === 'boolean') {
-                logLukerPersistenceDebug(main_api, 'stream_meta', {
-                    ...(meta?.generationId ? { generation_id: meta.generationId } : {}),
+            if (main_api !== requestApi || generationEpoch !== lukerGenerationEpoch) {
+                return;
+            }
+            const incomingGenerationId = typeof meta?.generationId === 'string' ? meta.generationId : '';
+            if (trackedGenerationId && lastLukerGenerationId && lastLukerGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (incomingGenerationId && trackedGenerationId && incomingGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (incomingGenerationId && !trackedGenerationId) {
+                trackedGenerationId = incomingGenerationId;
+            }
+            applyLukerGenerationMetaForApi(requestApi, meta);
+            if (incomingGenerationId || typeof meta?.persisted === 'boolean') {
+                logLukerPersistenceDebug(requestApi, 'stream_meta', {
+                    ...(incomingGenerationId ? { generation_id: incomingGenerationId } : {}),
                     ...(typeof meta?.persisted === 'boolean' ? { persisted: meta.persisted } : {}),
                 });
             }
         }
         : null;
-    if (main_api !== 'openai') {
-        if (shouldTrackLukerGenerationState) {
-            resetLukerGenerationState(main_api);
+    const onLukerMetaDisposer = shouldTrackLukerGenerationState
+        ? (dispose) => {
+            if (main_api !== requestApi || generationEpoch !== lukerGenerationEpoch) {
+                dispose?.();
+                return;
+            }
+            setLukerResponseMetaDisposer(dispose);
         }
-        const lukerGenerationOptions = shouldTrackLukerGenerationState
-            ? buildLukerGenerationRequestOptions(type, main_api)
-            : null;
-        if (lukerGenerationOptions) {
-            data = { ...data, luker_generation: lukerGenerationOptions };
-        }
-    }
+        : null;
 
-    switch (main_api) {
+    switch (requestApi) {
         case 'openai':
             return await sendOpenAIRequest(type, data.prompt, signal, options);
         case 'textgenerationwebui':
-            return await generateTextGenWithStreaming(data, signal, { onLukerMeta });
+            return await generateTextGenWithStreaming(data, signal, { onLukerMeta, onLukerMetaDisposer });
         case 'novel':
-            return await generateNovelWithStreaming(data, signal, { onLukerMeta });
+            return await generateNovelWithStreaming(data, signal, { onLukerMeta, onLukerMetaDisposer });
         case 'kobold':
-            return await generateKoboldWithStreaming(data, signal, { onLukerMeta });
+            return await generateKoboldWithStreaming(data, signal, { onLukerMeta, onLukerMetaDisposer });
         default:
             throw new Error('Streaming is enabled, but the current API does not support streaming.');
     }
@@ -11150,7 +11374,10 @@ export function extractJsonFromData(data, { mainApi = null, chatCompletionSource
             const text = extractMessageFromData(data, mainApi);
             switch (chatCompletionSource) {
                 case chat_completion_sources.CLAUDE:
-                    result = data?.content?.find(x => x.type === 'tool_use')?.input;
+                    result = data?.content?.find(x => x.type === 'tool_use')?.input ?? tryParse(text);
+                    if (!result && returnInvalidJson) {
+                        return text;
+                    }
                     break;
                 case chat_completion_sources.PERPLEXITY:
                     result = tryParse(removeReasoningFromString(text));
@@ -11618,7 +11845,122 @@ function applyPostGenerationText(text, isImpersonate, isContinue) {
     return out;
 }
 
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null, suppressEmit = false, finishReason = null }) {
+const PER_SWIPE_EXTRA_FIELDS = [
+    'token_count',
+    'reasoning',
+    'reasoning_duration',
+    'reasoning_signature',
+    'reasoning_blocks',
+    'reasoning_details',
+    'native_parts',
+    'native_content_blocks',
+    'responses_output_items',
+    'citations',
+    'finish_reason',
+];
+
+function clearPerSwipeExtraFields(extra) {
+    if (!extra || typeof extra !== 'object') return;
+    for (const key of PER_SWIPE_EXTRA_FIELDS) {
+        delete extra[key];
+    }
+}
+
+function applyAssistantTurnMetadata(extra, {
+    reasoning = '',
+    reasoningSignature = null,
+    reasoningBlocks = null,
+    reasoningDetails = null,
+    nativeParts = null,
+    nativeContentBlocks = null,
+    responsesOutputItems = null,
+    citations = null,
+    finishReason = null,
+}, {
+    appendReasoning = false,
+    resetReasoningDuration = false,
+    preservePauseTurn = false,
+    mergeExistingCitations = false,
+} = {}) {
+    extra.api = getGeneratingApi();
+    extra.model = getGeneratingModel();
+    if (appendReasoning) {
+        extra.reasoning = String(extra.reasoning || '') + reasoning;
+    } else if (preservePauseTurn) {
+        if (reasoning) {
+            extra.reasoning = extra.reasoning ? `${extra.reasoning}\n${reasoning}` : reasoning;
+        }
+    } else {
+        extra.reasoning = reasoning;
+    }
+    if (resetReasoningDuration) {
+        extra.reasoning_duration = null;
+    }
+    if (reasoningSignature) {
+        extra.reasoning_signature = reasoningSignature;
+    } else if (!preservePauseTurn) {
+        extra.reasoning_signature = reasoningSignature;
+    }
+
+    if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
+        extra.reasoning_blocks = preservePauseTurn && Array.isArray(extra.reasoning_blocks)
+            ? [...extra.reasoning_blocks, ...reasoningBlocks]
+            : reasoningBlocks;
+    } else if (!preservePauseTurn) {
+        delete extra.reasoning_blocks;
+    }
+
+    if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+        extra.reasoning_details = preservePauseTurn && Array.isArray(extra.reasoning_details)
+            ? [...extra.reasoning_details, ...reasoningDetails]
+            : reasoningDetails;
+    } else if (!preservePauseTurn) {
+        delete extra.reasoning_details;
+    }
+
+    if (Array.isArray(nativeParts) && nativeParts.length > 0) {
+        extra.native_parts = preservePauseTurn && Array.isArray(extra.native_parts)
+            ? [...extra.native_parts, ...nativeParts]
+            : nativeParts;
+    } else if (!preservePauseTurn) {
+        delete extra.native_parts;
+    }
+
+    if (Array.isArray(nativeContentBlocks) && nativeContentBlocks.length > 0) {
+        extra.native_content_blocks = preservePauseTurn && Array.isArray(extra.native_content_blocks)
+            ? [...extra.native_content_blocks, ...nativeContentBlocks]
+            : nativeContentBlocks;
+    } else if (!preservePauseTurn) {
+        delete extra.native_content_blocks;
+    }
+
+    if (Array.isArray(responsesOutputItems) && responsesOutputItems.length > 0) {
+        extra.responses_output_items = preservePauseTurn && Array.isArray(extra.responses_output_items)
+            ? [...extra.responses_output_items, ...responsesOutputItems]
+            : responsesOutputItems;
+    } else if (!preservePauseTurn) {
+        delete extra.responses_output_items;
+    }
+
+    if (mergeExistingCitations) {
+        const merged = mergeCitations(extra.citations, citations);
+        if (merged) {
+            extra.citations = merged;
+        }
+    } else if (Array.isArray(citations) && citations.length > 0) {
+        extra.citations = citations;
+    } else if (!preservePauseTurn) {
+        delete extra.citations;
+    }
+
+    if (finishReason) {
+        extra.finish_reason = String(finishReason);
+    } else if (!preservePauseTurn) {
+        delete extra.finish_reason;
+    }
+}
+
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null, nativeParts = null, nativeContentBlocks = null, responsesOutputItems = null, citations = null, suppressEmit = false, finishReason = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -11635,6 +11977,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     const isStaleEpoch = () => getChatTransitionEpoch() !== saveEpoch;
 
     const lastMessage = chat[chat.length - 1];
+    const prevFinishReason = lastMessage?.extra?.finish_reason ?? null;
+    const isPauseTurnContinue = prevFinishReason === 'pause_turn';
 
     if (type != 'append' && type != 'continue' && type != 'appendFinal' && chat.length && (lastMessage.swipe_id === undefined ||
         lastMessage.is_user)) {
@@ -11654,6 +11998,18 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         reasoning = '';
     }
 
+    const turnMetadata = {
+        reasoning,
+        reasoningSignature,
+        reasoningBlocks,
+        reasoningDetails,
+        nativeParts,
+        nativeContentBlocks,
+        responsesOutputItems,
+        citations,
+        finishReason,
+    };
+
     let oldMessage = '';
     const generationFinished = new Date();
     if (type === 'swipe') {
@@ -11665,21 +12021,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.gen_started = generation_started;
             lastMessage.gen_finished = generationFinished;
             lastMessage.send_date = getMessageTimeStamp();
-            lastMessage.extra.api = getGeneratingApi();
-            lastMessage.extra.model = getGeneratingModel();
-            lastMessage.extra.reasoning = reasoning;
-            lastMessage.extra.reasoning_duration = null;
-            lastMessage.extra.reasoning_signature = reasoningSignature;
-            if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
-                lastMessage.extra.reasoning_blocks = reasoningBlocks;
-            } else {
-                delete lastMessage.extra.reasoning_blocks;
-            }
-            if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
-                lastMessage.extra.reasoning_details = reasoningDetails;
-            } else {
-                delete lastMessage.extra.reasoning_details;
-            }
+            applyAssistantTurnMetadata(lastMessage.extra, turnMetadata, {
+                resetReasoningDuration: true,
+            });
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -11706,24 +12050,14 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.gen_started = generation_started;
         lastMessage.gen_finished = generationFinished;
         lastMessage.send_date = getMessageTimeStamp();
-        lastMessage.extra.api = getGeneratingApi();
-        lastMessage.extra.model = getGeneratingModel();
-        lastMessage.extra.reasoning = reasoning;
-        lastMessage.extra.reasoning_duration = null;
-        lastMessage.extra.reasoning_signature = reasoningSignature;
-        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
-            lastMessage.extra.reasoning_blocks = reasoningBlocks;
-        } else {
-            delete lastMessage.extra.reasoning_blocks;
-        }
-        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
-            lastMessage.extra.reasoning_details = reasoningDetails;
-        } else {
-            delete lastMessage.extra.reasoning_details;
-        }
+        applyAssistantTurnMetadata(lastMessage.extra, turnMetadata, {
+            resetReasoningDuration: !isPauseTurnContinue,
+            preservePauseTurn: isPauseTurnContinue,
+            mergeExistingCitations: true,
+        });
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + lastMessage.mes;
+            const tokenCountText = (lastMessage.extra.reasoning || '') + lastMessage.mes;
             lastMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
         }
         const chat_id = (chat.length - 1);
@@ -11744,24 +12078,15 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.gen_started = generation_started;
         lastMessage.gen_finished = generationFinished;
         lastMessage.send_date = getMessageTimeStamp();
-        lastMessage.extra.api = getGeneratingApi();
-        lastMessage.extra.model = getGeneratingModel();
-        lastMessage.extra.reasoning += reasoning;
-        lastMessage.extra.reasoning_signature = reasoningSignature;
-        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
-            lastMessage.extra.reasoning_blocks = reasoningBlocks;
-        } else {
-            delete lastMessage.extra.reasoning_blocks;
-        }
-        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
-            lastMessage.extra.reasoning_details = reasoningDetails;
-        } else {
-            delete lastMessage.extra.reasoning_details;
-        }
+        applyAssistantTurnMetadata(lastMessage.extra, turnMetadata, {
+            appendReasoning: true,
+            preservePauseTurn: isPauseTurnContinue,
+            mergeExistingCitations: true,
+        });
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + lastMessage.mes;
+            const tokenCountText = (lastMessage.extra.reasoning || '') + lastMessage.mes;
             lastMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
         }
         const chat_id = (chat.length - 1);
@@ -11782,17 +12107,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.name = name2;
         newMessage.is_user = false;
         newMessage.send_date = getMessageTimeStamp();
-        newMessage.extra.api = getGeneratingApi();
-        newMessage.extra.model = getGeneratingModel();
-        newMessage.extra.reasoning = reasoning;
-        newMessage.extra.reasoning_duration = null;
-        newMessage.extra.reasoning_signature = reasoningSignature;
-        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
-            newMessage.extra.reasoning_blocks = reasoningBlocks;
-        }
-        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
-            newMessage.extra.reasoning_details = reasoningDetails;
-        }
+        applyAssistantTurnMetadata(newMessage.extra, turnMetadata, {
+            resetReasoningDuration: true,
+        });
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }
@@ -11862,9 +12179,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
 
     if (Array.isArray(swipes) && swipes.length > 0) {
         const swipeInfoExtra = structuredClone(item.extra ?? {});
-        delete swipeInfoExtra.token_count;
-        delete swipeInfoExtra.reasoning;
-        delete swipeInfoExtra.reasoning_duration;
+        clearPerSwipeExtraFields(swipeInfoExtra);
         /** @type {SwipeInfo} */
         const swipeInfo = {
             send_date: item.send_date,
@@ -15609,7 +15924,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         : ((mesId !== undefined && mesId >= 0 && mesId < chat.length)
             ? chat.slice(0, Number(mesId) + 1)
             : chat.slice());
-    // Freeze a stable deep clone before any await: third-party plugins (TavernDB ACU, __bl_*, etc.)
+    // Freeze a stable deep clone before any await: third-party plugins can
     // mutate chat[i] in-place during the network round-trip, and a shallow slice would let those
     // mutations leak into the snapshot via shared message references — producing test/N guards on
     // the next write that BE has no chance of matching. Retries already pass a cloned snapshot.
@@ -16579,6 +16894,7 @@ function reloadLoop() {
 ///////////////////////////////////////////
 const SETTINGS_GET_ENDPOINT = '/api/settings/get';
 let settingsGetRequestInterceptorInstalled = false;
+let settingsReadPublication = 0;
 
 function isSettingsGetRequest(input, init = {}) {
     const request = input instanceof Request ? input : null;
@@ -16596,6 +16912,17 @@ function isSettingsGetRequest(input, init = {}) {
     }
 }
 
+async function loadSettingsEnvelopeOnFreshSnapshot({ bootstrap = false, signal = undefined, isOverlapped = null } = {}) {
+    try {
+        return await loadSettingsEnvelope({ bootstrap, signal });
+    } catch (error) {
+        if (error?.code !== 'read_conflict' || isOverlapped?.()) {
+            throw error;
+        }
+        return await loadSettingsEnvelope({ bootstrap, signal });
+    }
+}
+
 function installSettingsGetRequestInterceptor() {
     if (settingsGetRequestInterceptorInstalled) {
         return;
@@ -16610,7 +16937,7 @@ function installSettingsGetRequestInterceptor() {
         const request = input instanceof Request ? input : null;
         const signal = init?.signal ?? request?.signal;
         try {
-            const envelope = await loadSettingsEnvelope({ bootstrap: false, signal });
+            const envelope = await loadSettingsEnvelopeOnFreshSnapshot({ bootstrap: false, signal });
             return new Response(JSON.stringify(envelope), {
                 headers: { 'Content-Type': 'application/json; charset=utf-8' },
                 status: 200,
@@ -16630,18 +16957,6 @@ function installSettingsGetRequestInterceptor() {
         }
     };
     settingsGetRequestInterceptorInstalled = true;
-}
-
-async function fetchSettingsEnvelope({ bootstrap = false, silent = false } = {}) {
-    try {
-        return await loadSettingsEnvelope({ bootstrap });
-    } catch (error) {
-        if (!silent) {
-            reloadLoop();
-            toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
-        }
-        throw error;
-    }
 }
 
 async function fetchBootstrapSnapshot() {
@@ -16719,7 +17034,28 @@ export async function ensureFullSettingsLoaded() {
 export async function getSettings(options = {}) {
     let onboardingTask = null;
     const useBootstrap = options?.bootstrap === true;
-    const data = options?.payload ?? await fetchSettingsEnvelope({ bootstrap: useBootstrap });
+    const suppliedPayload = options?.payload;
+    const publication = settingsReadPublication;
+    const pendingSaveAtStart = settingsSaveInFlight;
+    const isOverlapped = () => suppliedPayload == null && (publication !== settingsReadPublication || pendingSaveAtStart || settingsSaveInFlight);
+    let data = suppliedPayload;
+    if (data == null) {
+        try {
+            data = await loadSettingsEnvelopeOnFreshSnapshot({ bootstrap: useBootstrap, isOverlapped });
+        } catch (error) {
+            if (isOverlapped() && error?.code === 'read_conflict') {
+                return;
+            }
+            reloadLoop();
+            toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
+            throw error;
+        }
+    }
+    // Reject overlap before publishing authority or mutating live settings.
+    if (isOverlapped()) {
+        return;
+    }
+    rememberSettingsSnapshot(null);
 
     if (useBootstrap) {
         fullSettingsLoaded = false;
@@ -16729,6 +17065,12 @@ export async function getSettings(options = {}) {
 
     if (data.result != 'file not find' && data.settings) {
         settings = JSON.parse(data.settings);
+        // Only a complete server load establishes a stored baseline. Bootstrap
+        // and caller-supplied payloads use a full save to establish authority.
+        // Capture before loaders and subscribers normalize or edit settings.
+        if (!useBootstrap && suppliedPayload == null) {
+            rememberSettingsSnapshot(settings);
+        }
         if (settings.username !== undefined && settings.username !== '') {
             name1 = settings.username;
             $('#your_name').text(name1);
@@ -16857,9 +17199,22 @@ export async function getSettings(options = {}) {
                         return;
                     }
                     firstRun = false;
+                    let persisted = false;
                     try {
-                        await saveSettings(0, { directSave: true });
+                        const outcome = await saveSettings(0, {
+                            directSave: true,
+                            onSaved: () => {
+                                persisted = true;
+                            },
+                        });
+                        if (!outcome?.ok && outcome?.status !== 'deferred') {
+                            firstRun = true;
+                            console.error('Failed to persist firstRun completion', outcome);
+                        }
                     } catch (error) {
+                        if (!persisted) {
+                            firstRun = true;
+                        }
                         console.error('Failed to persist firstRun completion', error);
                     }
                 })
@@ -16869,7 +17224,6 @@ export async function getSettings(options = {}) {
         }
     }
     await validateDisabledSamplers();
-    rememberSettingsSnapshot(buildSettingsPayload());
     settingsReady = true;
     await eventSource.emit(event_types.SETTINGS_LOADED);
 
@@ -16898,7 +17252,7 @@ function rememberSettingsSnapshot(nextSettings = null, { serialized = null, sync
         }
         return;
     }
-    settingsSnapshotCache = nextSettings;
+    settingsSnapshotCache = structuredClone(nextSettings);
     if (!syncWorker) {
         return;
     }
@@ -16919,29 +17273,15 @@ function rememberSettingsSnapshot(nextSettings = null, { serialized = null, sync
 }
 
 function getSettingsSnapshot() {
-    // settingsSnapshotCache is always set to a freshly-cloned payload by
-    // rememberSettingsSnapshot — it never aliases live `settings`. Callers
+    // rememberSettingsSnapshot owns a detached copy of a stored source.
+    // It never aliases exported settings or a consumer's payload. Callers
     // (only saveSettingsInternal) treat the result as read-only, so returning
     // the cached reference directly is safe and avoids one full deep clone of
     // the entire settings tree on every save.
     if (isPlainObject(settingsSnapshotCache)) {
         return settingsSnapshotCache;
     }
-    if (isPlainObject(settings)) {
-        return normalizeJsonObject(settings);
-    }
     return null;
-}
-
-function mergeSettingsSaveOptions(baseOptions = null, overrideOptions = null) {
-    return {
-        onSaved: () => {
-            baseOptions?.onSaved?.();
-            overrideOptions?.onSaved?.();
-        },
-        asyncDiff: overrideOptions?.asyncDiff ?? baseOptions?.asyncDiff ?? true,
-        directSave: overrideOptions?.directSave ?? baseOptions?.directSave ?? false,
-    };
 }
 
 function normalizeSettingsSaveOptions(options = null) {
@@ -17009,31 +17349,28 @@ function parseNormalizedSettingsObject(serialized) {
 }
 
 function buildSettingsPayload() {
-    return normalizeJsonObject(buildRawSettingsObject());
+    return cloneAsJsonWire(buildRawSettingsObject());
 }
 
 //MARK: saveSettings()
-async function saveSettingsInternal(loopCounter = 0, options = {}) {
-    if (!settingsReady) {
-        console.warn('Settings not ready, scheduling another save');
-        saveSettingsDebounced();
-        return;
-    }
-
-    const MAX_RETRIES = 3;
-    if (TempResponseLength.isCustomized()) {
-        if (loopCounter < MAX_RETRIES) {
-            console.warn('Response length is currently being overridden, scheduling another save');
-            saveSettingsDebounced(++loopCounter, options);
+async function saveSettingsInternal(payload, options = {}) {
+    async function rejectDeletedWorldReference(response) {
+        let refusal;
+        try {
+            refusal = await response.json();
+        } catch {
             return;
         }
-        console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
-        TempResponseLength.restore(null);
+        // Ownership refusal is terminal for this captured payload.
+        if (refusal?.code === 'world_deleted' || refusal?.code === 'world_deletion_unknown') {
+            const reason = refusal.code === 'world_deleted' ? 'deleted' : 'whose deletion outcome is unconfirmed';
+            throw Object.assign(new Error(`Settings reference a world book ${reason} during this write: ${refusal.details?.name ?? 'unknown'}. Reload the world book list before retrying.`), refusal);
+        }
     }
 
     let workerDiff = null;
     try {
-        const serializedPayload = JSON.stringify(buildRawSettingsObject());
+        const serializedPayload = JSON.stringify(payload);
         let nextSnapshot = null;
         let saved = false;
         const previousSnapshot = getSettingsSnapshot();
@@ -17057,14 +17394,13 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
             }
 
             if (operations.length === 0) {
-                saved = true;
                 workerDiff?.discard();
                 workerDiff = null;
-                nextSnapshot = previousSnapshot;
+                return { ok: true, status: 'saved', payload: structuredClone(previousSnapshot) };
             } else if (shouldUseSettingsPatch(operations)) {
-                // Use ops count (not byte comparison) to decide patch vs full save —
-                // avoids JSON.stringify-ing the entire settings payload just to
-                // measure its length when the patch is obviously the smaller body.
+                // The existing operations threshold selects patch versus full
+                // replacement without serializing the entire payload twice.
+                settingsReadPublication += 1;
                 const patchResult = await fetch('/api/settings/patch', {
                     method: 'POST',
                     headers: getRequestHeaders(),
@@ -17072,67 +17408,100 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
                     cache: 'no-cache',
                 });
                 saved = patchResult.ok;
+                if (patchResult.status === 409) await rejectDeletedWorldReference(patchResult);
                 if (saved) {
                     workerDiff?.commit();
                     nextSnapshot = nextSnapshot ?? applyCommittedSnapshotOperations(previousSnapshot, operations);
+                } else {
+                    workerDiff?.discard();
+                    workerDiff = null;
                 }
             }
-            // else: too many ops or overflow sentinel — fall through to full save below.
+            // HTTP patch refusal falls back to the same captured full payload.
+            // Transport rejection remains a failed attempt, not another request.
         }
 
         if (!saved) {
+            settingsReadPublication += 1;
             const result = await fetch('/api/settings/save', {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 body: serializedPayload,
                 cache: 'no-cache',
             });
-
-            if (!result.ok) {
-                throw new Error(`Failed to save settings: ${result.statusText}`);
-            }
+            if (result.status === 409) await rejectDeletedWorldReference(result);
+            if (!result.ok) throw new Error(`Failed to save settings: HTTP ${result.status} ${result.statusText}`);
             workerDiff?.commit();
             nextSnapshot = nextSnapshot ?? parseNormalizedSettingsObject(serializedPayload);
         }
 
-        settings = nextSnapshot;
+        settings = structuredClone(nextSnapshot);
         rememberSettingsSnapshot(nextSnapshot, { serialized: serializedPayload, syncWorker: !workerDiff });
-        options.onSaved?.();
-        await eventSource.emit(event_types.SETTINGS_UPDATED);
+        return { ok: true, status: 'saved', payload: structuredClone(nextSnapshot) };
     } catch (error) {
         workerDiff?.discard();
+        // Uncertain failures invalidate snapshot authority. An explicit
+        // reference-ownership refusal left the stored settings unchanged.
+        if (error?.code !== 'world_deleted' && error?.code !== 'world_deletion_unknown') rememberSettingsSnapshot(null);
         console.error('Error saving settings:', error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
+        return { ok: false, status: 'failed', error: String(error?.message || error) };
     }
 }
 
+/**
+ * Persist a snapshot captured at invocation, after preceding persistence attempts.
+ * A failed or deferred attempt resolves with ok:false and never emits SETTINGS_UPDATED.
+ * Event listeners run after releasing the persistence lock and may await another save.
+ * The returned payload belongs to this attempt, not subsequent queued changes.
+ */
 export async function saveSettings(loopCounter = 0, options = null) {
     if (settingsSaveBlockedForImport) {
-        return;
+        return { ok: false, status: 'deferred', reason: 'data_import' };
     }
     const normalizedOptions = normalizeSettingsSaveOptions(options);
-
-    if (settingsSaveInFlight) {
-        settingsSaveQueued = true;
-        settingsSaveQueuedOptions = mergeSettingsSaveOptions(settingsSaveQueuedOptions, normalizedOptions);
-        return settingsSaveInFlight;
+    if (!settingsReady) {
+        console.warn('Settings not ready, scheduling another save');
+        saveSettingsDebounced(loopCounter, normalizedOptions);
+        return { ok: false, status: 'deferred', reason: 'not_ready' };
     }
 
-    settingsSaveInFlight = (async () => {
-        try {
-            await saveSettingsInternal(loopCounter, normalizedOptions);
-        } finally {
-            settingsSaveInFlight = null;
-            if (settingsSaveQueued) {
-                const queuedOptions = settingsSaveQueuedOptions;
-                settingsSaveQueued = false;
-                settingsSaveQueuedOptions = null;
-                await saveSettings(0, queuedOptions);
-            }
+    // Preserve the existing debounce retry policy before restoring a stranded
+    // temporary generation override. Never serialize the overridden length.
+    const MAX_RETRIES = 3; // cap-ok: existing temporary-generation override recovery policy, not a request retry limit.
+    if (TempResponseLength.isCustomized()) {
+        if (loopCounter < MAX_RETRIES) {
+            console.warn('Response length is currently being overridden, scheduling another save');
+            saveSettingsDebounced(++loopCounter, normalizedOptions);
+            return { ok: false, status: 'deferred', reason: 'temporary_response_length' };
         }
-    })();
+        console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
+        TempResponseLength.restore(null);
+    }
 
-    return settingsSaveInFlight;
+    let payload;
+    let cardPresetSave;
+    try {
+        payload = buildSettingsPayload();
+        cardPresetSave = captureCharacterBoundSettingsSave(payload.oai_settings, options?.cardPresetOwner);
+    } catch (error) {
+        console.error('Error capturing settings:', error);
+        toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
+        return { ok: false, status: 'failed', error: String(error?.message || error) };
+    }
+    const previous = settingsSaveInFlight;
+    const attempt = (async () => {
+        if (previous) await previous;
+        return saveSettingsInternal(payload, normalizedOptions);
+    })();
+    settingsSaveInFlight = attempt;
+    const outcome = await attempt;
+    if (settingsSaveInFlight === attempt) settingsSaveInFlight = null;
+    if (outcome.ok) {
+        normalizedOptions.onSaved?.();
+        await eventSource.emit(event_types.SETTINGS_UPDATED, { cardPresetSave });
+    }
+    return outcome;
 }
 
 
@@ -18772,41 +19141,58 @@ async function openCharacterWorldPopup() {
     }
 
     // TODO: Maybe make this utility function not use the window context?
+    const creating = menu_type === 'create';
+    const character = creating ? create_save : characters[chid];
     const fileName = getCharaFilename(chid);
-    const charName = (menu_type == 'create' ? create_save.name : characters[chid]?.data?.name) || 'Nameless';
-    const worldId = (menu_type == 'create' ? create_save.world : characters[chid]?.data?.extensions?.world) || '';
+    const charName = (creating ? character.name : character?.data?.name) || 'Nameless';
+    const worldId = (creating ? character.world : character?.data?.extensions?.world) || '';
+    const popupWorldNames = [...world_names];
     const template = $('#character_world_template .character_world').clone();
     template.find('.character_name').text(charName);
 
     // --- Event Handlers ---
+    let primarySelection = 0;
     async function handlePrimaryWorldSelect() {
+        const selection = ++primarySelection;
         const selectedValue = $(this).val();
         const worldIndex = selectedValue !== '' ? Number(selectedValue) : NaN;
-        const name = !isNaN(worldIndex) ? world_names[worldIndex] : '';
-        await charUpdatePrimaryWorld(name);
+        const name = !isNaN(worldIndex) ? popupWorldNames[worldIndex] : '';
+        let saved = false;
+        try {
+            saved = await charUpdatePrimaryWorld(name, character);
+        } catch (error) {
+            console.error('Failed to save character world binding', error);
+        }
+        if (selection !== primarySelection) return;
+        if (!saved) {
+            const acknowledged = (creating ? character.world : character?.data?.extensions?.world) || '';
+            const index = popupWorldNames.indexOf(acknowledged);
+            primarySelect.val(index >= 0 ? String(index) : '');
+            toastr.error(t`The character world book binding could not be confirmed.`);
+        }
     }
 
     function handleExtrasWorldSelect(evt) {
         const el = evt?.currentTarget ?? this;
         const selectedValues = $(el).val();
         const selected = Array.isArray(selectedValues) ? selectedValues : [];
-        const fileName = getCharaFilename(null, {});
-        const nextList = selected.map(i => world_names[i]).filter(Boolean);
+        if (creating ? menu_type !== 'create' : menu_type === 'create' || !characters.includes(character)) return;
+        const nextList = selected.map(i => popupWorldNames[i]).filter(Boolean);
         charSetAuxWorlds(fileName, nextList);
     }
 
     // --- Populate Dropdowns ---
     // Append to primary dropdown.
     const primarySelect = template.find('.character_world_info_selector');
-    world_names.forEach((item, i) => {
+    popupWorldNames.forEach((item, i) => {
         primarySelect.append(new Option(item, String(i), item === worldId, item === worldId));
     });
 
     // Append to extras dropdown.
     const extrasSelect = template.find('.character_extra_world_info_selector');
     const existingCharLore = world_info.charLore?.find((e) => e.name === fileName);
-    world_names.forEach((item, i) => {
-        const array = (menu_type == 'create' ? create_save.extra_books : existingCharLore?.extraBooks);
+    popupWorldNames.forEach((item, i) => {
+        const array = (creating ? create_save.extra_books : existingCharLore?.extraBooks);
         const isSelected = !!array?.includes(item);
         extrasSelect.append(new Option(item, String(i), isSelected, isSelected));
     });
@@ -19627,6 +20013,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
     const thisMesTextHeight = thisMesText[0]?.scrollHeight;
     if (![thisMesDiv.length, thisMesText.length].every(num => num > 0)) {
         console.error(`Message #${mesId}'s DOM element is not valid.`);
+        swipeState = SWIPE_STATE.NONE;
         return;
     }
     const originalSwipeId = Number(chat[mesId]?.swipe_id ?? 0);
@@ -19712,7 +20099,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
                 // fired against the now-discarded out-of-bounds state, so notify
                 // listeners that the affected messages were re-rendered to the
                 // clamped state — otherwise iframe-rendering extensions
-                // (e.g. JS-Slash-Runner) keep stale iframes / show raw HTML.
+                // keep stale iframes / show raw HTML.
                 for (let i = mesId; i < chat.length; i++) {
                     await eventSource.emit(event_types.MESSAGE_UPDATED, i);
                 }
@@ -19973,113 +20360,125 @@ export async function swipe(event, direction, { source, repeated, message = chat
     }
 
     if (isHordeGenerationNotAllowed()) {
+        swipeState = SWIPE_STATE.NONE;
+        delete document.body.dataset.swiping;
         return unblockGeneration();
     }
+    document.body.dataset.swiping = 'true';
+    try {
+        //If the swipe is not being deleted.
+        if (source != SWIPE_SOURCE.DELETE && source != SWIPE_SOURCE.BACK) {
+            // Make sure ad-hoc changes to extras are saved before swiping away
+            syncMesToSwipe(mesId);
 
-    //If the swipe is not being deleted.
-    if (source != SWIPE_SOURCE.DELETE && source != SWIPE_SOURCE.BACK) {
-        // Make sure ad-hoc changes to extras are saved before swiping away
-        syncMesToSwipe(mesId);
-
-        if (chat[mesId].swipe_id === undefined) {              // if there is no swipe-message in the last spot of the chat array
-            chat[mesId].swipe_id = 0;                        // set it to id 0
-            chat[mesId].swipes = [];                         // empty the array
-            chat[mesId].swipe_info = [];
-            chat[mesId].swipes[0] = chat[mesId].mes;  //assign swipe array with last chat[mesId] from chat
-            chat[mesId].swipe_info[0] = {
-                'send_date': chat[mesId].send_date,
-                'gen_started': chat[mesId].gen_started,
-                'gen_finished': chat[mesId].gen_finished,
-                'extra': structuredClone(chat[mesId].extra),
-            };
-        }
-        // If the user is holding down the key and we're at the last or first swipe, don't do anything.
-        let isLastSwipe = (direction === SWIPE_DIRECTION.RIGHT) ? (chat[mesId].swipe_id === Math.max(0, chat[mesId].swipes.length - 1)) : chat[mesId].swipe_id === 0;
-        if (source === SWIPE_SOURCE.KEYBOARD && repeated && isLastSwipe) {
-            await endSwipe();
-            return;
-        }
-    } else if (source == SWIPE_SOURCE.DELETE || source == SWIPE_SOURCE.BACK) {
-        //If the swipe is being deleted or reverted.
-        await standardSwipe(newSwipeId);
-        return;
-    }
-
-    //If swiping left.
-    if (direction === SWIPE_DIRECTION.LEFT) {
-        if (forceSwipeId == null) newSwipeId--;
-        //Loop to last swipe if negative.
-        if (newSwipeId < 0) {
-            newSwipeId = Math.max(0, chat[mesId].swipes.length - 1);
-        }
-        //Limit swipe_id to swipes.
-        if (newSwipeId > chat[mesId].swipes.length - 1) {
-            toastr.warning(`The swipe_id for message #${mesId} was ${newSwipeId}. It has been reset to ${chat[mesId].swipes.length - 1}.`);
-            chat[mesId].swipe_id = chat[mesId].swipes.length - 1;
-            await endSwipe();
-            return;
-        }
-        await standardSwipe(newSwipeId);
-        return;
-    } else if (direction === SWIPE_DIRECTION.RIGHT) {
-        //If swiping right.
-        // make new slot in array
-        if (forceSwipeId == null) newSwipeId++;
-
-        //Minimum of zero.
-        if (newSwipeId < 0) {
-            toastr.warning(`The swipe_id for message #${mesId} was ${newSwipeId}. It has been reset to zero.`);
-            chat[mesId].swipe_id = 0;
-            await endSwipe();
-            return;
-        }
-
-        //If overswiping.
-        if (newSwipeId >= chat[mesId].swipes.length) {
-            newSwipeId = chat[mesId].swipes.length;
-
-            //Update the swipe_id.
-            chat[mesId].swipe_id = newSwipeId;
-
-            const overswipe = getOverswipeBehavior(mesId);
-
-            //Cancel the generation.
-            if (overswipe == OVERSWIPE_BEHAVIOR.NONE) {
-                //Cancel swipe.
-                chat[mesId].swipe_id = originalSwipeId;
-                await endSwipe();
-                return;
-            } else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
-                //Regenerate the message
-                clearMessageData(chat[mesId]);
-                // Wipe the body/reasoning so any takeover plugin reading
-                // chat[mesId] inside GENERATE_TAKEOVER_DISPATCH sees a
-                // blank starting draft. The streaming path is unaffected
-                // — saveReply's swipe branch also writes mes='' before
-                // chunks land — but takeover plugins read chat directly
-                // and would otherwise inherit the previous swipe's text
-                // as their initial draft.
-                chat[mesId].mes = '';
-                if (chat[mesId].extra && typeof chat[mesId].extra === 'object') {
-                    chat[mesId].extra.reasoning = '';
-                    delete chat[mesId].extra.reasoning_duration;
-                    delete chat[mesId].extra.reasoning_signature;
-                    delete chat[mesId].extra.reasoning_blocks;
-                    delete chat[mesId].extra.reasoning_details;
-                    delete chat[mesId].extra.token_count;
-                }
-                let run_generate = true;
-                //Generate.
-                await animateSwipe(run_generate);
-                await endSwipe();
-                return;
-            } else if (overswipe == OVERSWIPE_BEHAVIOR.LOOP || overswipe == OVERSWIPE_BEHAVIOR.PRISTINE_GREETING) {
-                // Loop to the first swipe.
-                newSwipeId = 0;
+            if (chat[mesId].swipe_id === undefined) {              // if there is no swipe-message in the last spot of the chat array
+                chat[mesId].swipe_id = 0;                        // set it to id 0
+                chat[mesId].swipes = [];                         // empty the array
+                chat[mesId].swipe_info = [];
+                chat[mesId].swipes[0] = chat[mesId].mes;  //assign swipe array with last chat[mesId] from chat
+                chat[mesId].swipe_info[0] = {
+                    'send_date': chat[mesId].send_date,
+                    'gen_started': chat[mesId].gen_started,
+                    'gen_finished': chat[mesId].gen_finished,
+                    'extra': structuredClone(chat[mesId].extra),
+                };
             }
+            // If the user is holding down the key and we're at the last or first swipe, don't do anything.
+            let isLastSwipe = (direction === SWIPE_DIRECTION.RIGHT) ? (chat[mesId].swipe_id === Math.max(0, chat[mesId].swipes.length - 1)) : chat[mesId].swipe_id === 0;
+            if (source === SWIPE_SOURCE.KEYBOARD && repeated && isLastSwipe) {
+                await endSwipe();
+                return;
+            }
+        } else if (source == SWIPE_SOURCE.DELETE || source == SWIPE_SOURCE.BACK) {
+            //If the swipe is being deleted or reverted.
+            await standardSwipe(newSwipeId);
+            return;
         }
-        await standardSwipe(newSwipeId);
-        return;
+
+        //If swiping left.
+        if (direction === SWIPE_DIRECTION.LEFT) {
+            if (forceSwipeId == null) newSwipeId--;
+            //Loop to last swipe if negative.
+            if (newSwipeId < 0) {
+                newSwipeId = Math.max(0, chat[mesId].swipes.length - 1);
+            }
+            //Limit swipe_id to swipes.
+            if (newSwipeId > chat[mesId].swipes.length - 1) {
+                toastr.warning(`The swipe_id for message #${mesId} was ${newSwipeId}. It has been reset to ${chat[mesId].swipes.length - 1}.`);
+                chat[mesId].swipe_id = chat[mesId].swipes.length - 1;
+                await endSwipe();
+                return;
+            }
+            await standardSwipe(newSwipeId);
+            return;
+        } else if (direction === SWIPE_DIRECTION.RIGHT) {
+            //If swiping right.
+            // make new slot in array
+            if (forceSwipeId == null) newSwipeId++;
+
+            //Minimum of zero.
+            if (newSwipeId < 0) {
+                toastr.warning(`The swipe_id for message #${mesId} was ${newSwipeId}. It has been reset to zero.`);
+                chat[mesId].swipe_id = 0;
+                await endSwipe();
+                return;
+            }
+
+            //If overswiping.
+            if (newSwipeId >= chat[mesId].swipes.length) {
+                newSwipeId = chat[mesId].swipes.length;
+
+                //Update the swipe_id.
+                chat[mesId].swipe_id = newSwipeId;
+
+                const overswipe = getOverswipeBehavior(mesId);
+
+                //Cancel the generation.
+                if (overswipe == OVERSWIPE_BEHAVIOR.NONE) {
+                    //Cancel swipe.
+                    chat[mesId].swipe_id = originalSwipeId;
+                    await endSwipe();
+                    return;
+                } else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
+                    //Regenerate the message
+                    clearMessageData(chat[mesId]);
+                    // Wipe the body/reasoning so any takeover plugin reading
+                    // chat[mesId] inside GENERATE_TAKEOVER_DISPATCH sees a
+                    // blank starting draft. The streaming path is unaffected
+                    // — saveReply's swipe branch also writes mes='' before
+                    // chunks land — but takeover plugins read chat directly
+                    // and would otherwise inherit the previous swipe's text
+                    // as their initial draft.
+                    chat[mesId].mes = '';
+                    if (chat[mesId].extra && typeof chat[mesId].extra === 'object') {
+                        chat[mesId].extra.reasoning = '';
+                        delete chat[mesId].extra.reasoning_duration;
+                        delete chat[mesId].extra.reasoning_signature;
+                        delete chat[mesId].extra.reasoning_blocks;
+                        delete chat[mesId].extra.reasoning_details;
+                        delete chat[mesId].extra.native_parts;
+                        delete chat[mesId].extra.native_content_blocks;
+                        delete chat[mesId].extra.responses_output_items;
+                        delete chat[mesId].extra.citations;
+                        delete chat[mesId].extra.finish_reason;
+                        delete chat[mesId].extra.token_count;
+                    }
+                    let run_generate = true;
+                    //Generate.
+                    await animateSwipe(run_generate);
+                    await endSwipe();
+                    return;
+                } else if (overswipe == OVERSWIPE_BEHAVIOR.LOOP || overswipe == OVERSWIPE_BEHAVIOR.PRISTINE_GREETING) {
+                    // Loop to the first swipe.
+                    newSwipeId = 0;
+                }
+            }
+            await standardSwipe(newSwipeId);
+            return;
+        }
+    } finally {
+        swipeState = SWIPE_STATE.NONE;
+        delete document.body.dataset.swiping;
     }
 }
 
@@ -20972,7 +21371,7 @@ function addDebugFunctions() {
 
     registerDebugFunction('forceOnboarding', 'Force onboarding', 'Forces the onboarding process to restart.', async () => {
         firstRun = true;
-        await saveSettings();
+        if (!(await saveSettings()).ok) return;
         location.reload();
     });
 
@@ -21593,7 +21992,10 @@ jQuery(async function () {
             return;
         }
 
-        await renameChat(oldFileName, newName);
+        const result = await renameChat(oldFileName, newName);
+        if (!result?.ok) {
+            return;
+        }
 
         await delay(250);
         $('#option_select_chat').trigger('click');
@@ -23033,6 +23435,14 @@ jQuery(async function () {
             return;
         }
         const body = { format, avatar_url: characters[this_chid].avatar };
+        try {
+            if (await confirmCharacterSkillsExport({ context: getContext(), characterFile: body.avatar_url, t: translate })) {
+                body.includeSkills = true;
+            }
+        } catch (err) {
+            console.error('Failed to check character skills for export:', err);
+            toastr.error(t`Failed to bundle this character's skills. The card was exported without them.`);
+        }
 
         const response = await fetch('/api/characters/export', {
             method: 'POST',
@@ -23041,21 +23451,19 @@ jQuery(async function () {
         });
 
         if (response.ok) {
-            const warningHeader = response.headers.get('X-Luker-Export-Warning');
-            if (warningHeader) {
-                try {
-                    const decoded = JSON.parse(atob(warningHeader));
-                    const worldName = decoded?.name || '';
-                    const reason = decoded?.reason || '';
-                    const message = reason === 'world_not_found'
-                        ? t`Linked world book "${worldName}" was not found. The card was exported without an embedded world book.`
-                        : reason === 'world_unreadable'
-                            ? t`Linked world book "${worldName}" could not be read. The card was exported without an embedded world book.`
-                            : t`Failed to embed world book "${worldName}". The card was exported without it.`;
+            const rawExportWarningHeader = response.headers.get('X-Luker-Export-Warning');
+            try {
+                const warnings = describeCharacterExportWarnings(rawExportWarningHeader, t);
+                for (const message of warnings) {
                     toastr.warning(message, t`Export warning`, { timeOut: 8000, extendedTimeOut: 12000 });
-                } catch (err) {
-                    console.warn('Failed to parse export warning header', err);
                 }
+            } catch (err) {
+                console.error('Failed to parse character export warning header:', err, rawExportWarningHeader);
+                toastr.warning(
+                    String(err?.message || err),
+                    t`Export warning`,
+                    { timeOut: 8000, extendedTimeOut: 12000 },
+                );
             }
             const filename = characters[this_chid].avatar.replace('.png', `.${format}`);
             const blob = await response.blob();
@@ -23367,7 +23775,6 @@ jQuery(async function () {
                 break;
             case 'import_character_info':
                 await importEmbeddedWorldInfo();
-                saveCharacterDebounced();
                 break;
             case 'character_source': {
                 const source = getCharacterSource(this_chid);

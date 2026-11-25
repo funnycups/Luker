@@ -679,7 +679,7 @@ export function openAccountWindow({ tab = 'profile', view, handle, onDone, users
         return openWindow.closed;
     }
     const source = createLukerProvider({ handle });
-    source.start();
+    const started = source.start();
     let mounted;
     const done = onDone ?? (() => (mounted.ui.otherUser ? mounted.close() : location.reload()));
     mounted = mountLukerWindow({
@@ -689,6 +689,11 @@ export function openAccountWindow({ tab = 'profile', view, handle, onDone, users
             source.stop();
             openWindow = null;
         },
+    });
+    // Pending issues load after the window shows; mark the snapshot read so a
+    // reopened window is not mistaken for an empty one.
+    started.then(() => {
+        if (mounted.win.isConnected) mounted.ui.root.dataset.syncLoaded = '1';
     });
     openWindow = { ...mounted, handle };
     return mounted.closed;

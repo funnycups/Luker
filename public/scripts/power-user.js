@@ -646,10 +646,37 @@ function sampleCompositeBarColor(selectors, fallbackCssColor) {
     return `rgb(${Math.round(acc.r)}, ${Math.round(acc.g)}, ${Math.round(acc.b)})`;
 }
 
+const pendingIosBarSyncStyleLinks = new WeakSet();
+
+function scheduleIosSystemBarsSyncAfterPendingStylesheets() {
+    if (typeof document === 'undefined') {
+        return;
+    }
+    // WebKit defers active stylesheet recalculation while any <link rel="stylesheet">
+    // is still loading, causing getComputedStyle() after style.innerHTML mutations
+    // to read pre-update colors. Re-sync once in-flight stylesheets settle.
+    const links = document.querySelectorAll('link[rel~="stylesheet" i]');
+    for (const link of links) {
+        if (link.disabled || link.sheet || pendingIosBarSyncStyleLinks.has(link)) {
+            continue;
+        }
+        pendingIosBarSyncStyleLinks.add(link);
+        const onSettle = () => {
+            pendingIosBarSyncStyleLinks.delete(link);
+            link.removeEventListener('load', onSettle);
+            link.removeEventListener('error', onSettle);
+            syncIosSystemBarsColor();
+        };
+        link.addEventListener('load', onSettle);
+        link.addEventListener('error', onSettle);
+    }
+}
+
 function syncIosSystemBarsColor() {
     if (!canUseIosSystemBarsColorBridge()) {
         return;
     }
+    scheduleIosSystemBarsSyncAfterPendingStylesheets();
     const fallback = getEffectiveThemeColor();
     const baseSelectors = [document.documentElement, document.body, '#bg1'];
     const topVisible = ['#top-bar', '#top-settings-holder'].some((sel) => {
@@ -1107,7 +1134,7 @@ async function applyMobileKeepAliveFromUser(checked) {
     }
 
     if (getKeepAlivePlatform() === 'harmony') {
-        // Takes effect on the next GENERATION_STARTED, like web audio mode.
+        // Takes effect on the next generation, like web audio mode.
         power_user.luker_mobile_keep_alive_harmony_enabled = true;
         saveSettingsDebounced();
         syncMobileKeepAliveCheckbox();
@@ -1123,7 +1150,7 @@ async function applyMobileKeepAliveFromUser(checked) {
     }
 
     // Web platform: ask which mode. Audio only takes effect on the next
-    // GENERATION_STARTED — the toggle click itself is the user gesture that
+    // generation — the toggle click itself is the user gesture that
     // would be required, but we don't want to claim audio focus until there's
     // an actual generation to keep alive.
     let pipAttempt = null;
@@ -1153,7 +1180,7 @@ async function applyMobileKeepAliveFromUser(checked) {
         }
         setPipPrimingEnabled(true);
     } else {
-        // audio: just flag the setting on. The next GENERATION_STARTED enters
+        // audio: just flag the setting on. The next generation enters
         // audio mode automatically; nothing should happen right now.
         power_user.luker_mobile_keep_alive_web_audio_enabled = true;
         power_user.luker_mobile_keep_alive_web_pip_enabled = false;
@@ -5021,7 +5048,7 @@ jQuery(() => {
     $('#reload_chat').on('click', async function () {
         const currentChatId = getCurrentChatId();
         if (currentChatId !== undefined && currentChatId !== null) {
-            await saveSettings();
+            if (!(await saveSettings()).ok) return;
             await saveChatConditional();
             await reloadCurrentChat();
         }

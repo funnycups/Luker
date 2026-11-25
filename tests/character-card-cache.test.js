@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { read } from '../src/character-card-parser.js';
 import { diskCache, readCharacterData, writeCharacterData } from '../src/endpoints/characters.js';
+import { initStorage } from '../src/storage/index.js';
 
 const seedPath = fileURLToPath(new URL('../default/content/default_Seraphina.png', import.meta.url));
 
@@ -32,6 +33,7 @@ describe('character card cache storage identity', () => {
             },
         };
 
+        await initStorage({ directoriesByHandle: () => ({ characters }) });
         try {
             assert.equal(await writeCharacterData(inputPath, raw, 'CacheIdentity', request), true);
             const outputPath = path.join(characters, 'CacheIdentity.png');

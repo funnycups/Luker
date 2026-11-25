@@ -79,4 +79,22 @@ describe('shapeChatMessagePayload', () => {
         expect(shaped.role).toBe('user');
         expect(shaped.content).toBe('hi');
     });
+
+    test('routes native_content_blocks to Claude and native_parts / responses_output_items to non-Claude', () => {
+        const msg = makeMessage({
+            native_content_blocks: [{ type: 'thinking', thinking: 't', signature: 's' }, { type: 'text', text: 'hi' }],
+            native_parts: [{ text: 'hi', thoughtSignature: 'g-sig' }],
+            responses_output_items: [{ type: 'reasoning', id: 'rs_1', encrypted_content: 'enc', summary: [] }],
+        });
+
+        const claudeShaped = shapeChatMessagePayload(msg, true);
+        expect(claudeShaped.native_content_blocks).toEqual(msg.native_content_blocks);
+        expect(claudeShaped.native_parts).toBeUndefined();
+        expect(claudeShaped.responses_output_items).toBeUndefined();
+
+        const nonClaudeShaped = shapeChatMessagePayload(msg, false);
+        expect(nonClaudeShaped.native_content_blocks).toBeUndefined();
+        expect(nonClaudeShaped.native_parts).toEqual(msg.native_parts);
+        expect(nonClaudeShaped.responses_output_items).toEqual(msg.responses_output_items);
+    });
 });

@@ -47,7 +47,7 @@ const { hasUnsavedOpenAIPresetChanges } = await import(
     '/scripts/character/has-unsaved-openai-preset-changes.js'
 );
 const { encodeCardBoundOptionValue } = await import(
-    '/scripts/character/preset-ref-codec.js'
+    '/scripts/lib/preset-ref-codec.js'
 );
 
 // Factory for the openai.js-side deps that hasUnsavedOpenAIPresetChangesImpl

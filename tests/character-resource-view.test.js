@@ -79,6 +79,24 @@ describe('character resource source views', () => {
         expect(Object.keys(ordered)).toEqual(Object.keys(legacy));
     });
 
+    test('keeps a root field whose value is shared with a nested field', () => {
+        const raw = '{"spec":"chara_card_v2","data":{"name":"A","tags":[]}}';
+        const tags = [];
+        const legacy = {
+            avatar: 'A.png',
+            spec: 'chara_card_v2',
+            data: { name: 'A', tags },
+            name: 'A',
+            tags,
+            json_data: raw,
+        };
+        const projection = buildCharacterProjection({ raw, character: legacy });
+        const runtime = applyPatch(JSON.parse(raw), projection.patch).newDocument;
+        expect(runtime.tags).toEqual([]);
+        expect(runtime.data.tags).toEqual([]);
+        expect(projection.patch).toEqual(expect.arrayContaining([{ op: 'add', path: '/tags', value: [] }]));
+    });
+
     test('rejects missing field values in a layout', () => {
         assert.throws(
             () => assembleCharacterRaw([{ literal: '{"x":' }, { path: '/x' }, { literal: '}' }], new Map()),

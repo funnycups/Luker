@@ -218,9 +218,16 @@
 
 /* Collapsed pill */
 .rpdock.rp-dock-pill {
-    position: fixed; right: 16px; bottom: 84px; z-index: 9001;
-    display: inline-flex; align-items: center; height: 34px;
-    width: auto; inset: auto 16px 84px auto;
+    --rp-pill-h: 34px;
+    position: fixed;
+    left: auto;
+    right: calc(var(--rp-pill-float-right, 20px) + var(--rp-pill-vv-right, 0px));
+    top: max(8px, calc(var(--rp-pill-vh, 100vh) - var(--rp-pill-float-bottom, 84px) - var(--rp-pill-h)));
+    top: max(8px, calc(var(--rp-pill-vh, 100dvh) - var(--rp-pill-float-bottom, 84px) - var(--rp-pill-h)));
+    bottom: auto;
+    z-index: 9001;
+    display: inline-flex; align-items: center; height: var(--rp-pill-h);
+    width: auto;
     border-radius: 999px; font-size: 12.5px; font-weight: 550;
     color: var(--lw-text); background: var(--lw-raised);
     border: 1px solid color-mix(in srgb, var(--rp-running) 50%, var(--lw-border-strong));

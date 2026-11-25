@@ -271,61 +271,39 @@ function suppressLegacyEmbeddedWorldPopup(avatar) {
 }
 
 /**
- * Materialize a character's embedded world book: save it as a standalone
- * file, bind it as the primary world book, and mirror the visible UI.
+ * Materialize a character's embedded world book and return its separate
+ * import and binding outcomes.
  * Throws when the character or the import entry point is unavailable.
  */
-export async function importEmbeddedBookForCharacter(characterId) {
+export async function importEmbeddedBookForCharacter(characterId, character = getContext()?.characters?.[characterId], options) {
     const ctx = getContext();
-    const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
-    const character = Number.isInteger(characterId) ? characters[characterId] : null;
     if (!character?.avatar) {
         throw new Error(`${MODULE_NAME}: character not found at index ${characterId}`);
     }
-    // `importEmbeddedWorldInfo` reads the chid from the hidden import
-    // marker; re-arm it in case the legacy-popup suppression left it
-    // hidden.
-    jQuery('#import_character_info').data('chid', characterId).show();
     if (typeof ctx.importEmbeddedWorldInfo !== 'function') {
         throw new Error(`${MODULE_NAME}: importEmbeddedWorldInfo is unavailable`);
     }
-    await ctx.importEmbeddedWorldInfo(true);
-    const bookName = String(character?.data?.character_book?.name || `${character?.name}'s Lorebook`).trim();
-    if (bookName) {
-        await bindPrimaryBook(ctx, characterId, bookName);
-    }
+    return ctx.importEmbeddedWorldInfo(true, character, options);
 }
 
 /**
  * Re-bind a previously bound primary world book (used by the Keep action
  * and by CEA's merge rollback).
  */
-export async function rebindPreviousPrimaryBook(characterId, bookName) {
+export async function rebindPreviousPrimaryBook(characterId, bookName, character = getContext()?.characters?.[characterId], options) {
     const ctx = getContext();
-    const characters = Array.isArray(ctx?.characters) ? ctx.characters : [];
-    const character = Number.isInteger(characterId) ? characters[characterId] : null;
     if (!character?.avatar) {
         throw new Error(`${MODULE_NAME}: character not found at index ${characterId}`);
     }
-    await bindPrimaryBook(ctx, characterId, bookName);
+    await bindPrimaryBook(ctx, character, bookName, options);
 }
 
-async function bindPrimaryBook(ctx, characterId, bookName) {
+async function bindPrimaryBook(ctx, character, bookName, options) {
     if (typeof ctx.charUpdatePrimaryWorld !== 'function') {
         throw new Error(`${MODULE_NAME}: charUpdatePrimaryWorld is unavailable`);
     }
-    // `charUpdatePrimaryWorld` reads `this_chid` from script.js's module
-    // scope, so make sure the edit panel points at this character before
-    // writing.
-    const editPanelChid = jQuery('#set_character_world').data('chid');
-    if (editPanelChid !== characterId && typeof ctx.selectCharacterById === 'function') {
-        try { await ctx.selectCharacterById(characterId); } catch { /* best-effort */ }
-    }
-    await ctx.charUpdatePrimaryWorld(bookName);
-    // Mirror the UI gesture so the visible select picks up the value.
-    jQuery('#character_world').val(bookName).trigger('change');
-    if (typeof ctx.worldInfoEntry?.setButtonClass === 'function') {
-        ctx.worldInfoEntry.setButtonClass(characterId, true);
+    if (!await ctx.charUpdatePrimaryWorld(bookName, character, options)) {
+        throw new Error(t`The character world book binding could not be confirmed.`);
     }
 }
 
@@ -334,7 +312,7 @@ registerPostReplaceAction({
     label: () => t`Import new book`,
     description: () => t`Save the new card's embedded world book as a standalone file and bind it to this character. Use when you want the new card's shipped lore verbatim.`,
     isAvailable: detail => detail.hasNewEmbeddedBook,
-    run: detail => importEmbeddedBookForCharacter(detail.characterId),
+    run: detail => importEmbeddedBookForCharacter(detail.characterId, detail.character),
 });
 
 registerPostReplaceAction({
@@ -343,7 +321,7 @@ registerPostReplaceAction({
     description: detail => t`Re-bind the previously bound book (${detail.previousBookName}) and ignore the new card's embedded book. Use when you only wanted to refresh the character fields.`,
     isAvailable: detail => Boolean(detail.previousBookName && detail.previousBookExists),
     run: async detail => {
-        await rebindPreviousPrimaryBook(detail.characterId, detail.previousBookName);
+        await rebindPreviousPrimaryBook(detail.characterId, detail.previousBookName, detail.character);
         if (typeof toastr !== 'undefined') {
             toastr.success(t`Kept the previous primary world book bound: ${detail.previousBookName}`);
         }

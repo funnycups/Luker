@@ -2,6 +2,27 @@
 
 import { describe, test, expect, jest, beforeAll, beforeEach, afterEach } from '@jest/globals';
 import { createActivityGuardRegistry } from '../../public/scripts/activity-guard.js';
+import { installDomReadyJQuery } from '../util/browser-module-context.js';
+
+installDomReadyJQuery({
+    selectionMethods: {
+        show: (sel) => sel,
+        hide: (sel) => sel,
+        val: (sel, v) => (v !== undefined ? sel : ''),
+        text: (sel, v) => (v !== undefined ? sel : ''),
+        attr: (sel, ...args) => (args.length >= 2 ? sel : undefined),
+        prop: (sel, ...args) => (args.length >= 2 ? sel : false),
+        css: (sel, ...args) => (args.length >= 2 ? sel : ''),
+        addClass: (sel) => sel,
+        removeClass: (sel) => sel,
+        toggleClass: (sel) => sel,
+        find: (sel) => sel,
+        append: (sel) => sel,
+        empty: (sel) => sel,
+        remove: (sel) => sel,
+        trigger: (sel) => sel,
+    },
+});
 
 function deferred() {
     let resolve;

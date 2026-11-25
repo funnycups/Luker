@@ -98,3 +98,38 @@ export function walkLoopValuePath(value, path) {
     }
     return cur;
 }
+
+/**
+ * Split an each-macro's collection argument from its body.
+ *
+ * The lexer closes a macro at the first `}}`, so an inline JSON literal that
+ * contains `}}` or ends flush against the macro's closing braces
+ * (`{{each::{"a":1}}}`) reaches the handler cut short, with the rest of the
+ * literal at the start of the body. When the collection is a JSON literal
+ * that does not resolve, the split is moved to each later `}}` of the
+ * original text until the part before it parses as a JSON object or array.
+ * Candidates that would take in a nested macro are not tried.
+ *
+ * @param {string} rawCollection - Collection argument as the parser split it.
+ * @param {string} rawBody - Scoped body as the parser split it.
+ * @param {(ref: string) => object|null} resolveContainer - Resolves the collection reference as given.
+ * @returns {{ container: object|null, body: string }}
+ */
+export function splitEachCollectionAndBody(rawCollection, rawBody, resolveContainer) {
+    const collection = String(rawCollection ?? '');
+    const body = String(rawBody ?? '');
+    const container = resolveContainer(collection);
+    if (container !== null) return { container, body };
+
+    const head = collection.trim()[0];
+    if (head !== '{' && head !== '[') return { container: null, body };
+
+    const source = `${collection}}}${body}`;
+    for (let end = source.indexOf('}}', collection.length + 1); end !== -1; end = source.indexOf('}}', end + 1)) {
+        const candidate = source.slice(0, end);
+        if (candidate.includes('{{')) break;
+        const parsed = tryParseJsonContainer(candidate);
+        if (parsed !== null) return { container: parsed, body: source.slice(end + 2) };
+    }
+    return { container: null, body };
+}

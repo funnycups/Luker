@@ -41,20 +41,9 @@ export const saveChatSpy = record('saveChat');
 export const saveGroupSpy = record('saveGroup');
 export const saveConditionalSpy = record('saveConditional');
 
-// Inert stand-in for exports no test touches. Callable, constructible and
-// chainable via a Proxy so load-time calls in transitive importers
-// (`new X()`, `X.method(...)`, `X.on(...)`) are harmless no-ops.
+// Inert stand-in for unused exports required for ESM link-time resolution.
 function genericStub() {
-    const fn = function () {};
-    return new Proxy(fn, {
-        get(target, prop) {
-            if (prop === 'then') return undefined;
-            if (typeof prop === 'symbol') return Reflect.get(target, prop);
-            return genericStub();
-        },
-        apply() { return undefined; },
-        construct() { return {}; },
-    });
+    return function unusedExportStub() {};
 }
 
 // script.js carries ~300 live exports; transitive importers

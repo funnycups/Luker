@@ -11,6 +11,7 @@ import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { isTrueBoolean } from './utils.js';
+import { resolveGeminiModelCapabilities, resolveOpenAIModelCapabilities } from './lib/provider-capabilities.js';
 
 /**
  * @typedef {object} ToolInvocation
@@ -705,9 +706,21 @@ export class ToolManager {
             return false;
         }
 
-        // GPT-6 Astra supports tool calling only through the Responses API.
-        if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)
-            && /^gpt-6-astra/.test(model)) {
+        const plainTextEnabled = Boolean(settings.function_calling_plain_text);
+
+        // OpenAI/Azure Chat Completions models whose native function tools require the Responses API
+        // (e.g. GPT-6 Astra, GPT-6.1 Sol) or lack native tool support (o1, gpt-5-chat-latest).
+        // Plain-text function calling does not send native `tools` upstream and remains usable.
+        if (!plainTextEnabled
+            && [chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)
+            && !resolveOpenAIModelCapabilities(model).chatCompletionsSupportsTools) {
+            return false;
+        }
+
+        // Gemini image-generation models and Gemma 3 do not support native function declarations.
+        if (!plainTextEnabled
+            && [chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(settings.chat_completion_source)
+            && resolveGeminiModelCapabilities(model).functionCalling === 'unsupported') {
             return false;
         }
 
@@ -829,9 +842,13 @@ export class ToolManager {
             return data[0];
         }
 
-        // Google AI Studio tool calls
-        if (Array.isArray(data?.responseContent?.parts)) {
-            return data.responseContent.parts.filter(p => p.functionCall).map(p => convertGoogleToolCall(p.functionCall, p.thoughtSignature));
+        // Google AI Studio tool calls (legacy responseContent or native candidates)
+        const geminiParts = Array.isArray(data?.responseContent?.parts)
+            ? data.responseContent.parts
+            : (Array.isArray(data?.candidates?.[0]?.content?.parts) ? data.candidates[0].content.parts : null);
+        if (geminiParts) {
+            return geminiParts.filter(p => p?.functionCall || p?.function_call)
+                .map(p => convertGoogleToolCall(p.functionCall || p.function_call, p.thoughtSignature));
         }
 
         // Parsed tool calls from non-streaming data
@@ -914,6 +931,9 @@ export class ToolManager {
             toastr.clear(toast);
             console.log('[ToolManager] Function tool result:', result);
 
+            const extraContent = toolCall.extra_content && typeof toolCall.extra_content === 'object'
+                ? structuredClone(toolCall.extra_content)
+                : null;
             // Handle tool errors — still create an invocation so the LLM sees the failure
             if (toolResult instanceof Error) {
                 result.errors.push(toolResult);
@@ -927,7 +947,8 @@ export class ToolManager {
                         parameters: stringify(parameters),
                         result: toolResult.toString(),
                         error: true,
-                        signature: toolCall.signature || null,
+                        signature: toolCall.signature || toolCall.thoughtSignature || null,
+                        ...(extraContent ? { extra_content: extraContent } : {}),
                         reasoning: reasoningText || null,
                     });
                 }
@@ -947,7 +968,8 @@ export class ToolManager {
                 parameters: stringify(parameters),
                 result: toolResult,
                 error: false,
-                signature: toolCall.signature || null,
+                signature: toolCall.signature || toolCall.thoughtSignature || null,
+                ...(extraContent ? { extra_content: extraContent } : {}),
                 reasoning: reasoningText || null,
             };
             result.invocations.push(invocation);

@@ -172,7 +172,9 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
         if (!c) throw new Error(`test-writeExtensionField: no character at id=${id}`);
         if (!c.data) c.data = {};
         if (!c.data.extensions) c.data.extensions = {};
+        if (typeof value === 'function') value = await value(structuredClone(c.data.extensions[ns]));
         c.data.extensions[ns] = value;
+        return true;
     }),
     writeExtensionFieldBulk: async () => {},
     extensionNames: [],
@@ -243,7 +245,6 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
     SILICONFLOW_ENDPOINT: '',
     model_list: [],
     custom_prompt_post_processing_types: {},
-    getStreamingReply: () => '',
     tryParseStreamingError: () => null,
     createGenerationParameters: () => ({}),
     isOpenAIConnectionPresetField: () => false,
@@ -262,18 +263,8 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
 // via `import * as X` in st-context.js we can hand back a permissive Proxy;
 // for named-import modules we must declare each name explicitly (ESM link
 // step validates named-export presence structurally, not via [[Get]]).
-const noop = () => undefined;
 function nsStub(extra = {}) {
-    return new Proxy({ ...extra }, {
-        get(t, prop) {
-            if (prop in t) return t[prop];
-            if (prop === '__esModule') return true;
-            if (prop === 'then') return undefined;
-            if (prop === Symbol.toStringTag) return 'Module';
-            if (typeof prop === 'symbol') return undefined;
-            return noop;
-        },
-    });
+    return Object.assign(Object.create(null), { __esModule: true, ...extra });
 }
 
 // Namespace-import mocks (import * as X from ...) — Proxy is fine.
@@ -287,7 +278,7 @@ jest.unstable_mockModule('../../public/scripts/group-chats.js', () => ({
     groups: [], openGroupChat: () => Promise.resolve(), selected_group: null, unshallowGroupMembers: () => Promise.resolve(),
 }));
 jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {}, getCurrentLocale: () => 'en-US', t: (k) => k, translate: (k) => k,
+    addLocaleData: () => {}, createScopedI18n: () => ({ t: (k) => k, translate: (k) => k, format: (k) => k, has: () => false }), getCurrentLocale: () => 'en-US', t: (k) => k, translate: (k) => k,
 }));
 jest.unstable_mockModule('../../public/scripts/loader.js', () => ({
     hideLoader: () => {}, showLoader: () => {},

@@ -3,7 +3,8 @@ import { extractJsonFromData, extractMessageFromData, getGenerateUrl, getRequest
 import { getTextGenServer, createTextGenGenerationData, setting_names, textgenerationwebui_settings } from './textgen-settings.js';
 import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
-import { getStreamingReply, tryParseStreamingError, createGenerationParameters, isOpenAIConnectionPresetField, settingsToUpdate, oai_settings } from './openai.js';
+import { tryParseStreamingError, createGenerationParameters, isOpenAIConnectionPresetField, settingsToUpdate, oai_settings } from './openai.js';
+import { ProtocolParseError, createProtocolStreamParser, parseProtocolResponse, resolveWireProtocol } from './lib/protocol-parser/index.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 import EventSourceStream from './sse-stream.js';
 import { acquireActivityLease, resolveRequestActivityLeaseOptions, withActivityLease } from './activity-guard.js';
@@ -50,7 +51,7 @@ async function openSseStreamWithLease(url, sanitizedData, signal, leaseOptions) 
 
         const eventStream = new EventSourceStream();
         response.body.pipeThrough(eventStream);
-        return { response, reader: eventStream.readable.getReader() };
+        return { response, reader: eventStream.readable.getReader(), eventStream };
     });
 }
 
@@ -523,54 +524,107 @@ export class ChatCompletionService {
                     return json;
                 }
 
-                const result = {
-                    content: extractMessageFromData(json, this.TYPE),
-                    reasoning: extractReasoningFromData(json, {
-                        mainApi: this.TYPE,
-                        textGenType: data.chat_completion_source,
-                        ignoreShowThoughts: true,
-                    }),
-                };
+                const protocol = resolveWireProtocol(data.chat_completion_source);
+                let result;
+                if (protocol) {
+                    const turn = parseProtocolResponse(protocol, json);
+                    result = {
+                        content: turn.text,
+                        reasoning: turn.reasoning,
+                    };
+                } else {
+                    result = {
+                        content: extractMessageFromData(json, this.TYPE),
+                        reasoning: extractReasoningFromData(json, {
+                            mainApi: this.TYPE,
+                            textGenType: data.chat_completion_source,
+                            ignoreShowThoughts: true,
+                        }),
+                    };
+                }
                 // Try parse JSON
                 if (data.json_schema) {
-                    result.content = JSON.parse(extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }));
+                    result.content = JSON.parse(
+                        protocol
+                            ? (result.content || extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }))
+                            : extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }),
+                    );
                 }
                 return result;
             });
         }
 
-        const { response, reader } = await openSseStreamWithLease('/api/backends/chat-completions/generate', sanitizedData, signal, leaseOptions);
+        const { reader, eventStream } = await openSseStreamWithLease('/api/backends/chat-completions/generate', sanitizedData, signal, leaseOptions);
+        const streamParser = createProtocolStreamParser(data.chat_completion_source || 'openai');
         return wrapStreamFactoryWithActivityLease(leaseOptions, async function* streamData() {
             let text = '';
             const swipes = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, finishReason: null };
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) return;
-                const rawData = value.data;
-                if (rawData === '[DONE]') return;
-                tryParseStreamingError(response, rawData, { quiet: true });
-                const parsed = JSON.parse(rawData);
+            const state = { reasoning: '', images: [], signature: '', finishReason: null };
+            let sawDirectText = false;
+            let sawAnyFrame = false;
+            let finishedNormally = false;
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        if (!signal?.aborted) {
+                            const invalidSse = eventStream?.getInvalidDiagnostic?.();
+                            if (!sawAnyFrame && invalidSse) {
+                                throw new ProtocolParseError({
+                                    protocol: streamParser.protocol,
+                                    stage: 'sse',
+                                    location: 'stream',
+                                    message: 'Expected text/event-stream SSE frames, received non-SSE response body.',
+                                    rawDiagnostic: invalidSse,
+                                });
+                            }
+                            const finalTurn = streamParser.finish();
+                            state.signature = finalTurn.signature || state.signature;
+                            state.finishReason = finalTurn.finishReason;
+                        }
+                        finishedNormally = true;
+                        return;
+                    }
+                    sawAnyFrame = true;
+                    const rawData = value.data;
+                    if (rawData === '[DONE]') {
+                        streamParser.feedFrame('[DONE]');
+                        continue;
+                    }
+                    const frame = streamParser.feedFrame(rawData, value.event);
+                    if (frame.textDelta) {
+                        sawDirectText = true;
+                        text += frame.textDelta;
+                    } else if (!sawDirectText && frame.refusalDelta) {
+                        text += frame.refusalDelta;
+                    }
+                    if (frame.choiceTextDeltas) {
+                        for (const [choiceIdxKey, deltaStr] of Object.entries(frame.choiceTextDeltas)) {
+                            const swipeIdx = Number(choiceIdxKey) - 1;
+                            if (swipeIdx >= 0 && deltaStr) {
+                                swipes[swipeIdx] = (swipes[swipeIdx] || '') + deltaStr;
+                            }
+                        }
+                    }
+                    if (frame.reasoningDelta) {
+                        state.reasoning += frame.reasoningDelta;
+                    }
+                    if (Array.isArray(frame.imagesDelta) && frame.imagesDelta.length > 0) {
+                        state.images.push(...frame.imagesDelta);
+                    }
+                    if (frame.hasMetadataUpdate) {
+                        const snap = streamParser.getSnapshot();
+                        state.signature = snap.signature || '';
+                        state.finishReason = snap.finishReason;
+                    }
 
-                const reply = getStreamingReply(parsed, state, {
-                    chatCompletionSource: data.chat_completion_source,
-                    overrideShowThoughts: true,
-                });
-                if (Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
-                    const swipeIndex = parsed.choices[0].index - 1;
-                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + reply;
-                } else {
-                    text += reply;
+                    yield { text, swipes: swipes, state };
                 }
-
-                const rawFinish = parsed?.choices?.[0]?.finish_reason
-                    ?? parsed?.choices?.[0]?.delta?.finish_reason
-                    ?? null;
-                if (rawFinish) {
-                    state.finishReason = String(rawFinish);
+            } finally {
+                if (!finishedNormally) {
+                    try { await reader.cancel(); } catch { /* ignore cancel failure */ }
                 }
-
-                yield { text, swipes: swipes, state };
+                try { reader.releaseLock(); } catch { /* already released */ }
             }
         });
     }

@@ -509,9 +509,9 @@ export function initDefaultSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'forcesave',
         callback: async function () {
-            await saveSettings();
+            const outcome = await saveSettings();
             await saveChatConditional();
-            toastr.success(t`Chat and settings saved.`);
+            if (outcome.ok) toastr.success(t`Chat and settings saved.`);
             return '';
         },
         helpString: t`Forces a save of the current chat and settings`,

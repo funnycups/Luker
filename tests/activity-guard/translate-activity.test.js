@@ -50,14 +50,12 @@ beforeAll(async () => {
         },
     };
 
-    const jqChain = new Proxy(function () {}, {
-        get(_t, prop) {
-            if (prop === 'then') return undefined;
-            if (prop === 'length') return 0;
-            return () => jqChain;
-        },
-        apply() { return jqChain; },
-    });
+    const jqChain = { length: 0 };
+    for (const method of ['on', 'off', 'one', 'val', 'text', 'html', 'attr', 'prop', 'css', 'addClass', 'removeClass', 'toggleClass', 'show', 'hide', 'toggle', 'append', 'prepend', 'empty', 'remove', 'find', 'closest', 'children', 'parent', 'filter', 'first', 'last', 'eq', 'each', 'trigger', 'focus', 'blur', 'click', 'data']) {
+        jqChain[method] = () => jqChain;
+    }
+    jqChain.is = () => false;
+    jqChain.hasClass = () => false;
     globalThis.jQuery = Object.assign((selector) => {
         if (selector === '#send_textarea') {
             return {

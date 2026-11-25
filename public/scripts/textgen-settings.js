@@ -27,6 +27,7 @@ import { power_user, registerDebugFunction } from './power-user.js';
 import { getActiveManualApiSamplers, loadApiSelectedSamplers, isSamplerManualPriorityEnabled } from './samplerSelect.js';
 import { SECRET_KEYS, writeSecret } from './secrets.js';
 import { getEventSourceStream } from './sse-stream.js';
+import { onLukerResponseMeta } from './ws-delivery.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, loadAphroditeModels, loadDreamGenModels, loadFeatherlessModels, loadGenericModels, loadInfermaticAIModels, loadLlamaCppModels, loadMancerModels, loadOllamaModels, loadOpenRouterModels, loadTabbyModels, loadTogetherAIModels, loadVllmModels, updateOpenRouterProvidersWarning } from './textgen-models.js';
 import { TOKENIZER_SUPPORTED_KEY, getEncodingTokenizerType, getTextTokens, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
 import { AbortReason } from './util/AbortReason.js';
@@ -1317,7 +1318,7 @@ function setSettingByName(setting, value, trigger) {
  * @returns {Promise<(function(): AsyncGenerator<{swipes: [], text: string, toolCalls: [], logprobs: {token: string, topLogprobs: Candidate[]}|null}, void, *>)|*>}
  * @throws {Error} - If the response status is not OK, or from within the generator
  */
-export async function generateTextGenWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
+export async function generateTextGenWithStreaming(generate_data, signal, { onLukerMeta = null, onLukerMetaDisposer = null } = {}) {
     generate_data.stream = true;
 
     const requestTimeoutMs = getRequestTimeoutMs();
@@ -1352,23 +1353,72 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
         },
     });
 
-    const generationId = response.headers.get('x-luker-generation-id');
-    if (generationId && typeof onLukerMeta === 'function') {
+    const expectedGenerationId = typeof generate_data?.luker_generation?.job_id === 'string'
+        ? generate_data.luker_generation.job_id
+        : '';
+    const generationId = response.headers.get('x-luker-generation-id') || '';
+    const hasMismatchedGenerationIdHeader = Boolean(
+        expectedGenerationId && generationId && generationId !== expectedGenerationId,
+    );
+    let trackedGenerationId = expectedGenerationId || generationId;
+    if (!hasMismatchedGenerationIdHeader && generationId && typeof onLukerMeta === 'function') {
         onLukerMeta({ generationId });
     }
     const persistedHeader = response.headers.get('x-luker-server-persisted');
-    if ((persistedHeader === '0' || persistedHeader === '1') && typeof onLukerMeta === 'function') {
+    if (!hasMismatchedGenerationIdHeader && (persistedHeader === '0' || persistedHeader === '1') && typeof onLukerMeta === 'function') {
         onLukerMeta({ persisted: persistedHeader === '1' });
+    }
+    let disposeLukerMeta = null;
+    const cleanupLukerMeta = () => {
+        signal?.removeEventListener?.('abort', cleanupLukerMeta);
+        if (!disposeLukerMeta) return;
+        const dispose = disposeLukerMeta;
+        disposeLukerMeta = null;
+        dispose();
+    };
+    if (!hasMismatchedGenerationIdHeader && typeof onLukerMeta === 'function') {
+        disposeLukerMeta = onLukerResponseMeta(response, (meta) => {
+            const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
+            if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (metaGenerationId && !trackedGenerationId) {
+                trackedGenerationId = metaGenerationId;
+            }
+            if (metaGenerationId) {
+                onLukerMeta({ generationId: metaGenerationId });
+            }
+            if (typeof meta?.persisted === 'boolean') {
+                onLukerMeta({ persisted: meta.persisted });
+            }
+        });
+        if (typeof onLukerMetaDisposer === 'function') {
+            onLukerMetaDisposer(cleanupLukerMeta);
+        }
     }
 
     if (!response.ok) {
+        cleanupLukerMeta();
         tryParseStreamingError(response, await response.text());
         throw new Error(`Got response status ${response.status}`);
     }
+    if (signal && disposeLukerMeta) {
+        if (signal.aborted) {
+            cleanupLukerMeta();
+        } else {
+            signal.addEventListener('abort', cleanupLukerMeta, { once: true });
+        }
+    }
 
-    const eventStream = getEventSourceStream();
-    response.body.pipeThrough(eventStream);
-    const reader = eventStream.readable.getReader();
+    let reader;
+    try {
+        const eventStream = getEventSourceStream();
+        response.body.pipeThrough(eventStream);
+        reader = eventStream.readable.getReader();
+    } catch (error) {
+        cleanupLukerMeta();
+        throw error;
+    }
 
     return async function* streamData() {
         let text = '';
@@ -1377,48 +1427,41 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
         const swipes = [];
         const toolCalls = [];
         const state = { reasoning: '', finishReason: null };
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) return;
-            if (value.data === '[DONE]') continue;
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                if (value.data === '[DONE]') continue;
 
-            tryParseStreamingError(response, value.data);
+                tryParseStreamingError(response, value.data);
 
-            let data = JSON.parse(value.data);
-            if (data?.luker && typeof data.luker === 'object') {
-                if (typeof onLukerMeta === 'function') {
-                    if (typeof data.luker.generation_id === 'string' && data.luker.generation_id) {
-                        onLukerMeta({ generationId: data.luker.generation_id });
-                    }
-                    if (typeof data.luker.persisted === 'boolean') {
-                        onLukerMeta({ persisted: data.luker.persisted });
-                    }
+                let data = JSON.parse(value.data);
+
+                if (data?.choices?.[0]?.index > 0) {
+                    const swipeIndex = data.choices[0].index - 1;
+                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + data.choices[0].text;
+                } else if (data?.index > 0) {
+                    // llama.cpp streaming swipe
+                    const swipeIndex = data.index - 1;
+                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + data.content;
+                } else {
+                    const newText = data?.choices?.[0]?.text || data?.content || '';
+                    text += newText;
+                    logprobs = parseTextgenLogprobs(newText, data.choices?.[0]?.logprobs || data?.completion_probabilities);
+                    state.reasoning += data?.choices?.[0]?.reasoning ?? data?.choices?.[0]?.thinking ?? '';
                 }
-                continue;
-            }
 
-            if (data?.choices?.[0]?.index > 0) {
-                const swipeIndex = data.choices[0].index - 1;
-                swipes[swipeIndex] = (swipes[swipeIndex] || '') + data.choices[0].text;
-            } else if (data?.index > 0) {
-                // llama.cpp streaming swipe
-                const swipeIndex = data.index - 1;
-                swipes[swipeIndex] = (swipes[swipeIndex] || '') + data.content;
-            } else {
-                const newText = data?.choices?.[0]?.text || data?.content || '';
-                text += newText;
-                logprobs = parseTextgenLogprobs(newText, data.choices?.[0]?.logprobs || data?.completion_probabilities);
-                state.reasoning += data?.choices?.[0]?.reasoning ?? data?.choices?.[0]?.thinking ?? '';
-            }
+                // Textgen backends surface finish_reason on the terminal frame; keep the last
+                // non-null value seen so downstream auto-continue-on-truncated can consult it.
+                const rawFinish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason ?? null;
+                if (rawFinish) {
+                    state.finishReason = String(rawFinish);
+                }
 
-            // Textgen backends surface finish_reason on the terminal frame; keep the last
-            // non-null value seen so downstream auto-continue-on-truncated can consult it.
-            const rawFinish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason ?? null;
-            if (rawFinish) {
-                state.finishReason = String(rawFinish);
+                yield { text, swipes, logprobs, toolCalls, state };
             }
-
-            yield { text, swipes, logprobs, toolCalls, state };
+        } finally {
+            cleanupLukerMeta();
         }
     };
 }

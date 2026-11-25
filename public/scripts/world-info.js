@@ -1,6 +1,6 @@
 import { Fuse } from '../lib.js';
 
-import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
+import { saveSettingsDebounced as scheduleSettingsSaveDebounced, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
 import { readWorldInfoDocument } from './named-resource-read.js';
 import { areLookupNamesEqual, download, debounce, findCanonicalIndexInList, findCanonicalNameInList, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml, setInfoBlock, clearInfoBlock } from './utils.js';
 import { extension_settings, getContext, writeExtensionField } from './extensions.js';
@@ -217,11 +217,31 @@ export let world_info_max_recursion_steps = 0;
 function normalizeWorldInfoSaveOptions(options = null) {
     return {
         refreshEditor: options?.refreshEditor === true,
+        onSaved: options?.onSaved,
     };
 }
 
 const pendingWorldInfoSaves = new Map();
+const worldInfoCacheWriteTokens = new Map();
+const worldInfoCacheRollbackBaselines = new Map();
 let worldInfoSaveChain = Promise.resolve();
+
+function restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken) {
+    if (worldInfoCacheWriteTokens.get(normalizedName) !== cacheWriteToken) {
+        return;
+    }
+    worldInfoCacheWriteTokens.delete(normalizedName);
+    const baseline = worldInfoCacheRollbackBaselines.get(normalizedName);
+    worldInfoCacheRollbackBaselines.delete(normalizedName);
+    if (!baseline) {
+        return;
+    }
+    if (baseline.hadCached) {
+        worldInfoCache.set(normalizedName, baseline.previousCached);
+    } else {
+        worldInfoCache.delete(normalizedName);
+    }
+}
 
 const saveWorldDebounced = debounce(async () => {
     const names = [...pendingWorldInfoSaves.keys()];
@@ -234,14 +254,15 @@ const saveWorldDebounced = debounce(async () => {
         try {
             await _save(name, entry.data, entry.options);
         } catch (error) {
+            restoreWorldInfoCacheIfOwned(name, entry.cacheWriteToken);
             console.error(`[WI] Failed to save "${name}"`, error);
         }
     }));
 }, debounce_timeout.relaxed);
-const saveSettingsDebounced = debounce(() => {
+const saveSettingsDebounced = () => {
     Object.assign(world_info, { globalSelect: selected_world_info });
-    saveSettings();
-}, debounce_timeout.relaxed);
+    scheduleSettingsSaveDebounced();
+};
 const sortFn = (a, b) => b.order - a.order;
 let updateEditor = (navigation, flashOnNav = true) => { console.debug('Triggered WI navigation', navigation, flashOnNav); };
 
@@ -1675,6 +1696,7 @@ class WorldInfoTimedEffects {
 }
 
 export function getWorldInfoSettings() {
+    Object.assign(world_info, { globalSelect: selected_world_info });
     return {
         world_info,
         world_info_depth,
@@ -1912,7 +1934,7 @@ export function setWorldInfoSettings(settings, data) {
         selected_world_info = existingWorldInfo;
     }
 
-    world_info = settings.world_info ?? {};
+    world_info = structuredClone(settings.world_info ?? {});
 
     $('#world_info_depth_counter').val(world_info_depth);
     $('#world_info_depth').val(world_info_depth);
@@ -2152,14 +2174,15 @@ function registerWorldInfoSlashCommands() {
 
         if (isTrueBoolean(String(create)) && books.length === 0) {
             const newName = await createWorldWithName(name, `Character Book ${character.name}`.replace(/[^a-z0-9 -]/gi, '_').replace(/_{2,}/g, '_').substring(0, 64));
+            if (!newName) return '';
             // Also assign the book now - additional if requested, otherwise as primary
             if (type === 'additional') {
                 await charUpdateAddAuxWorld(character.avatar, newName);
             } else {
-                await charUpdatePrimaryWorld(newName);
+                if (!await charUpdatePrimaryWorld(newName, character)) {
+                    throw new Error(t`The character world book binding could not be confirmed.`);
+                }
             }
-            // Refresh UI, if needed
-            setWorldInfoButtonClass(this_chid);
             books.push(newName);
         }
 
@@ -3207,6 +3230,8 @@ function cacheWorldInfoData(name, data, { invalidateSearch = false } = {}) {
     if (!key) {
         return;
     }
+    worldInfoCacheWriteTokens.set(key, {});
+    worldInfoCacheRollbackBaselines.delete(key);
     worldInfoCache.set(key, data);
     rememberWorldInfoSnapshot(key, data);
     if (invalidateSearch) {
@@ -8227,7 +8252,7 @@ async function saveWorldInfoInternal(name, data, options = {}) {
     const canPatch = isPlainObject(previousSnapshot) && isPlainObject(payload);
     const normalizedOptions = normalizeWorldInfoSaveOptions(options);
 
-    if (canPatch) {
+    if (canPatch && !normalizedOptions.onSaved) {
         const operations = await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 16000 });
         if (operations.length === 0) {
             saved = true;
@@ -8250,6 +8275,7 @@ async function saveWorldInfoInternal(name, data, options = {}) {
         if (!fullSaveResult.ok) {
             throw new Error(`Failed to save world info: ${fullSaveResult.status}`);
         }
+        normalizedOptions.onSaved?.(fullSaveResult);
     }
 
     cacheWorldInfoData(name, payload, { invalidateSearch: true });
@@ -8298,6 +8324,7 @@ async function _save(name, data, options = {}) {
  * @param {string} name - The name of the world info
  * @param {any} data - The data to be saved
  * @param {boolean} [immediately=false] - Whether to save immediately or use debouncing
+ * @param {{refreshEditor?: boolean, onSaved?: (response: Response) => void}} [options] Refresh or observe the actual full-save acknowledgement
  * @return {Promise<void>} A promise that resolves when the world info is saved
  */
 export async function saveWorldInfo(name, data, immediately = false, options = {}) {
@@ -8311,18 +8338,31 @@ export async function saveWorldInfo(name, data, immediately = false, options = {
         return;
     }
 
+    if (!worldInfoCacheRollbackBaselines.has(normalizedName)) {
+        const hadCached = worldInfoCache.has(normalizedName);
+        const previousCached = hadCached ? worldInfoCache.get(normalizedName) : undefined;
+        worldInfoCacheRollbackBaselines.set(normalizedName, { hadCached, previousCached });
+    }
+    const cacheWriteToken = {};
+    worldInfoCacheWriteTokens.set(normalizedName, cacheWriteToken);
+
     // Update cache immediately, so any future call can pull from this
     worldInfoCache.set(normalizedName, data);
     const normalizedOptions = normalizeWorldInfoSaveOptions(options);
 
     if (immediately) {
-        return await _save(normalizedName, data, normalizedOptions);
+        try {
+            return await _save(normalizedName, data, normalizedOptions);
+        } catch (error) {
+            restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken);
+            throw error;
+        }
     }
 
     // Keep the latest state per book and move it to the end so the flush order
     // follows the last edit. One debounce timer then flushes every book.
     pendingWorldInfoSaves.delete(normalizedName);
-    pendingWorldInfoSaves.set(normalizedName, { data, options: normalizedOptions });
+    pendingWorldInfoSaves.set(normalizedName, { data, options: normalizedOptions, cacheWriteToken });
     saveWorldDebounced();
 }
 
@@ -8486,21 +8526,40 @@ async function updateWorldInfoLinks(oldName, newName, { retargetPersonaLore } = 
  * Deletes a world info with the given name
  *
  * @param {string} worldInfoName - The name of the world info to delete
- * @returns {Promise<boolean>} A promise that resolves to true if the world info was successfully deleted, false otherwise
+ * @param {{expectedVersion?: string, onlyIfUnbound?: boolean}} [options] Conditional cleanup of an original save
+ * @returns {Promise<boolean>} Acknowledged deletion; ordinary non-OK responses return false
+ * @throws {Error} Conditional HTTP refusal with code/resourceState, or unconfirmed transport failure
  */
-export async function deleteWorldInfo(worldInfoName) {
+export async function deleteWorldInfo(worldInfoName, { expectedVersion, onlyIfUnbound } = {}) {
     const resolvedWorldInfoName = resolveWorldInfoName(worldInfoName);
     if (!resolvedWorldInfoName) {
         return false;
     }
     invalidateWorldInfoRequestCache([resolvedWorldInfoName]);
 
-    const response = await fetch('/api/worldinfo/delete', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ name: resolvedWorldInfoName }),
-    });
+    let response;
+    try {
+        response = await fetch('/api/worldinfo/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ name: resolvedWorldInfoName, expectedVersion, onlyIfUnbound }),
+        });
+    } catch (error) {
+        error.resourceState = 'unknown';
+        throw error;
+    }
 
+    if (!response.ok && (expectedVersion !== undefined || onlyIfUnbound === true)) {
+        let failure = {};
+        try {
+            const parsed = await response.json();
+            if (parsed && typeof parsed === 'object') failure = parsed;
+        } catch {
+            failure = {};
+        }
+        const code = failure.code || response.statusText || 'error';
+        throw Object.assign(new Error(`World book '${resolvedWorldInfoName}' deletion was not acknowledged: HTTP ${response.status} ${code}`), failure);
+    }
     if (!response.ok) {
         return false;
     }
@@ -8514,6 +8573,8 @@ export async function deleteWorldInfo(worldInfoName) {
     if (worldInfoCache.has(resolvedWorldInfoName)) {
         worldInfoCache.delete(resolvedWorldInfoName);
     }
+    worldInfoCacheWriteTokens.delete(resolvedWorldInfoName);
+    worldInfoCacheRollbackBaselines.delete(resolvedWorldInfoName);
     worldInfoSnapshotCache.delete(resolvedWorldInfoName);
     invalidateWorldInfoManagerEntrySearch();
 
@@ -10473,7 +10534,8 @@ export function checkEmbeddedWorld(chid) {
         return false;
     }
 
-    if (characters[chid]?.data?.character_book) {
+    const character = characters[chid];
+    if (character?.data?.character_book) {
         $('#import_character_info').data('chid', chid).show();
 
         // Only show the alert once per character
@@ -10488,10 +10550,15 @@ export function checkEmbeddedWorld(chid) {
                 <div class="m-b-1">If you want to import it later, select "Import Card Lore" in the "More..." dropdown menu on the character panel.</div>`;
                 const checkResult = (result) => {
                     if (result) {
-                        importEmbeddedWorldInfo(true);
+                        return importEmbeddedWorldInfo(true, character);
                     }
                 };
-                callGenericPopup(html, POPUP_TYPE.CONFIRM, '', { okButton: 'Yes' }).then(checkResult);
+                callGenericPopup(html, POPUP_TYPE.CONFIRM, '', { okButton: 'Yes' })
+                    .then(checkResult)
+                    .catch((error) => {
+                        console.error('Failed to import embedded World/Lorebook', error);
+                        toastr.error(String(error?.message || error), t`Failed to import World Info`);
+                    });
             } else {
                 toastr.info(
                     'To import and use it, select "Import Card Lore" in the "More..." dropdown menu on the character panel.',
@@ -10547,68 +10614,85 @@ export function getCharacterEmbeddedWorld(charId) {
     };
 }
 
-export async function importEmbeddedWorldInfo(skipPopup = false) {
-    const chid = $('#import_character_info').data('chid');
+/**
+ * Import a captured embedded book and acknowledge its binding separately.
+ * @param {boolean} [skipPopup=false] Skip confirmation
+ * @param {object} [character] Original live character, otherwise captured from the import marker
+ * @param {{captureOwnership?: boolean}} [options] Capture original write receipts for later conditional cleanup
+ * @returns {Promise<{imported: boolean, bound: boolean, bookName: string, ownership?: object}>} Book save and current binding outcomes
+ */
+export async function importEmbeddedWorldInfo(skipPopup = false, character = characters[$('#import_character_info').data('chid')], { captureOwnership = false } = {}) {
+    const result = { imported: false, bound: false, bookName: '' };
+    character = resolvePrimaryWorldCharacter(character);
+    const book = character?.data?.character_book;
+    if (!book || !characters.includes(character)) return result;
 
-    if (chid === undefined || chid === -1) {
-        return;
-    }
-
-    const hasEmbed = checkEmbeddedWorld(chid);
-
-    if (!hasEmbed) {
-        return;
-    }
-
-    const bookName = characters[chid]?.data?.character_book?.name || `${characters[chid]?.name}'s Lorebook`;
+    const bookSource = JSON.stringify(book);
+    const convertedBook = convertCharacterBook(structuredClone(book));
+    const worldSource = JSON.stringify(character.data?.extensions?.world);
+    const previousOperation = primaryWorldOperations.get(character);
+    const ownsBook = () => character.data?.character_book === book && JSON.stringify(book) === bookSource;
+    const bookName = String(book.name || '').trim() || `${character.name}'s Lorebook`;
+    result.bookName = bookName;
     const existingBookName = resolveWorldInfoName(bookName);
+    let worldVersion;
+    let characterVersion;
+    let operation;
 
     if (!skipPopup) {
         const confirmation = await Popup.show.confirm(t`Are you sure you want to import '${bookName}'?`, existingBookName ? t`It will overwrite the World/Lorebook with the same name.` : '');
         if (!confirmation) {
-            return;
+            return result;
         }
     }
+    if (!ownsBook() || !characters.includes(character)
+        || primaryWorldOperations.get(character) !== previousOperation
+        || JSON.stringify(character.data?.extensions?.world) !== worldSource) return result;
 
-    const convertedBook = convertCharacterBook(characters[chid].data.character_book);
-
-    await saveWorldInfo(bookName, convertedBook, true);
-    await updateWorldInfoList();
-    // Persist the binding into the in-memory character data BEFORE the
-    // visible select fires its change handler. The legacy code only set
-    // `$('#character_world').val(bookName)` — that updates the dropdown
-    // text but does NOT touch `characters[chid].data.extensions.world`.
-    // Any subsequent `saveCharacterDebounced()` -> `/edit` would then
-    // POST the OLD value of `extensions.world` (e.g. empty for a freshly
-    // replaced card) and silently wipe the binding on disk. That's the
-    // bug behind "I imported the embedded book, button briefly lit up,
-    // then went gray again and reload showed nothing bound". Persist
-    // the new binding via writeExtensionField so the on-disk state
-    // matches the visible select.
-    if (characters[chid] && typeof characters[chid].data === 'object') {
-        if (!characters[chid].data.extensions || typeof characters[chid].data.extensions !== 'object') {
-            characters[chid].data.extensions = {};
-        }
-        characters[chid].data.extensions.world = bookName;
-    }
-    $('#character_world').val(bookName).trigger('change');
     try {
-        await writeExtensionField(chid, 'world', bookName);
+        result.bound = await updatePrimaryWorldBinding(bookName, character, async () => {
+            if (!ownsBook()) return false;
+            // Prepare inside the existing namespace queue. The writer retains
+            // the original target/source across this async file operation.
+            await saveWorldInfo(bookName, convertedBook, true, {
+                onSaved: response => {
+                    worldVersion = response.headers.get('X-World-Version');
+                    result.imported = true;
+                },
+            });
+            await updateWorldInfoList();
+            return result.imported && ownsBook();
+        }, ownsBook, { onAcknowledged: (response, initiatingOperation) => { characterVersion = response.headers.get('X-Character-Version'); operation = initiatingOperation; } });
     } catch (error) {
-        console.warn('importEmbeddedWorldInfo: failed to persist character world binding via writeExtensionField', error);
+        if (!result.imported) throw error;
+        console.error(`Character '${character.avatar}' world binding to '${bookName}' could not be confirmed:`, error);
     }
 
+    if (!result.imported) return result;
+    if (!result.bound) {
+        toastr.warning(t`The world '${bookName}' was imported, but its character binding could not be confirmed.`, t`World/Lorebook imported`);
+        return result;
+    }
+    if (captureOwnership) {
+        result.ownership = {
+            world: { name: bookName, version: worldVersion },
+            characterVersion,
+            ownsSource: ownsBook,
+            isCurrent: (target = character) => target === character && primaryWorldOperations.get(character) === operation && characters.includes(character)
+                && ownsBook() && character.data?.extensions?.world === bookName,
+        };
+    }
     toastr.success(t`The world '${bookName}' has been imported and linked to the character successfully.`, t`World/Lorebook imported`);
 
     const newIndex = resolveWorldInfoIndex(bookName);
-    if (newIndex >= 0) {
+    if (newIndex >= 0 && menu_type !== 'create' && characters[this_chid] === character) {
         //show&draw the WI panel before..
         $('#WIDrawerIcon').trigger('click');
         //..auto-opening the new imported WI
         $('#world_editor_select').val(newIndex).trigger('change');
     }
 
-    setWorldInfoButtonClass(chid, true);
+    return result;
 }
 
 export function onWorldInfoChange(args, text) {
@@ -11012,26 +11096,69 @@ export async function moveWorldInfoEntry(sourceName, targetName, uid, { deleteOr
 
 /**
  * Updates the primary world info linked to a character.
- * Can also unset it to null.
+ * Pass an empty name to unset the binding.
  * @param {string} name - The name of the world info to link to the character.
+ * @param {object} [character] Original live character, otherwise the selected character or creation buffer
+ * @param {{ownership?: object}} [options] Original import ownership for conditional cleanup
+ * @returns {Promise<boolean>} Current acknowledged binding, or a buffered creation value
  */
-export async function charUpdatePrimaryWorld(name) {
+export async function charUpdatePrimaryWorld(name, character = menu_type === 'create' ? create_save : characters[this_chid], { ownership } = {}) {
     console.debug('Character world selected:', name);
+    character = character === create_save ? character : resolvePrimaryWorldCharacter(character);
+    if (ownership && !ownership.isCurrent(character)) return false;
+    return updatePrimaryWorldBinding(String(name || ''), character, null,
+        ownership ? ownership.ownsSource : () => true,
+        ownership ? { ifMatch: { characterVersion: ownership.characterVersion, world: ownership.world } } : {});
+}
 
-    if (menu_type == 'create') {
+const primaryWorldOperations = new WeakMap();
+
+function resolvePrimaryWorldCharacter(character) {
+    // Core holds raw cards; extensions receive the existing compatibility
+    // proxies. Resolve either identity once, without matching by avatar.
+    const rawIndex = characters.indexOf(character);
+    const index = rawIndex >= 0 ? rawIndex : getContext().characters.indexOf(character);
+    return index >= 0 ? characters[index] : undefined;
+}
+
+async function updatePrimaryWorldBinding(name, character, prepare = null, ownsSource = () => true, writeOptions = {}) {
+    if (!character || typeof character !== 'object') return false;
+    if (character === create_save) {
+        if (menu_type !== 'create') return false;
         // Creation flow buffers the value until the card is actually written.
         create_save.world = name;
         $('#character_world').val(name);
-        return;
+        return true;
     }
 
-    if (this_chid === undefined || this_chid === null) {
-        return;
+    const chid = characters.indexOf(character);
+    if (chid < 0) return false;
+    const operation = {};
+    primaryWorldOperations.set(character, operation);
+    const isCurrent = () => primaryWorldOperations.get(character) === operation && characters.includes(character);
+    let saved;
+    try {
+        saved = await writeExtensionField(chid, 'world', async () => {
+            if (!isCurrent()) throw operation;
+            if (prepare && await prepare() === false) throw operation;
+            if (!isCurrent()) throw operation;
+            return name;
+        }, { ...writeOptions, isCurrent: ownsSource, onAcknowledged: response => writeOptions.onAcknowledged?.(response, operation) });
+    } catch (error) {
+        if (error === operation) return false;
+        throw error;
     }
-
-    await writeExtensionField(this_chid, 'world', String(name || ''));
-
-    setWorldInfoButtonClass(undefined, !!name);
+    if (!saved || !ownsSource() || !characters.includes(character) || character.data?.extensions?.world !== name) return false;
+    // The form mirrors acknowledged card data, while the popup retains any
+    // newer pending selection. If that newer write fails, a later form save
+    // must still serialize this acknowledged binding rather than an old value.
+    if (menu_type !== 'create' && characters[this_chid] === character) {
+        $('#character_world').val(name).trigger('change');
+        if (ownsSource() && menu_type !== 'create' && characters[this_chid] === character && character.data?.extensions?.world === name) {
+            setWorldInfoButtonClass(characters.indexOf(character));
+        }
+    }
+    return ownsSource() && isCurrent() && character.data?.extensions?.world === name;
 }
 
 /**
@@ -11081,13 +11208,12 @@ export function getCharaAuxWorlds(fileName, { storedOnly = false } = {}) {
 }
 
 function updateAuxBooks(fileName, computeNext) {
-    if (!fileName) return;
-
     if (menu_type === 'create') {
         const current = create_save.extra_books ?? [];
         create_save.extra_books = normalizeArray(computeNext(current));
         return; // no debounced save in create flow
     }
+    if (!fileName) return;
 
     const charLore = world_info.charLore ?? [];
     const idx = charLore.findIndex(e => e.name === fileName);
@@ -11118,7 +11244,7 @@ export function initWorldInfo() {
     });
 
     // Monitor the hidden legacy <select#world_info> for external DOM mutations.
-    // Third-party scripts (e.g. JS-Slash-Runner) may directly manipulate the select's
+    // Third-party scripts may directly manipulate the select's
     // options and selected_world_info array without triggering 'change' or calling
     // syncGlobalWorldInfoSelectionUi(). This observer detects such changes and
     // syncs the World Info Manager UI accordingly.
@@ -11465,7 +11591,6 @@ export function initWorldInfo() {
             openWorldInfoEditor(worldName);
         } else if (hasEmbed && !event.shiftKey && !event.altKey) {
             await importEmbeddedWorldInfo();
-            saveCharacterDebounced();
         } else {
             openSetWorldMenu();
         }

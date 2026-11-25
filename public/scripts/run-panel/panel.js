@@ -10,7 +10,44 @@ import * as EV from './events.js';
 import { createActivityPill } from '../activity-pill.js';
 
 const DEFAULT_STYLESHEET_URL = '/scripts/run-panel/panel.css';
-const DEFAULT_EMPTY_STATE = 'No active run yet. Start a conversation to see orchestration progress here.';
+const DEFAULT_EMPTY_STATE = 'No active run yet. Start a conversation to see run progress here.';
+
+// Below this viewport width the mobile layout makes the chat column
+// full-width, so no gutter is left for a sidebar (see panel.css).
+const SIDEBAR_MIN_VIEWPORT_PX = 1024;
+// Narrowest sidebar the panel rows fit in; must match the clamp() lower
+// bound of the sidebar width in panel.css.
+const SIDEBAR_MIN_WIDTH_PX = 255;
+
+/**
+ * Width of the chat column in px, from the `--sheldWidth` var the Chat
+ * Width setting writes (`${n}vw`). Null when the value is not a plain vw
+ * or px length.
+ * @returns {number|null}
+ */
+function getChatColumnWidthPx() {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--sheldWidth').trim();
+    const match = /^(\d+(?:\.\d+)?)(vw|px)$/.exec(raw);
+    if (!match) return null;
+    const value = Number(match[1]);
+    return match[2] === 'vw' ? value * window.innerWidth / 100 : value;
+}
+
+/**
+ * Pick the panel layout. The sidebar docks into the gutter right of the
+ * centred chat column, so it is used only on desktop viewports whose
+ * gutter fits the narrowest sidebar; otherwise the panel is a drawer.
+ * @returns {{ layout: 'sidebar'|'drawer', desktop: boolean }}
+ */
+function computeLayout() {
+    const desktop = window.innerWidth >= SIDEBAR_MIN_VIEWPORT_PX;
+    if (!desktop) return { layout: 'drawer', desktop };
+    const columnWidth = getChatColumnWidthPx();
+    if (columnWidth === null) return { layout: 'sidebar', desktop };
+    // Same gutter expression as the sidebar width in panel.css.
+    const gutter = (window.innerWidth - columnWidth) / 2 - 1;
+    return { layout: gutter >= SIDEBAR_MIN_WIDTH_PX ? 'sidebar' : 'drawer', desktop };
+}
 
 export function createRunPanel(options = {}) {
     const store = options.store;
@@ -47,8 +84,7 @@ export function createRunPanel(options = {}) {
     let pill = null;
     let unsubscribe = null;
     let pillTimer = null;
-    let layoutMql = null;
-    let layoutHandler = null;
+    let layoutObserver = null;
 
     function buildShellHtml() {
         return `
@@ -100,7 +136,7 @@ export function createRunPanel(options = {}) {
         root.id = rootId;
         root.className = 'luker-run-panel';
         root.dataset.state = 'closed';
-        root.dataset.layout = matchMedia('(min-width: 1024px)').matches ? 'sidebar' : 'drawer';
+        root.dataset.layout = computeLayout().layout;
         root.innerHTML = buildShellHtml();
         document.body.appendChild(root);
 
@@ -113,11 +149,10 @@ export function createRunPanel(options = {}) {
 
         renderer = new PanelRenderer(root, rendererOptions);
 
-        layoutMql = matchMedia('(min-width: 1024px)');
-        layoutHandler = (e) => {
-            root.dataset.layout = e.matches ? 'sidebar' : 'drawer';
-        };
-        layoutMql.addEventListener('change', layoutHandler);
+        window.addEventListener('resize', updateLayout);
+        // The Chat Width setting writes --sheldWidth on <html>.
+        layoutObserver = new MutationObserver(updateLayout);
+        layoutObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
 
         root.querySelector('[data-action="close"]').addEventListener('click', () => {
             setState('closed');
@@ -132,6 +167,11 @@ export function createRunPanel(options = {}) {
         });
 
         mounted = true;
+    }
+
+    function updateLayout() {
+        const root = document.getElementById(rootId);
+        if (root) root.dataset.layout = computeLayout().layout;
     }
 
     function panelIsOpen() {
@@ -206,8 +246,17 @@ export function createRunPanel(options = {}) {
                 mountOnce();
                 renderer.handle(event);
                 if (autoOpen) {
-                    setState('open');
-                    hidePill();
+                    // On desktop with a gutter too narrow for the sidebar, the
+                    // drawer would cover the composer; offer the reopen pill
+                    // instead and let the user open the panel on demand.
+                    // A panel the user already has open stays open.
+                    const { layout, desktop } = computeLayout();
+                    if (desktop && layout === 'drawer' && !wasOpen) {
+                        showPill();
+                    } else {
+                        setState('open');
+                        hidePill();
+                    }
                     return;
                 }
                 setState(wasOpen ? 'open' : 'closed');
@@ -228,10 +277,10 @@ export function createRunPanel(options = {}) {
 
     function destroy() {
         if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-        if (layoutMql && layoutHandler) {
-            layoutMql.removeEventListener('change', layoutHandler);
-            layoutMql = null;
-            layoutHandler = null;
+        window.removeEventListener('resize', updateLayout);
+        if (layoutObserver) {
+            layoutObserver.disconnect();
+            layoutObserver = null;
         }
         if (renderer && typeof renderer.destroy === 'function') renderer.destroy();
         hidePill();

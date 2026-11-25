@@ -198,7 +198,7 @@ export function extractReasoningBlocksFromData(data, {
     const source = chatCompletionSource ?? oai_settings.chat_completion_source;
 
     if (source === chat_completion_sources.CLAUDE) {
-        // Server-side normalizeClaudeResponseToOAI copies thinking / redacted_thinking blocks
+        // The shared protocol parser copies thinking / redacted_thinking blocks
         // into choices[0].message.reasoning_blocks so we can retrieve them without touching
         // the raw Claude content array.
         const messageBlocks = data?.choices?.[0]?.message?.reasoning_blocks;
@@ -287,16 +287,84 @@ export function extractReasoningSignatureFromData(data, {
         }
     }
 
-    // Direct Gemini format: Extract from responseContent.parts if available (only text parts)
-    if (isGemini && Array.isArray(data?.responseContent?.parts)) {
-        data.responseContent.parts.forEach((part) => {
-            if (part.thoughtSignature && typeof part.text === 'string') {
-                return part.thoughtSignature;
+    // Direct Gemini format: extract from responseContent.parts or native candidates[0].content.parts
+    if (isGemini) {
+        const parts = Array.isArray(data?.responseContent?.parts)
+            ? data.responseContent.parts
+            : (Array.isArray(data?.candidates?.[0]?.content?.parts) ? data.candidates[0].content.parts : null);
+        if (parts) {
+            let fallbackSig = null;
+            for (const part of parts) {
+                if (!part || typeof part.thoughtSignature !== 'string' || !part.thoughtSignature) {
+                    continue;
+                }
+                if (typeof part.text === 'string') {
+                    return part.thoughtSignature;
+                }
+                if (!fallbackSig) {
+                    fallbackSig = part.thoughtSignature;
+                }
             }
-        });
+            if (fallbackSig) {
+                return fallbackSig;
+            }
+        }
+        const msgSig = data?.choices?.[0]?.message?.signature;
+        if (typeof msgSig === 'string' && msgSig) {
+            return msgSig;
+        }
     }
 
     return null;
+}
+
+/**
+ * Extracts ordered provider-native turn envelopes from a non-streaming response
+ * so multi-turn replay can echo exact block/part/item sequences verbatim.
+ * @param {object} data Response data
+ * @param {object} [options] Optional overrides
+ * @param {string|null} [options.mainApi] Override for main API
+ * @param {string|null} [options.chatCompletionSource] Override for chat completion source
+ * @returns {{ nativeParts: object[]|null, nativeContentBlocks: object[]|null, responsesOutputItems: object[]|null }}
+ */
+export function extractNativeTurnFromData(data, {
+    mainApi = null,
+    chatCompletionSource = null,
+} = {}) {
+    const empty = { nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null };
+    if ((mainApi ?? main_api) !== 'openai' || !data || typeof data !== 'object') {
+        return empty;
+    }
+
+    const source = chatCompletionSource ?? oai_settings.chat_completion_source;
+    const msg = data?.choices?.[0]?.message;
+
+    if (source === chat_completion_sources.MAKERSUITE || source === chat_completion_sources.VERTEXAI) {
+        const parts = Array.isArray(msg?.native_parts) && msg.native_parts.length > 0
+            ? msg.native_parts
+            : (Array.isArray(data?.responseContent?.parts) && data.responseContent.parts.length > 0
+                ? data.responseContent.parts
+                : (Array.isArray(data?.candidates?.[0]?.content?.parts) && data.candidates[0].content.parts.length > 0
+                    ? data.candidates[0].content.parts
+                    : null));
+        return { ...empty, nativeParts: parts ? structuredClone(parts) : null };
+    }
+
+    if (source === chat_completion_sources.CLAUDE) {
+        const blocks = Array.isArray(msg?.native_content_blocks) && msg.native_content_blocks.length > 0
+            ? msg.native_content_blocks
+            : (Array.isArray(data?.content) && data.content.length > 0 ? data.content : null);
+        return { ...empty, nativeContentBlocks: blocks ? structuredClone(blocks) : null };
+    }
+
+    if (source === chat_completion_sources.OPENAI_RESPONSES) {
+        const items = Array.isArray(msg?.responses_output_items) && msg.responses_output_items.length > 0
+            ? msg.responses_output_items
+            : (Array.isArray(data?.output) && data.output.length > 0 ? data.output : null);
+        return { ...empty, responsesOutputItems: items ? structuredClone(items) : null };
+    }
+
+    return empty;
 }
 
 /**

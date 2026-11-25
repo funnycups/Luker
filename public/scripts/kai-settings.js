@@ -22,6 +22,7 @@ import {
     power_user,
 } from './power-user.js';
 import { getEventSourceStream } from './sse-stream.js';
+import { onLukerResponseMeta } from './ws-delivery.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import { getOrderedPresetNames, getSortableDelay, versionCompare } from './utils.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
@@ -236,7 +237,7 @@ function tryParseStreamingError(response, decoded) {
     }
 }
 
-export async function generateKoboldWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
+export async function generateKoboldWithStreaming(generate_data, signal, { onLukerMeta = null, onLukerMetaDisposer = null } = {}) {
     const response = await withProfileRetry(async () => {
         return await fetch('/api/backends/kobold/generate', {
             headers: getRequestHeaders(),
@@ -256,46 +257,88 @@ export async function generateKoboldWithStreaming(generate_data, signal, { onLuk
         },
     });
 
-    const generationId = response.headers.get('x-luker-generation-id');
-    if (generationId && typeof onLukerMeta === 'function') {
+    const expectedGenerationId = typeof generate_data?.luker_generation?.job_id === 'string'
+        ? generate_data.luker_generation.job_id
+        : '';
+    const generationId = response.headers.get('x-luker-generation-id') || '';
+    const hasMismatchedGenerationIdHeader = Boolean(
+        expectedGenerationId && generationId && generationId !== expectedGenerationId,
+    );
+    let trackedGenerationId = expectedGenerationId || generationId;
+    if (!hasMismatchedGenerationIdHeader && generationId && typeof onLukerMeta === 'function') {
         onLukerMeta({ generationId });
     }
     const persistedHeader = response.headers.get('x-luker-server-persisted');
-    if ((persistedHeader === '0' || persistedHeader === '1') && typeof onLukerMeta === 'function') {
+    if (!hasMismatchedGenerationIdHeader && (persistedHeader === '0' || persistedHeader === '1') && typeof onLukerMeta === 'function') {
         onLukerMeta({ persisted: persistedHeader === '1' });
+    }
+    let disposeLukerMeta = null;
+    const cleanupLukerMeta = () => {
+        signal?.removeEventListener?.('abort', cleanupLukerMeta);
+        if (!disposeLukerMeta) return;
+        const dispose = disposeLukerMeta;
+        disposeLukerMeta = null;
+        dispose();
+    };
+    if (!hasMismatchedGenerationIdHeader && typeof onLukerMeta === 'function') {
+        disposeLukerMeta = onLukerResponseMeta(response, (meta) => {
+            const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
+            if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
+                return;
+            }
+            if (metaGenerationId && !trackedGenerationId) {
+                trackedGenerationId = metaGenerationId;
+            }
+            if (metaGenerationId) {
+                onLukerMeta({ generationId: metaGenerationId });
+            }
+            if (typeof meta?.persisted === 'boolean') {
+                onLukerMeta({ persisted: meta.persisted });
+            }
+        });
+        if (typeof onLukerMetaDisposer === 'function') {
+            onLukerMetaDisposer(cleanupLukerMeta);
+        }
     }
 
     if (!response.ok) {
+        cleanupLukerMeta();
         tryParseStreamingError(response, await response.text());
         throw new Error(`Got response status ${response.status}`);
     }
-    const eventStream = getEventSourceStream();
-    response.body.pipeThrough(eventStream);
-    const reader = eventStream.readable.getReader();
+    if (signal && disposeLukerMeta) {
+        if (signal.aborted) {
+            cleanupLukerMeta();
+        } else {
+            signal.addEventListener('abort', cleanupLukerMeta, { once: true });
+        }
+    }
+    let reader;
+    try {
+        const eventStream = getEventSourceStream();
+        response.body.pipeThrough(eventStream);
+        reader = eventStream.readable.getReader();
+    } catch (error) {
+        cleanupLukerMeta();
+        throw error;
+    }
 
     return async function* streamData() {
         let text = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) return;
-            if (value.data === '[DONE]') continue;
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                if (value.data === '[DONE]') continue;
 
-            const data = JSON.parse(value.data);
-            if (data?.luker && typeof data.luker === 'object') {
-                if (typeof onLukerMeta === 'function') {
-                    if (typeof data.luker.generation_id === 'string' && data.luker.generation_id) {
-                        onLukerMeta({ generationId: data.luker.generation_id });
-                    }
-                    if (typeof data.luker.persisted === 'boolean') {
-                        onLukerMeta({ persisted: data.luker.persisted });
-                    }
+                const data = JSON.parse(value.data);
+                if (data?.token) {
+                    text += data.token;
                 }
-                continue;
+                yield { text, swipes: [], toolCalls: [], state: {} };
             }
-            if (data?.token) {
-                text += data.token;
-            }
-            yield { text, swipes: [], toolCalls: [], state: {} };
+        } finally {
+            cleanupLukerMeta();
         }
     };
 }
