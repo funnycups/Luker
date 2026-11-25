@@ -1612,7 +1612,7 @@ describe('workbench Ask model & source readers', () => {
 
             const sideRegexItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
                 .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
-            expect(sideRegexItem.querySelector('.wb-src-n').textContent).toBe('1 enabled');
+            expect(sideRegexItem.querySelector('.wb-src-n').textContent).toBe('1 enabled scripts');
 
             // Disabling the regex extension marks overview as '扩展已关闭', loadSnapshot regex.disabled as true, and side panel as 'Off'
             globalThis.Luker = savedLuker;

@@ -209,7 +209,7 @@ export function createAskPage(app) {
                 item(i18n('Variables'), varKeysCount > 0 ? i18nFormat('${0} keys', varKeysCount) : '—', 'content'),
                 item(
                     i18n('Regex scripts'),
-                    regexExtensionDisabled ? i18n('Off') : (regexEnabledCount == null ? '—' : i18nFormat('${0} enabled', regexEnabledCount)),
+                    regexExtensionDisabled ? i18n('Off') : (regexEnabledCount == null ? '—' : i18nFormat('${0} enabled scripts', regexEnabledCount)),
                     'content',
                     regexExtensionDisabled ? 'off' : 'ok',
                 ),
