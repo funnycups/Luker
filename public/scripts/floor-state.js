@@ -197,13 +197,13 @@ export async function readFloorStateSnapshot(options, depsOverride = null) {
     if (typeof runtime.getCurrentChatId === 'function') {
         const chatId = String(runtime.getCurrentChatId() || '').trim();
         if (!chatId) {
-            return { ok: false, state: null, reason: 'NO_CHAT' };
+            return { ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_TARGET };
         }
     }
 
     const chat = typeof runtime.getChat === 'function' ? runtime.getChat() : null;
     if (!Array.isArray(chat) && typeof runtime.getCurrentChatId !== 'function') {
-        return { ok: false, state: null, reason: 'NO_CHAT' };
+        return { ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_TARGET };
     }
 
     const logNamespace = `${namespace}${LOG_SUFFIX}`;
@@ -219,9 +219,6 @@ export async function readFloorStateSnapshot(options, depsOverride = null) {
         };
     }
     if (logResult && logResult.ok === false) {
-        if (logResult.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
-            return { ok: false, state: null, reason: 'NO_CHAT' };
-        }
         return {
             ok: false,
             state: null,
@@ -232,49 +229,22 @@ export async function readFloorStateSnapshot(options, depsOverride = null) {
 
     const rawLog = logResult?.ok ? logResult.state : logResult;
     const log = normalizeLog(rawLog);
-    if (log.commits.length > 0) {
-        const swipeMap = buildSwipeMapFromChat(Array.isArray(chat) ? chat : []);
-        try {
-            const state = computeTargetState(log.commits, swipeMap);
-            return { ok: true, state: state === null ? null : structuredClone(state) };
-        } catch (error) {
-            return {
-                ok: false,
-                state: null,
-                reason: STATE_ERROR_REASONS.REPLAY_BROKEN,
-                hint: String(error?.message || error).slice(0, 120),
-            };
-        }
+    if (log.commits.length === 0) {
+        return { ok: true, state: null };
     }
 
-    // Empty log fallback: read legacy unmigrated data namespace without any write/delete.
-    let legacyResult;
+    const swipeMap = buildSwipeMapFromChat(Array.isArray(chat) ? chat : []);
     try {
-        legacyResult = await runtime.getChatState(namespace);
+        const state = computeTargetState(log.commits, swipeMap);
+        return { ok: true, state: state === null ? null : structuredClone(state) };
     } catch (error) {
         return {
             ok: false,
             state: null,
-            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            reason: STATE_ERROR_REASONS.REPLAY_BROKEN,
             hint: String(error?.message || error).slice(0, 120),
         };
     }
-    if (legacyResult && legacyResult.ok === false) {
-        if (legacyResult.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
-            return { ok: false, state: null, reason: 'NO_CHAT' };
-        }
-        return {
-            ok: false,
-            state: null,
-            reason: legacyResult.reason || STATE_ERROR_REASONS.HTTP_ERROR,
-            ...(legacyResult.hint ? { hint: legacyResult.hint } : {}),
-        };
-    }
-    const legacyData = legacyResult?.ok ? legacyResult.state : legacyResult;
-    if (legacyData && typeof legacyData === 'object') {
-        return { ok: true, state: structuredClone(legacyData) };
-    }
-    return { ok: true, state: null };
 }
 
 /**

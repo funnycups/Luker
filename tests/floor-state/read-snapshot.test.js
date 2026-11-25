@@ -80,17 +80,17 @@ describe('readFloorStateSnapshot', () => {
         expect(spies.patchChatState).not.toHaveBeenCalled();
     });
 
-    test('returns NO_CHAT immediately when there is no active chat', async () => {
+    test('returns VALIDATION_TARGET immediately when there is no active chat', async () => {
         const { deps, spies } = makeReadOnlyDeps({ chatId: '', chat: [] });
 
         const res = await readFloorStateSnapshot({ namespace: 'luker_orch_loop_notes' }, deps);
-        expect(res).toEqual({ ok: false, state: null, reason: 'NO_CHAT' });
+        expect(res).toEqual({ ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_TARGET });
         expect(spies.getChatState).not.toHaveBeenCalled();
         expect(spies.updateChatState).not.toHaveBeenCalled();
         expect(spies.deleteChatState).not.toHaveBeenCalled();
     });
 
-    test('falls back to legacy unmigrated namespace when floor log is empty without migrating or writing', async () => {
+    test('returns null state when floor log is empty without reading or migrating legacy data namespace', async () => {
         const { deps, spies } = makeReadOnlyDeps({
             chatId: 'chat-legacy',
             chat: [{ swipe_id: 0 }],
@@ -102,12 +102,9 @@ describe('readFloorStateSnapshot', () => {
         });
 
         const res = await readFloorStateSnapshot({ namespace: 'luker_orch_loop_notes' }, deps);
-        expect(res.ok).toBe(true);
-        expect(res.state).toEqual({
-            entries: ['bare legacy note', { id: 'old-1', status: 'open', text: 'legacy object note' }],
-        });
-        expect(spies.getChatState).toHaveBeenNthCalledWith(1, 'luker_orch_loop_notes__floor_log');
-        expect(spies.getChatState).toHaveBeenNthCalledWith(2, 'luker_orch_loop_notes');
+        expect(res).toEqual({ ok: true, state: null });
+        expect(spies.getChatState).toHaveBeenCalledTimes(1);
+        expect(spies.getChatState).toHaveBeenCalledWith('luker_orch_loop_notes__floor_log');
         expect(spies.updateChatState).not.toHaveBeenCalled();
         expect(spies.deleteChatState).not.toHaveBeenCalled();
         expect(spies.patchChatState).not.toHaveBeenCalled();
