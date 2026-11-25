@@ -7,6 +7,10 @@ import {
     sectionTitle,
     selectInput,
 } from '../../../../lens-shared/ui.js';
+import {
+    createImageAttachmentTray,
+    renderMessageAttachments,
+} from '../../../../lens-shared/image-attachments.js';
 import { createCharacterProfileStore, profileVersion } from '../../character-archive/store.js';
 import { resolveExplorationLlm } from '../../exploration/agent.js';
 import { runCharacterBuilderTurn } from '../../exploration/dialog-agent.js';
@@ -135,6 +139,28 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
     const chatPaneEl = h('section', { class: 'sdlens-builder-chat-pane' });
     const chatLogEl = h('div', { class: 'sdlens-builder-messages', dataset: { sdRole: 'builder-messages' } });
     const composerWrapEl = h('div', { class: 'sdlens-builder-compose' });
+    const composerRowEl = h('div', { class: 'sdlens-compose-row' });
+    const composerInputEl = h('textarea', {
+        class: 'sdlens-textarea sdlens-builder-input',
+        rows: 2,
+        placeholder: i18n('Describe the character or request appearance, outfit, or reference updates…'),
+        dataset: { sdRole: 'builder-input' },
+        onInput: e => { composerText = e.target.value; },
+        onKeydown: e => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                e.preventDefault();
+                if (!turnBusy) void handleSend();
+            }
+        },
+    });
+    const attachmentTray = createImageAttachmentTray({
+        composerEl: composerWrapEl,
+        textareaEl: composerInputEl,
+        onError: msg => app.toast(msg, { error: true }),
+    });
+    const composerActionSlotEl = h('div', { class: 'sdlens-compose-action' });
+    put(composerRowEl, attachmentTray.attachButton, attachmentTray.fileInput, composerInputEl, composerActionSlotEl);
+    put(composerWrapEl, attachmentTray.trayEl, composerRowEl);
     const draftPaneEl = h('section', { class: 'sdlens-builder-draft-pane', dataset: { sdRole: 'builder-draft-pane' } });
     const footerEl = h('footer', { class: 'sdlens-builder-footer' });
 
@@ -147,6 +173,17 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
         return getPresetById(ill, ill?.currentPresetId) || ill?.presets?.[0] || {};
     }
 
+    async function loadCachedPreview(imagePath) {
+        if (!isStagedTempImagePath(imagePath)) {
+            return imagePath;
+        }
+        const cached = previewCache.get(imagePath);
+        if (cached) return cached;
+        const dataUrl = await tracker.preview(imagePath);
+        previewCache.set(imagePath, dataUrl);
+        return dataUrl;
+    }
+
     function createManagedThumbnail(imagePath, altText) {
         if (!isStagedTempImagePath(imagePath)) {
             return h('img', { src: imagePath, alt: altText, dataset: { imagePath } });
@@ -156,8 +193,7 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
             return h('img', { src: cached, alt: altText, dataset: { imagePath } });
         }
         const img = h('img', { alt: altText, dataset: { imagePath, loading: 'true' } });
-        tracker.preview(imagePath).then(dataUrl => {
-            previewCache.set(imagePath, dataUrl);
+        loadCachedPreview(imagePath).then(dataUrl => {
             img.src = dataUrl;
             delete img.dataset.loading;
         }).catch(err => {
@@ -211,6 +247,9 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
             if (entry.text) {
                 put(msgEl, h('div', { class: 'sdlens-builder-msg-text', text: entry.text }));
             }
+            if (Array.isArray(entry.attachments) && entry.attachments.length > 0) {
+                put(msgEl, renderMessageAttachments(entry.attachments, { loadPreview: loadCachedPreview }));
+            }
             if (Array.isArray(entry.tools) && entry.tools.length > 0) {
                 const toolList = h('div', { class: 'sdlens-builder-tool-list' });
                 for (const tool of entry.tools) {
@@ -235,23 +274,14 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
     }
 
     function renderComposer() {
-        clear(composerWrapEl);
-        const ta = h('textarea', {
-            class: 'sdlens-textarea sdlens-builder-input',
-            rows: 2,
-            placeholder: i18n('Describe the character or request appearance, outfit, or reference updates…'),
-            dataset: { sdRole: 'builder-input' },
-            disabled: saveBusy || closingBusy || Boolean(savedResult),
-            onInput: e => { composerText = e.target.value; },
-            onKeydown: e => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                    e.preventDefault();
-                    if (!turnBusy) void handleSend();
-                }
-            },
-        });
-        ta.value = composerText;
+        const disabled = saveBusy || closingBusy || Boolean(savedResult);
+        composerInputEl.disabled = disabled;
+        if (composerInputEl.value !== composerText) {
+            composerInputEl.value = composerText;
+        }
+        attachmentTray.setDisabled(turnBusy || disabled);
 
+        clear(composerActionSlotEl);
         const actionBtn = turnBusy
             ? button(i18n('Stop'), () => {
                 turnAbort?.abort('Stopped by user');
@@ -264,11 +294,11 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
                 primary: true,
                 iconName: 'send',
                 renderIcon: icon,
-                disabled: saveBusy || closingBusy || Boolean(savedResult),
+                disabled,
             });
         actionBtn.dataset.sdRole = turnBusy ? 'builder-stop' : 'builder-send';
 
-        put(composerWrapEl, ta, actionBtn);
+        put(composerActionSlotEl, actionBtn);
     }
 
     function renderConflictsSection() {
@@ -483,7 +513,8 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
 
     async function handleSend() {
         const text = String(composerText || '').trim();
-        if (!text || turnBusy || saveBusy || closingBusy || savedResult) return;
+        const hasPendingImages = attachmentTray.hasItems();
+        if ((!text && !hasPendingImages) || turnBusy || saveBusy || closingBusy || savedResult) return;
 
         const preset = resolveActivePreset();
         const expLlm = resolveExplorationLlm(preset);
@@ -491,6 +522,7 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
 
         let sourcePolicy;
         let promptContext = null;
+        let attachments = [];
         try {
             sourcePolicy = await createSourcePolicy(ctx, parseSourceSelection(sourceValue));
             if (typeof ctx?.captureTaskPromptContext === 'function') {
@@ -498,6 +530,21 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
                     scope: 'preset',
                     apiPresetName: expLlm.apiPresetName,
                     llmPresetName: expLlm.llmPresetName,
+                });
+            }
+            if (hasPendingImages) {
+                await tracker.ready();
+                attachments = await attachmentTray.commit(async (files) => {
+                    const out = [];
+                    for (const file of files) {
+                        const stagedPath = await tracker.upload(file);
+                        out.push({
+                            path: stagedPath,
+                            ...(file.name ? { name: file.name } : {}),
+                            ...(file.type ? { mime: file.type } : {}),
+                        });
+                    }
+                    return out;
                 });
             }
         } catch (err) {
@@ -508,9 +555,17 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
         }
 
         composerText = '';
-        const userMessage = { role: 'user', content: text };
+        const userMessage = {
+            role: 'user',
+            content: text,
+            ...(attachments.length ? { attachments } : {}),
+        };
         const nextInputMessages = [...conversationMessages, userMessage];
-        transcriptEntries.push({ role: 'user', text });
+        transcriptEntries.push({
+            role: 'user',
+            text,
+            ...(attachments.length ? { attachments } : {}),
+        });
         const assistantEntry = { role: 'assistant', text: '', tools: [], images: [] };
         transcriptEntries.push(assistantEntry);
 
@@ -724,5 +779,6 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
     popup.dlg?.classList?.add('sdlens-builder-popup');
 
     await popup.show();
+    attachmentTray.destroy();
     return dialogResult;
 }

@@ -458,11 +458,24 @@
 .sdlens-studio-compose {
     flex: none;
     display: flex;
-    align-items: flex-end;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
     padding: 10px 12px;
     border-top: 1px solid var(--lw-border);
     background: var(--lw-surface);
+}
+
+.sdlens-compose-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.sdlens-compose-action {
+    flex: none;
+    display: flex;
+    align-items: flex-end;
 }
 
 .sdlens-studio-gallery {
@@ -811,8 +824,9 @@
 .sdlens-builder-compose {
     flex: none;
     display: flex;
-    align-items: flex-end;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
     padding: 10px 12px;
     border-top: 1px solid var(--lw-border);
     background: var(--lw-surface);

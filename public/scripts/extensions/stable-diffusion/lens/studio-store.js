@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { buildPersistentToolHistoryMessages, createPersistentToolTurnMessage } from '../../../lib/iter-tool-calling.js';
+import {
+    buildAttachmentSummaryLabel,
+    collectAttachmentPathsFromRecords,
+    normalizeImageAttachments,
+} from '../../../lib/multimodal-messages.js';
+import {
+    copyChatAttachments,
+    deleteChatAttachments,
+    isAiAttachmentPath,
+    rewriteAttachmentsWithCopyMap,
+} from '../../../lib/chat-attachments-store.js';
 import { makeIllustrationId } from '../illustration/presets.js';
 
 export const STUDIO_SESSIONS_NAMESPACE = 'sd_studio_sessions';
@@ -88,19 +99,23 @@ export function normalizeStudioSession(raw, now = Date.now()) {
     };
 }
 
-export function appendStudioUserMessage(session, text, now = Date.now()) {
+export function appendStudioUserMessage(session, text, nowOrOpts = Date.now()) {
+    const opts = (nowOrOpts && typeof nowOrOpts === 'object') ? nowOrOpts : { now: nowOrOpts };
+    const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
     const content = String(text ?? '').trim();
+    const attachments = normalizeImageAttachments(opts.attachments);
     const message = {
         id: makeIllustrationId('msg'),
         role: 'user',
         content,
+        ...(attachments.length > 0 ? { attachments } : {}),
         at: now,
         tool_calls: [],
         tool_results: [],
     };
     session.messages.push(message);
     if (!session.title) {
-        session.title = sessionTitleFromText(content);
+        session.title = sessionTitleFromText(buildAttachmentSummaryLabel(content, attachments, '[Image]'));
     }
     session.updatedAt = now;
     return message;
@@ -190,7 +205,12 @@ export function buildStudioHistoryMessages(session) {
     for (const message of Array.isArray(session?.messages) ? session.messages : []) {
         const role = String(message?.role || '').trim().toLowerCase();
         if (role === 'user') {
-            history.push({ role: 'user', content: String(message.content ?? '') });
+            const attachments = normalizeImageAttachments(message.attachments);
+            history.push({
+                role: 'user',
+                content: String(message.content ?? ''),
+                ...(attachments.length > 0 ? { attachments } : {}),
+            });
             continue;
         }
         if (role === 'system') {
@@ -327,9 +347,33 @@ export function createStudioSessionStore(context) {
                 throw new Error(`Studio session "${id}" not found.`);
             }
             const count = Math.max(0, Math.min(source.messages.length, Math.floor(Number(messageCount) || 0)));
-            const keptMessages = source.messages.slice(0, count);
-            const keptMessageIds = new Set(keptMessages.map(m => m.id));
-            const keptImages = source.images.filter(img => !img.messageId || keptMessageIds.has(img.messageId));
+            const rawKeptMessages = source.messages.slice(0, count).map(m => JSON.parse(JSON.stringify(m)));
+            const keptMessageIds = new Set(rawKeptMessages.map(m => m.id));
+            const rawKeptImages = source.images
+                .filter(img => !img.messageId || keptMessageIds.has(img.messageId))
+                .map(img => JSON.parse(JSON.stringify(img)));
+
+            const sourcePaths = collectAttachmentPathsFromRecords(rawKeptMessages, { filter: isAiAttachmentPath });
+            let copyMap = new Map();
+            if (sourcePaths.length > 0 && typeof globalThis.fetch === 'function') {
+                copyMap = await copyChatAttachments(context, sourcePaths);
+            }
+
+            const keptMessages = rawKeptMessages.map(m => {
+                if (m.role !== 'user' || !Array.isArray(m.attachments) || !m.attachments.length) return m;
+                return { ...m, attachments: rewriteAttachmentsWithCopyMap(m.attachments, copyMap) };
+            });
+            const keptImages = rawKeptImages.map(img => {
+                if (copyMap.size === 0) return img;
+                const next = { ...img };
+                if (next.sourceImageId && copyMap.has(next.sourceImageId)) {
+                    next.sourceImageId = copyMap.get(next.sourceImageId);
+                }
+                if (Array.isArray(next.characterImageIds) && next.characterImageIds.length > 0) {
+                    next.characterImageIds = next.characterImageIds.map(tok => copyMap.get(tok) || tok);
+                }
+                return next;
+            });
 
             const forked = normalizeStudioSession({
                 ...source,
@@ -341,7 +385,14 @@ export function createStudioSessionStore(context) {
                 images: keptImages,
             }, now);
 
-            return await this.saveSession(forked, now);
+            try {
+                return await this.saveSession(forked, now);
+            } catch (err) {
+                if (copyMap.size > 0 && typeof globalThis.fetch === 'function') {
+                    await deleteChatAttachments(context, [...copyMap.values()]).catch(() => {});
+                }
+                throw err;
+            }
         },
 
         async deleteSession(id) {
@@ -350,6 +401,7 @@ export function createStudioSessionStore(context) {
                 return false;
             }
             let deleted = false;
+            let attachmentPaths = [];
             const res = await context.updateGlobalState(STUDIO_SESSIONS_NAMESPACE, (current) => {
                 const existing = (current?.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
                     ? { ...current.sessions }
@@ -357,6 +409,7 @@ export function createStudioSessionStore(context) {
                 if (!Object.hasOwn(existing, target)) {
                     return null;
                 }
+                attachmentPaths = collectAttachmentPathsFromRecords(existing[target]?.messages, { filter: isAiAttachmentPath });
                 delete existing[target];
                 deleted = true;
                 return {
@@ -368,6 +421,11 @@ export function createStudioSessionStore(context) {
 
             if (!res?.ok) {
                 throw new Error(`Failed to delete studio session "${target}": ${res?.hint || res?.reason || 'unknown error'}`);
+            }
+            if (deleted && attachmentPaths.length > 0 && typeof globalThis.fetch === 'function') {
+                await deleteChatAttachments(context, attachmentPaths).catch(err => {
+                    console.warn('[sd/studio-store] Failed to clean up session attachments:', err);
+                });
             }
             return deleted;
         },

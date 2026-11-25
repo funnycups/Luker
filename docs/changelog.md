@@ -64,6 +64,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Image generation
 
+- Added lossless chat image attachments to Image Studio and the AI Profile Builder dialog so the AI can visually inspect user images, derive character descriptions, or reuse attached images directly as references, alongside on-demand inspection of draft and archive reference images.
 - Added prompt preset creation and deletion to Image Generation AI iteration in Workbench.
 - Moved the prompt preset selector to the Image Studio toolbar, placed the new session button in the session list header, and added empty-state guidance explaining that Studio sessions are separate from chat illustrations.
 - Fixed regenerating an inline illustration not displaying the activity capsule and Run panel progress.

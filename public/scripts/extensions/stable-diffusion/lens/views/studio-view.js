@@ -15,6 +15,15 @@ import {
     makeRuntimeToolCallId,
     requestToolCallsWithRetry,
 } from '../../../../lib/iter-tool-calling.js';
+import { hydrateMessagesForLlm } from '../../../../lib/multimodal-messages.js';
+import {
+    deleteChatAttachments,
+    uploadChatAttachments,
+} from '../../../../lib/chat-attachments-store.js';
+import {
+    createImageAttachmentTray,
+    renderMessageAttachments,
+} from '../../../../lens-shared/image-attachments.js';
 import {
     buildCompactProfileIndex,
     createCharacterProfileStore,
@@ -88,6 +97,30 @@ export function createStudioView(app) {
     let draftInput = '';
     let busy = false;
     let abortController = null;
+
+    const composerEl = h('div', { class: 'sdlens-studio-compose' });
+    const composerRowEl = h('div', { class: 'sdlens-compose-row' });
+    const inputEl = h('textarea', {
+        class: 'sdlens-textarea',
+        rows: 2,
+        placeholder: i18n('Describe the scene or feedback for the next image…'),
+        dataset: { sdRole: 'studio-input' },
+        onInput: (e) => { draftInput = e.target.value; },
+        onKeydown: (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                void runTurn(e.target.value);
+            }
+        },
+    });
+    const attachmentTray = createImageAttachmentTray({
+        composerEl,
+        textareaEl: inputEl,
+        onError: (msg) => app.toast(msg, { error: true }),
+    });
+    const sendSlotEl = h('div', { class: 'sdlens-compose-action' });
+    put(composerRowEl, attachmentTray.attachButton, attachmentTray.fileInput, inputEl, sendSlotEl);
+    put(composerEl, attachmentTray.trayEl, composerRowEl);
 
     function getCtx() {
         return app.getContext();
@@ -442,7 +475,8 @@ export function createStudioView(app) {
 
     async function runTurn(rawText) {
         const text = String(rawText || '').trim();
-        if (!text || busy) return;
+        const hasPendingImages = attachmentTray.hasItems();
+        if ((!text && !hasPendingImages) || busy) return;
 
         const ctx = getCtx();
         const preset = resolveActivePreset();
@@ -463,6 +497,7 @@ export function createStudioView(app) {
         paint();
 
         let appendedUserMessage = false;
+        let uploadedAttachmentPaths = [];
         await runWithStudioActivity(ctx, async () => {
             try {
                 const imageBackend = resolveImageBackend();
@@ -479,6 +514,18 @@ export function createStudioView(app) {
                     return;
                 }
 
+                let attachments = [];
+                if (hasPendingImages) {
+                    attachments = await attachmentTray.commit(
+                        async (files) => {
+                            const uploaded = await uploadChatAttachments(ctx, files, { signal: abortController.signal });
+                            uploadedAttachmentPaths = uploaded.map(item => item.path);
+                            return uploaded;
+                        },
+                        { clearAfter: false },
+                    );
+                }
+
                 let characterArchiveIndex;
                 if (capabilities?.characterReferenceEnabled) {
                     characterArchiveIndex = buildCompactProfileIndex(profiles, {
@@ -488,16 +535,26 @@ export function createStudioView(app) {
                 const systemPrompt = buildStudioSystemPrompt(preset, { capabilities, characterArchiveIndex });
 
                 draftInput = '';
-                appendStudioUserMessage(turnSession, text);
+                appendStudioUserMessage(turnSession, text, { attachments });
                 appendedUserMessage = true;
+                if (hasPendingImages) {
+                    attachmentTray.clear();
+                }
                 paint();
 
                 const tools = buildStudioTools(loraState, capabilities);
                 const allowedNames = tools.map(t => t.function.name);
-                const taskMessages = [
+                const rawTaskMessages = [
                     { role: 'system', content: systemPrompt },
                     ...buildStudioHistoryMessages(turnSession),
                 ];
+                const imageCache = new Map();
+                const taskMessages = await hydrateMessagesForLlm(rawTaskMessages, {
+                    context: ctx,
+                    includePathAnnotations: true,
+                    cache: imageCache,
+                    signal: abortController.signal,
+                });
 
                 while (true) {
                     const response = await requestToolCallsWithRetry(ctx, { toolCallRetryMax: 1 }, {
@@ -650,6 +707,8 @@ export function createStudioView(app) {
                 }
                 if (appendedUserMessage) {
                     await persistCurrentSession(turnSession);
+                } else if (uploadedAttachmentPaths.length > 0) {
+                    await deleteChatAttachments(ctx, uploadedAttachmentPaths).catch(() => {});
                 }
             } finally {
                 busy = false;
@@ -891,6 +950,7 @@ export function createStudioView(app) {
                 paint();
             }, { className: 'is-sm', renderIcon: icon, disabled: busy })),
         msg.content ? h('div', { style: { whiteSpace: 'pre-wrap' }, text: msg.content }) : null,
+        msg.role === 'user' ? renderMessageAttachments(msg.attachments) : null,
         Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
             ? h('details', null,
                 h('summary', { style: { cursor: 'pointer', fontSize: '12px', color: 'var(--lw-muted)' }, text: i18nFormat('${0} tool call(s)', msg.tool_calls.length) }),
@@ -923,20 +983,9 @@ export function createStudioView(app) {
                 }, { className: 'is-sm', renderIcon: icon }))
             : null;
 
-        const inputEl = h('textarea', {
-            class: 'sdlens-textarea',
-            rows: 2,
-            placeholder: i18n('Describe the scene or feedback for the next image…'),
-            dataset: { sdRole: 'studio-input' },
-            onInput: (e) => { draftInput = e.target.value; },
-            onKeydown: (e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    void runTurn(e.target.value);
-                }
-            },
-        });
         inputEl.value = draftInput;
+        inputEl.disabled = busy;
+        attachmentTray.setDisabled(busy);
 
         const sendOrStopBtn = busy
             ? (() => {
@@ -957,12 +1006,14 @@ export function createStudioView(app) {
                 b.dataset.sdRole = 'studio-send';
                 return b;
             })();
+        clear(sendSlotEl);
+        put(sendSlotEl, sendOrStopBtn);
 
         return h('section', { class: 'sdlens-studio-main' },
             h('div', { class: 'sdlens-studio-toolbar' }, ...toolbarItems),
             h('div', { class: 'sdlens-studio-messages' }, ...messagesContent),
             attachedBanner,
-            h('div', { class: 'sdlens-studio-compose' }, inputEl, sendOrStopBtn));
+            composerEl);
     }
 
     function renderGalleryPane() {
@@ -1045,6 +1096,7 @@ export function createStudioView(app) {
             void ensureSessionLoaded();
         },
         destroy() {
+            attachmentTray.destroy();
             abortController?.abort('Studio closed');
         },
     };
