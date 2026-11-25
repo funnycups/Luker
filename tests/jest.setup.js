@@ -4,7 +4,6 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { getConfigFilePath, reloadConfigCache, setConfigFilePath } from '../src/util.js';
-import { probeTcp, resolveDbEndpoint } from './util/db-probe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,213 +37,11 @@ if (!getConfigFilePath()) {
 // endpoints look for (currently just an empty structure — tests that
 // need real seed data build their own dataRoot with startServer /
 // makeEndpointHarness / makeTempFsEngineHarness).
+// Bootstrap only. The harness setup replaces this path with a managed run
+// directory before the test module evaluates and removes this bootstrap root.
 if (!globalThis.DATA_ROOT) {
-    const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-jest-data-'));
+    const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-jest-bootstrap-'));
     globalThis.DATA_ROOT = scratchRoot;
-}
-
-// ---------------------------------------------------------------------------
-// Optional database suites. Mysql/Pg-backed tests are gated on
-// `LUKER_DISABLE_MYSQL_TESTS` / `LUKER_DISABLE_POSTGRES_TESTS`, but nothing
-// sets those flags on a machine without the containers, so the suites used to
-// run and fail with ECONNREFUSED. Probe the configured endpoints once per
-// test file (setupFiles runs before the test module is imported, so the flag
-// is set before the harness modules evaluate) and disable the suites when
-// nothing is listening. An explicit env var from the caller always wins, in
-// either direction.
-// ---------------------------------------------------------------------------
-async function gateOptionalDbSuites() {
-    const gates = [
-        {
-            env: 'LUKER_DISABLE_MYSQL_TESTS',
-            url: process.env.LUKER_TEST_MYSQL_ROOT_URL,
-            fallback: { host: '127.0.0.1', port: 53306 },
-        },
-        {
-            env: 'LUKER_DISABLE_POSTGRES_TESTS',
-            url: process.env.LUKER_TEST_POSTGRES_URL,
-            fallback: { host: '127.0.0.1', port: 55432 },
-        },
-    ];
-    for (const gate of gates) {
-        if (process.env[gate.env] !== undefined) {
-            continue;
-        }
-        const { host, port } = resolveDbEndpoint(gate.url, gate.fallback);
-        const reachable = await probeTcp(host, port);
-        if (!reachable) {
-            process.env[gate.env] = '1';
-        }
-    }
-}
-
-await gateOptionalDbSuites();
-
-if (typeof globalThis.Luker === 'undefined') {
-    // ---------------------------------------------------------------------
-    // Luker / SillyTavern / st global stub.
-    //
-    // Browser-side modules in public/scripts/extensions/** capture references
-    // at module-load time via `const x = Luker.getContext().y;`.
-    // public/script.js binds `globalThis.{Luker,st,SillyTavern}` to the same
-    // object so all three are user-facing aliases. Under jest (Node ESM) none
-    // of those globals exist, so the import-time evaluation throws
-    // ReferenceError and the entire test suite fails to load.
-    //
-    // We install a recursive Proxy that synthesizes any accessed field as a
-    // callable no-op (or as a nested proxy when accessed as an object).
-    // Behavioural tests that need a specific shape override the global with
-    // their own stub before importing the module under test — Proxy access
-    // patterns play nicely with normal object assignment.
-    //
-    // `getExtensionApi(name)` is special-cased: when the orchestrator
-    // extension is requested we hand back a tiny adapter that delegates
-    // register / unregister to the real `register-custom-tool.js` module via
-    // its globally exposed registry. This is what lets memory-graph /
-    // search-tools `register*OrchestrationTools()` populate the same
-    // registry the tests then introspect via `__getExtensionRegistryForTest`.
-    // ---------------------------------------------------------------------
-    const SENTINEL = Symbol('jest-setup:luker-stub');
-    const cache = new WeakMap();
-    function makeProxy() {
-        const target = function () {};
-        target[SENTINEL] = true;
-        const proxy = new Proxy(target, {
-            get(t, prop) {
-                if (prop === SENTINEL) return true;
-                if (prop === 'then') return undefined; // never look thenable
-                if (prop === Symbol.toPrimitive) return () => 'luker-stub';
-                if (prop === Symbol.iterator) return undefined;
-                if (!cache.has(t)) cache.set(t, new Map());
-                const memo = cache.get(t);
-                if (!memo.has(prop)) memo.set(prop, makeProxy());
-                return memo.get(prop);
-            },
-            apply() { return makeProxy(); },
-            construct() { return makeProxy(); },
-        });
-        return proxy;
-    }
-
-    // Known extension APIs. We pre-load the orchestrator's
-    // register-custom-tool module so register() / unregister() can run
-    // synchronously — memory-graph + search-tools call them inside a
-    // synchronous for-loop, so an async adapter would defer the actual
-    // mutation past `await register*OrchestrationTools()` and the test
-    // would read an empty registry.
-    const orchestratorMod = await import('../public/scripts/extensions/orchestrator/register-custom-tool.js');
-    const stateErrorsMod = await import('../public/scripts/state-errors.js');
-    const stateErrorsFormatMod = await import('../public/scripts/state-errors/format.js');
-    const presetRefCodecMod = await import('../public/scripts/character/preset-ref-codec.js');
-    const stateErrors = Object.freeze({
-        STATE_ERROR_REASONS: stateErrorsMod.STATE_ERROR_REASONS,
-        STATE_HINT_MAX_LENGTH: stateErrorsMod.STATE_HINT_MAX_LENGTH,
-        isValidReason: stateErrorsMod.isValidReason,
-        makeStateError: stateErrorsMod.makeStateError,
-        makeStateOk: stateErrorsMod.makeStateOk,
-        formatHttpErrorHint: stateErrorsFormatMod.formatHttpErrorHint,
-        formatTransportErrorHint: stateErrorsFormatMod.formatTransportErrorHint,
-        formatConflictHint: stateErrorsFormatMod.formatConflictHint,
-        formatValidationArgsHint: stateErrorsFormatMod.formatValidationArgsHint,
-        formatValidationTargetHint: stateErrorsFormatMod.formatValidationTargetHint,
-    });
-    const extensionApis = {
-        orchestrator: {
-            registerOrchestrationTool: orchestratorMod.registerOrchestrationTool,
-            unregisterOrchestrationTool: orchestratorMod.unregisterOrchestrationTool,
-            listExtensionTools: orchestratorMod.listExtensionTools,
-            bridgeSillyTavernTool: orchestratorMod.bridgeSillyTavernTool,
-            unbridgeSillyTavernTool: orchestratorMod.unbridgeSillyTavernTool,
-        },
-    };
-    function getExtensionApi(name) {
-        return extensionApis[name] || null;
-    }
-
-    function makeContextProxy() {
-        // Common ctx fields where production code does `c?.fn || fallback`
-        // for capability detection. The Proxy default is truthy, so without
-        // explicit identity / null defaults the fallback never fires and
-        // tests get the Proxy stringified to "luker-stub" in
-        // unexpected places (i18n strings, lib helpers, etc.). Override
-        // any of these in a test by assigning a new globalThis.Luker.
-        const base = {
-            getExtensionApi,
-            // i18n helpers (e.g. orchestrator/i18n.js)
-            translate: (s) => String(s ?? ''),
-            addLocaleData: () => {},
-            // capability detection sentinels
-            createMessageEditorHandle: null,
-            activityGuard: null,
-            registerExtensionApi: () => {},
-            stateErrors,
-            decodeCardBoundOptionValue: presetRefCodecMod.decodeCardBoundOptionValue,
-            regex: {
-                applyRegex: (s) => String(s ?? ''),
-                runRegexScript: (_script, s) => String(s ?? ''),
-                placement: { USER_INPUT: 1, AI_OUTPUT: 2, SLASH_COMMAND: 3, WORLD_INFO: 5, REASONING: 6 },
-                substituteFindRegex: { NONE: 0, RAW: 1, ESCAPED: 2 },
-                SCRIPT_TYPES: { GLOBAL: 0, PRESET: 1, SCOPED: 2 },
-                registerRegexProvider: () => ({ refresh: () => {}, unregister: () => {} }),
-                registerManagedRegexProvider: () => ({
-                    upsertScript: () => {},
-                    setScripts: () => {},
-                    removeScript: () => {},
-                    clearScripts: () => {},
-                    unregister: () => {},
-                    dispose: () => {},
-                }),
-                unregisterRegexProvider: () => {},
-                getScripts: () => [],
-                getScriptsByType: () => [],
-                saveScriptsByType: async () => {},
-                getPluginLanes: (script) => (
-                    Array.isArray(script?.pluginLanes)
-                        ? [...new Set(script.pluginLanes.filter(l => l === 'request' || l === 'reply'))]
-                        : (script?.pluginOnly ? ['request', 'reply'] : [])
-                ),
-                omitLegacyPluginScope: (script) => {
-                    if (!script || typeof script !== 'object') return script;
-                    const rest = { ...script };
-                    delete rest.pluginOnly;
-                    return rest;
-                },
-                normalizePluginScriptRecord: (script) => {
-                    if (!script || typeof script !== 'object') return script;
-                    const rest = { ...script };
-                    const lanes = Array.isArray(script?.pluginLanes)
-                        ? [...new Set(script.pluginLanes.filter(l => l === 'request' || l === 'reply'))]
-                        : (script?.pluginOnly ? ['request', 'reply'] : []);
-                    delete rest.pluginOnly;
-                    return { ...rest, pluginLanes: lanes };
-                },
-            },
-        };
-        return new Proxy(base, {
-            get(t, prop) {
-                if (prop in t) return t[prop];
-                if (prop === 'then') return undefined;
-                if (prop === Symbol.toPrimitive) return () => 'luker-ctx-stub';
-                if (prop === Symbol.iterator) return undefined;
-                if (!cache.has(t)) cache.set(t, new Map());
-                const memo = cache.get(t);
-                if (!memo.has(prop)) memo.set(prop, makeProxy());
-                return memo.get(prop);
-            },
-        });
-    }
-
-    const stub = {
-        getContext: () => makeContextProxy(),
-    };
-    // Mirror public/script.js:338-340 — Luker / st / SillyTavern are all
-    // aliases for the same plugin-facing API object. Plugin and test code
-    // consumes `Luker.getContext()`; the SillyTavern / st aliases remain
-    // for compatibility with any third-party extension that still expects
-    // them, so the stub installs all three.
-    globalThis.Luker = stub;
-    globalThis.st = stub;
-    globalThis.SillyTavern = stub;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,39 +52,10 @@ if (typeof globalThis.Luker === 'undefined') {
 // branch. Instead we redirect `public/lib.js` through moduleNameMapper to
 // the source bundle entry — see jest.config.json. That gives tests real
 // lodash/Fuse/yaml/etc. without dragging the DOM-touching scripts in.
+//
+// Browser module globals (`Luker`, `st`, `SillyTavern`, `jQuery`, `$`) are
+// intentionally NOT installed globally here. Tests that load browser modules
+// declare their explicit dependencies via `tests/util/browser-module-context.js`
+// (or `@jest-environment jsdom`) so missing capabilities stay observable.
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// jQuery stub. Several browser-side modules eagerly do `jQuery(() => ...)`
-// at module-load time as a DOM-ready guard. Provide a no-op shim so the
-// import-time evaluation doesn't ReferenceError. Tests that drive DOM
-// behaviour should switch to `@jest-environment jsdom` and import jQuery
-// proper.
-// ---------------------------------------------------------------------------
-if (typeof globalThis.jQuery === 'undefined') {
-    const jQueryStub = Object.assign(
-        function (selectorOrFn) {
-            if (typeof selectorOrFn === 'function') {
-                // DOM-ready handler — swallow under node.
-                return;
-            }
-            return jQueryStub.__chain;
-        },
-        {
-            __chain: new Proxy(function () {}, {
-                get(_, prop) {
-                    if (prop === 'then') return undefined;
-                    return () => jQueryStub.__chain;
-                },
-                apply() { return jQueryStub.__chain; },
-            }),
-            ajax: () => Promise.resolve({}),
-            extend: Object.assign,
-            fn: {},
-            noConflict: () => jQueryStub,
-        },
-    );
-    globalThis.jQuery = jQueryStub;
-    globalThis.$ = jQueryStub;
-}
 

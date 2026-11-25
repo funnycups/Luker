@@ -16,16 +16,15 @@ module.exports = {
     overrides: [
         {
             // Jest-run files: the unit suite (`jest.config.json` testMatch
-            // `**/*.test.js`) plus its shared setup. `frontend/` and
-            // `skills-ui/playwright/` are excluded here because Playwright
-            // owns those runners — see the override below.
+            // `**/*.test.js`) plus its shared setup. `frontend/` is
+            // excluded here because Playwright owns that runner — see the
+            // override below.
             files: [
                 '**/*.test.js',
                 'jest.setup.js',
             ],
             excludedFiles: [
                 'frontend/**',
-                'skills-ui/playwright/**',
             ],
             plugins: [
                 'jest',
@@ -48,14 +47,16 @@ module.exports = {
                 // `platformSpecific` / `posixTest` are local wrappers around
                 // `test` in the permission-sensitive suites. Register them so
                 // expects inside them count as being inside a test block.
+                // `testWithResources` is the managed-scope wrapper used by the
+                // storage projects.
                 'jest/no-standalone-expect': ['error', {
-                    additionalTestBlockFunctions: ['platformSpecific', 'posixTest'],
+                    additionalTestBlockFunctions: ['platformSpecific', 'posixTest', 'testWithResources'],
                 }],
             },
         },
         {
-            // Playwright-run files: the black-box e2e suite, the frontend +
-            // skills-ui integration projects, and the shared `_lib` helpers
+            // Playwright-run files: the black-box e2e suite, the frontend
+            // integration project, and the shared `_lib` helpers
             // they call. Specs run in a real browser context and routinely
             // call `page.evaluate(() => window.X)` / `document.X`, hence the
             // `browser` env inherited from the base config.
@@ -64,8 +65,6 @@ module.exports = {
                 'e2e/_lib/**/*.js',
                 'frontend/**/*.e2e.js',
                 'frontend/**/*.test.js',
-                'skills-ui/playwright/**/*.spec.js',
-                'skills-ui/playwright/helpers.js',
                 'sample.e2e.js',
             ],
             plugins: [

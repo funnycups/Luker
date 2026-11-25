@@ -1,26 +1,118 @@
 {
-    "verbose": true,
+    "projects": [
+        {
+            "displayName": "unit",
+            "globalSetup": "<rootDir>/util/global-setup.js",
+            "testEnvironment": "<rootDir>/harness/jest-environment.js",
+            "transform": {},
+            "setupFiles": [
+                "<rootDir>/harness/jest-profile-unit.js",
+                "<rootDir>/jest.setup.js"
+            ],
+            "setupFilesAfterEnv": [
+                "<rootDir>/harness/jest-data-root.js",
+                "<rootDir>/harness/jest-storage-hooks.js"
+            ],
+            "testMatch": [
+                "<rootDir>/**/?(*.)+(test).js"
+            ],
+            "testPathIgnorePatterns": [
+                "/node_modules/",
+                "/frontend/",
+                "/tests/storage/",
+                "/tests/sync/",
+                "/tests/endpoints/character-export-skills.test.js",
+                "/tests/endpoints/users-admin-global-extensions.test.js"
+            ],
+            "moduleNameMapper": {
+                "^supertest$": "<rootDir>/util/supertest-loopback.cjs",
+                "^(.*/)?public/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.core\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.optional\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/script\\.js$": "<rootDir>/../public/script.js",
+                "^/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/scripts/(.*)$": "<rootDir>/../public/scripts/$1",
+                "^(.*/)?dialog-polyfill\\.esm\\.js$": "<rootDir>/util/dialog-polyfill-stub.js"
+            }
+        },
+        {
+            "displayName": "storage-local",
+            "globalSetup": "<rootDir>/util/global-setup.js",
+            "testEnvironment": "<rootDir>/harness/jest-environment.js",
+            "transform": {},
+            "setupFiles": [
+                "<rootDir>/harness/jest-profile-storage-local.js",
+                "<rootDir>/jest.setup.js"
+            ],
+            "setupFilesAfterEnv": [
+                "<rootDir>/harness/jest-data-root.js",
+                "<rootDir>/harness/jest-storage-hooks.js"
+            ],
+            "testMatch": [
+                "<rootDir>/storage/**/?(*.)+(test).js",
+                "<rootDir>/sync/**/?(*.)+(test).js",
+                "<rootDir>/endpoints/character-export-skills.test.js",
+                "<rootDir>/endpoints/users-admin-global-extensions.test.js"
+            ],
+            "testPathIgnorePatterns": [
+                "/node_modules/",
+                "/storage/repositories/group-chat-rename.test.js",
+                "/storage/endpoints/group-chat-rename.parity.test.js",
+                "/storage/world-revision-migration.test.js",
+                "/sync/integration/cycle-cross-engine.test.js",
+                "/sync/integration/cycle-engines.test.js",
+                "/sync/integration/http-storage-gate.test.js",
+                "/sync/integration/local-ops.test.js",
+                "/sync/integration/s3-sql-records.test.js",
+                "/sync/materialize-cross-engine.test.js",
+                "/sync/materialize-records.test.js",
+                "/sync/pipeline/live-cas-sql.test.js"
+            ],
+            "moduleNameMapper": {
+                "^supertest$": "<rootDir>/util/supertest-loopback.cjs",
+                "^(.*/)?public/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.core\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.optional\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/script\\.js$": "<rootDir>/../public/script.js",
+                "^/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/scripts/(.*)$": "<rootDir>/../public/scripts/$1",
+                "^(.*/)?dialog-polyfill\\.esm\\.js$": "<rootDir>/util/dialog-polyfill-stub.js"
+            }
+        },
+        {
+            "displayName": "storage-sql",
+            "globalSetup": "<rootDir>/util/global-setup.js",
+            "testEnvironment": "<rootDir>/harness/jest-environment.js",
+            "transform": {},
+            "setupFiles": [
+                "<rootDir>/harness/jest-profile-storage-sql.js",
+                "<rootDir>/jest.setup.js"
+            ],
+            "setupFilesAfterEnv": [
+                "<rootDir>/harness/jest-data-root.js",
+                "<rootDir>/harness/jest-storage-hooks.js"
+            ],
+            "testMatch": [
+                "<rootDir>/storage/**/?(*.)+(test).js",
+                "<rootDir>/sync/**/?(*.)+(test).js",
+                "<rootDir>/endpoints/character-export-skills.test.js",
+                "<rootDir>/endpoints/users-admin-global-extensions.test.js"
+            ],
+            "testPathIgnorePatterns": [
+                "/node_modules/"
+            ],
+            "moduleNameMapper": {
+                "^supertest$": "<rootDir>/util/supertest-loopback.cjs",
+                "^(.*/)?public/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.core\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^\\.{1,2}/lib\\.optional\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/script\\.js$": "<rootDir>/../public/script.js",
+                "^/lib\\.js$": "<rootDir>/util/lib-stub.js",
+                "^/scripts/(.*)$": "<rootDir>/../public/scripts/$1",
+                "^(.*/)?dialog-polyfill\\.esm\\.js$": "<rootDir>/util/dialog-polyfill-stub.js"
+            }
+        }
+    ],
     "testTimeout": 15000,
-    "transform": {},
-    "setupFiles": [
-        "./jest.setup.js"
-    ],
-    "testEnvironment": "node",
-    "testMatch": [
-        "**/?(*.)+(test).js"
-    ],
-    "testPathIgnorePatterns": [
-        "/node_modules/",
-        "/skills-ui/playwright/",
-        "/frontend/"
-    ],
-    "moduleNameMapper": {
-        "^(.*/)?public/lib\\.js$": "<rootDir>/util/lib-stub.js",
-        "^\\.{1,2}/lib\\.core\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
-        "^\\.{1,2}/lib\\.optional\\.bundle\\.js$": "<rootDir>/util/lib-stub.js",
-        "^/script\\.js$": "<rootDir>/../public/script.js",
-        "^/lib\\.js$": "<rootDir>/util/lib-stub.js",
-        "^/scripts/(.*)$": "<rootDir>/../public/scripts/$1",
-        "^(.*/)?dialog-polyfill\\.esm\\.js$": "<rootDir>/util/dialog-polyfill-stub.js"
-    }
+    "verbose": true
 }

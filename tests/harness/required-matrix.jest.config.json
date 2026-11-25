@@ -1,0 +1,9 @@
+{
+    "rootDir": "..",
+    "testEnvironment": "node",
+    "transform": {},
+    "testMatch": [
+        "<rootDir>/sync/materialize-cross-engine.test.js",
+        "<rootDir>/sync/integration/cycle-cross-engine.test.js"
+    ]
+}

@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from '@jest/globals';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 
 import express from 'express';
 import storage from 'node-persist';
+import { ensureRun, trackScope } from './harness/jest-run.js';
 
 import {
     evaluateWhatsNew,
@@ -24,9 +24,18 @@ import { router as usersPrivateRouter } from '../src/endpoints/users-private.js'
 import { createUserFromOAuth, router as usersPublicRouter } from '../src/endpoints/users-public.js';
 
 const tempDirs = [];
+let suiteTempRoot;
+let tempDirSeq = 0;
+
+beforeAll(async () => {
+    const run = await ensureRun();
+    const scope = trackScope(await run.scope({ kind: 'scenario', label: 'whats-new' }));
+    suiteTempRoot = (await scope.directory('luker-wn-suite')).path;
+});
 
 function makeTempDir(prefix) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const dir = path.join(suiteTempRoot, `${prefix}${++tempDirSeq}`);
+    fs.mkdirSync(dir, { recursive: true });
     tempDirs.push(dir);
     return dir;
 }
@@ -406,7 +415,9 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
     let activeHandle = 'default-user';
 
     beforeAll(async () => {
-        dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-wn-http-'));
+        const run = await ensureRun();
+        const scope = trackScope(await run.scope({ kind: 'scenario', label: 'whats-new-http' }));
+        dataRoot = (await scope.directory('luker-wn-http')).path;
         globalThis.DATA_ROOT = dataRoot;
         setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: '9d17a9735', branch: 'release' });
         await initUserStorage(dataRoot);
@@ -437,7 +448,6 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         setRuntimeIdentityForTests(null);
         await new Promise(resolve => server.close(resolve));
         await storage.clear();
-        fs.rmSync(dataRoot, { recursive: true, force: true });
         globalThis.DATA_ROOT = prevDataRoot;
     });
 
