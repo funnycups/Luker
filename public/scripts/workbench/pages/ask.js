@@ -603,23 +603,21 @@ export function createAskPage(app) {
             if (hasReuseAttachments) {
                 attachments = normalizeImageAttachments(sendOpts.reuseAttachments);
             } else if (hasTrayAttachments) {
-                const created = [];
                 attachments = await attachmentTray.commit(
                     async (files) => {
                         const uploaded = await uploadChatAttachments(ctx, files);
-                        for (const item of uploaded) created.push(item.path);
+                        for (const item of uploaded) newlyCreatedAttachmentPaths.push(item.path);
                         return uploaded;
                     },
                     {
                         cloneManaged: async (paths) => {
                             const map = await copyChatAttachments(ctx, paths);
-                            for (const copiedPath of map.values()) created.push(copiedPath);
+                            for (const copiedPath of map.values()) newlyCreatedAttachmentPaths.push(copiedPath);
                             return map;
                         },
                         clearAfter: false,
                     },
                 );
-                newlyCreatedAttachmentPaths = created;
             }
 
             const owner = startingSession || await store.create({ kind: 'ask', title: titleFrom(question, attachments) }, ownerScope);
@@ -659,7 +657,7 @@ export function createAskPage(app) {
             });
             if (!saved) return;
             turnPersisted = true;
-            if (hasTrayAttachments) {
+            if (hasTrayAttachments && selection === selectionVersion && session?.id === ownerId) {
                 attachmentTray.clear();
             }
             if (session?.id === ownerId && input.value.trim() === question) {

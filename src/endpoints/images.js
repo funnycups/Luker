@@ -238,40 +238,55 @@ router.post('/copy', async (request, response) => {
 
         const copies = {};
         const missing = [];
-        for (const rawPath of uniquePaths) {
-            const rel = normalizeClientRelativePath(rawPath);
-            if (!rel) {
-                return response.status(400).json({ error: `Invalid image path: ${rawPath}` });
-            }
-            const sourceAbs = path.resolve(userRoot, rel);
-            if (!isPathUnderParent(userImagesDir, sourceAbs)) {
-                return response.status(400).json({ error: `Path is outside user images directory: ${rawPath}` });
-            }
-            assertTransientMediaRead(request, rawPath);
-
-            let stat;
-            try {
-                stat = await fs.promises.stat(sourceAbs);
-            } catch (err) {
-                if (err?.code === 'ENOENT') {
-                    missing.push(rawPath);
-                    continue;
+        const createdDestPaths = [];
+        const cleanupCreated = async () => {
+            if (createdDestPaths.length === 0) return;
+            await Promise.allSettled(createdDestPaths.splice(0).map(p => fs.promises.unlink(p)));
+        };
+        try {
+            for (const rawPath of uniquePaths) {
+                const rel = normalizeClientRelativePath(rawPath);
+                if (!rel) {
+                    await cleanupCreated();
+                    return response.status(400).json({ error: `Invalid image path: ${rawPath}` });
                 }
-                throw err;
-            }
-            if (!stat.isFile()) {
-                return response.status(400).json({ error: `Path is not a regular file: ${rawPath}` });
-            }
-            const realSource = await fs.promises.realpath(sourceAbs);
-            if (!isPathUnderParent(realUserImagesDir, realSource)) {
-                return response.status(400).json({ error: `Symlink target escapes user images directory: ${rawPath}` });
-            }
+                const sourceAbs = path.resolve(userRoot, rel);
+                if (!isPathUnderParent(userImagesDir, sourceAbs)) {
+                    await cleanupCreated();
+                    return response.status(400).json({ error: `Path is outside user images directory: ${rawPath}` });
+                }
+                assertTransientMediaRead(request, rawPath);
 
-            const ext = path.extname(realSource).toLowerCase().replace(/^\./, '');
-            const safeExt = MEDIA_EXTENSIONS.includes(ext) ? ext : 'png';
-            const destPath = path.join(targetDir, `${randomUUID()}.${safeExt}`);
-            await fs.promises.copyFile(realSource, destPath);
-            copies[rawPath] = clientRelativePath(userRoot, destPath);
+                let stat;
+                try {
+                    stat = await fs.promises.stat(sourceAbs);
+                } catch (err) {
+                    if (err?.code === 'ENOENT') {
+                        missing.push(rawPath);
+                        continue;
+                    }
+                    throw err;
+                }
+                if (!stat.isFile()) {
+                    await cleanupCreated();
+                    return response.status(400).json({ error: `Path is not a regular file: ${rawPath}` });
+                }
+                const realSource = await fs.promises.realpath(sourceAbs);
+                if (!isPathUnderParent(realUserImagesDir, realSource)) {
+                    await cleanupCreated();
+                    return response.status(400).json({ error: `Symlink target escapes user images directory: ${rawPath}` });
+                }
+
+                const ext = path.extname(realSource).toLowerCase().replace(/^\./, '');
+                const safeExt = MEDIA_EXTENSIONS.includes(ext) ? ext : 'png';
+                const destPath = path.join(targetDir, `${randomUUID()}.${safeExt}`);
+                createdDestPaths.push(destPath);
+                await fs.promises.copyFile(realSource, destPath);
+                copies[rawPath] = clientRelativePath(userRoot, destPath);
+            }
+        } catch (innerError) {
+            await cleanupCreated();
+            throw innerError;
         }
 
         return response.json({ copies, missing });
