@@ -186,6 +186,32 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.fetch).not.toHaveBeenCalled();
     });
 
+    test('Gemini 4 Argon streams forced function calls with low thinking effort and hidden thoughts', async () => {
+        const tool = { name: 'report_result', parameters: { type: 'object', properties: { result: { type: 'string' } } } };
+        const ctx = fakeCtx({
+            body: {
+                model: 'gemini-4-argon',
+                stream: true,
+                reasoning_effort: 'low',
+                include_reasoning: false,
+                tools: [{ type: 'function', function: tool }],
+                tool_choice: { type: 'function', function: { name: tool.name } },
+            },
+            onFetch: jest.fn(async () => new Response('data: {"candidates":[{"finishReason":"STOP"}]}\n\n', {
+                headers: { 'Content-Type': 'text/event-stream' },
+            })),
+        });
+
+        await dispatchMakerSuite(ctx);
+
+        const [url, init] = ctx.fetch.mock.calls[0];
+        const sent = JSON.parse(init.body);
+        expect(String(url)).toContain(':streamGenerateContent');
+        expect(sent.generationConfig.thinkingConfig).toEqual({ includeThoughts: false, thinkingLevel: 'low' });
+        expect(sent.tools[0].functionDeclarations[0].name).toBe(tool.name);
+        expect(sent.toolConfig.functionCallingConfig).toEqual({ mode: 'ANY', allowedFunctionNames: [tool.name] });
+    });
+
     test('MAKERSUITE streaming: forwards upstream SSE chunks verbatim, URL contains alt=sse', async () => {
         const sseBody =
             'data: {"candidates":[{"content":{"parts":[{"text":"he"}]}}]}\n\n' +
