@@ -652,6 +652,48 @@ describe('final review regression fixes', () => {
         $t2[0].dispatchEvent(makePointerEvent('pointerdown', { clientX: 250, clientY: 180, pointerId: 2 }));
         expect($t1[0].classList.contains('luker-toast-dragging')).toBe(false);
     });
+
+    test('marks 4th+ collapsed docked cards with data-stack-hidden and clears it on expand or detach', () => {
+        const $t1 = toastr.info('Oldest 1', '', { timeOut: 60000 });
+        toastr.info('Card 2', '', { timeOut: 60000 });
+        toastr.info('Card 3', '', { timeOut: 60000 });
+        const $t4 = toastr.info('Front 4', '', { timeOut: 60000 });
+        const container = document.getElementById('toast-container');
+
+        expect($t4[0].getAttribute('data-stack-hidden')).toBeNull();
+        expect($t1[0].getAttribute('data-stack-hidden')).toBe('true');
+
+        container.querySelector('.luker-toast-stack-badge').click();
+        expect($t1[0].getAttribute('data-stack-hidden')).toBeNull();
+
+        container.querySelector('.luker-toast-stack-badge').click();
+        expect($t1[0].getAttribute('data-stack-hidden')).toBe('true');
+    });
+
+    test('measureDockedHeight accounts for outer .toast padding and border when padding lives on .toast', () => {
+        const $a = toastr.info('Card A', '', { timeOut: 60000 });
+        const $b = toastr.info('Card B', '', { timeOut: 60000 });
+        const container = document.getElementById('toast-container');
+
+        $a[0].style.paddingTop = '10px';
+        $a[0].style.paddingBottom = '10px';
+        $a[0].style.borderTopWidth = '1px';
+        $a[0].style.borderBottomWidth = '1px';
+        setRect($a[0], { left: 440, top: 60, width: 320, height: 62 });
+        Object.defineProperty($a[0].querySelector('.luker-toast-surface'), 'offsetHeight', { configurable: true, value: 40 });
+
+        $b[0].style.paddingTop = '10px';
+        $b[0].style.paddingBottom = '10px';
+        $b[0].style.borderTopWidth = '1px';
+        $b[0].style.borderBottomWidth = '1px';
+        setRect($b[0], { left: 440, top: 60, width: 320, height: 82 });
+        Object.defineProperty($b[0].querySelector('.luker-toast-surface'), 'offsetHeight', { configurable: true, value: 60 });
+
+        container.querySelector('.luker-toast-stack-badge').click();
+        const badgeOffset = parseFloat(container.querySelector('.luker-toast-stack-badge').style.getPropertyValue('--deck-badge-offset-y'));
+        // 82 + 8 + 62 = 152 (includes outer padding+border, not just inner 60+40)
+        expect(badgeOffset).toBeGreaterThanOrEqual(152);
+    });
 });
 
 

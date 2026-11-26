@@ -18,8 +18,9 @@ import { accountWindow, openAccountWindow } from '../_lib/account-window.js';
 async function sendSlashCommand(page, commandText) {
     const input = page.locator('#send_textarea');
     await input.waitFor({ state: 'visible', timeout: 10_000 });
+    await input.click();
     await input.fill(commandText);
-    await page.locator('#send_but').click();
+    await input.press('Enter');
 }
 
 async function dragElementBy(page, locator, dx, dy) {
@@ -467,5 +468,140 @@ test.describe('modern toast system', () => {
         expect(pillOffset.marginTop).toBe('0px');
         expect(pillOffset.gapBelowPill).toBeGreaterThanOrEqual(6);
         expect(pillOffset.gapBelowPill).toBeLessThanOrEqual(24);
+    });
+
+    test('renders single surface under third-party !important and plain CSS themes and adapts cleanly to built-in Lens palettes', async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await awaitMainUI(page, server.baseURL);
+
+        // 1. Third-party !important theme styling .toast directly (single surface, 4px radius, custom accent):
+        // must produce one unified card and one unified minimized capsule with zero nested border/bg/shadow.
+        await page.evaluate(() => {
+            document.getElementById('builtin-theme-style')?.remove();
+            const style = document.getElementById('custom-style') || (() => {
+                const s = document.createElement('style');
+                s.id = 'custom-style';
+                document.head.appendChild(s);
+                return s;
+            })();
+            style.textContent = `
+                .toast, .toast-container .toast {
+                    background-color: rgb(250, 246, 232) !important;
+                    background-image: none !important;
+                    color: rgb(55, 53, 51) !important;
+                    border: 1px solid rgb(200, 192, 172) !important;
+                    border-left: 3px solid rgb(224, 64, 56) !important;
+                    border-radius: 4px !important;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+                    text-shadow: none !important;
+                }
+                .toast-info, .toast-container .toast-info { border-left-color: rgb(224, 64, 56) !important; }
+                .toast-info .toast-title { color: rgb(224, 64, 56) !important; }
+            `;
+            window.toastr.remove();
+            window.toastr.info('Extension sync in progress.', 'Please wait', { timeOut: 60000, closeButton: true });
+            window.toastr.info('Extracting memories 1/2', '', { timeOut: 0, tapToDismiss: false, closeButton: false });
+        });
+
+        await page.locator('#toast-container .luker-toast-minimize-button').click();
+        await expect(page.locator('#toast-container .toast[data-toast-state="minimized"]')).toHaveCount(1);
+
+        const themedMetrics = await page.evaluate(() => {
+            const card = document.querySelector('#toast-container .toast:not(.luker-toast-minimized)');
+            const surface = card.querySelector('.luker-toast-surface');
+            const title = card.querySelector('.toast-title');
+            const icon = card.querySelector('.luker-toast-icon');
+            const cap = document.querySelector('#toast-container .toast.luker-toast-minimized');
+            const capInner = cap.querySelector('.luker-toast-capsule');
+            return {
+                cardBg: getComputedStyle(card).backgroundColor,
+                cardBgImg: getComputedStyle(card).backgroundImage,
+                cardRadius: getComputedStyle(card).borderRadius,
+                cardBorderLeft: getComputedStyle(card).borderLeftColor,
+                titleColor: getComputedStyle(title).color,
+                iconColor: getComputedStyle(icon).color,
+                surfaceBg: getComputedStyle(surface).backgroundColor,
+                surfaceBorder: getComputedStyle(surface).borderTopWidth,
+                surfaceRadius: getComputedStyle(surface).borderRadius,
+                surfaceShadow: getComputedStyle(surface).boxShadow,
+                capRadius: getComputedStyle(cap).borderRadius,
+                capInnerBorder: getComputedStyle(capInner).borderTopWidth,
+                capInnerShadow: getComputedStyle(capInner).boxShadow,
+            };
+        });
+        expect(themedMetrics.cardBg).toBe('rgb(250, 246, 232)');
+        expect(themedMetrics.cardBgImg).toBe('none');
+        expect(themedMetrics.cardRadius).toBe('4px');
+        expect(themedMetrics.cardBorderLeft).toBe('rgb(224, 64, 56)');
+        expect(themedMetrics.titleColor).toBe('rgb(224, 64, 56)');
+        expect(themedMetrics.iconColor).toBe('rgb(55, 53, 51)');
+        expect(themedMetrics.surfaceBg).toBe('rgba(0, 0, 0, 0)');
+        expect(themedMetrics.surfaceBorder).toBe('0px');
+        expect(themedMetrics.surfaceRadius).toBe('0px');
+        expect(themedMetrics.surfaceShadow).toBe('none');
+        expect(themedMetrics.capRadius).toBe('4px');
+        expect(themedMetrics.capInnerBorder).toBe('0px');
+        expect(themedMetrics.capInnerShadow).toBe('none');
+
+        // 2. Plain non-!important classic solid-background theme: @layer luker-toast-skin yields cleanly
+        // and text, icon, and close button all inherit the theme's white foreground color.
+        await page.evaluate(() => {
+            document.getElementById('custom-style').textContent = `
+                .toast { border-radius: 6px; border: none; color: rgb(255, 255, 255); }
+                .toast-info { background-color: rgb(47, 150, 180); }
+            `;
+            window.toastr.remove();
+            window.toastr.info('Classic solid toast <small>detail</small>', 'Classic', {
+                timeOut: 60000,
+                closeButton: true,
+                escapeHtml: false,
+            });
+        });
+        const solidMetrics = await page.evaluate(() => {
+            const card = document.querySelector('#toast-container .toast.toast-info');
+            return {
+                bg: getComputedStyle(card).backgroundColor,
+                radius: getComputedStyle(card).borderRadius,
+                titleColor: getComputedStyle(card.querySelector('.toast-title')).color,
+                msgColor: getComputedStyle(card.querySelector('.toast-message')).color,
+                smallColor: getComputedStyle(card.querySelector('.toast-message small')).color,
+                iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
+                closeColor: getComputedStyle(card.querySelector('.toast-close-button')).color,
+            };
+        });
+        expect(solidMetrics.bg).toBe('rgb(47, 150, 180)');
+        expect(solidMetrics.radius).toBe('6px');
+        expect(solidMetrics.titleColor).toBe('rgb(255, 255, 255)');
+        expect(solidMetrics.msgColor).toBe('rgb(255, 255, 255)');
+        expect(solidMetrics.smallColor).toBe('rgb(255, 255, 255)');
+        expect(solidMetrics.iconColor).toBe('rgb(255, 255, 255)');
+        expect(solidMetrics.closeColor).toBe('rgb(255, 255, 255)');
+
+        // 3. Built-in Lens theme stylesheet adapts toast radius, semantic accent icon, and /echo inline color.
+        await page.evaluate(async () => {
+            document.getElementById('custom-style').textContent = '';
+            const link = document.createElement('link');
+            link.id = 'builtin-theme-style';
+            link.rel = 'stylesheet';
+            link.href = 'css/themes/lens.css';
+            await new Promise((resolve) => {
+                link.addEventListener('load', resolve, { once: true });
+                document.head.insertBefore(link, document.getElementById('custom-style'));
+            });
+            document.documentElement.setAttribute('data-theme-palette', 'mist');
+            window.toastr.remove();
+            window.toastr.info('Lens Mist notice', 'Lens', { timeOut: 60000, closeButton: true });
+        });
+        const lensMetrics = await page.evaluate(() => {
+            const card = document.querySelector('#toast-container .toast.toast-info');
+            return {
+                radius: getComputedStyle(card).borderRadius,
+                borderLeft: getComputedStyle(card).borderLeftColor,
+                iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
+            };
+        });
+        expect(lensMetrics.radius).toBe('12px');
+        expect(lensMetrics.borderLeft).toBe('rgb(43, 125, 233)');
+        expect(lensMetrics.iconColor).toBe('rgb(43, 125, 233)');
     });
 });

@@ -2,10 +2,19 @@
  * Theme-aware compact notifications with card-deck stacking, per-toast Pointer
  * Events dragging, and persistent-toast minimized capsules.
  *
- * Surface paint note: Android Chromium WebView can drop transparent color-mix
- * and backdrop-filter layers mid-scroll, so card and capsule surfaces layer an
- * opaque RGB base derived from --SmartThemeBlurTintColor beneath the semantic
- * accent tint. */
+ * Theme compatibility architecture:
+ * - Card presentation lives directly on `.toast` (single visual surface) so
+ *   third-party SillyTavern themes that target `.toast` / `#toast-container > div`
+ *   override the card cleanly without creating a nested double-box.
+ * - Default visual skin rules live inside `@layer luker-toast-skin` so any
+ *   unlayered theme CSS (built-in or user custom_css, even without `!important`)
+ *   wins on appearance, while unlayered structural rules keep positioning, deck
+ *   stacking, dragging, and minimized-capsule layout reliable.
+ * - Background tint uses a single opaque `background-color` (never a full-cover
+ *   `background-image` gradient), both to avoid Android WebView mid-scroll alpha
+ *   drops and so theme `background-color` overrides are never covered up. */
+
+@layer luker-toast-skin;
 
 :root {
     --luker-toast-radius: 10px;
@@ -14,6 +23,10 @@
     --luker-toast-dur: 180ms;
     --luker-toast-edge: 12px;
 }
+
+/* ============================================================================
+ * 1. Structural & Behavioral Rules (unlayered)
+ * ============================================================================ */
 
 #toast-container {
     position: fixed;
@@ -33,6 +46,28 @@
 #toast-container *::before,
 #toast-container *::after {
     box-sizing: border-box;
+}
+
+/* Reset unlayered global element defaults from public/style.css (*, button, small)
+ * with minimal specificity (0,0,0 / 0,0,1) so any theme class selector still wins. */
+:where(#toast-container .luker-toast),
+:where(#toast-container .luker-toast *) {
+    text-shadow: none;
+}
+
+button:where(#toast-container .luker-toast-action-btn) {
+    color: inherit;
+    font-size: inherit;
+}
+
+small:where(#toast-container .toast-message small) {
+    color: inherit;
+    opacity: 0.85;
+}
+
+a:where(#toast-container .toast-message a) {
+    color: inherit;
+    text-decoration: underline;
 }
 
 /* Anchor placements (match all 6 power_user.toastr_position options + full-width).
@@ -122,18 +157,14 @@ body.activity-pill-visible #toast-container.toast-top-right {
     visibility: hidden;
 }
 
-/* Base toast element (shared DOM node across docked, detached, and minimized states). */
+/* Base toast structural layout (shared DOM node across docked, detached, and minimized states). */
 #toast-container .luker-toast {
-    --toast-accent: #3b9ec4;
     position: absolute;
     pointer-events: auto;
     width: min(340px, calc(100vw - 24px));
     margin: 0;
-    padding: 0;
-    border: 0;
-    border-radius: var(--luker-toast-radius);
-    background: transparent;
-    color: var(--SmartThemeBodyColor, #e8e8ee);
+    overflow: hidden;
+    cursor: grab;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
@@ -143,10 +174,13 @@ body.activity-pill-visible #toast-container.toast-top-right {
         max-height var(--luker-toast-dur) var(--luker-toast-ease);
 }
 
-#toast-container .luker-toast.toast-info { --toast-accent: #3b9ec4; }
-#toast-container .luker-toast.toast-success { --toast-accent: #3fb97c; }
-#toast-container .luker-toast.toast-warning { --toast-accent: #e5a028; }
-#toast-container .luker-toast.toast-error { --toast-accent: #e05a5a; }
+#toast-container .luker-toast.interactable {
+    cursor: pointer;
+}
+
+#toast-container .luker-toast.rtl {
+    direction: rtl;
+}
 
 /* Docked deck alignment per container anchor (collapsed deck overlays cards
  * from the container origin; expanded deck switches to a viewport-bounded
@@ -213,6 +247,12 @@ body.activity-pill-visible #toast-container.toast-top-right {
     overflow: hidden;
 }
 
+#toast-container .luker-toast[data-stack-hidden="true"] {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
 /* Detached floating cards and minimized capsules use viewport-fixed coordinates. */
 #toast-container .luker-toast[data-toast-state="detached"],
 #toast-container .luker-toast[data-toast-state="minimized"] {
@@ -225,9 +265,11 @@ body.activity-pill-visible #toast-container.toast-top-right {
 }
 
 #toast-container .luker-toast[data-toast-state="minimized"] {
+    display: inline-flex;
+    align-items: center;
     width: auto;
     max-width: min(240px, calc(100vw - 24px));
-    border-radius: var(--luker-toast-capsule-radius);
+    cursor: pointer;
 }
 
 #toast-container .luker-toast.luker-toast-dragging {
@@ -240,64 +282,21 @@ body.activity-pill-visible #toast-container.toast-top-right {
     pointer-events: none !important;
 }
 
-/* Card surface: opaque RGB base + subtle semantic tint + crisp left accent bar. */
+/* Transparent inner flex layout container (visual card styling belongs on .toast). */
 #toast-container .luker-toast-surface {
-    position: relative;
+    position: static;
     display: flex;
     align-items: flex-start;
     gap: 9px;
-    padding: 9px 11px 9px 12px;
-    border-radius: var(--luker-toast-radius);
-    border: 1px solid color-mix(in srgb, var(--toast-accent) 42%, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16)));
-    border-left: 3px solid var(--toast-accent);
-    background-color: var(--SmartThemeBlurTintColor, #1a1c24);
-    background-image:
-        linear-gradient(
-            color-mix(in srgb, var(--toast-accent) 11%, transparent),
-            color-mix(in srgb, var(--toast-accent) 11%, transparent)
-        ),
-        linear-gradient(
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 0.96),
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 0.96)
-        ),
-        linear-gradient(
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1),
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
-        );
-    color: var(--SmartThemeBodyColor, #e8e8ee);
-    box-shadow: 0 8px 24px -6px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.52)), 0 1px 3px rgba(0, 0, 0, 0.25);
-    overflow: hidden;
-    cursor: grab;
-}
-
-body:not(.no-blur) #toast-container .luker-toast-surface,
-body:not(.no-blur) #toast-container .luker-toast-capsule {
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-}
-
-#toast-container .luker-toast.interactable .luker-toast-surface {
-    cursor: pointer;
-}
-
-#toast-container .luker-toast.luker-toast-dragging .luker-toast-surface,
-#toast-container .luker-toast.luker-toast-dragging .luker-toast-capsule {
-    cursor: grabbing;
-    box-shadow: 0 14px 34px -6px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.65)), 0 0 0 1px color-mix(in srgb, var(--toast-accent) 65%, transparent);
-}
-
-/* Preserve caller inline background-color overrides (e.g. /echo color=...). */
-#toast-container .luker-toast[style*="background-color"] .luker-toast-surface,
-#toast-container .luker-toast[style*="background-color"] .luker-toast-capsule {
-    background-color: transparent;
-    background-image: none;
-    color: #fff;
-}
-
-#toast-container .luker-toast.rtl .luker-toast-surface {
-    direction: rtl;
-    border-left: 1px solid color-mix(in srgb, var(--toast-accent) 42%, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16)));
-    border-right: 3px solid var(--toast-accent);
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: inherit;
 }
 
 /* Status icon */
@@ -309,7 +308,6 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     width: 18px;
     height: 18px;
     margin-top: 1px;
-    color: var(--toast-accent);
 }
 
 #toast-container .luker-toast-svg {
@@ -330,7 +328,7 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     to { transform: rotate(360deg); }
 }
 
-/* Body & text */
+/* Body & text layout */
 #toast-container .luker-toast-body {
     flex: 1 1 auto;
     min-width: 0;
@@ -339,37 +337,12 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
 }
 
 #toast-container .toast-title {
-    font-weight: 600;
-    font-size: 0.95em;
-    line-height: 1.3;
-    margin: 0 0 2px;
-    color: var(--SmartThemeBodyColor, #e8e8ee);
     overflow-wrap: anywhere;
 }
 
 #toast-container .toast-message {
-    margin: 0;
-    font-size: 0.92em;
-    line-height: 1.4;
-    color: var(--SmartThemeBodyColor, #e8e8ee);
     overflow-wrap: anywhere;
     word-break: break-word;
-}
-
-#toast-container .toast-message a {
-    color: var(--toast-accent);
-    text-decoration: underline;
-}
-
-#toast-container .toast-message small {
-    color: var(--SmartThemeEmColor, #a9abb8);
-    opacity: 0.92;
-}
-
-#toast-container .luker-toast[style*="background-color"] .toast-title,
-#toast-container .luker-toast[style*="background-color"] .toast-message,
-#toast-container .luker-toast[style*="background-color"] .toast-message small {
-    color: #fff;
 }
 
 /* Caller-injected inline action buttons (Stop / Undo / Action Loader) */
@@ -395,7 +368,6 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
 #toast-container .action-loader-stop {
     flex: none;
     cursor: pointer;
-    color: var(--toast-accent);
 }
 
 /* Header action controls (Minimize & Close) */
@@ -416,27 +388,18 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     padding: 0;
     margin: 0;
     border: 0;
-    border-radius: 6px;
     background: transparent;
-    color: var(--SmartThemeEmColor, #a9abb8);
     cursor: pointer;
-    opacity: 0.8;
     float: none;
     position: static;
+    top: auto;
+    right: auto;
     text-shadow: none;
     transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
 }
 
-#toast-container .luker-toast-action-btn:hover,
 #toast-container .luker-toast-action-btn:focus-visible {
-    opacity: 1;
-    color: var(--SmartThemeBodyColor, #ffffff);
-    background-color: color-mix(in srgb, var(--SmartThemeBodyColor, #ffffff) 12%, transparent);
     outline: none;
-}
-
-#toast-container .luker-toast-action-btn:focus-visible {
-    box-shadow: 0 0 0 2px var(--toast-accent);
 }
 
 #toast-container .luker-toast-action-svg {
@@ -449,57 +412,36 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     stroke-linejoin: round;
 }
 
-/* Progress bar */
+/* Progress bar (positioned against .toast border-box) */
 #toast-container .toast-progress {
     position: absolute;
     left: 0;
     bottom: 0;
-    height: 2.5px;
-    background-color: var(--toast-accent);
-    opacity: 0.8;
     pointer-events: none;
 }
 
-/* Minimized capsule view */
+/* Minimized capsule inner layout (visual surface lives on .toast.luker-toast-minimized) */
 #toast-container .luker-toast-capsule {
     display: none;
     align-items: center;
     gap: 7px;
-    height: 32px;
-    max-width: min(240px, calc(100vw - 24px));
-    padding: 0 12px 0 10px;
-    border-radius: var(--luker-toast-capsule-radius);
-    border: 1.5px solid color-mix(in srgb, var(--toast-accent) 62%, transparent);
-    background-color: var(--SmartThemeBlurTintColor, #1a1c24);
-    background-image:
-        linear-gradient(
-            color-mix(in srgb, var(--toast-accent) 14%, transparent),
-            color-mix(in srgb, var(--toast-accent) 14%, transparent)
-        ),
-        linear-gradient(
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 0.96),
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 0.96)
-        ),
-        linear-gradient(
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1),
-            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
-        );
-    color: var(--SmartThemeBodyColor, #e8e8ee);
-    box-shadow: 0 4px 14px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.45));
-    font-size: 12.5px;
-    font-weight: 600;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: inherit;
     line-height: 1;
     cursor: pointer;
     touch-action: none;
     overflow: hidden;
 }
 
-#toast-container .luker-toast-capsule:hover {
-    border-color: var(--toast-accent);
-}
-
 #toast-container .luker-toast-capsule:focus-visible {
-    outline: 2px solid var(--toast-accent);
+    outline: 2px solid var(--toast-accent, currentColor);
     outline-offset: 2px;
 }
 
@@ -510,7 +452,6 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     justify-content: center;
     width: 15px;
     height: 15px;
-    color: var(--toast-accent);
 }
 
 #toast-container .luker-toast-capsule-icon .luker-toast-svg {
@@ -544,15 +485,6 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     min-width: 34px;
     height: 22px;
     padding: 0 9px;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #e8e8ee) 22%, transparent);
-    background-color: var(--SmartThemeBlurTintColor, #1a1c24);
-    background-image: linear-gradient(
-        rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1),
-        rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
-    );
-    color: var(--SmartThemeBodyColor, #e8e8ee);
-    box-shadow: 0 3px 10px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.4));
     font-size: 11.5px;
     font-weight: 600;
     line-height: 1;
@@ -560,9 +492,7 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
     transition: transform var(--luker-toast-dur) var(--luker-toast-ease), border-color 120ms ease;
 }
 
-#toast-container .luker-toast-stack-badge:hover,
 #toast-container .luker-toast-stack-badge:focus-visible {
-    border-color: var(--SmartThemeQuoteColor, #5aa3ff);
     outline: none;
 }
 
@@ -655,8 +585,8 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
         width: 100%;
     }
 
-    #toast-container .luker-toast[data-toast-state="minimized"],
-    #toast-container .luker-toast-capsule {
+    #toast-container .luker-toast[data-toast-state="minimized"] {
+        width: auto;
         max-width: min(180px, calc(100vw - 20px));
     }
 }
@@ -669,5 +599,153 @@ body:not(.no-blur) #toast-container .luker-toast-capsule {
 
     #toast-container .luker-toast-task-spinner {
         animation: none !important;
+    }
+}
+
+/* ============================================================================
+ * 2. Default Visual Skin (@layer luker-toast-skin)
+ * Any unlayered theme rule (built-in or user custom_css) overrides these
+ * declarations cleanly, even with plain `.toast` selectors and no `!important`.
+ * ============================================================================ */
+
+@layer luker-toast-skin {
+    #toast-container .luker-toast {
+        --toast-accent: #3b9ec4;
+        padding: 9px 11px 9px 12px;
+        border-radius: var(--luker-toast-radius);
+        border: 1px solid color-mix(in srgb, var(--toast-accent) 42%, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16)));
+        border-left: 3px solid var(--toast-accent);
+        background-color: var(--SmartThemeBlurTintColor, #1a1c24);
+        background-color: color-mix(
+            in srgb,
+            var(--toast-accent) 10%,
+            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
+        );
+        background-image: none;
+        color: var(--SmartThemeBodyColor, #e8e8ee);
+        box-shadow: 0 8px 24px -6px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.52)), 0 1px 3px rgba(0, 0, 0, 0.25);
+        text-shadow: none;
+    }
+
+    #toast-container .luker-toast.toast-info { --toast-accent: #3b9ec4; }
+    #toast-container .luker-toast.toast-success { --toast-accent: #3fb97c; }
+    #toast-container .luker-toast.toast-warning { --toast-accent: #e5a028; }
+    #toast-container .luker-toast.toast-error { --toast-accent: #e05a5a; }
+
+    body:not(.no-blur) #toast-container .luker-toast {
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+
+    #toast-container .luker-toast.luker-toast-dragging {
+        box-shadow: 0 14px 34px -6px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.65)), 0 0 0 1px color-mix(in srgb, var(--toast-accent) 65%, transparent);
+    }
+
+    #toast-container .luker-toast.rtl {
+        border-left: 1px solid color-mix(in srgb, var(--toast-accent) 42%, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16)));
+        border-right: 3px solid var(--toast-accent);
+    }
+
+    /* Preserve readable text when callers pass inline background-color (e.g. /echo color=...). */
+    #toast-container .luker-toast[style*="background-color"] {
+        color: #fff;
+        --luker-toast-icon-color: currentColor;
+        --luker-toast-icon-opacity: 0.92;
+    }
+
+    /* Neutral currentColor icon avoids clashing with third-party theme palettes
+     * or disappearing against solid colored toast backgrounds; themes may opt
+     * into semantic icon colors via --luker-toast-icon-color. */
+    #toast-container .luker-toast-icon,
+    #toast-container .luker-toast-capsule-icon {
+        color: var(--luker-toast-icon-color, currentColor);
+        opacity: var(--luker-toast-icon-opacity, 0.82);
+    }
+
+    #toast-container .toast-title {
+        font-weight: 600;
+        font-size: 0.95em;
+        line-height: 1.3;
+        margin: 0 0 2px;
+        color: inherit;
+    }
+
+    #toast-container .toast-message {
+        margin: 0;
+        font-size: 0.92em;
+        line-height: 1.4;
+        color: inherit;
+    }
+
+    #toast-container .toast-message a {
+        color: inherit;
+        text-decoration: underline;
+    }
+
+    #toast-container .toast-message small {
+        color: inherit;
+        opacity: 0.82;
+    }
+
+    #toast-container .action-loader-stop {
+        color: var(--toast-accent);
+    }
+
+    #toast-container .luker-toast-action-btn {
+        border-radius: 6px;
+        color: inherit;
+        opacity: 0.72;
+    }
+
+    #toast-container .luker-toast-action-btn:hover,
+    #toast-container .luker-toast-action-btn:focus-visible {
+        opacity: 1;
+        background-color: color-mix(in srgb, currentColor 12%, transparent);
+    }
+
+    #toast-container .luker-toast-action-btn:focus-visible {
+        box-shadow: 0 0 0 2px var(--toast-accent);
+    }
+
+    #toast-container .toast-progress {
+        height: 2.5px;
+        background-color: var(--toast-accent);
+        opacity: 0.8;
+    }
+
+    /* Minimized capsule shares the single .toast surface so themed toasts never double-box. */
+    #toast-container .luker-toast.luker-toast-minimized {
+        padding: 0 12px 0 10px;
+        min-height: 32px;
+        border-radius: var(--luker-toast-capsule-radius);
+        border: 1.5px solid color-mix(in srgb, var(--toast-accent) 62%, transparent);
+        background-color: var(--SmartThemeBlurTintColor, #1a1c24);
+        background-color: color-mix(
+            in srgb,
+            var(--toast-accent) 14%,
+            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
+        );
+        background-image: none;
+        box-shadow: 0 4px 14px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.45));
+        font-size: 12.5px;
+        font-weight: 600;
+    }
+
+    #toast-container .luker-toast.luker-toast-minimized:hover {
+        border-color: var(--toast-accent);
+    }
+
+    #toast-container .luker-toast-stack-badge {
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #e8e8ee) 22%, transparent);
+        background-color: var(--SmartThemeBlurTintColor, #1a1c24);
+        background-color: rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1);
+        color: var(--SmartThemeBodyColor, #e8e8ee);
+        box-shadow: 0 3px 10px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.4));
+    }
+
+    #toast-container .luker-toast-stack-badge:hover,
+    #toast-container .luker-toast-stack-badge:focus-visible {
+        border-color: var(--SmartThemeQuoteColor, #5aa3ff);
     }
 }

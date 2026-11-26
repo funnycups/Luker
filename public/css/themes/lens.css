@@ -1008,10 +1008,72 @@ body.swipeAllMessages #chat .mes:not(.last_mes) {
     color: inherit !important;
 }
 
-/* 提示 */
+/* 提示（随夜空 / 晨雾 / 墨玉 / 素笺四套配色统一质感与语义强调色） */
 #toast-container > .toast {
-    border-radius: var(--lt-radius-sm);
-    box-shadow: var(--lt-shadow) !important;
+    --toast-accent: var(--lt-accent);
+    --luker-toast-icon-color: var(--toast-accent);
+    --luker-toast-icon-opacity: 1;
+    border-radius: var(--lt-radius);
+    border: 1px solid color-mix(in srgb, var(--toast-accent) 34%, var(--lt-hair-strong));
+    border-left: 3px solid var(--toast-accent);
+    box-shadow: inset 0 1px 0 var(--lt-glass-hi), var(--lt-shadow-lg);
+    -webkit-backdrop-filter: var(--lt-backdrop-mobile);
+    backdrop-filter: var(--lt-backdrop-mobile);
+}
+
+#toast-container > .toast.rtl {
+    border-left: 1px solid color-mix(in srgb, var(--toast-accent) 34%, var(--lt-hair-strong));
+    border-right: 3px solid var(--toast-accent);
+}
+
+#toast-container > .toast.toast-info { --toast-accent: var(--lt-accent); }
+#toast-container > .toast.toast-success { --toast-accent: var(--lt-good); }
+#toast-container > .toast.toast-warning { --toast-accent: #d99026; }
+#toast-container > .toast.toast-error { --toast-accent: var(--lt-bad); }
+
+#toast-container > .toast:not([style*="background-color"]) {
+    background-color: var(--lt-surface);
+    background-color: color-mix(in srgb, var(--toast-accent) 9%, rgb(from var(--lt-surface) r g b / 1));
+    color: var(--lt-ink);
+}
+
+#toast-container > .toast[style*="background-color"] {
+    color: #ffffff;
+    --luker-toast-icon-color: currentColor;
+    --luker-toast-icon-opacity: 0.92;
+}
+
+#toast-container > .toast.luker-toast-minimized {
+    border-radius: var(--luker-toast-capsule-radius);
+    border: 1.5px solid color-mix(in srgb, var(--toast-accent) 55%, var(--lt-hair-strong));
+    box-shadow: inset 0 1px 0 var(--lt-glass-hi), var(--lt-shadow);
+}
+
+#toast-container > .toast.luker-toast-minimized:not([style*="background-color"]) {
+    background-color: var(--lt-surface);
+    background-color: color-mix(in srgb, var(--toast-accent) 13%, rgb(from var(--lt-surface) r g b / 1));
+}
+
+#toast-container > .toast.luker-toast-dragging {
+    box-shadow: inset 0 1px 0 var(--lt-glass-hi), var(--lt-shadow-lg), 0 0 0 1px color-mix(in srgb, var(--toast-accent) 55%, transparent);
+}
+
+#toast-container .luker-toast-stack-badge {
+    border-color: var(--lt-hair-strong);
+    background-color: var(--lt-surface);
+    background-color: rgb(from var(--lt-surface) r g b / 1);
+    color: var(--lt-ink);
+    box-shadow: var(--lt-shadow);
+}
+
+#toast-container .luker-toast-stack-badge:hover,
+#toast-container .luker-toast-stack-badge:focus-visible {
+    border-color: var(--lt-accent);
+}
+
+body.no-blur #toast-container > .toast {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
 }
 
 /* 删除模式：选中的消息标红 */
