@@ -4,7 +4,7 @@
 // switching, shared state (snapshot, settings), toasts, and live refresh.
 
 import { i18n, i18nFormat } from './i18n.js';
-import { h, put, clear, debounce, formatTokens } from '../lens-shared/util.js';
+import { h, put, clear, debounce, formatTokens, scrollChildIntoView } from '../lens-shared/util.js';
 import { emptyState } from '../lens-shared/ui.js';
 import { icon } from './icons.js';
 import { createWindow } from './ui/window.js';
@@ -30,7 +30,7 @@ const CORE_PAGES = [
 
 const FOOTER_PAGE = { id: 'settings', label: () => i18n('Settings'), iconName: 'gear' };
 
-export function ensureWorkbenchStyles(doc = globalThis.document) {
+export function ensureWorkbenchStyles(doc = globalThis.document, onLoad = null) {
     if (!doc?.head) return;
     if (!doc.getElementById(TOKENS_CSS_ID) && !doc.querySelector('link[href*="lens-shared/tokens.css"]')) {
         const link = doc.createElement('link');
@@ -39,12 +39,16 @@ export function ensureWorkbenchStyles(doc = globalThis.document) {
         link.href = new URL('../lens-shared/tokens.css', import.meta.url).href;
         doc.head.appendChild(link);
     }
-    if (!doc.getElementById(WORKBENCH_CSS_ID) && !doc.querySelector('link[href*="workbench/style.css"]')) {
-        const link = doc.createElement('link');
-        link.id = WORKBENCH_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('./style.css', import.meta.url).href;
-        doc.head.appendChild(link);
+    let wbLink = doc.getElementById(WORKBENCH_CSS_ID) || doc.querySelector('link[href*="workbench/style.css"]');
+    if (!wbLink) {
+        wbLink = doc.createElement('link');
+        wbLink.id = WORKBENCH_CSS_ID;
+        wbLink.rel = 'stylesheet';
+        wbLink.href = new URL('./style.css', import.meta.url).href;
+        doc.head.appendChild(wbLink);
+    }
+    if (typeof onLoad === 'function' && wbLink && !wbLink.sheet) {
+        wbLink.addEventListener('load', () => onLoad(), { once: true });
     }
 }
 
@@ -289,9 +293,7 @@ export function mountWorkbench({
         );
         if (win.isCompact()) {
             globalThis.requestAnimationFrame?.(() => {
-                try {
-                    rail.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
-                } catch { /* ignore in test DOM */ }
+                scrollChildIntoView(rail, rail.querySelector('[aria-selected="true"]'), { inline: 'center' });
             });
         }
         paintPill();
@@ -459,6 +461,9 @@ export function mountWorkbench({
     }
 
     container.appendChild(win.layer);
+    ensureWorkbenchStyles(container?.ownerDocument || document, () => {
+        if (!destroyed) win.refresh();
+    });
     win.refresh();
     paintRail();
     if (shown) {

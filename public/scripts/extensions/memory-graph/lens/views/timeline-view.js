@@ -4,7 +4,7 @@
 // collapsible chapters; raw events sit on a rail inside them with time /
 // place chips and the characters and locations they involve.
 
-import { h, clear, truncate, put } from '../../../../lens-shared/util.js';
+import { h, clear, truncate, put, prefersReducedMotion, scrollChildIntoView } from '../../../../lens-shared/util.js';
 import { icon } from '../icons.js';
 import { i18n, i18nFormat, depthLabel } from '../i18n.js';
 import { buildChapters, entitiesOfEvent, contextState, formatFloor, isDefaultFilters } from '../model.js';
@@ -168,7 +168,7 @@ export function createTimelineView(app) {
             }
         }
         if (!card) return false;
-        card.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        scrollChildIntoView(scroller, card, { block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
         return true;
     }
 

@@ -677,7 +677,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 else floorValue = input.value;
                 mode = nextMode;
                 syncModeUi();
-                input.focus();
+                input.focus({ preventScroll: true });
             }, { ariaLabel: i18n('Rebuild mode') }));
 
             if (mode === 'recent') {

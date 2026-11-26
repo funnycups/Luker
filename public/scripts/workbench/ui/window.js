@@ -53,7 +53,7 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
     const grip = h('div', { class: 'wb-resize', 'aria-hidden': 'true' });
     const win = h('section', { class: 'wb-win', role: 'dialog', 'aria-label': title, tabIndex: -1 }, bar, body, bottomGrip, grip);
     const pill = h('button', { type: 'button', class: 'wb-pill', hidden: true, 'aria-label': i18nFormat('Open the ${0}', title), title: i18nFormat('Open ${0} (draggable)', title) });
-    const layer = h('div', { class: 'wbench lw-surface', dataset: { theme: theme() } }, win, pill);
+    const layer = h('div', { class: 'wbench lw-surface', style: { position: 'fixed' }, dataset: { theme: theme() } }, win, pill);
 
     function paintTheme() {
         layer.dataset.theme = theme();
@@ -333,6 +333,7 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
     function expand() {
         collapsed = false;
         apply();
+        fit.refresh();
         win.focus({ preventScroll: true });
         onExpand?.();
     }

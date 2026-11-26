@@ -29,14 +29,16 @@ export function fitToViewport(root, { layout = null, vhVar = '--lw-vh', resetAni
         if (box === false) return;
         const left = Math.round(vv?.offsetLeft ?? 0) + box.left;
         const top = Math.round(vv?.offsetTop ?? 0) + box.top;
-        // Reset to a known origin with 0x0 size so the root itself cannot keep
-        // documentElement scrolled while measuring its containing-block origin.
+        // Reset to a known fixed origin with 0x0 size so neither async
+        // stylesheet loading (position: static) nor root overflow can poison
+        // the containing-block measurement.
         const animation = root.style.animation;
         const transform = root.style.transform;
         const transition = root.style.transition;
         if (resetAnimation) root.style.animation = 'none';
         root.style.transition = 'none';
         root.style.transform = 'none';
+        root.style.position = 'fixed';
         root.style.left = '0px';
         root.style.top = '0px';
         root.style.right = 'auto';

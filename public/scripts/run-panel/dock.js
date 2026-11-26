@@ -155,6 +155,7 @@ function fitToViewport(root, { layout = null } = {}) {
         root.style.animation = 'none';
         root.style.transition = 'none';
         root.style.transform = 'none';
+        root.style.position = 'fixed';
         root.style.left = '0px';
         root.style.top = '0px';
         root.style.right = 'auto';

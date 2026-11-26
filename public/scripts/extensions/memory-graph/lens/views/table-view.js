@@ -5,7 +5,7 @@
 // via CSS (each cell carries a data-label).
 
 import { editable } from '../edit/inline-edit.js';
-import { h, clear, truncate, put } from '../../../../lens-shared/util.js';
+import { h, clear, truncate, put, scrollChildIntoView } from '../../../../lens-shared/util.js';
 import { icon } from '../icons.js';
 import { i18n, typeLabel, fieldLabel, depthLabel } from '../i18n.js';
 import { nodePassesFilters, contextState, formatFloor, fieldText, compareTimeline } from '../model.js';
@@ -170,7 +170,7 @@ export function createTableView(app) {
             }
         }
         if (!row) return false;
-        row.scrollIntoView?.({ block: 'nearest' });
+        scrollChildIntoView(scroller, row, { block: 'nearest' });
         return true;
     }
 

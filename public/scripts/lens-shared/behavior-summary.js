@@ -4,7 +4,7 @@
 // SillyTavern drawers/popups. All text goes through textContent /
 // createTextNode — never innerHTML.
 
-import { h, clear, put, prefersReducedMotion } from './util.js';
+import { h, clear, put, prefersReducedMotion, findLocalScrollContainer, scrollChildIntoView } from './util.js';
 
 const PLACEHOLDER_RE = /\$\{([^{}]+)\}/g;
 const FOCUSABLE_SELECTOR = 'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -424,8 +424,10 @@ export function createBehaviorSummary({
         }
 
         const scrollTarget = primaryFocusTarget || primaryScrollTarget;
-        if (typeof scrollTarget?.scrollIntoView === 'function') {
-            scrollTarget.scrollIntoView({
+        if (scrollTarget) {
+            const boundary = currentScopeEl?.closest?.('.wbench, .mlens, .olens, .dw-layer, .drawer-content, .popup') || null;
+            const scroller = findLocalScrollContainer(scrollTarget, boundary);
+            scrollChildIntoView(scroller, scrollTarget, {
                 behavior: prefersReducedMotion() ? 'auto' : 'smooth',
                 block: 'nearest',
             });

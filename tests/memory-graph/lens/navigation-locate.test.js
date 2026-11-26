@@ -64,6 +64,22 @@ describe('Memory Lens search & locate view navigation', () => {
     let animateCalls = [];
     let origCytoscape;
     let origScrollIntoView;
+    let origGetBoundingClientRect;
+
+    function stubLocalScroll(scroller, targetSelector) {
+        Object.defineProperty(scroller, 'clientHeight', { value: 200, configurable: true });
+        Object.defineProperty(scroller, 'scrollHeight', { value: 1000, configurable: true });
+        scroller.scrollTop = 0;
+        scroller.scrollTo = jest.fn(({ top }) => { scroller.scrollTop = top; });
+        Element.prototype.getBoundingClientRect = function () {
+            if (this === scroller) return { top: 0, bottom: 200, left: 0, right: 400, width: 400, height: 200 };
+            if (this.matches?.(targetSelector)) {
+                const top = 450 - scroller.scrollTop;
+                return { top, bottom: top + 40, left: 0, right: 300, width: 300, height: 40 };
+            }
+            return origGetBoundingClientRect.call(this);
+        };
+    }
 
     beforeEach(() => {
         document.body.innerHTML = '';
@@ -75,6 +91,7 @@ describe('Memory Lens search & locate view navigation', () => {
         animateCalls = [];
         origScrollIntoView = Element.prototype.scrollIntoView;
         Element.prototype.scrollIntoView = jest.fn();
+        origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
         origCytoscape = globalThis.cytoscape;
         // Real Cytoscape instance in headless mode (jsdom has no canvas 2D context),
@@ -99,6 +116,7 @@ describe('Memory Lens search & locate view navigation', () => {
         if (origCytoscape === undefined) delete globalThis.cytoscape;
         else globalThis.cytoscape = origCytoscape;
         Element.prototype.scrollIntoView = origScrollIntoView;
+        Element.prototype.getBoundingClientRect = origGetBoundingClientRect;
     });
 
     test('searching and clicking a character node from timeline switches to graph and locates it', async () => {
@@ -140,6 +158,9 @@ describe('Memory Lens search & locate view navigation', () => {
         lens = mountMemoryLens({ source: makeFakeSource(), container: host, opts: { subview: 'timeline' } });
         await flushAsync();
 
+        const scroller = host.querySelector('.ml-tl-scroll');
+        stubLocalScroll(scroller, '.ml-tl-card[data-id="e01"]');
+
         // Collapse top-level chapter r2_a so e01 is hidden inside it.
         const toggle = host.querySelector('.ml-tl-chapter .ml-tl-toggle');
         expect(toggle).not.toBeNull();
@@ -154,7 +175,8 @@ describe('Memory Lens search & locate view navigation', () => {
         const card = host.querySelector('.ml-tl-card[data-id="e01"]');
         expect(card).not.toBeNull();
         expect(card.getAttribute('aria-selected')).toBe('true');
-        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+        expect(scroller.scrollTop).toBe(290);
+        expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     });
 
     test('searching an event excluded by timeline focusEntityId switches to graph and locates it', async () => {
@@ -192,6 +214,9 @@ describe('Memory Lens search & locate view navigation', () => {
         lens = mountMemoryLens({ source: makeFakeSource(), container: host, opts: { subview: 'table' } });
         await flushAsync();
 
+        const scroller = host.querySelector('.ml-table-scroll');
+        stubLocalScroll(scroller, '.ml-table tr[data-id="c_wen"]');
+
         searchAndClick(host, '温澜', '温澜');
         await flushAsync();
 
@@ -200,7 +225,8 @@ describe('Memory Lens search & locate view navigation', () => {
         const row = host.querySelector('.ml-table tr[data-id="c_wen"]');
         expect(row).not.toBeNull();
         expect(row.getAttribute('aria-selected')).toBe('true');
-        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+        expect(scroller.scrollTop).toBe(290);
+        expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     });
 
     test('clicking "Locate in graph" in inspector switches from timeline or table to graph and locates node', async () => {
@@ -301,6 +327,8 @@ describe('Memory Lens search & locate view navigation', () => {
         expect(host.querySelector('.ml-table tr[data-id="c_wen"]')).toBeNull();
 
         // Search and click the same character again -> table.locate() switches sub-tab back and scrolls.
+        const scroller = host.querySelector('.ml-table-scroll');
+        stubLocalScroll(scroller, '.ml-table tr[data-id="c_wen"]');
         Element.prototype.scrollIntoView.mockClear();
         searchAndClick(host, '温澜', '温澜');
         await flushAsync();
@@ -309,6 +337,7 @@ describe('Memory Lens search & locate view navigation', () => {
         const row = host.querySelector('.ml-table tr[data-id="c_wen"]');
         expect(row).not.toBeNull();
         expect(row.getAttribute('aria-selected')).toBe('true');
-        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+        expect(scroller.scrollTop).toBe(290);
+        expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     });
 });

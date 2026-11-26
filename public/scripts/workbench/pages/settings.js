@@ -5,7 +5,7 @@
 // Ask sources, window, and suggestions rules (core + SuggestRuleProviders).
 
 import { i18n, i18nFormat } from '../i18n.js';
-import { h, put, clear } from '../../lens-shared/util.js';
+import { h, put, clear, prefersReducedMotion, scrollChildIntoView } from '../../lens-shared/util.js';
 import { createBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import { button, link, dot, checkRow, select, sectionTitle, loading } from '../ui/components.js';
 import { listRules } from '../model/suggest.js';
@@ -450,7 +450,14 @@ export function createSettingsPage(app) {
             paint();
             ensureChoices();
             if (!prompts) loadPrompts();
-            if (opts.scrollTo === 'rules') requestAnimationFrame(() => el.querySelector('#wb-rules')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+            if (opts.scrollTo === 'rules') {
+                requestAnimationFrame(() => {
+                    scrollChildIntoView(el.closest('.wb-main'), el.querySelector('#wb-rules'), {
+                        block: 'start',
+                        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+                    });
+                });
+            }
         },
         onRegistryUpdate() {
             promptsVersion++;

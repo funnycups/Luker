@@ -3,7 +3,7 @@
 // Command palette (Ctrl/⌘ K): fuzzy node search + a few commands, fully
 // keyboard driven, rendered as an ARIA combobox/listbox.
 
-import { h, clear, put } from '../../../../lens-shared/util.js';
+import { h, clear, put, scrollChildIntoView } from '../../../../lens-shared/util.js';
 import { icon } from '../icons.js';
 import { i18n, i18nFormat, typeLabel } from '../i18n.js';
 import { searchNodes, formatFloor } from '../model.js';
@@ -129,7 +129,7 @@ export function createPalette(app) {
         const current = options[active];
         if (current) {
             input.setAttribute('aria-activedescendant', current.id);
-            current.scrollIntoView({ block: 'nearest' });
+            scrollChildIntoView(list, current, { block: 'nearest' });
         }
     }
 

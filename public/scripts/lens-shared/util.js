@@ -158,3 +158,75 @@ export async function copyText(text) {
 export function prefersReducedMotion() {
     return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
+
+/**
+ * Finds the nearest scrollable ancestor of `child` strictly inside `boundary`,
+ * never crossing into `document.body` or `document.documentElement`.
+ */
+export function findLocalScrollContainer(child, boundary = null) {
+    if (!child || typeof globalThis.getComputedStyle !== 'function') return null;
+    const doc = child.ownerDocument;
+    const docEl = doc?.documentElement;
+    const body = doc?.body;
+    let node = child.parentElement;
+    while (node && node !== body && node !== docEl) {
+        const cs = globalThis.getComputedStyle(node);
+        const canScrollY = /(auto|scroll)/.test(cs.overflowY) && node.scrollHeight > node.clientHeight + 1;
+        const canScrollX = /(auto|scroll)/.test(cs.overflowX) && node.scrollWidth > node.clientWidth + 1;
+        if (canScrollY || canScrollX) return node;
+        if (boundary && node === boundary) break;
+        node = node.parentElement;
+    }
+    return null;
+}
+
+/**
+ * Scrolls `child` into view strictly inside `container` by updating only
+ * `container.scrollLeft` / `container.scrollTop`. Unlike native
+ * `Element.prototype.scrollIntoView()`, this never walks up to ancestor layers
+ * or `document.documentElement`.
+ */
+export function scrollChildIntoView(container, child, { inline = 'none', block = 'none', behavior = 'auto' } = {}) {
+    if (!container || !child) return;
+    const doc = child.ownerDocument;
+    if (container === doc?.documentElement || container === doc?.body) return;
+    const cr = container.getBoundingClientRect?.();
+    const br = child.getBoundingClientRect?.();
+    if (!cr || !br) return;
+
+    let nextLeft = container.scrollLeft;
+    if (inline !== 'none' && container.scrollWidth > container.clientWidth) {
+        if (inline === 'center') {
+            nextLeft = container.scrollLeft + (br.left - cr.left) - (cr.width - br.width) / 2;
+        } else if (inline === 'start') {
+            nextLeft = container.scrollLeft + (br.left - cr.left);
+        } else if (inline === 'nearest') {
+            if (br.left < cr.left) nextLeft = container.scrollLeft + (br.left - cr.left);
+            else if (br.right > cr.right) nextLeft = container.scrollLeft + (br.right - cr.right);
+        }
+        nextLeft = Math.max(0, Math.min(nextLeft, container.scrollWidth - container.clientWidth));
+    }
+
+    let nextTop = container.scrollTop;
+    if (block !== 'none' && container.scrollHeight > container.clientHeight) {
+        if (block === 'center') {
+            nextTop = container.scrollTop + (br.top - cr.top) - (cr.height - br.height) / 2;
+        } else if (block === 'start') {
+            nextTop = container.scrollTop + (br.top - cr.top);
+        } else if (block === 'nearest') {
+            if (br.top < cr.top) nextTop = container.scrollTop + (br.top - cr.top);
+            else if (br.bottom > cr.bottom) nextTop = container.scrollTop + (br.bottom - cr.bottom);
+        }
+        nextTop = Math.max(0, Math.min(nextTop, container.scrollHeight - container.clientHeight));
+    }
+
+    if (nextLeft === container.scrollLeft && nextTop === container.scrollTop) return;
+    if (behavior === 'smooth' && typeof container.scrollTo === 'function') {
+        try {
+            container.scrollTo({ left: nextLeft, top: nextTop, behavior: 'smooth' });
+            return;
+        } catch { /* fall back to direct assignment in synthetic DOM */ }
+    }
+    container.scrollLeft = nextLeft;
+    container.scrollTop = nextTop;
+}

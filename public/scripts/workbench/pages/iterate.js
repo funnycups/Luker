@@ -11,7 +11,7 @@
 // views or hijack active sessions.
 
 import { i18n, i18nFormat, listSeparator } from '../i18n.js';
-import { h, put, clear, relativeTime, copyText } from '../../lens-shared/util.js';
+import { h, put, clear, relativeTime, copyText, scrollChildIntoView } from '../../lens-shared/util.js';
 import { confirmDialog } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
 import { button, iconButton, checkRow, segmented, dot, msgActions, loading } from '../ui/components.js';
@@ -865,9 +865,8 @@ export function createIteratePage(app) {
         paintControls();
         if (app.isCompact?.()) {
             globalThis.requestAnimationFrame?.(() => {
-                try {
-                    head.querySelector('.wb-ws-seg [aria-pressed="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
-                } catch { /* ignore in test DOM */ }
+                const seg = head.querySelector('.wb-ws-seg');
+                scrollChildIntoView(seg, seg?.querySelector('[aria-pressed="true"]'), { inline: 'center' });
             });
         }
     }

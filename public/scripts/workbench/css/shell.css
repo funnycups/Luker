@@ -4,6 +4,7 @@
     position: fixed; inset: 0;
     z-index: 2147481000;
     overflow: hidden;
+    overflow: clip;
     pointer-events: none;
     font-family: var(--wb-font); font-size: 13px; line-height: 1.5;
     color: var(--wb-text);
@@ -130,7 +131,7 @@
     content: ''; position: absolute; left: 50%; bottom: 4px; width: 32px; height: 3px;
     margin-left: -16px; border-radius: 3px; background: var(--wb-border-strong); opacity: 0.75;
 }
-.wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); border-radius: 0 0 var(--wb-r-lg) var(--wb-r-lg); border: 1px solid var(--wb-border-strong); border-top: 0; overflow: hidden; }
+.wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); border-radius: 0 0 var(--wb-r-lg) var(--wb-r-lg); border: 1px solid var(--wb-border-strong); border-top: 0; overflow: hidden; overflow: clip; }
 .wbench.is-compact .wb-win.is-max .wb-body { border-radius: 0 0 12px 12px; }
 .wbench.is-compact .wb-rail { width: auto; flex-direction: row; gap: 4px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--wb-border); overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .wbench.is-compact .wb-rail::-webkit-scrollbar { display: none; }

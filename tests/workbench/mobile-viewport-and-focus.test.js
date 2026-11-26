@@ -5,6 +5,7 @@
 
 import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
 import { fitToViewport } from '../../public/scripts/workbench/viewport.js';
+import { scrollChildIntoView, findLocalScrollContainer } from '../../public/scripts/lens-shared/util.js';
 import { createWindow } from '../../public/scripts/workbench/ui/window.js';
 import { createAskPage } from '../../public/scripts/workbench/pages/ask.js';
 import { createHomePage } from '../../public/scripts/workbench/pages/home.js';
@@ -38,6 +39,7 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         const origGetBCR = root.getBoundingClientRect.bind(root);
         root.getBoundingClientRect = () => {
             observedDuringMeasure.push({
+                position: root.style.position,
                 width: root.style.width,
                 height: root.style.height,
             });
@@ -57,7 +59,7 @@ describe('workbench mobile viewport & preventScroll focus', () => {
 
         const handle = fitToViewport(root);
         expect(observedDuringMeasure.length).toBeGreaterThanOrEqual(1);
-        expect(observedDuringMeasure[0]).toEqual({ width: '0px', height: '0px' });
+        expect(observedDuringMeasure[0]).toEqual({ position: 'fixed', width: '0px', height: '0px' });
         expect(root.style.top).toBe('0px');
         expect(root.style.width).toBe('400px');
         expect(root.style.height).toBe('800px');
@@ -483,5 +485,36 @@ describe('workbench mobile viewport & preventScroll focus', () => {
             globalThis.matchMedia = origMatchMedia;
             Object.defineProperty(globalThis, 'visualViewport', { value: origVV, configurable: true });
         }
+    });
+
+    test('scrollChildIntoView centers child strictly within target container and never scrolls documentElement or body', () => {
+        const rail = document.createElement('nav');
+        const tab = document.createElement('button');
+        rail.appendChild(tab);
+        document.body.appendChild(rail);
+
+        Object.defineProperty(rail, 'scrollWidth', { configurable: true, value: 900 });
+        Object.defineProperty(rail, 'clientWidth', { configurable: true, value: 360 });
+        rail.scrollLeft = 0;
+        rail.getBoundingClientRect = () => ({ left: 12, top: 60, right: 372, bottom: 100, width: 360, height: 40 });
+        tab.getBoundingClientRect = () => ({ left: 820, top: 60, right: 860, bottom: 100, width: 40, height: 40 });
+
+        const nativeSpy = jest.fn();
+        tab.scrollIntoView = nativeSpy;
+
+        scrollChildIntoView(rail, tab, { inline: 'center' });
+        expect(nativeSpy).not.toHaveBeenCalled();
+        expect(rail.scrollLeft).toBe(540); // clamped to scrollWidth - clientWidth (900 - 360)
+        expect(document.documentElement.scrollLeft).toBe(0);
+
+        // Refuses to scroll documentElement or body even if passed directly
+        document.documentElement.scrollLeft = 0;
+        scrollChildIntoView(document.documentElement, tab, { inline: 'center' });
+        scrollChildIntoView(document.body, tab, { inline: 'center' });
+        expect(document.documentElement.scrollLeft).toBe(0);
+        expect(document.body.scrollLeft).toBe(0);
+
+        // findLocalScrollContainer stops before body/documentElement
+        expect(findLocalScrollContainer(tab, rail)).toBeNull();
     });
 });

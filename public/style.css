@@ -152,6 +152,10 @@ html {
     -webkit-transform: translateZ(0);
     -webkit-backface-visibility: hidden;
     -webkit-perspective: 1000;
+    /* Keep root viewport non-scrollable so programmatic scrollIntoView/focus
+       cannot shift fixed overlays off-screen when body has overflow: hidden. */
+    overflow: hidden;
+    overflow: clip;
 }
 
 body {

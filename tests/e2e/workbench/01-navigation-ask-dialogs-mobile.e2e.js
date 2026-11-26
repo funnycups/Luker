@@ -449,12 +449,58 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
 
         await closeWorkbench(page);
         const afterClose = await page.evaluate(() => ({
+            scrollX: window.scrollX,
             scrollY: window.scrollY,
+            docScrollLeft: document.documentElement.scrollLeft,
             docScrollHeight: document.documentElement.scrollHeight,
             topBarTop: Math.round(document.getElementById('top-bar')?.getBoundingClientRect().top ?? 0),
+            topBarLeft: Math.round(document.getElementById('top-bar')?.getBoundingClientRect().left ?? 0),
         }));
+        expect(afterClose.scrollX).toBe(0);
         expect(afterClose.scrollY).toBe(0);
+        expect(afterClose.docScrollLeft).toBe(0);
         expect(afterClose.docScrollHeight).toBeLessThanOrEqual(baselineDocScrollHeight);
         expect(afterClose.topBarTop).toBe(0);
+        expect(afterClose.topBarLeft).toBe(0);
+
+        // Regression: even when an external/theme element overflows horizontally, opening
+        // Workbench on the rightmost Settings tab (normal and maximised) must scroll only
+        // .wb-rail locally and never drift documentElement or #top-bar horizontally.
+        await page.evaluate(() => {
+            const wide = document.createElement('div');
+            wide.id = '__wb_drift_probe_wide';
+            wide.style.cssText = 'position:absolute; left:360px; top:120px; width:160px; height:24px; pointer-events:none;';
+            document.body.appendChild(wide);
+        });
+        const win2 = await openWorkbench(page, { via: 'wand' });
+        await switchWorkbenchTab(page, 'settings');
+        await win2.locator('.wb-ctl-max').click();
+        await closeWorkbench(page);
+        await openWorkbench(page, { via: 'wand' });
+        await expect.poll(() => page.evaluate(() => Math.round(document.querySelector('.wbench .wb-rail')?.scrollLeft ?? 0)), { timeout: 5_000 }).toBeGreaterThan(0);
+
+        const driftAfterSettingsReopen = await page.evaluate(() => {
+            const rail = document.querySelector('.wbench .wb-rail');
+            const winEl = document.querySelector('.wbench .wb-win');
+            const topBar = document.getElementById('top-bar');
+            document.getElementById('__wb_drift_probe_wide')?.remove();
+            return {
+                scrollX: window.scrollX,
+                scrollY: window.scrollY,
+                docScrollLeft: document.documentElement.scrollLeft,
+                topBarLeft: Math.round(topBar?.getBoundingClientRect().left ?? 0),
+                winLeft: Math.round(winEl?.getBoundingClientRect().left ?? 0),
+                winRight: Math.round(winEl?.getBoundingClientRect().right ?? 0),
+                railScrollLeft: Math.round(rail?.scrollLeft ?? 0),
+            };
+        });
+        expect(driftAfterSettingsReopen.scrollX).toBe(0);
+        expect(driftAfterSettingsReopen.scrollY).toBe(0);
+        expect(driftAfterSettingsReopen.docScrollLeft).toBe(0);
+        expect(driftAfterSettingsReopen.topBarLeft).toBe(0);
+        expect(driftAfterSettingsReopen.winLeft).toBeGreaterThanOrEqual(0);
+        expect(driftAfterSettingsReopen.winRight).toBeLessThanOrEqual(390);
+        expect(driftAfterSettingsReopen.railScrollLeft).toBeGreaterThan(0);
+        await closeWorkbench(page);
     });
 });

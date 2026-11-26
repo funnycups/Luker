@@ -350,11 +350,17 @@ describe('createBehaviorSummary', () => {
         jest.useFakeTimers();
 
         const container = document.createElement('div');
+        container.style.overflowY = 'auto';
+        Object.defineProperty(container, 'clientHeight', { value: 200, configurable: true });
+        Object.defineProperty(container, 'scrollHeight', { value: 800, configurable: true });
+        container.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 300, width: 300, height: 200 });
+        container.scrollTo = jest.fn(({ top }) => { container.scrollTop = top; });
 
         // 1. Closed <details>
         const details = document.createElement('details');
         details.open = false;
         const { wrap: detailsWrap, ctl: detailsInput } = makeField('inDetails', 'input', { type: 'text' });
+        detailsInput.getBoundingClientRect = () => ({ top: 420, bottom: 450, left: 0, right: 200, width: 200, height: 30 });
         detailsInput.scrollIntoView = jest.fn();
         details.appendChild(detailsWrap);
 
@@ -420,7 +426,8 @@ describe('createBehaviorSummary', () => {
         detailsBtn.click();
         expect(details.open).toBe(true);
         expect(document.activeElement).toBe(detailsInput);
-        expect(detailsInput.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'nearest' });
+        expect(container.scrollTo).toHaveBeenCalledWith({ left: 0, top: 250, behavior: 'smooth' });
+        expect(detailsInput.scrollIntoView).not.toHaveBeenCalled();
         expect(detailsWrap.classList.contains('luker-bsum-field-pulse')).toBe(true);
 
         // Click token inside collapsed .inline-drawer
@@ -492,7 +499,7 @@ describe('createBehaviorSummary', () => {
         summary.destroy();
     });
 
-    test('renders interactive button for onActivate-only token and honors prefers-reduced-motion on scrollIntoView', () => {
+    test('renders interactive button for onActivate-only token and honors prefers-reduced-motion on local container scroll', () => {
         const parts = renderTemplateParts('Action: ${act}', {
             act: { text: 'Jump', tone: 'accent', onActivate: () => true },
         });
@@ -504,7 +511,13 @@ describe('createBehaviorSummary', () => {
         globalThis.matchMedia = jest.fn().mockReturnValue({ matches: true });
         try {
             const section = document.createElement('div');
+            section.style.overflowY = 'auto';
+            Object.defineProperty(section, 'clientHeight', { value: 200, configurable: true });
+            Object.defineProperty(section, 'scrollHeight', { value: 800, configurable: true });
+            section.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 300, width: 300, height: 200 });
+            section.scrollTo = jest.fn();
             const { wrap, ctl } = makeField('target', 'input', { type: 'text' });
+            ctl.getBoundingClientRect = () => ({ top: 420, bottom: 450, left: 0, right: 200, width: 200, height: 30 });
             ctl.scrollIntoView = jest.fn();
             section.appendChild(wrap);
 
@@ -518,7 +531,9 @@ describe('createBehaviorSummary', () => {
             document.body.append(summary.el, section);
 
             summary.el.querySelector('[data-bsum-fields="target"]').click();
-            expect(ctl.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
+            expect(section.scrollTo).not.toHaveBeenCalled();
+            expect(section.scrollTop).toBe(250);
+            expect(ctl.scrollIntoView).not.toHaveBeenCalled();
 
             summary.destroy();
         } finally {
