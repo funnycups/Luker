@@ -61,6 +61,10 @@ Two settings matter when generation leaves the foreground.
 
 - **Open external links in the system browser** (under **UI Theme**) — shown in the desktop, Android and HarmonyOS apps, and enabled by default. When turned off, ordinary third-party links open inside the Luker window. Links that request a separate window still open as an in-app floating window, so authorization flows keep working. In a browser the row is hidden; the iOS app always opens external links in the system browser.
 
+## Input bar
+
+- **Expand input bar on long drafts** — located under **UI Theme** and enabled by default. When a draft contains line breaks or exceeds the single-row input width, the text box expands onto its own full-width row above the action buttons and stays expanded after losing focus until the draft is cleared or shortened.
+
 ## Chat rendering
 
 - **Lazy-load Message Media** — enabled by default. Chat images and videos load only as they approach the viewport, which keeps the rendering cost of long chats with extensive media low. Extensions that need a specific element loaded immediately can opt out per element.

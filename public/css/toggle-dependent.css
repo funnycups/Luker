@@ -607,3 +607,24 @@ label[for="trim_spaces"]:not(:has(input:checked)) small {
     color: var(--warning);
     margin-left: 5px;
 }
+
+/* Expand long composer drafts onto their own full-width row */
+:where(#send_form[data-composer-draft-layout="flex"])[data-composer-draft-wrap] > #nonQRFormItems {
+    flex-wrap: wrap;
+    row-gap: 4px;
+}
+
+:where(#send_form[data-composer-draft-layout="flex"])[data-composer-draft-wrap] #send_textarea {
+    order: 0;
+    flex: 1 0 100%;
+    min-width: 0;
+}
+
+:where(#send_form[data-composer-draft-layout="flex"])[data-composer-draft-wrap] :is(#leftSendForm, #rightSendForm) {
+    width: unset;
+    flex-wrap: nowrap;
+}
+
+:where(#send_form[data-composer-draft-layout="flex"])[data-composer-draft-wrap] #rightSendForm {
+    margin-left: auto;
+}
