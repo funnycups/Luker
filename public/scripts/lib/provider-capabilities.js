@@ -602,6 +602,7 @@ export function resolveOpenAIModelCapabilities(model) {
     const lower = base.toLowerCase();
 
     const isO1 = /^o1(?:-|$)/.test(lower);
+    const isO1LegacyNoEffort = /^o1-(?:mini|preview)(?:-|$)/.test(lower);
     const isOSeries = /^(o1|o3|o4)/.test(lower);
     const isGpt5 = /^gpt-5/.test(lower);
     const isGpt6 = /^gpt-6/.test(lower);
@@ -611,7 +612,7 @@ export function resolveOpenAIModelCapabilities(model) {
     const rejectsReasoningNone = isGpt6ResponsesOnlyTools;
     const isReasoningModel = isOSeries || isGpt5 || isGpt6;
     const isKnownNonReasoningModel = /^(?:gpt-3\.5|gpt-4|chatgpt-4o|davinci|babbage)/.test(lower) || isChatLatestGpt5;
-    const supportsReasoningEffort = isReasoningModel && !isChatLatestGpt5;
+    const supportsReasoningEffort = isReasoningModel && !isChatLatestGpt5 && !isO1LegacyNoEffort;
     const supportsVerbosity = /^(?:gpt-5|gpt-6)/.test(lower);
     const supportsXhigh = /^gpt-6|^gpt-5\.(4|5|6)|^gpt-5\.1-codex-max/.test(lower);
     const supportsResponsesMax = /^gpt-6|^gpt-5\.6/.test(lower);
@@ -726,5 +727,44 @@ export function resolveMinimaxModelCapabilities(model) {
         maxContextTokens: 204800,
         maxOutputTokens: null,
         retired: false,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// xAI (Grok) Chat Completions (https://docs.x.ai/docs/api-reference)
+//
+// Verified protocol constraints:
+//   1. `reasoning_effort` is supported by `grok-3-mini*` and `grok-4.5*` /
+//      `grok-4-5*`. Legacy `grok-2*`, non-mini `grok-3*`, `grok-4*` (4.0/4-fast/
+//      4-1), and `grok-code*` reject `reasoning_effort` with HTTP 400.
+//   2. Unknown/future Grok models report `'unknown'` so explicit configuration
+//      continues working without waiting for an allowlist update.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve xAI model parameter constraints.
+ * @param {unknown} model
+ */
+export function resolveXaiModelCapabilities(model) {
+    const base = normalizeModelBaseId(model);
+    const lower = base.toLowerCase();
+
+    if (/grok-3-mini|grok-4[.-]5/i.test(lower)) {
+        return {
+            modelId: base,
+            supportsReasoningEffort: true,
+        };
+    }
+
+    if (/^grok-(?:2|3(?!-mini)|4(?![.-]5)|code)(?:$|[.-])/i.test(lower)) {
+        return {
+            modelId: base,
+            supportsReasoningEffort: false,
+        };
+    }
+
+    return {
+        modelId: base,
+        supportsReasoningEffort: 'unknown',
     };
 }

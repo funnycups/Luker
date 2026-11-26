@@ -13,6 +13,7 @@ import {
     ProtocolParseError,
     createProtocolStreamParser,
     createSseFramer,
+    isParsedTurnEmpty,
     parseProtocolResponse,
     resolveWireProtocol,
 } from '../../../public/scripts/lib/protocol-parser/index.js';
@@ -159,7 +160,17 @@ export function finalizeJobProtocolStream(job) {
             applyParsedTurnToJob(job, turn);
         } catch (err) {
             if (err instanceof ProtocolParseError) {
-                job.parseError = err.toDiagnostic();
+                if (err.stage === 'eof') {
+                    const partial = job._protocolParser.getSnapshot();
+                    if (!isParsedTurnEmpty(partial) || Boolean(job.text)) {
+                        console.warn('[LukerGeneration] Stream closed without terminal marker; preserving received content:', err.message);
+                        applyParsedTurnToJob(job, partial);
+                    } else {
+                        job.parseError = err.toDiagnostic();
+                    }
+                } else {
+                    job.parseError = err.toDiagnostic();
+                }
             } else {
                 console.error('[LukerGeneration] Unexpected error while finalizing stream parser:', err);
             }

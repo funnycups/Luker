@@ -142,6 +142,42 @@ function buildParts({ text, reasoning, reasoningDetails, reasoningBlocks, images
     return parts;
 }
 
+const OPENAI_CHAT_BENIGN_FRAME_KEYS = new Set([
+    'id',
+    'object',
+    'created',
+    'model',
+    'system_fingerprint',
+    'service_tier',
+    'prompt_filter_results',
+    'content_filter_results',
+    'provider',
+]);
+
+function extractAlternateOpenAIError(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.quota_error != null) {
+        return { location: 'quota_error', error: payload.quota_error };
+    }
+    if (payload.moderation != null) {
+        return { location: 'moderation', error: payload.moderation };
+    }
+    if (payload.detail != null && !Array.isArray(payload.choices)) {
+        return { location: 'detail', error: payload.detail };
+    }
+    if (typeof payload.message === 'string' && payload.message.trim().length > 0 && !Array.isArray(payload.choices)) {
+        return { location: 'message', error: payload.message };
+    }
+    return null;
+}
+
+function isBenignMetadataOnlyChunk(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const keys = Object.keys(parsed);
+    if (keys.length === 0) return true;
+    return keys.every(key => OPENAI_CHAT_BENIGN_FRAME_KEYS.has(key));
+}
+
 /**
  * Parse a non-streaming OpenAI Chat Completions JSON response strictly.
  * @param {*} payload
@@ -163,6 +199,17 @@ export function parseOpenAIChatResponse(payload) {
             location: 'error',
             message: extractProviderErrorMessage(payload.error),
             providerError: payload.error,
+            rawDiagnostic: payload,
+        });
+    }
+    const altError = extractAlternateOpenAIError(payload);
+    if (altError) {
+        throw new ProtocolParseError({
+            protocol: PROTOCOL,
+            stage: 'provider_error',
+            location: altError.location,
+            message: extractProviderErrorMessage(altError.error),
+            providerError: altError.error,
             rawDiagnostic: payload,
         });
     }
@@ -424,10 +471,32 @@ export function createOpenAIChatStreamParser() {
                 rawDiagnostic: parsed,
             });
         }
+        const altError = extractAlternateOpenAIError(parsed);
+        if (altError) {
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'provider_error',
+                location,
+                message: extractProviderErrorMessage(altError.error),
+                providerError: altError.error,
+                rawDiagnostic: parsed,
+            });
+        }
 
         assertNotForeignPayload(parsed, location);
 
         if (!Array.isArray(parsed.choices) && parsed.usage == null) {
+            if (isBenignMetadataOnlyChunk(parsed)) {
+                return {
+                    textDelta: '',
+                    choiceTextDeltas: {},
+                    reasoningDelta: '',
+                    refusalDelta: '',
+                    imagesDelta: [],
+                    logprobsPayload: null,
+                    hasMetadataUpdate: false,
+                };
+            }
             throw new ProtocolParseError({
                 protocol: PROTOCOL,
                 stage: 'protocol_mismatch',
@@ -544,7 +613,7 @@ export function createOpenAIChatStreamParser() {
                 hasMetadataUpdate = true;
             }
 
-            if (delta.tool_calls !== undefined) {
+            if (delta.tool_calls !== undefined && delta.tool_calls !== null) {
                 if (!Array.isArray(delta.tool_calls)) {
                     throw new ProtocolParseError({
                         protocol: PROTOCOL,
@@ -560,7 +629,7 @@ export function createOpenAIChatStreamParser() {
                     const idx = Number.isInteger(tc.index) ? tc.index : resolveUnindexedToolSlotIndex(incomingId);
                     const slot = ensureToolSlot(idx);
                     if (incomingId) slot.id = incomingId;
-                    if (typeof tc.function?.name === 'string' && tc.function.name) slot.name += tc.function.name;
+                    if (typeof tc.function?.name === 'string' && tc.function.name && !slot.name) slot.name = tc.function.name;
                     if (typeof tc.function?.arguments === 'string') slot.argsStr += tc.function.arguments;
                     const sig = typeof tc.signature === 'string' && tc.signature
                         ? tc.signature
@@ -573,8 +642,8 @@ export function createOpenAIChatStreamParser() {
                 }
             } else if (delta.function_call && typeof delta.function_call === 'object') {
                 const slot = ensureToolSlot(0);
-                if (typeof delta.function_call.name === 'string' && delta.function_call.name) {
-                    slot.name += delta.function_call.name;
+                if (typeof delta.function_call.name === 'string' && delta.function_call.name && !slot.name) {
+                    slot.name = delta.function_call.name;
                 }
                 if (typeof delta.function_call.arguments === 'string') {
                     slot.argsStr += delta.function_call.arguments;

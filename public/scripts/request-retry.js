@@ -162,6 +162,16 @@ export async function withRetry(fetcher, options = {}) {
         if (!thrownError) {
             if (result instanceof Response && !result.ok && isRetriableStatus(result.status, whitelist)) {
                 if (signal?.aborted) throw makeAbortError();
+                if (result.status === 400) {
+                    try {
+                        const peeked = await result.clone().json();
+                        if (peeked?.error?.non_retryable === true || peeked?.error?.type === 'capability_conflict') {
+                            return result;
+                        }
+                    } catch {
+                        // Non-JSON or unreadable 400 body; fall through to normal status handling.
+                    }
+                }
                 if (attempt >= maxRetries) {
                     return result;
                 }
@@ -180,7 +190,7 @@ export async function withRetry(fetcher, options = {}) {
         // a user-triggered abort never leaks into the retry path.
         if (signal?.aborted) throw makeAbortError();
         if (isAbortError(thrownError)) throw thrownError;
-        if (thrownError?.skipRetry) throw thrownError;
+        if (thrownError?.skipRetry || thrownError?.nonRetryable) throw thrownError;
 
         const status = thrownError?.status;
         const retriable = (status === undefined) || isRetriableStatus(status, whitelist);

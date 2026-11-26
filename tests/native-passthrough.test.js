@@ -23,6 +23,7 @@ import {
     ProtocolParseError,
     createProtocolStreamParser,
     isParsedTurnEmpty,
+    parseCompatChatCompletionResponse,
     parseProtocolResponse,
 } from '../public/scripts/lib/protocol-parser/index.js';
 
@@ -168,7 +169,7 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
         globalThis.location = savedLocation;
     });
 
-    async function callWithPluginObserver(requestId, body) {
+    async function callWithPluginObserver(requestId, body, extraHeaders = {}) {
         const pluginObserved = { status: null, rawBodyText: null };
         const observedMetaEvents = [];
         const resp = await fakeWindow.fetch('/api/backends/chat-completions/generate', {
@@ -176,6 +177,7 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
             headers: {
                 'content-type': 'application/json',
                 'x-luker-request-id': requestId,
+                ...extraHeaders,
             },
             body: JSON.stringify({
                 ...body,
@@ -305,7 +307,7 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
     ];
 
     for (const tc of nonStreamCases) {
-        test(`non-streaming passthrough: ${tc.name} preserves exact upstream bytes and delivers meta out-of-band`, async () => {
+        test(`non-streaming compat superset: ${tc.name} exposes OAI choices alongside native fields and delivers meta out-of-band`, async () => {
             upstream.setHandler((_req, res) => {
                 res.writeHead(200, { 'content-type': 'application/json' });
                 res.end(tc.upstreamBody);
@@ -320,9 +322,21 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
             });
 
             expect(pluginObserved.status).toBe(200);
-            expect(pluginObserved.rawBodyText).toBe(tc.upstreamBody);
-            expect(consumerBodyText).toBe(tc.upstreamBody);
+            expect(pluginObserved.rawBodyText).toBe(consumerBodyText);
             expect(pluginObserved.rawBodyText).not.toContain('"luker"');
+
+            const bodyJson = JSON.parse(consumerBodyText);
+            const rawJson = JSON.parse(tc.upstreamBody);
+            if (tc.source === 'openai') {
+                expect(consumerBodyText).toBe(tc.upstreamBody);
+            } else {
+                expect(bodyJson.choices?.[0]?.message?.content).toBe(tc.expectedText);
+                expect(bodyJson.choices?.[0]?.message?.reasoning_content).toBe(tc.expectedReasoning);
+                for (const nativeKey of Object.keys(rawJson)) {
+                    if (nativeKey === 'usage' || nativeKey === 'object') continue;
+                    expect(bodyJson[nativeKey]).toEqual(rawJson[nativeKey]);
+                }
+            }
 
             expect(meta).toEqual(expect.objectContaining({
                 generation_id: tc.requestId,
@@ -330,7 +344,7 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
                 status: expect.any(String),
             }));
 
-            const parsed = parseProtocolResponse(tc.source, JSON.parse(consumerBodyText));
+            const parsed = parseCompatChatCompletionResponse(tc.source, bodyJson);
             expect(parsed.text).toBe(tc.expectedText);
             expect(parsed.reasoning).toBe(tc.expectedReasoning);
 
@@ -339,6 +353,29 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
             expect(inspectorEntry).toBeDefined();
             expect(inspectorEntry.status).toBe('success');
         });
+
+        if (tc.source !== 'openai') {
+            test(`non-streaming x-luker-wire native opt-in: ${tc.name} preserves exact upstream bytes`, async () => {
+                upstream.setHandler((_req, res) => {
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(tc.upstreamBody);
+                });
+
+                const { pluginObserved, consumerBodyText } = await callWithPluginObserver(`${tc.requestId}-native`, {
+                    chat_completion_source: tc.source,
+                    model: tc.model,
+                    stream: false,
+                    messages: [{ role: 'user', content: 'hello' }],
+                    max_tokens: 64,
+                }, { 'x-luker-wire': 'native' });
+
+                expect(pluginObserved.status).toBe(200);
+                expect(pluginObserved.rawBodyText).toBe(tc.upstreamBody);
+                expect(consumerBodyText).toBe(tc.upstreamBody);
+                const parsed = parseProtocolResponse(tc.source, JSON.parse(consumerBodyText));
+                expect(parsed.text).toBe(tc.expectedText);
+            });
+        }
     }
 
     const streamCases = [
@@ -473,7 +510,7 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
         expect(inspectorEntry.parseError).toBeNull();
     });
 
-    test('Gemini non-streaming probabilistic SAFETY empty candidate passes native JSON verbatim as retriable empty turn', async () => {
+    test('Gemini non-streaming probabilistic SAFETY empty candidate returns retriable empty compat superset preserving candidates', async () => {
         const emptyPayload = JSON.stringify({
             candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'SAFETY' }],
         });
@@ -490,8 +527,11 @@ describe('Native HTTP passthrough + out-of-band WS meta channel', () => {
             max_tokens: 64,
         });
 
-        expect(pluginObserved.rawBodyText).toBe(emptyPayload);
-        const turn = parseProtocolResponse('makersuite', JSON.parse(consumerBodyText));
+        const body = JSON.parse(consumerBodyText);
+        expect(pluginObserved.rawBodyText).toBe(consumerBodyText);
+        expect(body.candidates).toEqual(JSON.parse(emptyPayload).candidates);
+        expect(body.choices?.[0]?.message?.content).toBe('');
+        const turn = parseCompatChatCompletionResponse('makersuite', body);
         expect(isParsedTurnEmpty(turn)).toBe(true);
     });
 });

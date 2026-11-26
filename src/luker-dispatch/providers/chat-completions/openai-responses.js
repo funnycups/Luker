@@ -109,6 +109,57 @@ function applyResponsesEncryptedReasoningInclude(requestBody, body) {
     }
 }
 
+function canReplayResponsesOutputItems(message) {
+    if (message?.role !== 'assistant' || !Array.isArray(message.responses_output_items) || message.responses_output_items.length === 0) {
+        return false;
+    }
+    if (Array.isArray(message.content)) {
+        return false;
+    }
+    const items = message.responses_output_items.filter(item => item && typeof item === 'object');
+    if (items.length === 0) {
+        return false;
+    }
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const nativeCalls = items.filter(item => item.type === 'function_call');
+    if (nativeCalls.length !== toolCalls.length) {
+        return false;
+    }
+    if (toolCalls.length > 0) {
+        const nativeCallIds = new Set(
+            nativeCalls
+                .map(item => String(item.call_id || item.id || ''))
+                .filter(Boolean),
+        );
+        for (const tc of toolCalls) {
+            if (!tc?.id || !nativeCallIds.has(String(tc.id))) {
+                return false;
+            }
+        }
+    }
+    if (typeof message.content === 'string') {
+        const expectedText = message.content.replace(/\r/g, '').trim();
+        const textParts = [];
+        const refusalParts = [];
+        for (const item of items) {
+            if (item.type !== 'message' || !Array.isArray(item.content)) continue;
+            for (const part of item.content) {
+                if (!part || typeof part !== 'object') continue;
+                if ((part.type === 'output_text' || part.type === 'text') && typeof part.text === 'string') {
+                    textParts.push(part.text);
+                } else if (part.type === 'refusal' && typeof part.refusal === 'string') {
+                    refusalParts.push(part.refusal);
+                }
+            }
+        }
+        const nativeText = (textParts.length > 0 ? textParts.join('') : refusalParts.join('')).replace(/\r/g, '').trim();
+        if (expectedText !== nativeText) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /**
  * Build a Responses API request body from ST chat-completions generate_data.
  * Chat parameters with no Responses equivalent (stop / logit_bias / n /
@@ -139,7 +190,7 @@ export function buildResponsesRequestBody(body, { applyEncryptedInclude = true }
             });
             continue;
         }
-        if (role === 'assistant' && Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0) {
+        if (canReplayResponsesOutputItems(message)) {
             // Replay exact finalized Responses output items verbatim in original order
             // (preserving reasoning id/summary/encrypted_content, message id/metadata,
             // and function_call items for stateless store:false continuation).

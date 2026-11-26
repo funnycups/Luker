@@ -177,40 +177,48 @@ describe('dispatchXai', () => {
 
         test('off and auto omit reasoning_effort', async () => {
             for (const effort of ['off', 'auto']) {
-                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
+                const ctx = fakeCtx({ body: { model: 'grok-3-mini', reasoning_effort: effort } });
                 await dispatchXai(ctx);
                 expect(wireBody(ctx).reasoning_effort).toBeUndefined();
             }
         });
 
-        test('low maps to low', async () => {
-            const ctx = fakeCtx({ body: { reasoning_effort: 'low' } });
+        test('omits reasoning_effort on models that reject it (grok-2, grok-3, grok-4)', async () => {
+            for (const model of ['grok-2-latest', 'grok-3', 'grok-4', 'grok-4-fast']) {
+                const ctx = fakeCtx({ body: { model, reasoning_effort: 'high' } });
+                await dispatchXai(ctx);
+                expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+            }
+        });
+
+        test('low maps to low on supported reasoning models', async () => {
+            const ctx = fakeCtx({ body: { model: 'grok-3-mini', reasoning_effort: 'low' } });
             await dispatchXai(ctx);
             expect(wireBody(ctx).reasoning_effort).toBe('low');
         });
 
-        test('high and xhigh pass through', async () => {
+        test('high and xhigh pass through on supported reasoning models', async () => {
             for (const effort of ['high', 'xhigh']) {
-                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
+                const ctx = fakeCtx({ body: { model: 'grok-4.5', reasoning_effort: effort } });
                 await dispatchXai(ctx);
                 expect(wireBody(ctx).reasoning_effort).toBe(effort);
             }
         });
 
-        test('medium passes through', async () => {
-            const ctx = fakeCtx({ body: { reasoning_effort: 'medium' } });
+        test('medium passes through on supported reasoning models', async () => {
+            const ctx = fakeCtx({ body: { model: 'grok-4.5', reasoning_effort: 'medium' } });
             await dispatchXai(ctx);
             expect(wireBody(ctx).reasoning_effort).toBe('medium');
         });
 
-        test('minimal falls back to low', async () => {
-            const ctx = fakeCtx({ body: { reasoning_effort: 'minimal' } });
+        test('minimal falls back to low on supported reasoning models', async () => {
+            const ctx = fakeCtx({ body: { model: 'grok-3-mini', reasoning_effort: 'minimal' } });
             await dispatchXai(ctx);
             expect(wireBody(ctx).reasoning_effort).toBe('low');
         });
 
-        test('max falls back to xhigh', async () => {
-            const ctx = fakeCtx({ body: { reasoning_effort: 'max' } });
+        test('max falls back to xhigh on supported reasoning models', async () => {
+            const ctx = fakeCtx({ body: { model: 'grok-4.5', reasoning_effort: 'max' } });
             await dispatchXai(ctx);
             expect(wireBody(ctx).reasoning_effort).toBe('xhigh');
         });

@@ -3,6 +3,7 @@ import { describe, expect, test } from '@jest/globals';
 import {
     joinReasoningDetailsText,
     mergeReasoningDetails,
+    pushReasoningDetails,
 } from '../public/scripts/util/reasoning-details.js';
 
 describe('mergeReasoningDetails: consecutive-run merging', () => {
@@ -66,5 +67,21 @@ describe('joinReasoningDetailsText', () => {
     test('returns empty string for missing or empty input', () => {
         expect(joinReasoningDetailsText(null)).toBe('');
         expect(joinReasoningDetailsText([])).toBe('');
+    });
+});
+
+describe('pushReasoningDetails', () => {
+    test('accumulates reasoning_details with positional index backfill and extracts toolSignatures', () => {
+        const state = { reasoningDetails: [], toolSignatures: {} };
+        pushReasoningDetails(state, [
+            { type: 'reasoning.text', text: 'Step 1' },
+            { type: 'reasoning.text', text: ' -> Step 2' },
+            { type: 'reasoning.encrypted', id: 'tool_abc', data: 'enc-sig' },
+        ]);
+        expect(state.reasoningDetails).toEqual([
+            { type: 'reasoning.text', text: 'Step 1 -> Step 2', index: 0, signature: undefined, format: undefined },
+            { type: 'reasoning.encrypted', id: 'tool_abc', data: 'enc-sig', index: 1 },
+        ]);
+        expect(state.toolSignatures).toEqual({ tool_abc: 'enc-sig' });
     });
 });

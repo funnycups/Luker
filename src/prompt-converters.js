@@ -265,8 +265,51 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
         return out;
     };
 
+    const canReplayNativeContentBlocks = (message) => {
+        if (message.role !== 'assistant' || !Array.isArray(message.native_content_blocks) || message.native_content_blocks.length === 0) {
+            return false;
+        }
+        if (message.name || Array.isArray(message.content)) {
+            return false;
+        }
+        const blocks = message.native_content_blocks.filter(block => block && typeof block === 'object');
+        if (blocks.length === 0) {
+            return false;
+        }
+        const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+        const nativeToolBlocks = blocks.filter(block => block.type === 'tool_use');
+        if (nativeToolBlocks.length !== toolCalls.length) {
+            return false;
+        }
+        if (toolCalls.length > 0) {
+            const nativeToolIds = new Set(
+                nativeToolBlocks
+                    .filter(block => typeof block.id === 'string' && block.id.length > 0)
+                    .map(block => block.id),
+            );
+            for (const tc of toolCalls) {
+                if (!tc?.id || !nativeToolIds.has(tc.id)) {
+                    return false;
+                }
+            }
+        }
+        if (typeof message.content === 'string') {
+            const expectedText = message.content.replace(/\r/g, '').trim();
+            const nativeText = blocks
+                .filter(block => block.type === 'text' && typeof block.text === 'string')
+                .map(block => block.text)
+                .join('')
+                .replace(/\r/g, '')
+                .trim();
+            if (expectedText !== nativeText) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     messages.forEach((message) => {
-        if (message.role === 'assistant' && Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0) {
+        if (canReplayNativeContentBlocks(message)) {
             // Replay exact ordered native Anthropic blocks verbatim (preserving
             // interleaved thinking/text/citations/tool_use/server_tool_use/
             // web_search_tool_result positions for prefix-bound signatures and
@@ -607,7 +650,118 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
         // When exact native Gemini Parts were captured for this model turn, replay them
         // verbatim in original order so per-Part thoughtSignature, interleaved text,
         // functionCall ids, and inlineData remain intact.
-        if (message.role === 'model' && Array.isArray(message.native_parts) && message.native_parts.length > 0) {
+        const canReplayNativeParts = (() => {
+            if (message.role !== 'model' || !Array.isArray(message.native_parts) || message.native_parts.length === 0) {
+                return false;
+            }
+            if (message.name) {
+                return false;
+            }
+            const parts = message.native_parts.filter(part => part && typeof part === 'object');
+            if (parts.length === 0) {
+                return false;
+            }
+            const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+            const nativeCalls = parts
+                .map(part => part.functionCall ?? part.function_call)
+                .filter(fc => fc && typeof fc === 'object' && fc.name);
+            if (nativeCalls.length !== toolCalls.length) {
+                return false;
+            }
+            if (toolCalls.length > 0) {
+                const nativeCallIds = new Set(
+                    nativeCalls
+                        .map(fc => (typeof fc.id === 'string' && fc.id.length > 0 ? fc.id : null))
+                        .filter(Boolean),
+                );
+                const nativeNameCounts = new Map();
+                for (const fc of nativeCalls) {
+                    const name = String(fc.name);
+                    nativeNameCounts.set(name, (nativeNameCounts.get(name) || 0) + 1);
+                }
+                for (const tc of toolCalls) {
+                    const tcId = typeof tc?.id === 'string' ? tc.id : '';
+                    const tcName = String(tc?.function?.name || '');
+                    if (nativeCallIds.size > 0 && tcId && !tcId.startsWith('gemini_call_') && !nativeCallIds.has(tcId)) {
+                        return false;
+                    }
+                    if (tcName) {
+                        const remaining = nativeNameCounts.get(tcName) || 0;
+                        if (remaining <= 0) {
+                            return false;
+                        }
+                        nativeNameCounts.set(tcName, remaining - 1);
+                    }
+                }
+            }
+            const nativeText = parts
+                .filter(part => !part.thought && typeof part.text === 'string')
+                .map(part => part.text)
+                .join('')
+                .replace(/\r/g, '')
+                .trim();
+            const normalizeImageMime = (mime) => {
+                const lower = String(mime || '').toLowerCase();
+                return lower === 'image/jpg' ? 'image/jpeg' : lower;
+            };
+            const nativeInlineImages = parts
+                .filter(part => !part.thought && (part.inlineData || part.inline_data))
+                .map(part => {
+                    const inline = part.inlineData ?? part.inline_data;
+                    return {
+                        mimeType: normalizeImageMime(inline?.mimeType ?? inline?.mime_type),
+                        data: String(inline?.data ?? ''),
+                    };
+                })
+                .filter(img => img.mimeType && img.data);
+
+            if (Array.isArray(message.content)) {
+                const contentTexts = [];
+                const contentImages = [];
+                for (const item of message.content) {
+                    if (!item || typeof item !== 'object') {
+                        return false;
+                    }
+                    if (item.type === 'text' && typeof item.text === 'string') {
+                        contentTexts.push(item.text);
+                    } else if (item.type === 'image_url' && typeof item.image_url?.url === 'string') {
+                        const match = /^data:([^;]+);base64,(.*)$/s.exec(item.image_url.url);
+                        if (!match) {
+                            return false;
+                        }
+                        contentImages.push({ mimeType: normalizeImageMime(match[1]), data: match[2] });
+                    } else {
+                        return false;
+                    }
+                }
+                const expectedText = contentTexts.join('').replace(/\r/g, '').trim();
+                if (expectedText !== nativeText) {
+                    return false;
+                }
+                if (contentImages.length !== nativeInlineImages.length) {
+                    return false;
+                }
+                for (let imgIdx = 0; imgIdx < contentImages.length; imgIdx++) {
+                    if (contentImages[imgIdx].mimeType !== nativeInlineImages[imgIdx].mimeType
+                        || contentImages[imgIdx].data !== nativeInlineImages[imgIdx].data) {
+                        return false;
+                    }
+                }
+            } else {
+                if (nativeInlineImages.length > 0) {
+                    return false;
+                }
+                if (typeof message.content === 'string') {
+                    const expectedText = message.content.replace(/\r/g, '').trim();
+                    if (expectedText !== nativeText) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        })();
+
+        if (canReplayNativeParts) {
             const nativeParts = message.native_parts
                 .filter(part => part && typeof part === 'object')
                 .map(part => structuredClone(part));
@@ -645,6 +799,9 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                 return;
             }
         }
+        delete message.native_parts;
+        delete message.native_content_blocks;
+        delete message.responses_output_items;
 
         // Convert the content to an array of parts
         if (!Array.isArray(message.content)) {
@@ -1104,6 +1261,11 @@ export function mergeMessages(messages, names, { strict = false, placeholders = 
         }
         delete message.name;
         if (!tools) {
+            if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+                delete message.native_content_blocks;
+                delete message.native_parts;
+                delete message.responses_output_items;
+            }
             delete message.tool_calls;
             delete message.tool_call_id;
         }

@@ -7108,22 +7108,29 @@ class StreamingProcessor {
             } else if (!isPauseTurnContinue) {
                 delete message.extra.reasoning_details;
             }
-            if (Array.isArray(this.nativeParts) && this.nativeParts.length > 0) {
-                message.extra.native_parts = this.nativeParts;
-            } else if (!isPauseTurnContinue) {
+            const isNonPauseContinue = this.type === 'continue' && !isPauseTurnContinue;
+            if (isNonPauseContinue) {
                 delete message.extra.native_parts;
-            }
-            if (Array.isArray(this.nativeContentBlocks) && this.nativeContentBlocks.length > 0) {
-                message.extra.native_content_blocks = isPauseTurnContinue && Array.isArray(message.extra.native_content_blocks)
-                    ? [...message.extra.native_content_blocks, ...this.nativeContentBlocks]
-                    : this.nativeContentBlocks;
-            } else if (!isPauseTurnContinue) {
                 delete message.extra.native_content_blocks;
-            }
-            if (Array.isArray(this.responsesOutputItems) && this.responsesOutputItems.length > 0) {
-                message.extra.responses_output_items = this.responsesOutputItems;
-            } else if (!isPauseTurnContinue) {
                 delete message.extra.responses_output_items;
+            } else {
+                if (Array.isArray(this.nativeParts) && this.nativeParts.length > 0) {
+                    message.extra.native_parts = this.nativeParts;
+                } else if (!isPauseTurnContinue) {
+                    delete message.extra.native_parts;
+                }
+                if (Array.isArray(this.nativeContentBlocks) && this.nativeContentBlocks.length > 0) {
+                    message.extra.native_content_blocks = isPauseTurnContinue && Array.isArray(message.extra.native_content_blocks)
+                        ? [...message.extra.native_content_blocks, ...this.nativeContentBlocks]
+                        : this.nativeContentBlocks;
+                } else if (!isPauseTurnContinue) {
+                    delete message.extra.native_content_blocks;
+                }
+                if (Array.isArray(this.responsesOutputItems) && this.responsesOutputItems.length > 0) {
+                    message.extra.responses_output_items = this.responsesOutputItems;
+                } else if (!isPauseTurnContinue) {
+                    delete message.extra.responses_output_items;
+                }
             }
             if (this.type === 'continue') {
                 const mergedCitations = mergeCitations(message.extra.citations, this.citations);
@@ -8400,8 +8407,17 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             regexedMessage = `${regexedMessage}\n\n${titles.join('\n\n')}`;
         }
 
+        let nextExtra = chatItem.extra;
+        if (regexedMessage !== chatItem.mes && nextExtra && (nextExtra.native_parts || nextExtra.native_content_blocks || nextExtra.responses_output_items)) {
+            nextExtra = { ...nextExtra };
+            delete nextExtra.native_parts;
+            delete nextExtra.native_content_blocks;
+            delete nextExtra.responses_output_items;
+        }
+
         return {
             ...chatItem,
+            ...(nextExtra !== chatItem.extra ? { extra: nextExtra } : {}),
             mes: regexedMessage,
             index,
         };
@@ -8450,14 +8466,15 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     continue;
                 }
                 if (action === 'merge') {
+                    const mergedExtra = {
+                        ...(targetMessage.extra || {}),
+                        tool_invocations: Array.isArray(targetMessage?.extra?.tool_invocations)
+                            ? targetMessage.extra.tool_invocations.concat(invocations)
+                            : invocations.slice(),
+                    };
                     coreChatByIndex.set(owner.ownerCoreIndex, {
                         ...targetMessage,
-                        extra: {
-                            ...(targetMessage.extra || {}),
-                            tool_invocations: Array.isArray(targetMessage?.extra?.tool_invocations)
-                                ? targetMessage.extra.tool_invocations.concat(invocations)
-                                : invocations.slice(),
-                        },
+                        extra: mergedExtra,
                     });
                     consumedSummaryIndexes.add(chatItem.index);
                     continue;
@@ -11351,8 +11368,39 @@ export function extractMessageFromData(data, activeApi = null) {
                 return data.choices?.[0]?.text ?? data.choices?.[0]?.message?.content ?? data.content ?? data.response ?? data[0]?.content ?? '';
             case 'novel':
                 return data.output;
-            case 'openai':
-                return data?.content?.filter(p => p.type === 'text')?.map(p => p.text)?.join('\n\n') ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.text ?? data?.message?.content?.[0]?.text ?? data?.message?.tool_plan ?? '';
+            case 'openai': {
+                const choiceMsg = Array.isArray(data?.choices) ? data.choices[0]?.message : null;
+                if (choiceMsg && typeof choiceMsg === 'object' && Object.hasOwn(choiceMsg, 'content')) {
+                    if (typeof choiceMsg.content === 'string' || Array.isArray(choiceMsg.content)) {
+                        return choiceMsg.content;
+                    }
+                    return data?.choices?.[0]?.text ?? '';
+                }
+                const direct = data?.choices?.[0]?.message?.content
+                    ?? data?.choices?.[0]?.text
+                    ?? (Array.isArray(data?.content) ? data.content.filter(p => p?.type === 'text').map(p => p.text).join('') : undefined)
+                    ?? data?.text
+                    ?? data?.message?.content?.[0]?.text
+                    ?? data?.message?.tool_plan;
+                if (direct !== undefined && direct !== null) {
+                    return direct;
+                }
+                if (Array.isArray(data?.candidates?.[0]?.content?.parts)) {
+                    return data.candidates[0].content.parts
+                        .filter(p => p && !p.thought && typeof p.text === 'string')
+                        .map(p => p.text)
+                        .join('');
+                }
+                if (Array.isArray(data?.output)) {
+                    return data.output
+                        .filter(item => item?.type === 'message' && Array.isArray(item.content))
+                        .flatMap(item => item.content)
+                        .filter(part => part && (part.type === 'output_text' || part.type === 'text') && typeof part.text === 'string')
+                        .map(part => part.text)
+                        .join('');
+                }
+                return '';
+            }
             default:
                 return '';
         }
@@ -11389,12 +11437,24 @@ export function extractJsonFromData(data, { mainApi = null, chatCompletionSource
         case 'openai': {
             const text = extractMessageFromData(data, mainApi);
             switch (chatCompletionSource) {
-                case chat_completion_sources.CLAUDE:
-                    result = data?.content?.find(x => x.type === 'tool_use')?.input ?? tryParse(text);
+                case chat_completion_sources.CLAUDE: {
+                    const hasChoices = Array.isArray(data?.choices)
+                        && data.choices.length > 0
+                        && data.choices[0]?.message
+                        && typeof data.choices[0].message === 'object';
+                    const choiceToolArgs = hasChoices ? data.choices[0].message.tool_calls?.[0]?.function?.arguments : undefined;
+                    const parsedChoiceTool = typeof choiceToolArgs === 'string'
+                        ? tryParse(choiceToolArgs)
+                        : (choiceToolArgs && typeof choiceToolArgs === 'object' ? choiceToolArgs : undefined);
+                    const nativeToolInput = !hasChoices && Array.isArray(data?.content)
+                        ? data.content.find(x => x?.type === 'tool_use')?.input
+                        : undefined;
+                    result = parsedChoiceTool ?? nativeToolInput ?? tryParse(text);
                     if (!result && returnInvalidJson) {
-                        return text;
+                        return typeof choiceToolArgs === 'string' && choiceToolArgs.length > 0 ? choiceToolArgs : text;
                     }
                     break;
+                }
                 case chat_completion_sources.PERPLEXITY:
                     result = tryParse(removeReasoningFromString(text));
                     if (!result && returnInvalidJson) {
@@ -11897,6 +11957,7 @@ function applyAssistantTurnMetadata(extra, {
     resetReasoningDuration = false,
     preservePauseTurn = false,
     mergeExistingCitations = false,
+    clearNativeReplay = false,
 } = {}) {
     extra.api = getGeneratingApi();
     extra.model = getGeneratingModel();
@@ -11934,28 +11995,34 @@ function applyAssistantTurnMetadata(extra, {
         delete extra.reasoning_details;
     }
 
-    if (Array.isArray(nativeParts) && nativeParts.length > 0) {
-        extra.native_parts = preservePauseTurn && Array.isArray(extra.native_parts)
-            ? [...extra.native_parts, ...nativeParts]
-            : nativeParts;
-    } else if (!preservePauseTurn) {
+    if (clearNativeReplay) {
         delete extra.native_parts;
-    }
-
-    if (Array.isArray(nativeContentBlocks) && nativeContentBlocks.length > 0) {
-        extra.native_content_blocks = preservePauseTurn && Array.isArray(extra.native_content_blocks)
-            ? [...extra.native_content_blocks, ...nativeContentBlocks]
-            : nativeContentBlocks;
-    } else if (!preservePauseTurn) {
         delete extra.native_content_blocks;
-    }
-
-    if (Array.isArray(responsesOutputItems) && responsesOutputItems.length > 0) {
-        extra.responses_output_items = preservePauseTurn && Array.isArray(extra.responses_output_items)
-            ? [...extra.responses_output_items, ...responsesOutputItems]
-            : responsesOutputItems;
-    } else if (!preservePauseTurn) {
         delete extra.responses_output_items;
+    } else {
+        if (Array.isArray(nativeParts) && nativeParts.length > 0) {
+            extra.native_parts = preservePauseTurn && Array.isArray(extra.native_parts)
+                ? [...extra.native_parts, ...nativeParts]
+                : nativeParts;
+        } else if (!preservePauseTurn) {
+            delete extra.native_parts;
+        }
+
+        if (Array.isArray(nativeContentBlocks) && nativeContentBlocks.length > 0) {
+            extra.native_content_blocks = preservePauseTurn && Array.isArray(extra.native_content_blocks)
+                ? [...extra.native_content_blocks, ...nativeContentBlocks]
+                : nativeContentBlocks;
+        } else if (!preservePauseTurn) {
+            delete extra.native_content_blocks;
+        }
+
+        if (Array.isArray(responsesOutputItems) && responsesOutputItems.length > 0) {
+            extra.responses_output_items = preservePauseTurn && Array.isArray(extra.responses_output_items)
+                ? [...extra.responses_output_items, ...responsesOutputItems]
+                : responsesOutputItems;
+        } else if (!preservePauseTurn) {
+            delete extra.responses_output_items;
+        }
     }
 
     if (mergeExistingCitations) {
@@ -12070,6 +12137,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             resetReasoningDuration: !isPauseTurnContinue,
             preservePauseTurn: isPauseTurnContinue,
             mergeExistingCitations: true,
+            clearNativeReplay: !isPauseTurnContinue,
         });
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
@@ -12097,6 +12165,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         applyAssistantTurnMetadata(lastMessage.extra, turnMetadata, {
             appendReasoning: true,
             preservePauseTurn: isPauseTurnContinue,
+            clearNativeReplay: !isPauseTurnContinue,
             mergeExistingCitations: true,
         });
         await processImageAttachment(lastMessage, { imageUrls });

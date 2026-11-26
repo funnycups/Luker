@@ -967,18 +967,17 @@ export function normalizeResponse({ requestApi, mode, raw }) {
             // openai chat-completion shape — sendOpenAIRequest returns the full data object
             const msg = raw.choices[0]?.message;
             const content = msg?.content;
-            if (typeof content === 'string' && content.trim().length > 0) {
-                jsonString = content;
-            } else if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
-                // Legacy Claude models fall back to a forced schema tool whose JSON
-                // payload arrives in tool_calls[0].function.arguments while content is empty.
+            // In json mode (`tools` and `jsonSchema` are mutually exclusive), any tool_calls
+            // present came from a forced schema tool; check it before prose preamble text.
+            if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
                 const toolArgs = msg.tool_calls[0]?.function?.arguments;
                 if (typeof toolArgs === 'string' && toolArgs.trim().length > 0) {
                     jsonString = toolArgs;
                 } else if (toolArgs && typeof toolArgs === 'object') {
                     jsonString = JSON.stringify(toolArgs);
                 }
-            } else if (typeof content === 'string') {
+            }
+            if (typeof jsonString !== 'string' && typeof content === 'string') {
                 jsonString = content;
             }
             if (typeof jsonString !== 'string') {
@@ -992,13 +991,13 @@ export function normalizeResponse({ requestApi, mode, raw }) {
             result.finishReason = coerceFinishReason(raw.choices[0].finish_reason);
             result.usage = extractOpenAiUsage(raw.usage);
         } else if (raw && typeof raw === 'object' && Array.isArray(raw.content)) {
-            // Native Anthropic Messages JSON response (text block or forced schema tool_use.input).
-            const textBlock = raw.content.find(b => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0);
+            // Native Anthropic Messages JSON response (forced schema tool_use.input before preamble text).
             const toolUseBlock = raw.content.find(b => b?.type === 'tool_use' && b.input !== undefined);
-            if (textBlock) {
-                jsonString = textBlock.text;
-            } else if (toolUseBlock) {
+            const textBlock = raw.content.find(b => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0);
+            if (toolUseBlock) {
                 jsonString = typeof toolUseBlock.input === 'string' ? toolUseBlock.input : JSON.stringify(toolUseBlock.input);
+            } else if (textBlock) {
+                jsonString = textBlock.text;
             } else {
                 throw new GenerateTaskError(
                     'json_schema_violation',

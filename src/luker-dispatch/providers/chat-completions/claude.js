@@ -175,6 +175,7 @@ export async function dispatchClaude(ctx) {
             }
         }
 
+        let forcedLegacyJsonTool = false;
         if (body.json_schema) {
             if (caps.supportsNativeStructuredOutput) {
                 // Claude 4.1+/4.5+/4.6+/4.7+/5+ support native structured outputs via output_config.format.
@@ -192,6 +193,7 @@ export async function dispatchClaude(ctx) {
                 if (jsonTool) {
                     requestBody.tools = [...(requestBody.tools || []), jsonTool];
                     requestBody.tool_choice = { type: 'tool', name: jsonTool.name };
+                    forcedLegacyJsonTool = true;
                 }
             }
         }
@@ -219,6 +221,7 @@ export async function dispatchClaude(ctx) {
             delete requestBody.top_k;
         }
 
+        const effectiveUseThinking = useThinking && !forcedLegacyJsonTool;
         const reasoningToken = normalizeReasoningToken(body.reasoning_effort);
         const includeReasoning = Boolean(body.include_reasoning);
 
@@ -234,7 +237,7 @@ export async function dispatchClaude(ctx) {
                 fixThinkingPrefill = true;
                 requestBody.thinking = { type: 'disabled' };
             }
-        } else if (useThinking && typeof budgetTokens === 'string') {
+        } else if (effectiveUseThinking && typeof budgetTokens === 'string') {
             fixThinkingPrefill = true;
             requestBody.thinking = { type: 'adaptive' };
             if (noSamplingModel && includeReasoning) {
@@ -245,7 +248,7 @@ export async function dispatchClaude(ctx) {
             delete requestBody.temperature;
             delete requestBody.top_p;
             delete requestBody.top_k;
-        } else if (useThinking && Number.isInteger(budgetTokens)) {
+        } else if (effectiveUseThinking && Number.isInteger(budgetTokens)) {
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;
             if (requestBody.max_tokens <= minThinkTokens) {
@@ -258,7 +261,7 @@ export async function dispatchClaude(ctx) {
             delete requestBody.temperature;
             delete requestBody.top_p;
             delete requestBody.top_k;
-        } else if (useThinking && includeReasoning && (reasoningToken === 'auto' || reasoningToken === 'off')
+        } else if (effectiveUseThinking && includeReasoning && (reasoningToken === 'auto' || reasoningToken === 'off')
             && caps.defaultThinkingRequiresDisplay) {
             // These families think by default; readable summaries require an explicit display request.
             fixThinkingPrefill = true;

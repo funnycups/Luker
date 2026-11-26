@@ -39,6 +39,48 @@ export function mergeReasoningDetails(accumulated, incoming) {
 }
 
 /**
+ * Client-side stream accumulator for a chat-completion `state`: appends one
+ * delta's reasoning_details to `state.reasoningDetails` with the same merging
+ * semantics, backfills a positional `index` for entries the provider left
+ * without one, and routes tool-attached encrypted payloads into
+ * `state.toolSignatures`.
+ * @param {{ reasoningDetails?: object[], toolSignatures?: Record<string, string> }} state
+ * @param {object[]|null|undefined} incoming
+ */
+export function pushReasoningDetails(state, incoming) {
+    if (!state || !Array.isArray(incoming) || incoming.length === 0) return;
+    if (!Array.isArray(state.reasoningDetails)) {
+        state.reasoningDetails = [];
+    }
+    for (const detail of incoming) {
+        if (!detail || typeof detail !== 'object') continue;
+
+        const isEncrypted = detail.type === 'reasoning.encrypted' && typeof detail.data === 'string' && detail.data.length > 0;
+        const isToolLikeId = typeof detail.id === 'string' && /^(tool_|call_)/.test(detail.id);
+        if (isEncrypted && isToolLikeId) {
+            if (!state.toolSignatures || typeof state.toolSignatures !== 'object') {
+                state.toolSignatures = {};
+            }
+            state.toolSignatures[detail.id] = detail.data;
+        }
+
+        const last = state.reasoningDetails[state.reasoningDetails.length - 1];
+        const mergesWithLast = (detail.type === TEXT && last?.type === TEXT)
+            || (detail.type === SUMMARY && last?.type === SUMMARY);
+        if (mergesWithLast) {
+            mergeReasoningDetails(state.reasoningDetails, [detail]);
+            continue;
+        }
+
+        const preserved = { ...detail };
+        if (!Number.isInteger(preserved.index)) {
+            preserved.index = state.reasoningDetails.length;
+        }
+        state.reasoningDetails.push(preserved);
+    }
+}
+
+/**
  * Concatenate the human-readable text carried by a reasoning_details array
  * (`reasoning.text` fragments plus `reasoning.summary` fragments, in order).
  * Encrypted blobs contribute nothing. Detects the dual-channel case where the

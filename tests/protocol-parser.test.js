@@ -679,4 +679,150 @@ describe('Strict protocol mismatch, malformed JSON, tool correlation, and premat
         });
         expect(turn.toolCalls[0].signature).toBe('sig_tool_42');
     });
+
+    test('OpenAI Chat streaming tolerates delta.tool_calls: null and benign metadata keepalive chunks', () => {
+        const oai = createProtocolStreamParser('openai');
+        expect(oai.feedFrame(JSON.stringify({}))).toMatchObject({ textDelta: '' });
+        expect(oai.feedFrame(JSON.stringify({ id: 'cmpl-1', object: 'chat.completion.chunk', model: 'gpt-4o' }))).toMatchObject({ textDelta: '' });
+        expect(oai.feedFrame(JSON.stringify({
+            choices: [{ index: 0, delta: { content: 'Hello', tool_calls: null }, finish_reason: null }],
+        }))).toMatchObject({ textDelta: 'Hello' });
+        oai.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: null }, finish_reason: 'stop' }] }));
+        oai.feedFrame('[DONE]');
+        const turn = oai.finish();
+        expect(turn.text).toBe('Hello');
+        expect(turn.toolCalls).toEqual([]);
+    });
+
+    test('OpenAI Chat classifies HTTP 200 message/detail/quota_error payloads as provider_error', () => {
+        expect(() => parseProtocolResponse('openai', { message: 'quota exceeded' })).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'provider_error',
+            message: 'quota exceeded',
+        }));
+        const stream = createProtocolStreamParser('openai');
+        expect(() => stream.feedFrame(JSON.stringify({ detail: 'rate limited' }))).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'provider_error',
+            message: 'rate limited',
+        }));
+    });
+
+    test('Claude streaming auto-initializes missing content_block_start for text_delta while still rejecting orphan input_json_delta', () => {
+        const claude = createProtocolStreamParser('claude');
+        expect(claude.feedFrame(JSON.stringify({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'proxy text' },
+        }))).toMatchObject({ textDelta: 'proxy text' });
+        claude.feedFrame(JSON.stringify({ type: 'message_stop' }));
+        expect(claude.finish().text).toBe('proxy text');
+    });
+
+    test('Gemini non-streaming zero-candidate usageMetadata-only payload parses as retriable empty turn', () => {
+        const turn = parseProtocolResponse('makersuite', {
+            usageMetadata: { promptTokenCount: 20, totalTokenCount: 20 },
+            modelVersion: 'gemini-2.5-flash',
+        });
+        expect(isParsedTurnEmpty(turn)).toBe(true);
+    });
+
+    test('Cohere non-streaming supports string message.content and preserves tool_plan as reasoning alongside text', () => {
+        const strTurn = parseProtocolResponse('cohere', {
+            id: 'c-str',
+            finish_reason: 'COMPLETE',
+            message: { role: 'assistant', content: 'Plain string reply', tool_plan: 'Internal plan' },
+        });
+        expect(strTurn.text).toBe('Plain string reply');
+        expect(strTurn.reasoning).toBe('Internal plan');
+    });
+
+    test('buildCompatChatCompletionPayload and parseCompatChatCompletionResponse preserve native fields, OAI choices, and hook edits', async () => {
+        const {
+            buildCompatChatCompletionPayload,
+            parseCompatChatCompletionResponse,
+        } = await import('../public/scripts/lib/protocol-parser/index.js');
+
+        const rawClaude = {
+            id: 'msg_compat_1',
+            type: 'message',
+            role: 'assistant',
+            content: [
+                { type: 'thinking', thinking: 'step', signature: 'sig-1' },
+                { type: 'text', text: 'Original reply' },
+            ],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3 },
+        };
+        const claudeTurn = parseProtocolResponse('claude', rawClaude);
+        const compatClaude = buildCompatChatCompletionPayload(claudeTurn, rawClaude);
+        expect(compatClaude.choices[0].message.content).toBe('Original reply');
+        expect(compatClaude.content).toEqual(rawClaude.content);
+        expect(compatClaude.usage.input_tokens).toBe(10);
+        expect(compatClaude.usage.prompt_tokens).toBe(13);
+
+        compatClaude.choices[0].message.content = 'Hook edited reply';
+        const parsedCompat = parseCompatChatCompletionResponse('claude', compatClaude);
+        expect(parsedCompat.text).toBe('Hook edited reply');
+        expect(parsedCompat.reasoning).toBe('step');
+        expect(parsedCompat.nativeContentBlocks).toEqual(rawClaude.content);
+
+        const rawGemini = {
+            candidates: [{
+                content: { role: 'model', parts: [{ text: 'Gemini reply', thoughtSignature: 'g-sig' }] },
+                finishReason: 'STOP',
+            }],
+            usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 4, totalTokenCount: 12 },
+        };
+        const compatGemini = buildCompatChatCompletionPayload(parseProtocolResponse('makersuite', rawGemini), rawGemini);
+        expect(compatGemini.candidates).toEqual(rawGemini.candidates);
+        expect(compatGemini.responseContent).toEqual(rawGemini.candidates[0].content);
+        expect(compatGemini.choices[0].message.content).toBe('Gemini reply');
+        const parsedGeminiCompat = parseCompatChatCompletionResponse('makersuite', compatGemini);
+        expect(parsedGeminiCompat.text).toBe('Gemini reply');
+        expect(parsedGeminiCompat.signature).toBe('g-sig');
+        expect(parsedGeminiCompat.nativeParts).toEqual(rawGemini.candidates[0].content.parts);
+    });
+
+    test('Claude stream parser never fabricates {} tool calls on truncated or unclosed premature EOF', () => {
+        // 1) Truncated JSON mid-arguments throws tool_correlation and hides incomplete tool block
+        const truncated = createProtocolStreamParser('claude');
+        truncated.feedFrame(JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_trunc', name: 'delete_file', input: {} } }), 'content_block_start');
+        truncated.feedFrame(JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"/tmp/a' } }), 'content_block_delta');
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+        expect(() => truncated.finish()).toThrow(expect.objectContaining({ name: 'ProtocolParseError', stage: 'tool_correlation' }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+
+        // 2) Unclosed content_block_start with no deltas throws eof and leaves snapshot empty
+        const unclosed = createProtocolStreamParser('claude');
+        unclosed.feedFrame(JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_open', name: 'delete_file', input: {} } }), 'content_block_start');
+        expect(() => unclosed.finish()).toThrow(expect.objectContaining({ name: 'ProtocolParseError', stage: 'eof' }));
+        expect(unclosed.getSnapshot().toolCalls).toEqual([]);
+        expect(isParsedTurnEmpty(unclosed.getSnapshot())).toBe(true);
+
+        // 3) Complete valid JSON buffered before premature EOF is preserved on snapshot
+        const completeBuffered = createProtocolStreamParser('claude');
+        completeBuffered.feedFrame(JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_ok', name: 'lookup', input: {} } }), 'content_block_start');
+        completeBuffered.feedFrame(JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"q":"luker"}' } }), 'content_block_delta');
+        expect(() => completeBuffered.finish()).toThrow(expect.objectContaining({ name: 'ProtocolParseError', stage: 'eof' }));
+        expect(completeBuffered.getSnapshot().toolCalls).toEqual([
+            { id: 'toolu_ok', type: 'function', function: { name: 'lookup', arguments: '{"q":"luker"}' } },
+        ]);
+    });
+
+    test('OpenAI Chat stream parser treats repeated delta function.name as assign-once', () => {
+        const oai = createProtocolStreamParser('openai');
+        oai.feedFrame(JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"a":' } }] } }],
+        }));
+        oai.feedFrame(JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '1}' } }] } }],
+        }));
+        oai.feedFrame(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }));
+        oai.feedFrame('[DONE]');
+        const turn = oai.finish();
+        expect(turn.toolCalls).toEqual([
+            { id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"a":1}' } },
+        ]);
+    });
 });

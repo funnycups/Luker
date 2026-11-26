@@ -4,7 +4,7 @@ import { getTextGenServer, createTextGenGenerationData, setting_names, textgener
 import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
 import { tryParseStreamingError, createGenerationParameters, isOpenAIConnectionPresetField, settingsToUpdate, oai_settings } from './openai.js';
-import { ProtocolParseError, createProtocolStreamParser, parseProtocolResponse, resolveWireProtocol } from './lib/protocol-parser/index.js';
+import { ProtocolParseError, createProtocolStreamParser, isParsedTurnEmpty, parseCompatChatCompletionResponse, resolveWireProtocol } from './lib/protocol-parser/index.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 import EventSourceStream from './sse-stream.js';
 import { acquireActivityLease, resolveRequestActivityLeaseOptions, withActivityLease } from './activity-guard.js';
@@ -32,7 +32,7 @@ function wrapStreamFactoryWithActivityLease(leaseOptions, createStream) {
     };
 }
 
-async function openSseStreamWithLease(url, sanitizedData, signal, leaseOptions) {
+async function openSseStreamWithLease(url, sanitizedData, signal, leaseOptions, { allowJsonFallback = false } = {}) {
     return await runWithRequestActivityLease(leaseOptions, async () => {
         const response = await fetch(url, {
             method: 'POST',
@@ -49,9 +49,14 @@ async function openSseStreamWithLease(url, sanitizedData, signal, leaseOptions) 
             throw new Error(`Got response status ${response.status}`);
         }
 
+        const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+        if (allowJsonFallback && contentType.includes('application/json')) {
+            return { response, reader: null, eventStream: null, isJsonFallback: true };
+        }
+
         const eventStream = new EventSourceStream();
         response.body.pipeThrough(eventStream);
-        return { response, reader: eventStream.readable.getReader(), eventStream };
+        return { response, reader: eventStream.readable.getReader(), eventStream, isJsonFallback: false };
     });
 }
 
@@ -516,8 +521,17 @@ export class ChatCompletionService {
                 });
 
                 const json = await response.json();
-                if (!response.ok || json.error) {
-                    throw new Error(String(json.error?.message || 'Response not OK'));
+                const arrayError = Array.isArray(json) ? json[0]?.error : null;
+                const nativeMessageError = !Array.isArray(json)
+                    && json && typeof json === 'object'
+                    && typeof json.message === 'string' && json.message.trim().length > 0
+                    && !Array.isArray(json.choices) && !Array.isArray(json.candidates) && !Array.isArray(json.content) && !Array.isArray(json.output);
+                if (!response.ok || json?.error || arrayError || nativeMessageError) {
+                    const errObj = json?.error ?? arrayError;
+                    const errMsg = typeof errObj === 'string'
+                        ? errObj
+                        : (errObj?.message || (nativeMessageError ? json.message : 'Response not OK'));
+                    throw new Error(String(errMsg || 'Response not OK'));
                 }
 
                 if (!extractData) {
@@ -527,7 +541,7 @@ export class ChatCompletionService {
                 const protocol = resolveWireProtocol(data.chat_completion_source);
                 let result;
                 if (protocol) {
-                    const turn = parseProtocolResponse(protocol, json);
+                    const turn = parseCompatChatCompletionResponse(protocol, json);
                     result = {
                         content: turn.text,
                         reasoning: turn.reasoning,
@@ -537,7 +551,7 @@ export class ChatCompletionService {
                         content: extractMessageFromData(json, this.TYPE),
                         reasoning: extractReasoningFromData(json, {
                             mainApi: this.TYPE,
-                            textGenType: data.chat_completion_source,
+                            chatCompletionSource: data.chat_completion_source,
                             ignoreShowThoughts: true,
                         }),
                     };
@@ -545,17 +559,48 @@ export class ChatCompletionService {
                 // Try parse JSON
                 if (data.json_schema) {
                     result.content = JSON.parse(
-                        protocol
-                            ? (result.content || extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }))
-                            : extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }),
+                        extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }),
                     );
                 }
                 return result;
             });
         }
 
-        const { reader, eventStream } = await openSseStreamWithLease('/api/backends/chat-completions/generate', sanitizedData, signal, leaseOptions);
-        const streamParser = createProtocolStreamParser(data.chat_completion_source || 'openai');
+        const { response, reader, eventStream, isJsonFallback } = await openSseStreamWithLease(
+            '/api/backends/chat-completions/generate',
+            sanitizedData,
+            signal,
+            leaseOptions,
+            { allowJsonFallback: true },
+        );
+        if (isJsonFallback) {
+            const source = data.chat_completion_source || 'openai';
+            return wrapStreamFactoryWithActivityLease(leaseOptions, async function* streamJsonFallback() {
+                const json = await response.json();
+                const protocol = resolveWireProtocol(source);
+                const turn = protocol
+                    ? parseCompatChatCompletionResponse(protocol, json)
+                    : { text: extractMessageFromData(json, ChatCompletionService.TYPE), reasoning: '', images: [], swipes: [], signature: '', finishReason: null };
+                yield {
+                    text: turn.text ?? '',
+                    swipes: Array.isArray(turn.swipes) ? turn.swipes : [],
+                    state: {
+                        reasoning: turn.reasoning ?? '',
+                        images: Array.isArray(turn.images) ? turn.images : [],
+                        signature: turn.signature || '',
+                        finishReason: turn.finishReason ?? null,
+                    },
+                };
+            });
+        }
+        let streamParser;
+        try {
+            streamParser = createProtocolStreamParser(data.chat_completion_source || 'openai');
+        } catch (err) {
+            try { await reader.cancel(); } catch { /* ignore cancel failure */ }
+            try { reader.releaseLock(); } catch { /* already released */ }
+            throw err;
+        }
         return wrapStreamFactoryWithActivityLease(leaseOptions, async function* streamData() {
             let text = '';
             const swipes = [];
@@ -578,9 +623,29 @@ export class ChatCompletionService {
                                     rawDiagnostic: invalidSse,
                                 });
                             }
-                            const finalTurn = streamParser.finish();
+                            let finalTurn;
+                            try {
+                                finalTurn = streamParser.finish();
+                            } catch (err) {
+                                if (err instanceof ProtocolParseError && err.stage === 'eof') {
+                                    const snap = streamParser.getSnapshot();
+                                    if (!isParsedTurnEmpty(snap) || text.length > 0) {
+                                        console.warn('[custom-request] Stream closed without terminal marker; preserving received output:', err.message);
+                                        finalTurn = snap;
+                                    } else {
+                                        throw err;
+                                    }
+                                } else {
+                                    throw err;
+                                }
+                            }
+                            const prevSig = state.signature;
+                            const prevFinish = state.finishReason;
                             state.signature = finalTurn.signature || state.signature;
                             state.finishReason = finalTurn.finishReason;
+                            if (state.signature !== prevSig || state.finishReason !== prevFinish) {
+                                yield { text, swipes, state };
+                            }
                         }
                         finishedNormally = true;
                         return;
@@ -696,6 +761,9 @@ export class ChatCompletionService {
             // The order is: connection profile => CC preset => CC settings
             overridePayload[field] = overridePayload[field] || settings[field] || oai_settings[field];
         });
+        if (overridePayload.chat_completion_source) {
+            settings.chat_completion_source = overridePayload.chat_completion_source;
+        }
 
         // Convert from settings to generation payload
         const data = await createGenerationParameters(settings, overridePayload.model, 'quiet', overridePayload.messages);

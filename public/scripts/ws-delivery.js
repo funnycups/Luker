@@ -2,7 +2,13 @@
 
 const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
 const TRANSIENT_SESSION_HEADER = 'X-Luker-Transient-Session';
+const RESPONSE_META_REQUEST_ID_HEADER = 'x-luker-request-id';
+const RESPONSE_META_GENERATION_ID_HEADER = 'x-luker-generation-id';
 const DEFAULT_RECONNECT_BACKOFF_MS = 500;
+// Retain request-id metadata lookup briefly after stream settle so outer fetch
+// wrappers that asynchronously construct a new Response from the drained body
+// can still resolve WS metadata via forwarded response headers.
+const SETTLED_META_RETENTION_MS = 60_000;
 
 /**
  * Out-of-band Luker metadata store keyed by proxied `Response` instances.
@@ -14,13 +20,42 @@ const DEFAULT_RECONNECT_BACKOFF_MS = 500;
 const responseMetaStore = new WeakMap();
 
 /**
+ * Header-keyed fallback index (`requestId -> metaSlot`) used when an outer
+ * `window.fetch` wrapper returns a newly constructed `Response` preserving the
+ * `x-luker-request-id` / `x-luker-generation-id` headers.
+ * @type {Map<string, { latest: object | null, listeners: Set<(meta: object) => void> }>}
+ */
+const responseMetaByRequestId = new Map();
+
+function resolveResponseMetaSlot(response) {
+    if (!response || (typeof response !== 'object' && typeof response !== 'function')) return null;
+    const direct = responseMetaStore.get(response);
+    if (direct) return direct;
+    const headers = response.headers;
+    if (headers && typeof headers.get === 'function') {
+        const reqId = String(
+            headers.get(RESPONSE_META_REQUEST_ID_HEADER)
+            || headers.get(RESPONSE_META_GENERATION_ID_HEADER)
+            || '',
+        ).trim();
+        if (reqId) {
+            const byId = responseMetaByRequestId.get(reqId);
+            if (byId) {
+                responseMetaStore.set(response, byId);
+                return byId;
+            }
+        }
+    }
+    return null;
+}
+
+/**
  * Read the latest out-of-band Luker metadata received for a proxied Response.
  * @param {Response|null|undefined} response
  * @returns {object|null}
  */
 export function getLukerResponseMeta(response) {
-    if (!response || (typeof response !== 'object' && typeof response !== 'function')) return null;
-    const slot = responseMetaStore.get(response);
+    const slot = resolveResponseMetaSlot(response);
     return slot?.latest ? { ...slot.latest } : null;
 }
 
@@ -33,7 +68,7 @@ export function getLukerResponseMeta(response) {
  */
 export function onLukerResponseMeta(response, listener) {
     if (!response || typeof listener !== 'function') return () => {};
-    const slot = responseMetaStore.get(response);
+    const slot = resolveResponseMetaSlot(response);
     if (!slot) return () => {};
     if (slot.latest) {
         try {
@@ -305,6 +340,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 }
                 try { entry.controller.close(); } catch { /* ignore */ }
                 pending.delete(msg.request_id);
+                entry.onSettle?.();
             } else if (msg.type === 'error') {
                 disarmEntryTimer(entry);
                 detachAbortListener(entry);
@@ -322,6 +358,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                     }
                     try { entry.controller.error(abortErr); } catch { /* ignore */ }
                     pending.delete(msg.request_id);
+                    entry.onSettle?.();
                     if (typeof entry.onServerAbort === 'function') {
                         try { entry.onServerAbort(msg.request_id, msg); } catch (cbErr) {
                             console.warn('[ws-delivery] onServerAbort callback threw:', cbErr?.message || cbErr);
@@ -347,6 +384,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                     try { entry.controller.error(new Error(msg.message || msg.code || 'ws delivery error')); } catch { /* ignore */ }
                 }
                 pending.delete(msg.request_id);
+                entry.onSettle?.();
             }
         };
         // NOTE: onclose and onerror are intentionally NOT re-installed here.
@@ -454,6 +492,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // user-style stop, not a retriable transport failure.
             onServerAbort: typeof options.onServerAbort === 'function' ? options.onServerAbort : null,
             onMeta: typeof options.onMeta === 'function' ? options.onMeta : null,
+            onSettle: typeof options.onSettle === 'function' ? options.onSettle : null,
             meta: null,
             timeoutTimer: null,
             detachAbort: null,
@@ -546,6 +585,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             }
         }
         pending.delete(requestId);
+        entry?.onSettle?.();
     }
 
     return {
@@ -591,6 +631,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 if (entry.controller) {
                     try { entry.controller.error(new Error('ws-delivery: closed')); } catch { /* ignore */ }
                 }
+                entry.onSettle?.();
             }
             pending.clear();
         },
@@ -773,6 +814,18 @@ export function installFetchProxy(delivery, options = {}) {
             latest: null,
             listeners: new Set(),
         };
+        let metaCleanupTimer = null;
+        const scheduleMetaCleanup = () => {
+            if (metaCleanupTimer) return;
+            metaCleanupTimer = setTimeout(() => {
+                metaCleanupTimer = null;
+                if (responseMetaByRequestId.get(requestId) === metaSlot) {
+                    responseMetaByRequestId.delete(requestId);
+                }
+            }, SETTLED_META_RETENTION_MS);
+            if (typeof metaCleanupTimer?.unref === 'function') metaCleanupTimer.unref();
+        };
+        responseMetaByRequestId.set(requestId, metaSlot);
         const { stream, headPromise } = delivery.subscribe(requestId, initialHeaders, {
             transientSessionId,
             timeoutMs: requestTimeoutMs,
@@ -800,6 +853,7 @@ export function installFetchProxy(delivery, options = {}) {
                     }
                 }
             },
+            onSettle: scheduleMetaCleanup,
         });
         console.info(`[ws-delivery] proxiedFetch subscribe request_id=${requestId} url=${String(url).split('?')[0]}`);
         // Wait for the dispatch to publish upstream {status, headers} via a
@@ -809,13 +863,20 @@ export function installFetchProxy(delivery, options = {}) {
         // reflects the real upstream status (401/429/500/etc) instead of a
         // synthetic 200, so existing client-side branches that check
         // `response.status` or `!response.ok` fire correctly.
-        const head = await headPromise;
+        let head;
+        try {
+            head = await headPromise;
+        } catch (err) {
+            scheduleMetaCleanup();
+            throw err;
+        }
         console.info(`[ws-delivery] head resolved request_id=${requestId} status=${head.status}`);
         const defaultContentType = isStreamRequest
             ? 'text/event-stream; charset=utf-8'
             : 'application/json; charset=utf-8';
         const mergedHeaders = {
             ...initialHeaders,
+            [RESPONSE_META_REQUEST_ID_HEADER]: requestId,
             'content-type': defaultContentType,
             ...(head.headers || {}),
         };

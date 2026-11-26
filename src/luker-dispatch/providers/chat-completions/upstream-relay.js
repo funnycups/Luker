@@ -78,8 +78,11 @@ export async function relayUpstreamResponse(ctx, resp, {
 }) {
     // Synchronize the effective upstream streaming mode before emitting head so
     // runner content-type normalization, job accumulation, and Request Inspector
-    // match what was actually sent upstream (e.g. providers that force stream=false).
-    ctx.setStreamMode?.(Boolean(stream));
+    // match what was actually sent upstream (including proxies that return an
+    // HTTP 200 application/json fallback to a stream=true request).
+    const respContentType = String(resp.headers?.get?.('content-type') || '').toLowerCase();
+    const effectiveStream = Boolean(stream) && !(resp.ok && respContentType.includes('application/json'));
+    ctx.setStreamMode?.(effectiveStream);
 
     // Architectural contract: every dispatch emits a single head frame
     // immediately after the upstream fetch resolves, regardless of status, so
@@ -99,7 +102,7 @@ export async function relayUpstreamResponse(ctx, resp, {
         return;
     }
 
-    if (stream) {
+    if (effectiveStream) {
         await pipeResponseBodyToEmit(resp, ctx);
         return;
     }

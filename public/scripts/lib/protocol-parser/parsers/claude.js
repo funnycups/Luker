@@ -212,7 +212,7 @@ export function parseClaudeResponse(payload) {
  * Create a strict incremental Anthropic Messages SSE parser.
  */
 export function createClaudeStreamParser() {
-    /** @type {Map<number, { block: object, inputJsonBuffer: string, hasInputJson: boolean }>} */
+    /** @type {Map<number, { block: object, inputJsonBuffer: string, hasInputJson: boolean, closed: boolean }>} */
     const blockSlots = new Map();
     /** @type {number[]} */
     const blockOrder = [];
@@ -229,6 +229,12 @@ export function createClaudeStreamParser() {
         for (const idx of blockOrder) {
             const slot = blockSlots.get(idx);
             if (!slot) continue;
+            // Never expose unclosed tool blocks in snapshots (abort / premature
+            // EOF / mid-stream error) so incomplete tool_use inputs are never
+            // fabricated as executable `{}` arguments.
+            if (CLAUDE_TOOL_BLOCK_TYPES.has(slot.block.type) && !slot.closed) {
+                continue;
+            }
             out.push(slot.block);
         }
         return out;
@@ -330,7 +336,12 @@ export function createClaudeStreamParser() {
             if (!blockSlots.has(idx)) {
                 blockOrder.push(idx);
             }
-            blockSlots.set(idx, { block, inputJsonBuffer: '', hasInputJson: false });
+            blockSlots.set(idx, {
+                block,
+                inputJsonBuffer: '',
+                hasInputJson: false,
+                closed: !CLAUDE_TOOL_BLOCK_TYPES.has(block.type),
+            });
             hasMetadataUpdate = true;
         } else if (type === 'content_block_delta') {
             const idx = Number.isInteger(parsed.index) ? parsed.index : null;
@@ -343,17 +354,30 @@ export function createClaudeStreamParser() {
                     rawDiagnostic: parsed,
                 });
             }
-            const slot = blockSlots.get(idx);
-            if (!slot) {
-                throw new ProtocolParseError({
-                    protocol: PROTOCOL,
-                    stage: 'tool_correlation',
-                    location,
-                    message: `Anthropic content_block_delta referenced unstarted content block index ${idx} at ${location}.`,
-                    rawDiagnostic: parsed,
-                });
-            }
+            let slot = blockSlots.get(idx);
             const d = parsed.delta;
+            if (!slot) {
+                // Proxies occasionally omit `content_block_start` for plain
+                // text or thinking deltas; auto-vivify those slots while
+                // keeping strict tool_correlation enforcement on tool inputs.
+                if (d.type === 'text_delta' || d.type === 'citations_delta') {
+                    slot = { block: { type: 'text', text: '' }, inputJsonBuffer: '', hasInputJson: false, closed: true };
+                    blockOrder.push(idx);
+                    blockSlots.set(idx, slot);
+                } else if (d.type === 'thinking_delta' || d.type === 'signature_delta') {
+                    slot = { block: { type: 'thinking', thinking: '' }, inputJsonBuffer: '', hasInputJson: false, closed: true };
+                    blockOrder.push(idx);
+                    blockSlots.set(idx, slot);
+                } else {
+                    throw new ProtocolParseError({
+                        protocol: PROTOCOL,
+                        stage: 'tool_correlation',
+                        location,
+                        message: `Anthropic content_block_delta referenced unstarted content block index ${idx} at ${location}.`,
+                        rawDiagnostic: parsed,
+                    });
+                }
+            }
             if (d.type === 'text_delta' && typeof d.text === 'string') {
                 if (slot.block.type !== 'text') {
                     throw new ProtocolParseError({
@@ -447,6 +471,7 @@ export function createClaudeStreamParser() {
                 slot.inputJsonBuffer = '';
                 slot.hasInputJson = false;
             }
+            slot.closed = true;
             hasMetadataUpdate = true;
         } else if (type === 'message_delta') {
             const deltaUsage = normalizeClaudeUsage(parsed.usage);
@@ -477,22 +502,25 @@ export function createClaudeStreamParser() {
     }
 
     function finish() {
-        if (sawFrames && !sawMessageStop) {
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'eof',
-                location: 'eof',
-                message: 'Anthropic SSE stream ended prematurely before message_stop.',
-            });
-        }
-        // Validate any tool_use block that never saw content_block_stop.
+        const isPrematureEof = sawFrames && !sawMessageStop;
+        // Validate any unclosed tool block before throwing premature EOF:
+        // - Complete valid buffered JSON is committed so proxies dropping only
+        //   closing markers preserve full tool arguments.
+        // - Truncated/malformed buffered JSON ALWAYS throws `tool_correlation`
+        //   (never silently falling back to `{}`).
+        // - Tool blocks without content_block_stop or complete JSON stay
+        //   unclosed on premature EOF so snapshots never fabricate `{}` calls.
         for (const idx of blockOrder) {
             const slot = blockSlots.get(idx);
-            if (slot && CLAUDE_TOOL_BLOCK_TYPES.has(slot.block.type) && slot.hasInputJson) {
+            if (!slot || !CLAUDE_TOOL_BLOCK_TYPES.has(slot.block.type) || slot.closed) {
+                continue;
+            }
+            if (slot.hasInputJson) {
                 const rawJson = slot.inputJsonBuffer.trim();
                 if (rawJson.length > 0) {
                     try {
                         slot.block.input = JSON.parse(rawJson);
+                        slot.closed = true;
                     } catch (cause) {
                         throw new ProtocolParseError({
                             protocol: PROTOCOL,
@@ -503,10 +531,22 @@ export function createClaudeStreamParser() {
                             rawDiagnostic: rawJson,
                         });
                     }
+                } else if (!isPrematureEof) {
+                    slot.closed = true;
                 }
                 slot.inputJsonBuffer = '';
                 slot.hasInputJson = false;
+            } else if (!isPrematureEof) {
+                slot.closed = true;
             }
+        }
+        if (isPrematureEof) {
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'eof',
+                location: 'eof',
+                message: 'Anthropic SSE stream ended prematurely before message_stop.',
+            });
         }
         return getSnapshot();
     }

@@ -261,6 +261,89 @@ export function parsedTurnToChatCompletion(turn, rawPayload = null) {
 }
 
 /**
+ * Build a non-streaming compatibility superset payload that preserves all
+ * native upstream fields (`content`, `candidates`, `message`, `output`,
+ * `usageMetadata`, etc.) alongside the standard OpenAI `choices[0].message`
+ * shape expected by SillyTavern-compatible clients and extensions.
+ *
+ * @param {object} turn
+ * @param {*} rawPayload
+ * @returns {object}
+ */
+export function buildCompatChatCompletionPayload(turn, rawPayload) {
+    const oai = parsedTurnToChatCompletion(turn, rawPayload);
+    if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+        return oai;
+    }
+    const mergedUsage = (rawPayload.usage && typeof rawPayload.usage === 'object' && oai.usage)
+        ? { ...rawPayload.usage, ...oai.usage }
+        : (oai.usage ?? rawPayload.usage);
+    return {
+        ...rawPayload,
+        ...oai,
+        ...(mergedUsage ? { usage: mergedUsage } : {}),
+    };
+}
+
+/**
+ * Parse a non-streaming chat completion payload that may be either the raw
+ * provider-native payload OR a compatibility superset / OpenAI-shaped object
+ * (`choices[]`) returned by the backend compat layer or a client fetch hook.
+ * Strict `parseProtocolResponse` remains unchanged for raw wire inspection.
+ *
+ * @param {string} protocolOrSource
+ * @param {*} payload
+ * @returns {object} Unified ParsedTurn
+ */
+export function parseCompatChatCompletionResponse(protocolOrSource, payload) {
+    const protocol = requireWireProtocol(protocolOrSource);
+    if (protocol !== WIRE_PROTOCOLS.OPENAI_CHAT
+        && payload
+        && typeof payload === 'object'
+        && !Array.isArray(payload)
+        && Array.isArray(payload.choices)
+        && payload.choices.length > 0) {
+        const oaiView = {
+            choices: payload.choices,
+            ...(payload.id !== undefined ? { id: payload.id } : {}),
+            ...(payload.model !== undefined ? { model: payload.model } : {}),
+            ...(payload.usage !== undefined ? { usage: payload.usage } : {}),
+            ...(payload.citations !== undefined ? { citations: payload.citations } : {}),
+            ...(payload.error !== undefined ? { error: payload.error } : {}),
+            ...(payload.quota_error !== undefined ? { quota_error: payload.quota_error } : {}),
+            ...(payload.moderation !== undefined ? { moderation: payload.moderation } : {}),
+        };
+        const turn = parseOpenAIChatResponse(oaiView);
+        const choice0 = payload.choices[0];
+        const msg0 = choice0?.message || {};
+        turn.protocol = protocol;
+        if (typeof msg0.signature === 'string' && msg0.signature && !turn.signature) {
+            turn.signature = msg0.signature;
+        }
+        if (Array.isArray(msg0.native_parts) && msg0.native_parts.length > 0) {
+            turn.nativeParts = msg0.native_parts;
+        }
+        if (Array.isArray(msg0.native_content_blocks) && msg0.native_content_blocks.length > 0) {
+            turn.nativeContentBlocks = msg0.native_content_blocks;
+        }
+        if (Array.isArray(msg0.responses_output_items) && msg0.responses_output_items.length > 0) {
+            turn.responsesOutputItems = msg0.responses_output_items;
+        }
+        if (choice0?.native_finish_reason != null) {
+            turn.nativeFinishReason = choice0.native_finish_reason;
+        }
+        if (choice0?.stop_sequence != null) {
+            turn.stopSequence = choice0.stop_sequence;
+        }
+        if (choice0?.stop_details != null) {
+            turn.stopDetails = choice0.stop_details;
+        }
+        return turn;
+    }
+    return parseProtocolResponse(protocol, payload);
+}
+
+/**
  * Determine whether a ParsedTurn contains no assistant output at all (no text,
  * no refusal, no tool calls, no images).
  * @param {object|null|undefined} turn

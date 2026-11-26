@@ -68,6 +68,7 @@ import { getLukerResponseMeta, onLukerResponseMeta } from './ws-delivery.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
 import {
     resolveClaudeModelCapabilities,
+    resolveGeminiModelCapabilities,
     resolveMinimaxModelCapabilities,
     resolveOpenAIModelCapabilities,
 } from './lib/provider-capabilities.js';
@@ -75,12 +76,13 @@ import {
     ProtocolParseError,
     createProtocolStreamParser,
     isParsedTurnEmpty,
-    parseProtocolResponse,
+    parseCompatChatCompletionResponse,
     parsedTurnToChatCompletion,
     resolveWireProtocol,
 } from './lib/protocol-parser/index.js';
 import { readPresetDocument } from './named-resource-read.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
+import { pushReasoningDetails } from './util/reasoning-details.js';
 import {
     areLookupNamesEqual,
     findCanonicalNameInList,
@@ -1167,6 +1169,7 @@ function setOpenAIMessages(chat) {
         }
 
         // for groups or sendas command - prepend a character's name
+        const contentBeforeNamePrefix = content;
         switch (oai_settings.names_behavior) {
             case character_names_behavior.NONE:
                 break;
@@ -1185,6 +1188,7 @@ function setOpenAIMessages(chat) {
             default:
                 break;
         }
+        const namePrefixApplied = content !== contentBeforeNamePrefix;
 
         // remove caret return (waste of tokens)
         content = content.replace(/\r/gm, '');
@@ -1209,13 +1213,14 @@ function setOpenAIMessages(chat) {
         const reasoningDetails = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.reasoning_details)
             ? chat[j].extra.reasoning_details
             : null;
-        const nativeParts = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.native_parts)
+        const allowNativeReplay = isSameModel && !isOtherGroupMember && !namePrefixApplied;
+        const nativeParts = allowNativeReplay && Array.isArray(chat[j]?.extra?.native_parts)
             ? chat[j].extra.native_parts
             : null;
-        const nativeContentBlocks = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.native_content_blocks)
+        const nativeContentBlocks = allowNativeReplay && Array.isArray(chat[j]?.extra?.native_content_blocks)
             ? chat[j].extra.native_content_blocks
             : null;
-        const responsesOutputItems = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.responses_output_items)
+        const responsesOutputItems = allowNativeReplay && Array.isArray(chat[j]?.extra?.responses_output_items)
             ? chat[j].extra.responses_output_items
             : null;
 
@@ -1730,27 +1735,56 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             if (!media.type) {
                 media.type = MEDIA_TYPE.IMAGE;
             }
+            let attached = false;
             if (imageInlining && media.type === MEDIA_TYPE.IMAGE) {
                 await chatMessage.addImage(media.url);
+                attached = true;
             }
             if (videoInlining && media.type === MEDIA_TYPE.VIDEO) {
                 await chatMessage.addVideo(media.url);
+                attached = true;
             }
             if (audioInlining && media.type === MEDIA_TYPE.AUDIO) {
                 await chatMessage.addAudio(media.url);
+                attached = true;
+            }
+            if (attached) {
+                const keepGeminiNativeForImage = media.type === MEDIA_TYPE.IMAGE
+                    && chatMessage.role === 'assistant'
+                    && Array.isArray(chatMessage.native_parts)
+                    && chatMessage.native_parts.some(p => p && !p.thought && (p.inlineData || p.inline_data));
+                if (!keepGeminiNativeForImage) {
+                    chatMessage.native_parts = null;
+                }
+                chatMessage.native_content_blocks = null;
+                chatMessage.responses_output_items = null;
             }
         }
 
+        const activeMedia = [];
         if (Array.isArray(entry.chatPrompt.media) && entry.chatPrompt.media.length) {
             if (entry.chatPrompt.mediaDisplay === MEDIA_DISPLAY.LIST) {
                 for (const media of entry.chatPrompt.media) {
-                    await inlineMediaAttachment(media);
+                    if (media?.url) activeMedia.push(media);
                 }
             }
             if (entry.chatPrompt.mediaDisplay === MEDIA_DISPLAY.GALLERY) {
                 const media = entry.chatPrompt.media[entry.chatPrompt.mediaIndex];
-                await inlineMediaAttachment(media);
+                if (media?.url) activeMedia.push(media);
             }
+        }
+
+        if (Array.isArray(chatMessage.native_parts) && chatMessage.native_parts.some(p => p && (p.inlineData || p.inline_data))) {
+            const hasNonThoughtInlineImage = chatMessage.native_parts.some(p => p && !p.thought && (p.inlineData || p.inline_data));
+            if (!imageInlining) {
+                chatMessage.native_parts = null;
+            } else if (hasNonThoughtInlineImage && activeMedia.length === 0) {
+                chatMessage.native_parts = null;
+            }
+        }
+
+        for (const media of activeMedia) {
+            await inlineMediaAttachment(media);
         }
 
         if (canUseTools && Array.isArray(entry.chatPrompt.invocations)) {
@@ -4340,6 +4374,27 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
+    if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(settings.chat_completion_source)) {
+        const geminiCaps = resolveGeminiModelCapabilities(model);
+        if (generate_data.request_images && geminiCaps.imageOutput === 'unsupported') {
+            generate_data.request_images = false;
+        }
+        let hasNativeFunctionTools = !isPlainTextTools
+            && Array.isArray(generate_data.tools)
+            && generate_data.tools.some(tool => tool?.type === 'function');
+        if (hasNativeFunctionTools && geminiCaps.functionCalling === 'unsupported') {
+            delete generate_data.tools;
+            delete generate_data.tool_choice;
+            hasNativeFunctionTools = false;
+        }
+        if (generate_data.enable_web_search) {
+            if (geminiCaps.googleSearch === 'unsupported'
+                || (hasNativeFunctionTools && geminiCaps.combineBuiltinAndFunctionTools === 'unsupported')) {
+                generate_data.enable_web_search = false;
+            }
+        }
+    }
+
     if (jsonSchema) {
         generate_data.json_schema = jsonSchema;
     }
@@ -4392,6 +4447,11 @@ function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
 
     if (hasReplacedTurn) {
         const rt = ptMeta.replacedTurn;
+        delete firstChoice.message.reasoning;
+        if (responseData.choices.length > 1) {
+            responseData.choices = [firstChoice];
+        }
+        delete responseData.swipes;
         if (typeof rt.reasoning === 'string' && rt.reasoning) {
             firstChoice.message.reasoning_content = rt.reasoning;
         } else {
@@ -4414,13 +4474,17 @@ function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
         }
         if (Array.isArray(rt.nativeParts) && rt.nativeParts.length > 0) {
             firstChoice.message.native_parts = rt.nativeParts;
+            responseData.responseContent = { role: 'model', parts: rt.nativeParts };
         } else {
             delete firstChoice.message.native_parts;
+            delete responseData.responseContent;
         }
         if (Array.isArray(rt.nativeContentBlocks) && rt.nativeContentBlocks.length > 0) {
             firstChoice.message.native_content_blocks = rt.nativeContentBlocks;
+            responseData.content = rt.nativeContentBlocks;
         } else {
             delete firstChoice.message.native_content_blocks;
+            delete responseData.content;
         }
         if (Array.isArray(rt.responsesOutputItems) && rt.responsesOutputItems.length > 0) {
             firstChoice.message.responses_output_items = rt.responsesOutputItems;
@@ -4429,9 +4493,14 @@ function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
         }
         if (Array.isArray(rt.citations) && rt.citations.length > 0) {
             firstChoice.message.citations = rt.citations;
+            responseData.citations = rt.citations;
         } else {
             delete firstChoice.message.citations;
+            delete responseData.citations;
         }
+        delete responseData.candidates;
+        delete responseData.output;
+        delete responseData.message;
         if (Array.isArray(rt.images) && rt.images.length > 0) {
             firstChoice.message.images = rt.images.map(img => (
                 typeof img === 'string'
@@ -4474,6 +4543,11 @@ function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
         delete firstChoice.message.native_parts;
         delete firstChoice.message.native_content_blocks;
         delete firstChoice.message.responses_output_items;
+        delete responseData.responseContent;
+        delete responseData.content;
+        delete responseData.candidates;
+        delete responseData.output;
+        delete responseData.message;
         firstChoice.finish_reason = 'tool_calls';
     } else if (hasReplacedTurn) {
         firstChoice.message.content = ptMeta.displayText ?? '';
@@ -4502,7 +4576,7 @@ export function isChatCompletionResponseEmpty(data, chatCompletionSource = null)
     if (!declaredProtocol) return false;
 
     try {
-        const turn = parseProtocolResponse(declaredProtocol, data);
+        const turn = parseCompatChatCompletionResponse(declaredProtocol, data);
         return isParsedTurnEmpty(turn);
     } catch {
         // Provider errors and protocol mismatches must NOT be retried as
@@ -4621,7 +4695,6 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
 
     if (!response.ok) {
         const responseBody = await response.text();
-        tryParseStreamingError(response, responseBody, { quiet: suppressToasts });
         console.error(`[openai] ${response.status} from ${response.url}`, {
             status: response.status,
             statusText: response.statusText,
@@ -4629,6 +4702,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
             responseHeaders: Object.fromEntries(response.headers.entries()),
             body: responseBody.substring(0, 500),
         });
+        tryParseStreamingError(response, responseBody, { quiet: suppressToasts });
         let parsedError = null;
         try {
             const parsed = JSON.parse(responseBody);
@@ -4889,6 +4963,97 @@ async function sendOpenAIRequest(type, messages, signal, {
         }
     }
 
+    const effectiveChatCompletionSource = requestBody?.chat_completion_source || requestSettings.chat_completion_source;
+    const responseContentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+
+    if (stream && responseContentType.includes('application/json')) {
+        // Server or custom_include_body downgraded a streaming request to a
+        // non-streaming JSON body (e.g., providers without streaming tool support),
+        // or returned an HTTP 200 JSON error payload. Parse it cleanly instead of
+        // feeding JSON into EventSourceStream.
+        const showThoughts = Boolean(requestSettings.show_thoughts ?? oai_settings.show_thoughts);
+        return async function* streamJsonFallback() {
+            try {
+                let data = await response.json();
+                checkQuotaError(data);
+                checkModerationError(data);
+                if (data?.error) {
+                    const message = getChatCompletionErrorMessage(data, response);
+                    toastr.error(message, t`API returned an error`);
+                    throw new Error(message);
+                }
+                const declaredProtocol = resolveWireProtocol(effectiveChatCompletionSource);
+                let turn = null;
+                if (declaredProtocol) {
+                    const alreadyNormalized = declaredProtocol !== 'openai-chat' && Array.isArray(data?.choices) && data.choices.length > 0;
+                    try {
+                        turn = parseCompatChatCompletionResponse(declaredProtocol, data);
+                        data = alreadyNormalized ? data : parsedTurnToChatCompletion(turn, data);
+                    } catch (err) {
+                        if (err instanceof ProtocolParseError) {
+                            toastr.error(err.message, t`API returned an error`);
+                        }
+                        throw err;
+                    }
+                }
+                if (plainTextActive) {
+                    const ptMeta = getLukerResponseMeta(response)?.plain_text_function_call || null;
+                    try {
+                        data = applyBackendPlainTextResultToNonStreamData(data, ptMeta);
+                        if (ptMeta?.enabled && (ptMeta.status === 'parsed' || (ptMeta.replacedTurn && typeof ptMeta.replacedTurn === 'object'))) {
+                            // Attempt-1 parsed turn is now superseded by authoritative
+                            // post-PTFC / retry fields in `data`; do not let fallbacks
+                            // below resurrect deleted Attempt-1 metadata.
+                            turn = null;
+                        }
+                    } catch (err) {
+                        if (err?.name !== 'AbortError') {
+                            toastr.error(err?.message || String(err), t`API returned an error`);
+                        }
+                        throw err;
+                    }
+                }
+                const choice = data?.choices?.[0];
+                const msg = choice?.message || {};
+                const images = Array.isArray(msg.images)
+                    ? msg.images.map(img => (typeof img === 'string' ? img : img?.image_url?.url)).filter(isDataURL)
+                    : (Array.isArray(turn?.images) ? turn.images.filter(isDataURL) : []);
+                const swipes = Array.isArray(data?.choices)
+                    ? data.choices.slice(1).map(c => String(c?.message?.content ?? c?.text ?? ''))
+                    : [];
+                const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 ? [msg.tool_calls] : [];
+                const state = {
+                    reasoning: showThoughts ? String(msg.reasoning_content ?? msg.reasoning ?? turn?.reasoning ?? '') : '',
+                    images,
+                    signature: String(msg.signature ?? turn?.signature ?? ''),
+                    reasoningBlocks: Array.isArray(msg.reasoning_blocks) ? msg.reasoning_blocks : (Array.isArray(turn?.reasoningBlocks) ? turn.reasoningBlocks : []),
+                    reasoningDetails: Array.isArray(msg.reasoning_details) ? msg.reasoning_details : (Array.isArray(turn?.reasoningDetails) ? turn.reasoningDetails : []),
+                    toolSignatures: {},
+                    nativeParts: Array.isArray(msg.native_parts) ? msg.native_parts : (Array.isArray(turn?.nativeParts) ? turn.nativeParts : []),
+                    nativeContentBlocks: Array.isArray(msg.native_content_blocks) ? msg.native_content_blocks : (Array.isArray(turn?.nativeContentBlocks) ? turn.nativeContentBlocks : []),
+                    responsesOutputItems: Array.isArray(msg.responses_output_items) ? msg.responses_output_items : (Array.isArray(turn?.responsesOutputItems) ? turn.responsesOutputItems : null),
+                    citations: Array.isArray(msg.citations) ? msg.citations : (Array.isArray(turn?.citations) ? turn.citations : []),
+                    refusal: String(msg.refusal ?? turn?.refusal ?? ''),
+                    usage: data?.usage ?? turn?.usage ?? null,
+                    finishReason: choice?.finish_reason ?? turn?.finishReason ?? null,
+                    nativeFinishReason: choice?.native_finish_reason ?? turn?.nativeFinishReason ?? null,
+                    stopSequence: choice?.stop_sequence ?? turn?.stopSequence ?? null,
+                    stopDetails: choice?.stop_details ?? turn?.stopDetails ?? null,
+                };
+                setLastUsage(state.usage);
+                yield {
+                    text: String(msg.content ?? turn?.text ?? ''),
+                    swipes,
+                    logprobs: parseChatCompletionLogprobs(data),
+                    toolCalls,
+                    state,
+                };
+            } finally {
+                cleanupGenerationMeta();
+            }
+        };
+    }
+
     if (stream) {
         let eventStream;
         let reader;
@@ -4897,7 +5062,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             eventStream = getEventSourceStream();
             response.body.pipeThrough(eventStream);
             reader = eventStream.readable.getReader();
-            streamParser = createProtocolStreamParser(requestSettings.chat_completion_source);
+            streamParser = createProtocolStreamParser(effectiveChatCompletionSource);
         } catch (error) {
             cleanupGenerationMeta();
             throw error;
@@ -4913,6 +5078,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 signature: '',
                 reasoningBlocks: [],
                 reasoningDetails: [],
+                toolSignatures: {},
                 nativeParts: [],
                 nativeContentBlocks: [],
                 responsesOutputItems: null,
@@ -4924,12 +5090,40 @@ async function sendOpenAIRequest(type, messages, signal, {
                 stopSequence: null,
                 stopDetails: null,
             };
+            const syncToolSignaturesFromTurn = (turn) => {
+                if (!turn || typeof turn !== 'object') return false;
+                let changed = false;
+                if (Array.isArray(turn.reasoningDetails)) {
+                    for (const detail of turn.reasoningDetails) {
+                        if (detail?.type === 'reasoning.encrypted'
+                            && typeof detail.data === 'string' && detail.data
+                            && typeof detail.id === 'string' && /^(tool_|call_)/.test(detail.id)
+                            && state.toolSignatures[detail.id] !== detail.data) {
+                            state.toolSignatures[detail.id] = detail.data;
+                            changed = true;
+                        }
+                    }
+                }
+                if (Array.isArray(turn.toolCalls)) {
+                    for (const tc of turn.toolCalls) {
+                        if (typeof tc?.id === 'string' && tc.id
+                            && typeof tc?.signature === 'string' && tc.signature
+                            && state.toolSignatures[tc.id] !== tc.signature) {
+                            state.toolSignatures[tc.id] = tc.signature;
+                            changed = true;
+                        }
+                    }
+                }
+                return changed;
+            };
             const applyReplacedTurnIntoState = (rt) => {
                 state.reasoning = (showThoughts && typeof rt.reasoning === 'string') ? rt.reasoning : '';
                 state.images = Array.isArray(rt.images) ? rt.images.filter(isDataURL) : [];
                 state.signature = rt.signature || '';
                 state.reasoningBlocks = Array.isArray(rt.reasoningBlocks) ? rt.reasoningBlocks : [];
                 state.reasoningDetails = Array.isArray(rt.reasoningDetails) ? rt.reasoningDetails : [];
+                state.toolSignatures = {};
+                syncToolSignaturesFromTurn(rt);
                 state.nativeParts = Array.isArray(rt.nativeParts) ? rt.nativeParts : [];
                 state.nativeContentBlocks = Array.isArray(rt.nativeContentBlocks) ? rt.nativeContentBlocks : [];
                 state.responsesOutputItems = Array.isArray(rt.responsesOutputItems) && rt.responsesOutputItems.length > 0
@@ -4942,6 +5136,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 state.nativeFinishReason = rt.nativeFinishReason || null;
                 state.stopSequence = rt.stopSequence || null;
                 state.stopDetails = rt.stopDetails || null;
+                swipes.length = 0;
                 toolCalls.length = 0;
                 if (Array.isArray(rt.toolCalls) && rt.toolCalls.length > 0) {
                     toolCalls[0] = rt.toolCalls;
@@ -5038,36 +5233,25 @@ async function sendOpenAIRequest(type, messages, signal, {
                     state.signature = turn.signature;
                     changed = true;
                 }
-                if (Array.isArray(turn.reasoningBlocks) && turn.reasoningBlocks.length > 0) {
-                    if (state.reasoningBlocks.length !== turn.reasoningBlocks.length) changed = true;
-                    state.reasoningBlocks = turn.reasoningBlocks;
-                }
-                if (Array.isArray(turn.reasoningDetails) && turn.reasoningDetails.length > 0) {
-                    if (state.reasoningDetails.length !== turn.reasoningDetails.length) changed = true;
-                    state.reasoningDetails = turn.reasoningDetails;
-                }
-                if (Array.isArray(turn.nativeParts) && turn.nativeParts.length > 0) {
-                    if (state.nativeParts.length !== turn.nativeParts.length) changed = true;
-                    state.nativeParts = turn.nativeParts;
-                }
-                if (Array.isArray(turn.nativeContentBlocks) && turn.nativeContentBlocks.length > 0) {
-                    if (state.nativeContentBlocks.length !== turn.nativeContentBlocks.length) changed = true;
-                    state.nativeContentBlocks = turn.nativeContentBlocks;
-                }
-                if (Array.isArray(turn.responsesOutputItems) && turn.responsesOutputItems.length > 0) {
-                    if ((state.responsesOutputItems?.length || 0) !== turn.responsesOutputItems.length) changed = true;
-                    state.responsesOutputItems = turn.responsesOutputItems;
-                }
-                if (Array.isArray(turn.citations) && turn.citations.length > 0) {
-                    if (state.citations.length !== turn.citations.length) changed = true;
-                    state.citations = turn.citations;
-                }
+                const syncArrayField = (key, incoming) => {
+                    if (!Array.isArray(incoming) || incoming.length === 0) return;
+                    const prevJson = Array.isArray(state[key]) && state[key].length > 0 ? JSON.stringify(state[key]) : '';
+                    const nextJson = JSON.stringify(incoming);
+                    if (prevJson !== nextJson) changed = true;
+                    state[key] = incoming;
+                };
+                syncArrayField('reasoningBlocks', turn.reasoningBlocks);
+                syncArrayField('reasoningDetails', turn.reasoningDetails);
+                syncArrayField('nativeParts', turn.nativeParts);
+                syncArrayField('nativeContentBlocks', turn.nativeContentBlocks);
+                syncArrayField('responsesOutputItems', turn.responsesOutputItems);
+                syncArrayField('citations', turn.citations);
                 if (turn.refusal && state.refusal !== turn.refusal) {
                     state.refusal = turn.refusal;
                     changed = true;
                 }
                 if (turn.usage) {
-                    if (state.usage !== turn.usage) changed = true;
+                    if (JSON.stringify(state.usage) !== JSON.stringify(turn.usage)) changed = true;
                     state.usage = turn.usage;
                 }
                 if (turn.finishReason && state.finishReason !== turn.finishReason) {
@@ -5082,7 +5266,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                     state.stopSequence = turn.stopSequence;
                     changed = true;
                 }
-                if (turn.stopDetails && state.stopDetails !== turn.stopDetails) {
+                if (turn.stopDetails && JSON.stringify(state.stopDetails) !== JSON.stringify(turn.stopDetails)) {
                     state.stopDetails = turn.stopDetails;
                     changed = true;
                 }
@@ -5091,6 +5275,9 @@ async function sendOpenAIRequest(type, messages, signal, {
                     const nextJson = JSON.stringify(turn.toolCalls);
                     if (prevJson !== nextJson) changed = true;
                     toolCalls[0] = turn.toolCalls;
+                }
+                if (syncToolSignaturesFromTurn(turn)) {
+                    changed = true;
                 }
                 return changed;
             };
@@ -5114,9 +5301,36 @@ async function sendOpenAIRequest(type, messages, signal, {
                                 toastr.error(sseErr.message, t`API returned an error`);
                                 throw sseErr;
                             }
-                            const finalTurn = streamParser.finish();
+                            let finalTurn;
+                            try {
+                                finalTurn = streamParser.finish();
+                            } catch (err) {
+                                if (err instanceof ProtocolParseError && err.stage === 'eof') {
+                                    const snap = streamParser.getSnapshot();
+                                    if (!isParsedTurnEmpty(snap) || text.length > 0) {
+                                        console.warn('[openai] Stream closed without terminal marker; preserving received content:', err.message);
+                                        finalTurn = snap;
+                                    } else {
+                                        toastr.error(err.message, t`API returned an error`);
+                                        throw err;
+                                    }
+                                } else {
+                                    if (err?.name !== 'AbortError') {
+                                        toastr.error(err?.message || String(err), t`API returned an error`);
+                                    }
+                                    throw err;
+                                }
+                            }
                             const stateUpdated = syncTurnIntoState(finalTurn);
-                            const ptUpdated = finalizePlainTextToolCalls();
+                            let ptUpdated = false;
+                            try {
+                                ptUpdated = finalizePlainTextToolCalls();
+                            } catch (err) {
+                                if (err?.name !== 'AbortError') {
+                                    toastr.error(err?.message || String(err), t`API returned an error`);
+                                }
+                                throw err;
+                            }
                             if (stateUpdated || ptUpdated) {
                                 yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
                             }
@@ -5140,6 +5354,8 @@ async function sendOpenAIRequest(type, messages, signal, {
                     } catch (err) {
                         if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
                             tryParseStreamingError(response, rawData);
+                            toastr.error(err.message, t`API returned an error`);
+                        } else if (err instanceof ProtocolParseError) {
                             toastr.error(err.message, t`API returned an error`);
                         }
                         throw err;
@@ -5214,11 +5430,14 @@ async function sendOpenAIRequest(type, messages, signal, {
                 throw new Error(message);
             }
 
-            const declaredProtocol = resolveWireProtocol(requestSettings.chat_completion_source);
+            const declaredProtocol = resolveWireProtocol(effectiveChatCompletionSource);
             if (declaredProtocol) {
+                const alreadyNormalized = declaredProtocol !== 'openai-chat' && Array.isArray(data?.choices) && data.choices.length > 0;
                 try {
-                    const turn = parseProtocolResponse(declaredProtocol, data);
-                    data = parsedTurnToChatCompletion(turn, data);
+                    const turn = parseCompatChatCompletionResponse(declaredProtocol, data);
+                    if (!alreadyNormalized) {
+                        data = parsedTurnToChatCompletion(turn, data);
+                    }
                 } catch (err) {
                     if (err instanceof ProtocolParseError) {
                         toastr.error(err.message, t`API returned an error`);
@@ -5244,6 +5463,146 @@ async function sendOpenAIRequest(type, messages, signal, {
         } finally {
             cleanupGenerationMeta();
         }
+    }
+}
+
+/**
+ * Extracts the reply from the response data from a chat completions-like source.
+ * Preserved as a public SillyTavern-compatible module export for external consumers.
+ * @param {object} data Response data from the chat completions-like source
+ * @param {object} [state] Additional state to keep track of
+ * @param {object} [options] Additional options
+ * @param {string?} [options.chatCompletionSource] Chat completion source
+ * @param {boolean?} [options.overrideShowThoughts] Override show thoughts
+ * @returns {string} The reply extracted from the response data
+ */
+export function getStreamingReply(data, state = {}, { chatCompletionSource = null, overrideShowThoughts = null } = {}) {
+    const chat_completion_source = chatCompletionSource ?? oai_settings.chat_completion_source;
+    const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
+    const targetState = state && typeof state === 'object' ? state : {};
+
+    if (chat_completion_source === chat_completion_sources.CLAUDE) {
+        if (data?.type === 'content_block_start' && data?.content_block && Number.isInteger(data?.index)) {
+            if (!Array.isArray(targetState.reasoningBlocks)) {
+                targetState.reasoningBlocks = [];
+            }
+            const block = data.content_block;
+            if (block.type === 'thinking') {
+                targetState.reasoningBlocks[data.index] = { type: 'thinking', thinking: String(block.thinking || '') };
+            } else if (block.type === 'redacted_thinking') {
+                targetState.reasoningBlocks[data.index] = { type: 'redacted_thinking', data: String(block.data || '') };
+            }
+        } else if (data?.type === 'content_block_delta' && data?.delta && Number.isInteger(data?.index)) {
+            const existing = Array.isArray(targetState.reasoningBlocks) ? targetState.reasoningBlocks[data.index] : null;
+            if (existing) {
+                if (data.delta.type === 'thinking_delta' && existing.type === 'thinking') {
+                    existing.thinking += String(data.delta.thinking || '');
+                } else if (data.delta.type === 'signature_delta' && existing.type === 'thinking') {
+                    existing.signature = (existing.signature || '') + String(data.delta.signature || '');
+                }
+            }
+        }
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (data?.delta?.thinking || '');
+        }
+        return data?.delta?.text || '';
+    } else if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(chat_completion_source)) {
+        const inlineData = data?.candidates?.[0]?.content?.parts?.filter(x => x.inlineData && !x.thought)?.map(x => x.inlineData) || [];
+        if (Array.isArray(inlineData) && inlineData.length > 0) {
+            if (!Array.isArray(targetState.images)) {
+                targetState.images = [];
+            }
+            targetState.images.push(...inlineData.map(x => `data:${x.mimeType};base64,${x.data}`).filter(isDataURL));
+        }
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (data?.candidates?.[0]?.content?.parts?.filter(x => x.thought)?.map(x => x.text)?.[0] || '');
+        }
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        parts.forEach((part) => {
+            if (part?.thoughtSignature && typeof part.text === 'string') {
+                targetState.signature = part.thoughtSignature;
+            }
+        });
+        return data?.candidates?.[0]?.content?.parts?.filter(x => !x.thought)?.map(x => x.text)?.[0] || '';
+    } else if (chat_completion_source === chat_completion_sources.COHERE) {
+        return data?.delta?.message?.content?.text || data?.delta?.message?.tool_plan || '';
+    } else if (chat_completion_source === chat_completion_sources.DEEPSEEK || chat_completion_source === chat_completion_sources.XAI) {
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content || '');
+        }
+        return data?.choices?.[0]?.delta?.content || '';
+    } else if (chat_completion_source === chat_completion_sources.OPENROUTER) {
+        const imageUrls = data?.choices?.[0]?.delta?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url) || [];
+        if (Array.isArray(imageUrls) && imageUrls.length > 0) {
+            if (!Array.isArray(targetState.images)) {
+                targetState.images = [];
+            }
+            targetState.images.push(...imageUrls.filter(isDataURL));
+        }
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (
+                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
+                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
+                data?.choices?.filter(x => x?.message?.reasoning)?.[0]?.message?.reasoning ??
+                data?.choices?.filter(x => x?.message?.reasoning_content)?.[0]?.message?.reasoning_content ??
+                ''
+            );
+        }
+        pushReasoningDetails(targetState, [
+            ...(data?.choices?.[0]?.delta?.reasoning_details || []),
+            ...(data?.choices?.[0]?.message?.reasoning_details || []),
+        ]);
+        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
+    } else if (chat_completion_source === chat_completion_sources.OPENAI_RESPONSES) {
+        const eventType = typeof data?.type === 'string' ? data.type : '';
+        if (eventType === 'response.output_text.delta' && typeof data.delta === 'string') {
+            return data.delta;
+        }
+        if ((eventType === 'response.reasoning_text.delta' || eventType === 'response.reasoning_summary_text.delta') && typeof data.delta === 'string') {
+            if (show_thoughts) {
+                targetState.reasoning = (targetState.reasoning || '') + data.delta;
+            }
+            return '';
+        }
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (
+                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
+                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
+                ''
+            );
+        }
+        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
+    } else if ([
+        chat_completion_sources.CUSTOM,
+        chat_completion_sources.POLLINATIONS,
+        chat_completion_sources.AIMLAPI,
+        chat_completion_sources.MOONSHOT,
+        chat_completion_sources.COMETAPI,
+        chat_completion_sources.ELECTRONHUB,
+        chat_completion_sources.NANOGPT,
+        chat_completion_sources.ZAI,
+        chat_completion_sources.SILICONFLOW,
+        chat_completion_sources.CHUTES,
+        chat_completion_sources.WORKERS_AI,
+        chat_completion_sources.FIREWORKS,
+        chat_completion_sources.MINIMAX,
+    ].includes(chat_completion_source)) {
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (
+                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
+                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
+                ''
+            );
+        }
+        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
+    } else if (chat_completion_source === chat_completion_sources.MISTRALAI) {
+        if (show_thoughts) {
+            targetState.reasoning = (targetState.reasoning || '') + (data?.choices?.filter(x => x?.delta?.content?.[0]?.thinking)?.[0]?.delta?.content?.[0]?.thinking?.[0]?.text || '');
+        }
+        const content = data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
+        return Array.isArray(content) ? content.map(x => x.text).filter(x => x).join('') : content;
+    } else {
+        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
     }
 }
 
@@ -5717,7 +6076,36 @@ class Message {
             }
         }
 
-        image = await this.compressImage(image);
+        // Preserve exact lossless bytes for Gemini-generated assistant images
+        // already present in `this.native_parts` when targeting Gemini so
+        // `convertGooglePrompt` can replay verbatim per-Part `thoughtSignature`s
+        // without canvas re-encoding mismatch (e.g. 2K/4K PNG outputs > 2 MiB).
+        const normalizeImageMime = (mime) => {
+            const lower = String(mime || '').toLowerCase();
+            return lower === 'image/jpg' ? 'image/jpeg' : lower;
+        };
+        const isGeminiSource = oai_settings.chat_completion_source === chat_completion_sources.MAKERSUITE
+            || oai_settings.chat_completion_source === chat_completion_sources.VERTEXAI;
+        const matchesNativeGeminiImage = isGeminiSource
+            && this.role === 'assistant'
+            && Array.isArray(this.native_parts)
+            && (() => {
+                const match = /^data:([^;]+);base64,(.*)$/s.exec(image);
+                if (!match) return false;
+                const rawMime = normalizeImageMime(match[1]);
+                const rawData = match[2];
+                return this.native_parts.some((p) => {
+                    if (!p || p.thought) return false;
+                    const inline = p.inlineData ?? p.inline_data;
+                    if (!inline) return false;
+                    return normalizeImageMime(inline.mimeType ?? inline.mime_type) === rawMime
+                        && String(inline.data ?? '') === rawData;
+                });
+            })();
+
+        if (!matchesNativeGeminiImage) {
+            image = await this.compressImage(image);
+        }
 
         const quality = oai_settings.inline_image_quality || default_settings.inline_image_quality;
         this.content.push({ type: 'image_url', image_url: { 'url': image, 'detail': quality } });

@@ -147,12 +147,51 @@ export function extractReasoningFromData(data, {
                         ?? data?.choices?.[0]?.message?.reasoning_content
                         ?? '';
                 case chat_completion_sources.MAKERSUITE:
-                case chat_completion_sources.VERTEXAI:
-                    return data?.responseContent?.parts?.filter(part => part.thought)?.map(part => part.text)?.join('\n\n') ?? '';
-                case chat_completion_sources.CLAUDE:
-                    return data?.content?.filter(part => part.type === 'thinking')?.map(part => part.thinking)?.join('\n\n') ?? '';
+                case chat_completion_sources.VERTEXAI: {
+                    const hasChoices = Array.isArray(data?.choices)
+                        && data.choices.length > 0
+                        && data.choices[0]?.message
+                        && typeof data.choices[0].message === 'object';
+                    if (hasChoices) {
+                        return data.choices[0].message.reasoning_content
+                            ?? data.choices[0].message.reasoning
+                            ?? '';
+                    }
+                    return data?.responseContent?.parts?.filter(part => part.thought)?.map(part => part.text)?.join('\n\n')
+                        ?? data?.candidates?.[0]?.content?.parts?.filter(part => part.thought)?.map(part => part.text)?.join('\n\n')
+                        ?? '';
+                }
+                case chat_completion_sources.CLAUDE: {
+                    const hasChoices = Array.isArray(data?.choices)
+                        && data.choices.length > 0
+                        && data.choices[0]?.message
+                        && typeof data.choices[0].message === 'object';
+                    if (hasChoices) {
+                        return data.choices[0].message.reasoning_content
+                            ?? data.choices[0].message.reasoning
+                            ?? '';
+                    }
+                    return data?.content?.filter(part => part.type === 'thinking')?.map(part => part.thinking)?.join('\n\n')
+                        ?? '';
+                }
                 case chat_completion_sources.MISTRALAI:
-                    return data?.choices?.[0]?.message?.content?.[0]?.thinking?.map(part => part.text)?.filter(x => x)?.join('\n\n') ?? '';
+                    return data?.choices?.[0]?.message?.reasoning_content
+                        ?? data?.choices?.[0]?.message?.content?.[0]?.thinking?.map(part => part.text)?.filter(x => x)?.join('\n\n')
+                        ?? '';
+                case chat_completion_sources.COHERE: {
+                    const normalized = data?.choices?.[0]?.message?.reasoning_content
+                        ?? data?.choices?.[0]?.message?.reasoning;
+                    if (typeof normalized === 'string' && normalized) return normalized;
+                    if (Array.isArray(data?.message?.content)) {
+                        const thinking = data.message.content
+                            .filter(part => part?.type === 'thinking' && typeof part.thinking === 'string')
+                            .map(part => part.thinking)
+                            .join('\n\n');
+                        if (thinking) return thinking;
+                    }
+                    return '';
+                }
+                case chat_completion_sources.MINIMAX:
                 case chat_completion_sources.AIMLAPI:
                 case chat_completion_sources.POLLINATIONS:
                 case chat_completion_sources.MOONSHOT:

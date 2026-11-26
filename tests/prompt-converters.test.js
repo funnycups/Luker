@@ -2135,4 +2135,60 @@ describe('Gemini native_parts fallback tool-call id mapping and opaque metadata 
             expect(msg.reasoning_blocks).toBeUndefined();
         }
     });
+
+    test('convertClaudeMessages falls back when merged tool_calls or modified content diverges from native_content_blocks', () => {
+        const names = { userName: 'User', charName: 'Char', startsWithGroupName: () => false };
+        const toolMerged = mod.convertClaudeMessages([
+            { role: 'user', content: 'Run tool' },
+            {
+                role: 'assistant',
+                content: 'Final answer after tool',
+                native_content_blocks: [{ type: 'text', text: 'Final answer after tool' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 'plan', signature: 'sig-1' }],
+                tool_calls: [{ id: 'toolu_merged', type: 'function', function: { name: 'lookup', arguments: '{"q":"a"}' } }],
+            },
+            { role: 'tool', tool_call_id: 'toolu_merged', content: '{"ok":true}' },
+        ], '', false, true, names);
+        const assistantMerged = toolMerged.messages.find(m => m.role === 'assistant');
+        expect(assistantMerged.content.some(b => b.type === 'tool_use' && b.id === 'toolu_merged')).toBe(true);
+        expect(assistantMerged.native_content_blocks).toBeUndefined();
+
+        const contentEdited = mod.convertClaudeMessages([
+            { role: 'user', content: 'Hi' },
+            {
+                role: 'assistant',
+                content: 'Regex-rewritten text',
+                native_content_blocks: [{ type: 'text', text: 'Original raw text' }],
+            },
+        ], '', false, true, names);
+        const assistantEdited = contentEdited.messages.find(m => m.role === 'assistant');
+        expect(assistantEdited.content).toEqual([{ type: 'text', text: 'Regex-rewritten text' }]);
+    });
+
+    test('convertGooglePrompt falls back when merged tool_calls or modified content diverges from native_parts', () => {
+        const names = { userName: 'User', charName: 'Char', startsWithGroupName: () => false };
+        const toolMerged = mod.convertGooglePrompt([
+            { role: 'user', content: 'Run tool' },
+            {
+                role: 'assistant',
+                content: 'Final answer after tool',
+                native_parts: [{ text: 'Final answer after tool' }],
+                tool_calls: [{ id: 'gem_merged', type: 'function', function: { name: 'lookup', arguments: '{"q":"a"}' } }],
+            },
+            { role: 'tool', tool_call_id: 'gem_merged', content: '{"ok":true}' },
+        ], 'gemini-2.5-pro', false, names);
+        const modelMerged = toolMerged.contents.find(c => c.role === 'model');
+        expect(modelMerged.parts.some(p => p.functionCall?.name === 'lookup')).toBe(true);
+
+        const contentEdited = mod.convertGooglePrompt([
+            { role: 'user', content: 'Hi' },
+            {
+                role: 'assistant',
+                content: 'Continued prefix + suffix',
+                native_parts: [{ text: 'suffix' }],
+            },
+        ], 'gemini-2.5-pro', false, names);
+        const modelEdited = contentEdited.contents.find(c => c.role === 'model');
+        expect(modelEdited.parts).toEqual([{ text: 'Continued prefix + suffix' }]);
+    });
 });

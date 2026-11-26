@@ -22,6 +22,8 @@ import {
 } from '../request-inspector.js';
 import {
     ProtocolParseError,
+    WIRE_PROTOCOLS,
+    buildCompatChatCompletionPayload,
     createSseFramer,
     parseProtocolResponse,
     resolveWireProtocol,
@@ -61,7 +63,8 @@ function normalizeDispatchHeadEvent(event, { endpoint, isStream }) {
     const headers = { ...(event.data?.headers || {}) };
     const currentContentType = String(headers['content-type'] || '').toLowerCase();
     if (isStream) {
-        if (!currentContentType.includes('text/event-stream')) {
+        const allowJsonFallbackHeader = endpoint === 'chat-completions' && currentContentType.includes('application/json');
+        if (!currentContentType.includes('text/event-stream') && !allowJsonFallbackHeader) {
             headers['content-type'] = 'text/event-stream; charset=utf-8';
         }
     } else if (!currentContentType.includes('application/json')) {
@@ -289,6 +292,30 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
         let upstreamHeadStatus = 200;
         let effectiveIsStream = Boolean(request.body?.stream || request.body?.streaming);
         job._isStream = effectiveIsStream;
+        const wantsNativeWire = String(request.headers?.['x-luker-wire'] || '').trim().toLowerCase() === 'native';
+        const declaredProtocol = endpoint === 'chat-completions'
+            ? resolveWireProtocol(request.body?.chat_completion_source)
+            : null;
+        const shouldBufferNonStreamCompat = () => endpoint === 'chat-completions'
+            && !effectiveIsStream
+            && !wantsNativeWire
+            && declaredProtocol !== null
+            && declaredProtocol !== WIRE_PROTOCOLS.OPENAI_CHAT;
+        const bufferedNonStreamChunks = [];
+        let bufferedNonStreamFlushed = false;
+        function flushBufferedNonStreamChunks(replacementBytes = null) {
+            if (bufferedNonStreamFlushed) return;
+            bufferedNonStreamFlushed = true;
+            if (replacementBytes !== null) {
+                bufferedNonStreamChunks.length = 0;
+                appendGenerationEvent(job, { kind: 'chunk', data: replacementBytes });
+                return;
+            }
+            for (const chunkEvent of bufferedNonStreamChunks) {
+                appendGenerationEvent(job, chunkEvent);
+            }
+            bufferedNonStreamChunks.length = 0;
+        }
         let initialPlainTextMetaEmitted = false;
         const plainTextStreamDetector = plainTextSession.active ? plainTextSession.createDetector() : null;
         let lastDetectedJobTextLen = 0;
@@ -299,6 +326,9 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
             onStreamMode: (streamMode) => {
                 effectiveIsStream = Boolean(streamMode);
                 job._isStream = effectiveIsStream;
+                if (effectiveIsStream && bufferedNonStreamChunks.length > 0) {
+                    flushBufferedNonStreamChunks(null);
+                }
             },
             onEmit: (rawEvent) => {
                 const event = normalizeDispatchHeadEvent(rawEvent, { endpoint, isStream: effectiveIsStream });
@@ -318,6 +348,7 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                     return;
                 }
                 if (event?.kind === 'error') {
+                    flushBufferedNonStreamChunks(null);
                     dispatchSawError = true;
                     dispatchErrorMessage = String(event.data?.message || 'Dispatch error');
                     appendGenerationEvent(job, event);
@@ -326,11 +357,29 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                 }
                 if (event?.kind === 'head') {
                     upstreamHeadStatus = Number(event.data?.status ?? 200);
+                    const headContentType = String(event.data?.headers?.['content-type'] || '').toLowerCase();
+                    if (endpoint === 'chat-completions'
+                        && effectiveIsStream
+                        && upstreamHeadStatus >= 200
+                        && upstreamHeadStatus < 300
+                        && headContentType.includes('application/json')) {
+                        effectiveIsStream = false;
+                        job._isStream = false;
+                    }
                 }
-                // Store every envelope (head / chunk / meta) in `job.events`
-                // so `ws-delivery.js:eventToFrame` turns each entry into the
-                // exact wire frame the browser's WS handler dispatches on.
-                appendGenerationEvent(job, event);
+                const bufferThisChunk = event?.kind === 'chunk'
+                    && !bufferedNonStreamFlushed
+                    && shouldBufferNonStreamCompat()
+                    && upstreamHeadStatus >= 200
+                    && upstreamHeadStatus < 300;
+                if (bufferThisChunk) {
+                    bufferedNonStreamChunks.push(event);
+                } else {
+                    // Store every envelope (head / chunk / meta) in `job.events`
+                    // so `ws-delivery.js:eventToFrame` turns each entry into the
+                    // exact wire frame the browser's WS handler dispatches on.
+                    appendGenerationEvent(job, event);
+                }
                 if (event?.kind === 'head' && plainTextSession.active && !initialPlainTextMetaEmitted && upstreamHeadStatus >= 200 && upstreamHeadStatus < 300) {
                     initialPlainTextMetaEmitted = true;
                     // Publish trigger metadata out-of-band right after head so
@@ -492,12 +541,14 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                 // Request Inspector is disabled (transient sessions) or when
                 // the response body is empty, so malformed JSON never silently
                 // falls through to plain-text evaluation or awaiting_ack.
+                let parsedRawNonStreamPayload = null;
                 if (isSuccessStatus && !isAborted && !effectiveIsStream && !job.parseError && (!job.parsedTurn || job._streamMode !== 'json')) {
                     const protocol = resolveWireProtocol(request.body?.chat_completion_source);
                     if (protocol) {
                         const rawBody = inspectionEvents.join('');
                         try {
-                            const turn = parseProtocolResponse(protocol, JSON.parse(rawBody));
+                            parsedRawNonStreamPayload = JSON.parse(rawBody);
+                            const turn = parseProtocolResponse(protocol, parsedRawNonStreamPayload);
                             job.parsedTurn = turn;
                             if (typeof turn.text === 'string') {
                                 job.text = turn.text;
@@ -518,6 +569,32 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                             job.text = '';
                             job.parseError = parseErr.toDiagnostic();
                         }
+                    }
+                }
+
+                // Flush buffered non-streaming chunks for non-OAI protocols:
+                // on a valid parsed turn (default wire mode), emit a compat
+                // superset preserving all native upstream fields alongside OAI
+                // `choices[0].message`; on errors, aborts, or `x-luker-wire:
+                // native`, emit the original upstream bytes verbatim.
+                if (bufferedNonStreamChunks.length > 0) {
+                    if (isSuccessStatus && !isAborted && !job.parseError && job.parsedTurn) {
+                        let rawPayload = parsedRawNonStreamPayload;
+                        if (rawPayload === null) {
+                            try {
+                                rawPayload = JSON.parse(inspectionEvents.join(''));
+                            } catch {
+                                rawPayload = null;
+                            }
+                        }
+                        if (rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)) {
+                            const compatBody = buildCompatChatCompletionPayload(job.parsedTurn, rawPayload);
+                            flushBufferedNonStreamChunks(new TextEncoder().encode(JSON.stringify(compatBody)));
+                        } else {
+                            flushBufferedNonStreamChunks(null);
+                        }
+                    } else {
+                        flushBufferedNonStreamChunks(null);
                     }
                 }
 

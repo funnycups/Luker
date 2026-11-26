@@ -115,20 +115,30 @@ export function parseCohereResponse(payload) {
     let text = '';
     let reasoning = '';
     const parts = [];
-    const content = Array.isArray(msg.content) ? msg.content : [];
-    for (const block of content) {
-        if (!block || typeof block !== 'object') continue;
-        if (block.type === 'thinking' && typeof block.thinking === 'string') {
-            reasoning += block.thinking;
-            if (block.thinking) parts.push({ type: 'reasoning', kind: 'thinking', text: block.thinking });
-        } else if (typeof block.text === 'string') {
-            text += block.text;
-            if (block.text) parts.push({ type: 'text', text: block.text });
+    if (typeof msg.content === 'string') {
+        text = msg.content;
+        if (text) parts.push({ type: 'text', text });
+    } else {
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of content) {
+            if (!block || typeof block !== 'object') continue;
+            if (block.type === 'thinking' && typeof block.thinking === 'string') {
+                reasoning += block.thinking;
+                if (block.thinking) parts.push({ type: 'reasoning', kind: 'thinking', text: block.thinking });
+            } else if (typeof block.text === 'string') {
+                text += block.text;
+                if (block.text) parts.push({ type: 'text', text: block.text });
+            }
         }
     }
-    if (!text && typeof msg.tool_plan === 'string' && msg.tool_plan) {
-        text = msg.tool_plan;
-        parts.push({ type: 'text', text });
+    if (typeof msg.tool_plan === 'string' && msg.tool_plan) {
+        if (!text) {
+            text = msg.tool_plan;
+            parts.push({ type: 'text', text });
+        } else {
+            reasoning = reasoning ? `${reasoning}\n\n${msg.tool_plan}` : msg.tool_plan;
+            parts.push({ type: 'reasoning', kind: 'thinking', text: msg.tool_plan });
+        }
     }
 
     const toolCalls = [];

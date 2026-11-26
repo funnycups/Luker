@@ -209,4 +209,43 @@ describe('installFetchProxy', () => {
             { generation_id: 'test-uuid-fixed', persisted: true, status: 'completed' },
         ]);
     });
+
+    test('resolves WS metadata via forwarded response headers when an outer fetch wrapper constructs a new Response', async () => {
+        const {
+            installFetchProxy,
+            getLukerResponseMeta,
+            onLukerResponseMeta,
+        } = await import('../public/scripts/ws-delivery.js');
+        let capturedOnMeta = null;
+        mockDelivery.subscribe.mockImplementation((_id, _headers, opts) => {
+            capturedOnMeta = opts.onMeta;
+            return {
+                stream: new ReadableStream({ start(c) { c.close(); } }),
+                headPromise: Promise.resolve({ status: 200, headers: { 'content-type': 'application/json' } }),
+                unsubscribe: jest.fn(),
+            };
+        });
+        installFetchProxy(mockDelivery, { originalFetch });
+        const innerResp = await window.fetch(PROXY_URL, {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ stream: false }),
+        });
+        const wrappedResp = new Response('{"wrapped":true}', {
+            status: innerResp.status,
+            headers: innerResp.headers,
+        });
+        const observed = [];
+        onLukerResponseMeta(wrappedResp, (m) => observed.push(m));
+        capturedOnMeta({ generation_id: 'test-uuid-fixed', persisted: true, status: 'completed' });
+
+        expect(getLukerResponseMeta(wrappedResp)).toEqual({
+            generation_id: 'test-uuid-fixed',
+            persisted: true,
+            status: 'completed',
+        });
+        expect(observed).toEqual([
+            { generation_id: 'test-uuid-fixed', persisted: true, status: 'completed' },
+        ]);
+    });
 });

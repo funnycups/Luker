@@ -180,6 +180,7 @@ jest.unstable_mockModule('../public/scripts/lib/transient-session.js', () => ({
 }));
 jest.unstable_mockModule('../public/scripts/lib/provider-capabilities.js', () => ({
     resolveClaudeModelCapabilities: () => ({}),
+    resolveGeminiModelCapabilities: () => ({}),
     resolveMinimaxModelCapabilities: () => ({}),
     resolveOpenAIModelCapabilities: () => ({}),
 }));
@@ -197,6 +198,7 @@ jest.unstable_mockModule('../public/scripts/lib/protocol-parser/index.js', () =>
         };
     },
     isParsedTurnEmpty: () => false,
+    parseCompatChatCompletionResponse: (_p, d) => d,
     parseProtocolResponse: (_p, d) => d,
     parsedTurnToChatCompletion: (d) => d,
     resolveWireProtocol: () => null,
@@ -328,6 +330,7 @@ jest.unstable_mockModule('../public/scripts/chat-message-shape.js', () => ({
 }));
 
 let sendOpenAIRequest;
+let getStreamingReply;
 let getLastOpenAIGenerationId;
 let isLastOpenAIReplyPersistedByServer;
 let oai_settings;
@@ -356,7 +359,7 @@ beforeAll(async () => {
         value: { getItem: () => null, setItem: noop, removeItem: noop },
     });
     const mod = await import('../public/scripts/openai.js');
-    ({ sendOpenAIRequest, getLastOpenAIGenerationId, isLastOpenAIReplyPersistedByServer, oai_settings } = mod);
+    ({ sendOpenAIRequest, getStreamingReply, getLastOpenAIGenerationId, isLastOpenAIReplyPersistedByServer, oai_settings } = mod);
     globalThis.toastr = { info: jest.fn(), error: jest.fn(), warning: jest.fn(), success: jest.fn() };
 });
 
@@ -545,5 +548,48 @@ describe('openai.js onLukerResponseMeta disposal and stale generationId / token 
 
         ac2.abort();
         expect(listenerCount(resp2)).toBe(0);
+    });
+});
+
+describe('openai.js getStreamingReply compatibility export', () => {
+    test('extracts streaming text and reasoning state across OpenAI, Claude, Gemini, OpenRouter, and Mistral', () => {
+        expect(typeof getStreamingReply).toBe('function');
+
+        const oaiState = { reasoning: '' };
+        expect(getStreamingReply({ choices: [{ delta: { content: 'hello' } }] }, oaiState, { chatCompletionSource: 'openai' })).toBe('hello');
+
+        const claudeState = { reasoning: '', reasoningBlocks: [] };
+        getStreamingReply({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: 'a' } }, claudeState, { chatCompletionSource: 'claude', overrideShowThoughts: true });
+        getStreamingReply({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'b' } }, claudeState, { chatCompletionSource: 'claude', overrideShowThoughts: true });
+        getStreamingReply({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-1' } }, claudeState, { chatCompletionSource: 'claude', overrideShowThoughts: true });
+        expect(getStreamingReply({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'world' } }, claudeState, { chatCompletionSource: 'claude', overrideShowThoughts: true })).toBe('world');
+        expect(claudeState.reasoning).toBe('b');
+        expect(claudeState.reasoningBlocks[0]).toEqual({ type: 'thinking', thinking: 'ab', signature: 'sig-1' });
+
+        const geminiState = { reasoning: '', images: [], signature: '' };
+        expect(getStreamingReply({
+            candidates: [{ content: { parts: [{ thought: true, text: 'plan' }, { text: 'reply', thoughtSignature: 'gsig' }] } }],
+        }, geminiState, { chatCompletionSource: 'makersuite', overrideShowThoughts: true })).toBe('reply');
+        expect(geminiState.reasoning).toBe('plan');
+        expect(geminiState.signature).toBe('gsig');
+
+        const orState = { reasoning: '', images: [], reasoningDetails: [], toolSignatures: {} };
+        expect(getStreamingReply({
+            choices: [{
+                delta: {
+                    content: 'ok',
+                    reasoning: 'think',
+                    reasoning_details: [{ type: 'reasoning.encrypted', id: 'call_1', data: 'enc' }],
+                },
+            }],
+        }, orState, { chatCompletionSource: 'openrouter', overrideShowThoughts: true })).toBe('ok');
+        expect(orState.reasoning).toBe('think');
+        expect(orState.toolSignatures).toEqual({ call_1: 'enc' });
+
+        const mistralState = { reasoning: '' };
+        expect(getStreamingReply({
+            choices: [{ delta: { content: [{ thinking: [{ text: 'm-think' }], text: 'm-text' }] } }],
+        }, mistralState, { chatCompletionSource: 'mistralai', overrideShowThoughts: true })).toBe('m-text');
+        expect(mistralState.reasoning).toBe('m-think');
     });
 });

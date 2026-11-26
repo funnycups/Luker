@@ -13,6 +13,7 @@ import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 import { handleProviderDispatchError, relayUpstreamResponse } from './upstream-relay.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
+import { resolveXaiModelCapabilities } from '../../../../public/scripts/lib/provider-capabilities.js';
 
 const API_XAI = 'https://api.x.ai/v1';
 
@@ -68,8 +69,9 @@ export async function dispatchXai(ctx) {
             bodyParams.stop = body.stop;
         }
 
+        const xaiCaps = resolveXaiModelCapabilities(body.model);
         const xaiToken = normalizeReasoningToken(body.reasoning_effort);
-        if (xaiToken !== 'auto' && xaiToken !== 'off') {
+        if (xaiCaps.supportsReasoningEffort !== false && xaiToken !== 'auto' && xaiToken !== 'off') {
             // xAI accepts low/medium/high/xhigh; grok-4.5 treats xhigh as high.
             // Minimal has no equivalent and max is represented by the highest level.
             const xaiEffort = { minimal: 'low', max: 'xhigh' }[xaiToken] ?? xaiToken;

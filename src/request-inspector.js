@@ -10,6 +10,7 @@ import {
     ProtocolParseError,
     createProtocolStreamParser,
     extractProviderErrorMessage,
+    isParsedTurnEmpty,
     parseProtocolResponse,
     resolveWireProtocol,
     toInspectorUsage,
@@ -755,7 +756,18 @@ export function completeInspectionFromStream(request, events, _accumulatedText) 
         const turn = parser.finish();
         applyParsedTurnToEntry(entry, turn);
     } catch (err) {
-        if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
+        if (err instanceof ProtocolParseError && err.stage === 'eof') {
+            const partial = parser.getSnapshot();
+            if (!isParsedTurnEmpty(partial)) {
+                applyParsedTurnToEntry(entry, partial);
+            } else {
+                applyParseFailureToEntry(entry, err, {
+                    kind: 'stream',
+                    protocol,
+                    events: normalizedEvents.map(normalizeEvent),
+                });
+            }
+        } else if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
             const partial = parser.getSnapshot();
             applyParsedTurnToEntry(entry, partial);
             entry.status = 'error';

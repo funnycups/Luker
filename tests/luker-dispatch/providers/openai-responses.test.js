@@ -210,6 +210,40 @@ describe('buildResponsesRequestBody', () => {
         ]);
     });
 
+    test('falls back from responses_output_items when merged tool_calls or edited content diverges', () => {
+        const mergedReq = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            messages: [
+                { role: 'user', content: 'hi' },
+                {
+                    role: 'assistant',
+                    content: 'Final reply',
+                    responses_output_items: [
+                        { type: 'message', id: 'msg_2', role: 'assistant', content: [{ type: 'output_text', text: 'Final reply' }] },
+                    ],
+                    tool_calls: [{ id: 'call_merged', type: 'function', function: { name: 'lookup', arguments: '{"q":"z"}' } }],
+                },
+                { role: 'tool', tool_call_id: 'call_merged', content: '{"ok":true}' },
+            ],
+        });
+        expect(mergedReq.input.some(item => item.type === 'function_call' && item.call_id === 'call_merged')).toBe(true);
+
+        const editedReq = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            messages: [
+                { role: 'user', content: 'hi' },
+                {
+                    role: 'assistant',
+                    content: 'Regex edited reply',
+                    responses_output_items: [
+                        { type: 'message', id: 'msg_3', role: 'assistant', content: [{ type: 'output_text', text: 'Original reply' }] },
+                    ],
+                },
+            ],
+        });
+        expect(editedReq.input[1]).toEqual({ role: 'assistant', content: 'Regex edited reply' });
+    });
+
     test('gates reasoning against known non-reasoning models while allowing unknown custom models', () => {
         for (const model of ['gpt-4o', 'gpt-4.1', 'gpt-5-chat-latest']) {
             const req = buildResponsesRequestBody({

@@ -819,11 +819,14 @@ export class ToolManager {
      * @returns {any[]} Tool calls from the response data
      */
     static #getToolCallsFromData(data) {
-        const getRandomId = () => Math.random().toString(36).substring(2);
         const isClaudeToolCall = c => Array.isArray(c) ? c.filter(x => x).every(isClaudeToolCall) : c?.input && c?.name && c?.id;
-        const isGoogleToolCall = c => Array.isArray(c) ? c.filter(x => x).every(isGoogleToolCall) : c?.name && c?.args;
+        const isGoogleToolCall = c => Array.isArray(c) ? c.filter(x => x).every(isGoogleToolCall) : Boolean(typeof c?.name === 'string' && !c?.function && c?.input === undefined);
         const convertClaudeToolCall = c => ({ id: c.id, function: { name: c.name, arguments: c.input } });
-        const convertGoogleToolCall = (c, signature = null) => ({ id: typeof c.id === 'string' && c.id.length > 0 ? c.id : getRandomId(), function: { name: c.name, arguments: c.args }, signature });
+        const convertGoogleToolCall = (c, signature = null, index = 0) => ({
+            id: typeof c.id === 'string' && c.id.length > 0 ? c.id : `gemini_call_${index + 1}`,
+            function: { name: c.name, arguments: c.args !== undefined ? c.args : {} },
+            signature,
+        });
 
         // Parsed tool calls from streaming data
         if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0])) {
@@ -832,7 +835,7 @@ export class ToolManager {
             }
 
             if (isGoogleToolCall(data[0])) {
-                return data[0].filter(x => x).map((c) => convertGoogleToolCall(c, c.thoughtSignature));
+                return data[0].filter(x => x).map((c, idx) => convertGoogleToolCall(c, c.thoughtSignature, idx));
             }
 
             if (typeof data[0]?.[0]?.tool_calls === 'object') {
@@ -842,33 +845,36 @@ export class ToolManager {
             return data[0];
         }
 
+        // Parsed tool calls from non-streaming data (including compat supersets)
+        if (Array.isArray(data?.choices)) {
+            // Find a choice with 0-index
+            const choice = data.choices.find(choice => choice.index === 0) ?? data.choices[0];
+
+            if (choice && typeof choice.message === 'object') {
+                if (Array.isArray(choice.message.tool_calls)) {
+                    // Add OpenRouter signatures
+                    if (Array.isArray(choice.message.reasoning_details)) {
+                        for (const toolCall of choice.message.tool_calls) {
+                            const reasoningDetail = choice.message.reasoning_details.find(rd => rd.id === toolCall.id);
+                            if (reasoningDetail && reasoningDetail.type === 'reasoning.encrypted' && reasoningDetail.data) {
+                                toolCall.signature = reasoningDetail.data;
+                            }
+                        }
+                    }
+
+                    return choice.message.tool_calls;
+                }
+                return [];
+            }
+        }
+
         // Google AI Studio tool calls (legacy responseContent or native candidates)
         const geminiParts = Array.isArray(data?.responseContent?.parts)
             ? data.responseContent.parts
             : (Array.isArray(data?.candidates?.[0]?.content?.parts) ? data.candidates[0].content.parts : null);
         if (geminiParts) {
             return geminiParts.filter(p => p?.functionCall || p?.function_call)
-                .map(p => convertGoogleToolCall(p.functionCall || p.function_call, p.thoughtSignature));
-        }
-
-        // Parsed tool calls from non-streaming data
-        if (Array.isArray(data?.choices)) {
-            // Find a choice with 0-index
-            const choice = data.choices.find(choice => choice.index === 0);
-
-            if (choice && typeof choice.message === 'object' && Array.isArray(choice.message.tool_calls)) {
-                // Add OpenRouter signatures
-                if (Array.isArray(choice.message.reasoning_details)) {
-                    for (const toolCall of choice.message.tool_calls) {
-                        const reasoningDetail = choice.message.reasoning_details.find(rd => rd.id === toolCall.id);
-                        if (reasoningDetail && reasoningDetail.type === 'reasoning.encrypted' && reasoningDetail.data) {
-                            toolCall.signature = reasoningDetail.data;
-                        }
-                    }
-                }
-
-                return choice.message.tool_calls;
-            }
+                .map((p, idx) => convertGoogleToolCall(p.functionCall || p.function_call, p.thoughtSignature, idx));
         }
 
         // Claude tool calls to OpenAI tool calls

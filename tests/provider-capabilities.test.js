@@ -8,6 +8,7 @@ import {
     validateClaudeRequestCapabilities,
     resolveOpenAIModelCapabilities,
     resolveMinimaxModelCapabilities,
+    resolveXaiModelCapabilities,
     openAIResponsesSupportsSampling,
     validateOpenAIChatCapabilities,
     createCapabilityConflictError,
@@ -239,6 +240,18 @@ describe('provider-capabilities', () => {
         });
     });
 
+    describe('xAI model capabilities', () => {
+        test('enables reasoning_effort on grok-3-mini and grok-4.5, disables on grok-2/3/4, and keeps unknown for future models', () => {
+            expect(resolveXaiModelCapabilities('grok-3-mini').supportsReasoningEffort).toBe(true);
+            expect(resolveXaiModelCapabilities('grok-4.5').supportsReasoningEffort).toBe(true);
+            expect(resolveXaiModelCapabilities('grok-2-latest').supportsReasoningEffort).toBe(false);
+            expect(resolveXaiModelCapabilities('grok-3').supportsReasoningEffort).toBe(false);
+            expect(resolveXaiModelCapabilities('grok-4').supportsReasoningEffort).toBe(false);
+            expect(resolveXaiModelCapabilities('grok-4-fast').supportsReasoningEffort).toBe(false);
+            expect(resolveXaiModelCapabilities('grok-5-preview').supportsReasoningEffort).toBe('unknown');
+        });
+    });
+
     describe('generate-task JSON fallback and non-retryable conflict propagation', () => {
         test('normalizeResponse in json mode extracts forced schema tool_calls arguments when text content is empty', () => {
             const res = normalizeResponse({
@@ -298,6 +311,39 @@ describe('provider-capabilities', () => {
             expect(resolveOpenAIModelCapabilities('my-custom-model').isKnownNonReasoningModel).toBe(false);
             expect(validateOpenAIChatCapabilities({ model: 'gpt-5-chat-latest', hasTools: true })?.conflictCode).toBe('openai_chat_tools_unsupported');
             expect(validateOpenAIChatCapabilities({ model: 'o1', hasTools: true })?.conflictCode).toBe('openai_chat_tools_unsupported');
+        });
+
+        test('normalizeResponse in json mode prioritizes forced schema tool_calls and tool_use over preamble text', () => {
+            const oaiRes = normalizeResponse({
+                requestApi: 'openai',
+                mode: 'json',
+                raw: {
+                    choices: [{
+                        message: {
+                            content: 'Sure, here is the JSON:',
+                            tool_calls: [{
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'reply_schema', arguments: '{"ok":true}' },
+                            }],
+                        },
+                        finish_reason: 'tool_calls',
+                    }],
+                },
+            });
+            expect(oaiRes.jsonData).toEqual({ ok: true });
+
+            const claudeRes = normalizeResponse({
+                requestApi: 'openai',
+                mode: 'json',
+                raw: {
+                    content: [
+                        { type: 'text', text: 'Here you go:' },
+                        { type: 'tool_use', id: 'toolu_3', name: 'reply_schema', input: { ok: true, items: [1] } },
+                    ],
+                },
+            });
+            expect(claudeRes.jsonData).toEqual({ ok: true, items: [1] });
         });
 
         test('iter-tool-calling stops immediately on non-retryable capability conflicts without burning retries', async () => {

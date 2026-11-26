@@ -305,12 +305,12 @@ export function parseGeminiResponse(payload) {
         });
     }
     assertNotForeignPayload(payload, 'root');
-    if (!Array.isArray(payload.candidates) && !payload.promptFeedback) {
+    if (!Array.isArray(payload.candidates) && !payload.promptFeedback && !payload.usageMetadata) {
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
             location: 'candidates',
-            message: 'Gemini GenerateContent response is missing candidates[] and promptFeedback.',
+            message: 'Gemini GenerateContent response is missing candidates[], usageMetadata, and promptFeedback.',
             rawDiagnostic: payload,
         });
     }
