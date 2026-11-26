@@ -61,6 +61,8 @@ router.get('/get', async (request, response) => {
             });
         }
         const handle = request.user.profile.handle;
+        await ensureLegacyThemesMigrated(handle);
+        assertSafeRepoName(name, 'Theme name');
         const result = await getNamedDocRepo().read(handle, 'themes', name);
         if (!result.exists) {
             return sendResourceReadError(response, {
@@ -84,6 +86,14 @@ router.get('/get', async (request, response) => {
             cacheEntry: result.cacheEntry,
         });
     } catch (error) {
+        if (error instanceof InvalidArgumentError) {
+            return sendResourceReadError(response, {
+                code: 'invalid_args',
+                resource: `themes:${name}`,
+                detail: error.message,
+                status: 400,
+            });
+        }
         console.error('Error reading themes document:', error);
         return sendResourceReadError(response, {
             code: 'read_failed',
@@ -172,19 +182,27 @@ router.post('/patch', async (request, response) => {
 
 router.post('/delete', async (request, response) => {
     if (!request.body || !request.body.name) return response.sendStatus(400);
-    const name = String(request.body.name);
-    if (isBuiltinThemeName(name)) {
+    let safeName;
+    try {
+        safeName = assertSafeRepoName(request.body.name);
+    } catch (err) {
+        if (err instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: err.message });
+        }
+        throw err;
+    }
+    if (isBuiltinThemeName(safeName)) {
         return response.status(403).send({
             error: 'Built-in themes are read-only and cannot be deleted.',
             code: 'builtin_theme_readonly',
         });
     }
     try {
-        await getNamedDocRepo().delete(request.user.profile.handle, 'themes', name, { strict: true });
+        await getNamedDocRepo().delete(request.user.profile.handle, 'themes', safeName, { strict: true });
         return response.sendStatus(200);
     } catch (err) {
         if (err instanceof NotFoundError) {
-            console.error('Theme file not found:', name);
+            console.error('Theme file not found:', safeName);
             return response.sendStatus(404);
         }
         console.error('Error deleting theme:', err);

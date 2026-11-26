@@ -8,7 +8,9 @@ import {
     isStorageInitialized,
 } from '../storage/index.js';
 import {
+    deepEqualJson,
     getBuiltinTheme,
+    getBuiltinThemeStylesheetText,
     isBuiltinThemeName,
     isLegacyShippedLensCss,
     isUnmodifiedLegacyBuiltinTheme,
@@ -197,23 +199,36 @@ async function runMigrationForHandle(handle) {
         const legacyCss = typeof pu.custom_css === 'string' ? pu.custom_css : '';
         const legacyPalettes = isPlainObject(pu.palettes) ? pu.palettes : null;
         const activeName = typeof pu.theme === 'string' ? pu.theme : '';
+        const hasCustomCssPayload = legacyCss.trim().length > 0;
+        const hasCustomPalettesPayload = legacyPalettes !== null && Object.keys(legacyPalettes).length > 0;
 
-        if (legacyCss.trim().length > 0) {
+        if (hasCustomCssPayload || hasCustomPalettesPayload) {
             const activeBuiltinDoc = isBuiltinThemeName(activeName) ? getBuiltinTheme(activeName) : null;
             const activeUserDoc = (!activeBuiltinDoc && activeName)
                 ? await namedDocRepo.get(handle, 'themes', activeName)
                 : null;
+            const activeDoc = activeUserDoc || activeBuiltinDoc || null;
 
             const isUnmodifiedBuiltinLens = Boolean(activeBuiltinDoc?.builtin_stylesheet)
                 && isLegacyShippedLensCss(legacyCss);
             const alreadySavedInActiveUserTheme = isPlainObject(activeUserDoc)
                 && String(activeUserDoc.custom_css || '') === legacyCss;
+            const hasUnsavedCss = hasCustomCssPayload && !isUnmodifiedBuiltinLens && !alreadySavedInActiveUserTheme;
 
-            if (!isUnmodifiedBuiltinLens && !alreadySavedInActiveUserTheme) {
+            const activePalettes = isPlainObject(activeDoc?.palettes) ? activeDoc.palettes : null;
+            const hasUnsavedPalettes = hasCustomPalettesPayload
+                && !deepEqualJson(legacyPalettes, activePalettes);
+
+            if (hasUnsavedCss || hasUnsavedPalettes) {
                 const names = await getExistingNames();
                 const newName = pickUniqueCustomThemeName(activeName || 'Custom', names);
-                const baseDoc = activeUserDoc || activeBuiltinDoc || {};
-                const migratedTheme = buildMigratedThemeDoc(newName, baseDoc, pu, legacyCss, legacyPalettes);
+                const baseDoc = activeDoc || {};
+                const effectiveCss = hasCustomCssPayload && !isUnmodifiedBuiltinLens
+                    ? legacyCss
+                    : (activeBuiltinDoc?.builtin_stylesheet
+                        ? getBuiltinThemeStylesheetText(activeBuiltinDoc)
+                        : String(baseDoc.custom_css || ''));
+                const migratedTheme = buildMigratedThemeDoc(newName, baseDoc, pu, effectiveCss, legacyPalettes);
                 await namedDocRepo.save(handle, 'themes', newName, migratedTheme);
                 pu.theme = newName;
             }

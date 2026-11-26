@@ -25,7 +25,7 @@ function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function deepEqualJson(a, b) {
+export function deepEqualJson(a, b) {
     if (a === b) return true;
     if (Array.isArray(a) && Array.isArray(b)) {
         if (a.length !== b.length) return false;

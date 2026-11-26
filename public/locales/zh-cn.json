@@ -869,6 +869,7 @@
     "Create an editable copy of the current theme": "基于当前主题创建可编辑副本",
     "Create editable copy": "创建可编辑副本",
     "Built-in themes are read-only. Create an editable copy to save changes.": "内置主题为只读，请先创建可编辑副本后再保存修改。",
+    "Failed to apply theme.": "应用主题失败。",
     "Built-in themes cannot be deleted.": "内置主题不可删除。",
     "Built-in theme names are reserved. Please choose another name.": "内置主题名称已保留，请改用其他名称。",
     "Created editable copy \"${0}\".": "已创建可编辑副本“${0}”。",

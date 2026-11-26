@@ -330,6 +330,42 @@ describe.each(ENDPOINT_HARNESSES)('Theme API built-in hosting, patch, and legacy
         const afterRestore = await getSettingsRepo().get(harness.handle);
         expect(afterRestore.power_user.theme).toBe('ExternalOne (Custom)');
     });
+
+    test('migration preserves customized power_user.palettes even when custom_css is empty or unchanged shipped Lens CSS', async () => {
+        const customPalettes = {
+            default: 'amber',
+            items: [{ id: 'amber', label: 'Amber', title: 'Amber' }],
+        };
+        await getSettingsRepo().save(harness.handle, {
+            power_user: {
+                theme: 'Lens',
+                custom_css: '',
+                palettes: customPalettes,
+            },
+        });
+
+        await ensureLegacyThemesMigrated(harness.handle);
+
+        const settings = await getSettingsRepo().get(harness.handle);
+        expect(settings.power_user.theme).toBe('Lens (Custom)');
+        expect(Object.prototype.hasOwnProperty.call(settings.power_user, 'palettes')).toBe(false);
+        const migrated = await getNamedDocRepo().get(harness.handle, 'themes', 'Lens (Custom)');
+        expect(migrated).not.toBeNull();
+        expect(migrated.palettes).toEqual(customPalettes);
+        expect(migrated.custom_css).toBe(LENS_CSS);
+    });
+
+    test('POST /api/themes/delete and GET /api/themes/get reject unsafe repository names with HTTP 400', async () => {
+        await request(harness.server)
+            .post('/api/themes/delete')
+            .send({ name: '../escape' })
+            .expect(400);
+
+        await request(harness.server)
+            .get('/api/themes/get')
+            .query({ name: '../escape' })
+            .expect(400);
+    });
 });
 
 describe('Client theme-manager proxy, lazy loading, stylesheet order, and independent derivation', () => {

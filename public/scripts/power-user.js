@@ -2330,12 +2330,47 @@ function showMediaDisplayReloadPrompt() {
     );
 }
 
+let applyThemeSeq = 0;
+
 async function applyTheme(name) {
-    await themeManager.flushPendingPatch();
-    const theme = await themeManager.ensureThemeLoaded(name);
+    const seq = ++applyThemeSeq;
+    const restoreActiveBuiltinStylesheet = async () => {
+        if (seq !== applyThemeSeq) return;
+        const activeTheme = themeManager.getActiveTheme();
+        try {
+            await themeManager.mountBuiltinStylesheet(activeTheme?.builtin ? activeTheme.builtin_stylesheet : '');
+        } catch {
+            // Best-effort stylesheet restore when a theme load fails.
+        }
+    };
+    let theme;
+    try {
+        await themeManager.flushPendingPatch();
+        if (seq !== applyThemeSeq) {
+            return false;
+        }
+        theme = await themeManager.ensureThemeLoaded(name);
+    } catch (error) {
+        await restoreActiveBuiltinStylesheet();
+        throw error;
+    }
+    if (seq !== applyThemeSeq) {
+        return false;
+    }
 
     if (!theme) {
-        return;
+        await restoreActiveBuiltinStylesheet();
+        return false;
+    }
+
+    try {
+        await themeManager.mountBuiltinStylesheet(theme.builtin ? theme.builtin_stylesheet : '');
+    } catch (error) {
+        await restoreActiveBuiltinStylesheet();
+        throw error;
+    }
+    if (seq !== applyThemeSeq) {
+        return false;
     }
 
     themeManager.setActiveTheme(theme);
@@ -2540,12 +2575,12 @@ async function applyTheme(name) {
         }
     }
 
-    await themeManager.mountBuiltinStylesheet(theme.builtin ? theme.builtin_stylesheet : '');
     applyCustomCSS();
     syncThemePalettes(theme.name, normalizeThemePalettes(theme.palettes));
     syncThemeChromeColors();
 
     console.log('theme applied: ' + name);
+    return true;
 }
 
 async function applyMovingUIPreset(name) {
@@ -3655,15 +3690,23 @@ async function deleteTheme() {
     const remainingNames = themeManager.listThemeNames();
     power_user.theme = remainingNames[0] || '';
     renderThemeSelectOptions(power_user.theme);
-    saveSettingsDebounced();
+    let fallbackApplied = false;
     if (power_user.theme) {
-        await applyTheme(power_user.theme);
-    } else {
+        try {
+            fallbackApplied = await applyTheme(power_user.theme);
+        } catch (err) {
+            console.error('Failed to apply fallback theme after deletion:', err);
+        }
+    }
+    if (!fallbackApplied && (!power_user.theme || !themeManager.getActiveTheme())) {
+        power_user.theme = '';
+        renderThemeSelectOptions('');
         await themeManager.mountBuiltinStylesheet('');
         applyCustomCSS();
         syncThemePalettes('', null);
         syncThemeChromeColors();
     }
+    saveSettingsDebounced();
     toastr.success(t`Theme deleted.`);
 }
 
@@ -3706,8 +3749,10 @@ async function deriveTheme({ sourceName = power_user.theme, promptForName = true
     await persistThemeDocToServer(targetName, standaloneTheme);
     power_user.theme = targetName;
     renderThemeSelectOptions(targetName);
-    await applyTheme(targetName);
-    saveSettingsDebounced();
+    const applied = await applyTheme(targetName);
+    if (applied) {
+        saveSettingsDebounced();
+    }
 
     if (focusCustomCss) {
         const $textarea = $('#customCSS');
@@ -3794,7 +3839,7 @@ async function importTheme(file) {
  * @param {object|undefined} theme Theme object. If undefined, the current theme will be saved.
  * @returns {Promise<object|null>} A promise that resolves when the theme is saved.
  */
-async function saveTheme(name = undefined, theme = undefined) {
+async function saveTheme(name = undefined, theme = undefined, { saveSettings = true } = {}) {
     if (typeof name !== 'string') {
         return await deriveTheme({ promptForName: true, suffix: 'Copy' });
     }
@@ -3813,7 +3858,9 @@ async function saveTheme(name = undefined, theme = undefined) {
     const saved = await persistThemeDocToServer(name, theme);
     power_user.theme = name;
     renderThemeSelectOptions(name);
-    saveSettingsDebounced();
+    if (saveSettings) {
+        saveSettingsDebounced();
+    }
 
     return saved;
 }
@@ -4239,16 +4286,65 @@ async function setAvgBG(args) {
     // Generate a full theme palette from the dominant color
     const palette = generateThemePalette(dominantRgb);
 
-    // Create theme object from current settings, then override colors
-    const theme = getThemeObject(themeName);
-    Object.assign(theme, palette);
+    // Create an independent theme snapshot from current settings (preserving
+    // built-in stylesheets such as Lens), then override extracted palette colors.
+    const activeName = power_user.theme;
+    const sourceTheme = activeName ? await themeManager.ensureThemeLoaded(activeName) : null;
+    const baseFields = getThemeObject(themeName);
+    Object.assign(baseFields, palette);
+    const theme = await themeManager.buildIndependentThemeSnapshot({
+        name: themeName,
+        baseFields,
+        sourceTheme,
+    });
 
     // Save as a new theme
-    await saveTheme(themeName, theme);
-    await applyTheme(themeName);
-
-    toastr.success(`Theme "${themeName}" generated and applied.`);
+    const saved = await saveTheme(themeName, theme, { saveSettings: false });
+    if (!saved) {
+        return '';
+    }
+    power_user.theme = themeName;
+    renderThemeSelectOptions(themeName);
+    const applied = await applyTheme(themeName);
+    if (applied) {
+        saveSettingsDebounced();
+        toastr.success(`Theme "${themeName}" generated and applied.`);
+    }
     return '';
+}
+
+async function switchThemeWithRollback(themeName, { updateSelect = false } = {}) {
+    const committedTheme = themeManager.getActiveTheme()?.name || power_user.theme;
+    power_user.theme = themeName;
+    const applyPromise = applyTheme(themeName);
+    const mySeq = applyThemeSeq;
+    try {
+        const applied = await applyPromise;
+        if (mySeq !== applyThemeSeq) {
+            return false;
+        }
+        if (applied) {
+            power_user.theme = themeName;
+            if (updateSelect || $('#themes').val() !== themeName) {
+                $('#themes').val(themeName);
+            }
+            saveSettingsDebounced();
+            return true;
+        }
+        const rollbackTheme = themeManager.getActiveTheme()?.name || committedTheme;
+        power_user.theme = rollbackTheme;
+        $('#themes').val(rollbackTheme);
+        return false;
+    } catch (err) {
+        console.error('Failed to apply theme:', err);
+        toastr.error(String(err?.message || err), t`Failed to apply theme.`);
+        if (mySeq === applyThemeSeq) {
+            const rollbackTheme = themeManager.getActiveTheme()?.name || committedTheme;
+            power_user.theme = rollbackTheme;
+            $('#themes').val(rollbackTheme);
+        }
+        return false;
+    }
 }
 
 async function setThemeCallback(_, themeName) {
@@ -4271,13 +4367,10 @@ async function setThemeCallback(_, themeName) {
 
     if (!theme) {
         toastr.warning(`Could not find theme with name: ${themeName}`);
-        return;
+        return '';
     }
 
-    power_user.theme = theme.name;
-    await applyTheme(theme.name);
-    $('#themes').val(theme.name);
-    saveSettingsDebounced();
+    await switchThemeWithRollback(theme.name, { updateSelect: true });
     return '';
 }
 
@@ -4676,7 +4769,10 @@ jQuery(() => {
     });
 
     $('#ui_preset_derive_button').on('click', () => {
-        void deriveTheme({ promptForName: false, focusCustomCss: true, suffix: 'Custom' });
+        void deriveTheme({ promptForName: false, focusCustomCss: true, suffix: 'Custom' }).catch((err) => {
+            console.error('Failed to derive theme:', err);
+            toastr.error(String(err?.message || err), t`Failed to apply theme.`);
+        });
     });
 
     window.addEventListener('pagehide', () => {
@@ -4842,9 +4938,7 @@ jQuery(() => {
 
     $('#themes').on('change', async function () {
         const themeSelected = String($(this).find(':selected').val());
-        power_user.theme = themeSelected;
-        await applyTheme(themeSelected);
-        saveSettingsDebounced();
+        await switchThemeWithRollback(themeSelected);
     });
 
     $('#movingUIPresets').on('change', async function () {
@@ -4855,7 +4949,12 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
-    $('#ui-preset-save-button').on('click', () => void deriveTheme({ promptForName: true, suffix: 'Copy' }));
+    $('#ui-preset-save-button').on('click', () => {
+        void deriveTheme({ promptForName: true, suffix: 'Copy' }).catch((err) => {
+            console.error('Failed to derive theme:', err);
+            toastr.error(String(err?.message || err), t`Failed to apply theme.`);
+        });
+    });
     $('#ui-preset-update-button').on('click', () => void updateTheme());
     $('#ui-preset-delete-button').on('click', () => void deleteTheme());
     $('#movingui-preset-save-button').on('click', saveMovingUI);
