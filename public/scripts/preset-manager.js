@@ -29,10 +29,11 @@ import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
 import { applyPresetBodyChangesToSettings, captureCharacterBoundSettingsSave, persistCapturedCharacterBoundSettings, getActiveCardBoundGhostSnapshot, getChatCompletionPreset, getPresetApplicationPromise, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
 import { decodeCardBoundOptionValue } from './lib/preset-ref-codec.js';
-import { renameCharacterBoundPreset } from './character/presets.js';
+import { readCharacterBoundStateRaw, renameCharacterBoundPreset } from './character/presets.js';
 import { createPresetLineage } from './character/preset-mutation.js';
 import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
+import { readPresetDocument } from './named-resource-read.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
 import { reasoning_templates } from './reasoning.js';
@@ -938,7 +939,7 @@ class PresetManager {
                 // Card slot was already persisted above; pass cardPresetOwner so
                 // SETTINGS_UPDATED does not trigger a second card write.
                 const outcome = await saveSettings(0, { cardPresetOwner: { source: {} } });
-                if (!outcome.ok) throw new Error(`Character-bound preset settings save ${outcome.status}`);
+                if (!outcome?.ok && outcome?.status !== 'deferred') throw new Error(`Character-bound preset settings save ${outcome?.status}`);
             }
             return;
         }
@@ -1676,20 +1677,53 @@ class PresetManager {
         const id = Number(this_chid);
         const character = characters[id];
         const ref = isCharacterBoundOpenAIPreset ? decodeCardBoundOptionValue(selectedOption.val()) : null;
-        const binding = character?.data?.extensions?.luker?.chat_completion_preset;
-        const slot = binding?.presets?.find(preset => preset.name === ref?.name);
+        const boundState = isCharacterBoundOpenAIPreset ? readCharacterBoundStateRaw(character) : null;
+        const slot = boundState?.presets?.find(preset => preset.name === ref?.name);
         let target;
         if (isCharacterBoundOpenAIPreset) {
             if (!slot || ref.avatar !== character?.avatar) throw new Error('Character-bound preset target is unavailable');
-            target = { character, id, name: slot.name, source: { defaultPresetName: binding.defaultPresetName } };
+            target = { character, id, name: slot.name, source: { defaultPresetName: boundState.defaultPresetName } };
         }
-        const index = !target ? (Array.isArray(preset_names) ? preset_names.indexOf(presetName) : preset_names[presetName]) : -1;
-        const hasPreset = !target && Boolean(presets[index]);
-        const invokedPreset = hasPreset ? presets[index] : null;
+        let currentPresets = presets;
+        let index = !target ? (Array.isArray(preset_names) ? preset_names.indexOf(presetName) : preset_names?.[presetName]) : -1;
+        let hasIndex = !target && (Array.isArray(preset_names) ? index !== -1 : index !== undefined);
+        if (hasIndex && !currentPresets[index]) {
+            let fetched = null;
+            try {
+                fetched = await readPresetDocument(this.apiId, presetName);
+            } catch (error) {
+                console.warn(`[PresetManager] Failed to hydrate preset "${presetName}" before extension write:`, error);
+            }
+            // Always re-read live preset arrays after yielding so a concurrent
+            // background preload (warmPreloadFullSettings) is observed even if
+            // readPresetDocument failed.
+            const latestRaw = this.getPresetListRaw();
+            const latestIndex = Array.isArray(latestRaw.preset_names)
+                ? latestRaw.preset_names.indexOf(presetName)
+                : latestRaw.preset_names?.[presetName];
+            const latestHasIndex = Array.isArray(latestRaw.preset_names) ? latestIndex !== -1 : latestIndex !== undefined;
+            currentPresets = latestRaw.presets;
+            index = latestIndex;
+            hasIndex = latestHasIndex;
+            if (hasIndex && !currentPresets[index] && fetched && typeof fetched === 'object' && !Array.isArray(fetched)) {
+                currentPresets[index] = structuredClone(fetched);
+            }
+        }
+        const hasPreset = hasIndex && Boolean(currentPresets[index]);
+        const invokedPreset = hasPreset ? currentPresets[index] : null;
         const invokedIdentity = invokedPreset ? presetExtensionLineage.capture(invokedPreset) : null;
+        let settingsSaved = false;
+
+        // Re-check live selection after any lazy hydration yield so switching
+        // presets mid-fetch cannot write into the newly selected preset's settings.
+        const currentSelectedOption = $(this.select).find('option:selected');
+        const currentSelectedIsCardBound = this.apiId === 'openai' && currentSelectedOption.attr('data-luker-char-bound') === '1';
+        const isTargetSelectedNow = Boolean(settings)
+            && areLookupNamesEqual(this.getSelectedPresetName(), presetName)
+            && (target ? currentSelectedIsCardBound : !currentSelectedIsCardBound);
 
         // Write to settings if the selected preset is the same as the provided name
-        if (settings && areLookupNamesEqual(selectedName, presetName)) {
+        if (isTargetSelectedNow) {
             const hadExtensions = Object.hasOwn(settings, 'extensions');
             const previousExtensions = settings.extensions;
             // Assemble privately so retained live subtrees cannot reach captured values.
@@ -1698,12 +1732,18 @@ class PresetManager {
             const intendedExtensions = cloneAsJsonWire(path ? desiredExtensions : value);
             const assignedExtensions = structuredClone(intendedExtensions);
             settings.extensions = assignedExtensions;
-            if (target) target.captured = captureCharacterBoundSettingsSave(oai_settings, target);
             const rollbackSettingsExtensions = () => {
                 if (settings.extensions !== assignedExtensions) return;
                 if (hadExtensions) settings.extensions = previousExtensions;
                 else delete settings.extensions;
             };
+            if (target) {
+                target.captured = captureCharacterBoundSettingsSave(oai_settings, target);
+                if (!target.captured) {
+                    rollbackSettingsExtensions();
+                    throw new Error('Character-bound preset target is unavailable');
+                }
+            }
             let outcome;
             try {
                 outcome = await saveSettings(0, { cardPresetOwner: target });
@@ -1721,17 +1761,35 @@ class PresetManager {
                 rollbackSettingsExtensions();
                 throw new Error('Preset extension settings acknowledgement changed');
             }
+            settingsSaved = true;
         }
+
+        const markPostSettingsError = (error) => {
+            if (settingsSaved && error && typeof error === 'object') {
+                error.settingsSaved = true;
+            }
+            return error;
+        };
 
         // Card-bound OpenAI presets are isolated from same-name global presets.
         if (target) {
-            await syncCharacterBoundOpenAIPresetExtensionField({ target, path, value });
+            try {
+                await syncCharacterBoundOpenAIPresetExtensionField({ target, path, value });
+            } catch (error) {
+                throw markPostSettingsError(error);
+            }
+            return;
+        }
+
+        // Built-in / non-stored active selections (e.g. Kobold 'gui') only live
+        // in active settings and have no backing preset file to update.
+        if (!hasIndex && isTargetSelectedNow) {
             return;
         }
 
         // Also update the global preset by name
         if (!hasPreset) {
-            throw new Error(`Preset ${presetName} not found`);
+            throw markPostSettingsError(new Error(`Preset ${presetName} not found`));
         }
 
         // Compose global field edits after the preceding acknowledged save,
@@ -1741,10 +1799,13 @@ class PresetManager {
         const previous = writes.get(presetName);
         const task = (async () => {
             if (previous) await previous.catch(() => {});
-            const currentNames = this.getPresetListRaw().preset_names;
-            const currentIndex = Array.isArray(currentNames) ? currentNames.indexOf(presetName) : currentNames[presetName];
-            const originalPreset = presets[index];
-            if (!originalPreset || currentIndex !== index || this.getPresetListRaw().presets !== presets) throw new Error('Preset collection changed');
+            const current = this.getPresetListRaw();
+            const currentIndex = Array.isArray(current.preset_names)
+                ? current.preset_names.indexOf(presetName)
+                : current.preset_names?.[presetName];
+            const hasCurrentIndex = Array.isArray(current.preset_names) ? currentIndex !== -1 : currentIndex !== undefined;
+            const originalPreset = hasCurrentIndex ? current.presets[currentIndex] : null;
+            if (!originalPreset) throw new Error('Preset collection changed');
             if (!presetExtensionLineage.owns(originalPreset, invokedIdentity)) throw new Error('Preset source replaced');
             const preset = structuredClone(originalPreset);
             preset.extensions = ensurePlainObject(preset.extensions || {});
@@ -1752,13 +1813,22 @@ class PresetManager {
             const written = cloneAsJsonWire(preset);
             await this.savePreset(presetName, written, { skipUpdate: true });
             const latest = this.getPresetListRaw();
-            const latestIndex = Array.isArray(latest.preset_names) ? latest.preset_names.indexOf(presetName) : latest.preset_names[presetName];
-            if (latest.presets !== presets || latestIndex !== index || presets[index] !== originalPreset) throw new Error('Preset saved but target ownership changed');
-            presets[index] = written;
+            const latestIndex = Array.isArray(latest.preset_names)
+                ? latest.preset_names.indexOf(presetName)
+                : latest.preset_names?.[presetName];
+            const hasLatestIndex = Array.isArray(latest.preset_names) ? latestIndex !== -1 : latestIndex !== undefined;
+            if (!hasLatestIndex || latest.presets[latestIndex] !== originalPreset) throw new Error('Preset saved but target ownership changed');
+            latest.presets[latestIndex] = written;
             presetExtensionLineage.acknowledge(written, invokedIdentity);
         })();
         writes.set(presetName, task);
-        try { await task; } finally { if (writes.get(presetName) === task) writes.delete(presetName); }
+        try {
+            await task;
+        } catch (error) {
+            throw markPostSettingsError(error);
+        } finally {
+            if (writes.get(presetName) === task) writes.delete(presetName);
+        }
     }
 
     // ===== Preset Group Methods =====

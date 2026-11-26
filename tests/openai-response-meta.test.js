@@ -316,6 +316,7 @@ jest.unstable_mockModule('../public/scripts/character/character-bound-preset-sta
 jest.unstable_mockModule('../public/scripts/character/presets.js', () => ({
     listCharacterBoundPresets: () => [],
     readCharacterBoundState: () => null,
+    readCharacterBoundStateRaw: () => ({ presets: [], defaultPresetName: null }),
     getCharacterBoundPreset: () => null,
     addCharacterBoundPreset: asyncNoop,
     updateCharacterBoundPreset: asyncNoop,

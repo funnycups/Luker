@@ -150,6 +150,7 @@ import { updateCharacterBoundPresetActiveState, clearCharacterBoundActiveAfterRe
 import {
     listCharacterBoundPresets,
     readCharacterBoundState,
+    readCharacterBoundStateRaw,
     getCharacterBoundPreset,
     addCharacterBoundPreset,
     updateCharacterBoundPreset,
@@ -413,8 +414,22 @@ export function getActiveCardBoundGhostSnapshot() {
  * @returns {boolean} true when a matching runtime slot was refreshed
  */
 export function refreshCharacterBoundPresetRuntimeBody(snapshot, body) {
-    const cached = characterBoundPresetState.runtimeOptions.get(snapshot.ghostValue);
-    if (!cached || cached.body !== snapshot.body) return false;
+    if (!snapshot) return false;
+    let cached = null;
+    if (typeof snapshot === 'string') {
+        for (const entry of characterBoundPresetState.runtimeOptions.values()) {
+            if (entry?.name === snapshot) {
+                cached = entry;
+                break;
+            }
+        }
+        if (!cached?.body) return false;
+    } else if (typeof snapshot === 'object' && snapshot.ghostValue) {
+        cached = characterBoundPresetState.runtimeOptions.get(snapshot.ghostValue);
+        if (!cached || cached.body !== snapshot.body) return false;
+    } else {
+        return false;
+    }
     const stripped = stripOpenAIConnectionFieldsFromPreset(body);
     const target = cached.body;
     for (const key of Object.keys(target)) {
@@ -7445,9 +7460,11 @@ export function captureCharacterBoundSettingsSave(settings, owner = null) {
     const ghost = getActiveCardBoundGhostSnapshot();
     const character = characters[Number(this_chid)];
     const name = ghost?.name;
-    const slot = character?.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === name);
+    const boundState = character ? readCharacterBoundStateRaw(character) : null;
+    const slot = boundState?.presets?.find(preset => preset.name === name);
     if (!ghost || !slot) return null;
     const cached = characterBoundPresetState.runtimeOptions.get(ghost.ghostValue);
+    if (!cached?.body) return null;
     return {
         character, id: Number(this_chid), name, ghostValue: ghost.ghostValue, cached, cacheIdentity: cardCacheLineage.capture(cached.body), bodyIdentity: cardBodyLineage.capture(slot.preset),
         before: cloneAsJsonWire(slot.preset),
@@ -7476,20 +7493,20 @@ export async function persistCapturedCharacterBoundSettings(target, { path, valu
     const desired = structuredClone(target.body);
     let written;
     const ok = await getContext().writeExtensionField(target.id, 'luker', current => {
-        const binding = current?.chat_completion_preset;
-        const index = binding?.presets?.findIndex(preset => preset.name === target.name) ?? -1;
+        const binding = readCharacterBoundStateRaw({ data: { extensions: { luker: current } } });
+        const index = binding.presets.findIndex(preset => preset.name === target.name);
         if (index < 0) throw new Error('Character-bound preset no longer exists');
         if (target.owner && binding.defaultPresetName !== target.owner.source.defaultPresetName) throw new Error('Character-bound preset source changed');
         const live = binding.presets[index].preset;
-        const actual = target.character.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === target.name)?.preset;
+        const actual = readCharacterBoundStateRaw(target.character).presets.find(preset => preset.name === target.name)?.preset;
         written = preparePresetMutation(before, desired, live, { ownedPath: target.owner ? (path || '') : null, ownedValue: value, acknowledged: cardBodyLineage.owns(actual, target.bodyIdentity), normalize: cloneAsJsonWire });
         written = cloneAsJsonWire(written);
         const presets = binding.presets.slice();
         presets[index] = { ...presets[index], preset: written };
-        return { ...current, chat_completion_preset: { ...binding, presets } };
+        return { ...current, chat_completion_preset: { presets, defaultPresetName: binding.defaultPresetName } };
     });
     if (!ok) throw new Error('Failed to save character-bound preset extensions');
-    const liveSlot = target.character.data?.extensions?.luker?.chat_completion_preset?.presets?.find(preset => preset.name === target.name);
+    const liveSlot = readCharacterBoundStateRaw(target.character).presets.find(preset => preset.name === target.name);
     if (JSON.stringify(liveSlot?.preset) === JSON.stringify(written)) {
         cardBodyLineage.acknowledge(liveSlot.preset, target.bodyIdentity);
         refreshCharacterBoundPresetCache(target, written);
@@ -7996,7 +8013,9 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         // presets.js:mutateCharacterBoundState).
         const snapshot = getActiveCardBoundGhostSnapshot();
         await updateCharacterBoundPreset(character, decision.name, presetBody);
-        refreshCharacterBoundPresetRuntimeBody(snapshot, presetBody);
+        if (snapshot) {
+            refreshCharacterBoundPresetRuntimeBody(snapshot, presetBody);
+        }
         // Skip the selector `.trigger('change')` — the card-bound option is
         // already the current selection, and firing change would re-enter
         // onSettingsPresetChange → getSelectedCardBoundBody → re-apply loop.

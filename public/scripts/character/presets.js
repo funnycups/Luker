@@ -43,6 +43,12 @@ const FIELD = 'chat_completion_preset';
  * @param {object} character
  * @returns {BoundState}
  */
+const legacyStrippedPresetCache = new WeakMap();
+
+/**
+ * Pure read of normalized bound-preset state without side effects.
+ * Used by both public reads and persistence updaters.
+ */
 export function readCharacterBoundStateRaw(character) {
     const raw = character?.data?.extensions?.[NAMESPACE]?.[FIELD];
     if (raw == null) return { presets: [], defaultPresetName: null };
@@ -55,8 +61,18 @@ export function readCharacterBoundStateRaw(character) {
 
     // Legacy single-binding {name, preset}
     if (raw && typeof raw === 'object' && raw.name && raw.preset && !Array.isArray(raw.presets)) {
+        let strippedPreset;
+        if (typeof raw.preset === 'object') {
+            strippedPreset = legacyStrippedPresetCache.get(raw.preset);
+            if (!strippedPreset) {
+                strippedPreset = stripOpenAIConnectionFieldsFromPreset(raw.preset);
+                legacyStrippedPresetCache.set(raw.preset, strippedPreset);
+            }
+        } else {
+            strippedPreset = stripOpenAIConnectionFieldsFromPreset(raw.preset);
+        }
         return {
-            presets: [{ name: String(raw.name), preset: stripOpenAIConnectionFieldsFromPreset(raw.preset) }],
+            presets: [{ name: String(raw.name), preset: strippedPreset }],
             defaultPresetName: String(raw.name),
             _migrated: true,
         };
