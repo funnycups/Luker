@@ -38,7 +38,7 @@ import {
 } from '../script.js';
 import { hasActiveSource, hasKeepAliveHold, subscribeActivityGuard } from './activity-guard.js';
 import { getPipViewStatus, updatePipView } from './luker-pip-view.js';
-import { isMobile, initMovingUI, favsToHotswap, shouldSendOnEnter } from './RossAscends-mods.js';
+import { isMobile, initMovingUI, favsToHotswap, shouldSendOnEnter, autoFitSendTextAreaDebounced } from './RossAscends-mods.js';
 import {
     getActiveKeepAliveMode,
     getAvailableWebModes,
@@ -230,6 +230,7 @@ export const power_user = {
     allow_name2_display: false,
     immersive_mode_last_state: false,
     immersive_mode_keep_top_bar: false,
+    expand_composer_on_long_draft: true,
     luker_mobile_keep_alive_android_enabled: false,
     luker_mobile_keep_alive_harmony_enabled: false,
     luker_mobile_keep_alive_ios_enabled: false,
@@ -424,18 +425,19 @@ const themeManager = createThemeManager({
             $textarea.val(next);
         }
         themeManager.applyCustomStyleTag(next);
-        applyComposerDraftLayout();
+        refreshComposerDraftLayout();
         syncIosSystemBarsColor();
     },
     onPalettesApplied: (themeName, palettes) => {
         syncThemePalettes(themeName, palettes);
+        refreshComposerDraftLayout();
         syncThemeChromeColors();
     },
     onBuiltinWriteBlocked: (field, themeName) => {
         console.warn(`Ignored write to "${field}" on read-only built-in theme "${themeName}". Create an editable copy first.`);
     },
     onStylesheetLoaded: () => {
-        applyComposerDraftLayout();
+        refreshComposerDraftLayout();
         syncThemeChromeColors();
         syncIosSystemBarsColor();
     },
@@ -1588,6 +1590,19 @@ function switchReducedMotion() {
 function switchCompactInputArea() {
     $('#send_form').toggleClass('compact', power_user.compact_input_area);
     $('#compact_input_area').prop('checked', power_user.compact_input_area);
+    refreshComposerDraftLayout();
+}
+
+function syncSendTextareaHeightAfterWrap() {
+    if (!CSS.supports('field-sizing', 'content')) {
+        autoFitSendTextAreaDebounced();
+    }
+}
+
+function switchExpandComposerOnLongDraft() {
+    const enabled = Boolean(power_user.expand_composer_on_long_draft);
+    $('#expand_composer_on_long_draft').prop('checked', enabled);
+    applyComposerDraftLayout(enabled, { onWrapChange: syncSendTextareaHeightAfterWrap });
 }
 
 function switchSwipeNumAllMessages() {
@@ -2237,7 +2252,7 @@ function applyCustomCSS() {
         $textarea.val(cssText);
     }
     themeManager.applyCustomStyleTag(cssText);
-    applyComposerDraftLayout();
+    refreshComposerDraftLayout();
     syncThemeActionControls();
     syncIosSystemBarsColor();
 }
@@ -2606,6 +2621,7 @@ export function applyPowerUserSettings() {
     switchTokenCount();
     switchMessageActions();
     switchSwipeNumAllMessages();
+    switchExpandComposerOnLongDraft();
 }
 
 export function applyStylePins() {
@@ -2968,6 +2984,7 @@ export async function loadPowerUserSettings(settings, data) {
     $(`#character_sort_order option[data-order="${power_user.sort_order}"][data-field="${power_user.sort_field}"]`).prop('selected', true);
     switchReducedMotion();
     switchCompactInputArea();
+    switchExpandComposerOnLongDraft();
     reloadMarkdownProcessor();
     await loadInstructMode(data);
     await loadContextSettings();
@@ -4411,6 +4428,7 @@ jQuery(() => {
     initThemePalettes({
         translate,
         onPaletteChange: () => {
+            refreshComposerDraftLayout();
             syncThemeChromeColors();
         },
     });
@@ -5166,6 +5184,12 @@ jQuery(() => {
         if (document.body.classList.contains('luker-immersive-mode')) {
             document.body.classList.toggle('luker-immersive-keep-top-bar', value);
         }
+        saveSettingsDebounced();
+    });
+
+    $('#expand_composer_on_long_draft').on('input', function () {
+        power_user.expand_composer_on_long_draft = !!$(this).prop('checked');
+        switchExpandComposerOnLongDraft();
         saveSettingsDebounced();
     });
 

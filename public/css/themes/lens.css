@@ -819,6 +819,10 @@ body.swipeAllMessages #chat .mes:not(.last_mes) {
         line-height: 22px !important;
     }
 
+    #send_form[data-composer-draft-wrap] #send_textarea {
+        padding-inline: 12px;
+    }
+
     #leftSendForm,
     #rightSendForm {
         flex-wrap: nowrap;

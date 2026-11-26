@@ -2922,6 +2922,8 @@
     "Exit immersive mode": "退出沉浸模式",
     "Keep top bar in immersive mode": "沉浸模式下保留頂部欄",
     "When immersive mode is on, keep the top bar visible instead of hiding it": "沉浸模式開啟時，頂部欄仍然可見而不會被隱藏。",
+    "Expand input bar on long drafts": "長草稿時自動擴展輸入欄",
+    "Move the message input onto its own full-width row when the draft wraps or contains line breaks.": "草稿換行或超過單行寬度時，將輸入框擴展為獨占首行。",
     "Background keep-alive on mobile": "行動端後台保活",
     "Open external links in the system browser": "外部連結以系統瀏覽器開啟",
     "Keep AI requests running when the app or browser is in the background on mobile devices.": "當應用程式或瀏覽器在行動裝置後台時，保持 AI 請求繼續執行。",
