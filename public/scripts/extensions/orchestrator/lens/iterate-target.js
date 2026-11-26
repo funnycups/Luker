@@ -761,10 +761,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
     function readTargetProfile(ctx, settings, target) {
         const { mode, scope, avatar } = target;
         const id = destinationPresetId(target);
-        const characterLibrary = scope === 'character'
-            ? deps.getCharacterExtensionDataByAvatar(ctx, avatar)?.presetLibraries?.[mode]
-            : null;
-        const copyingGlobal = scope === 'character' && !target.hasOverride && !characterLibrary?.[id];
+        const copyingGlobal = scope === 'character' && !target.hasOverride;
         const entry = deps.getPreset(settings, mode, copyingGlobal ? 'global' : scope, copyingGlobal ? target.presetId : id, { context: ctx, avatar });
         if (!entry) throw new SourceError('preset-missing', i18nFormat('Preset "${0}" no longer exists.', copyingGlobal ? target.presetId : id));
         return sanitizeForMode(mode, entry);
@@ -842,7 +839,9 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             ext.activePresetIds ||= {};
             if (!ext.presetLibraries[mode][id]) {
                 if (target.hasOverride) throw new SourceError('preset-missing', i18nFormat('Preset "${0}" no longer exists.', id));
-                if (!ext.activePresetIds[mode]) ext.activePresetIds[mode] = id;
+            }
+            if (!target.hasOverride && !ext.activePresetIds[mode]) {
+                ext.activePresetIds[mode] = id;
             }
             const existingName = ext.presetLibraries[mode][id]?.name || 'Default';
             const entry = deps.sanitizePresetEntry ? deps.sanitizePresetEntry(mode, { ...sanitized, name: existingName }) : { name: existingName, ...sanitized };

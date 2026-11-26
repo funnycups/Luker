@@ -298,7 +298,7 @@ function enqueueGlobalPresetLifecycle(context, mode, operation, pending) {
         }
         return true;
     })();
-    queue.tail = next;
+    queue.tail = next.catch(() => {});
     return next;
 }
 
@@ -306,14 +306,14 @@ function persistGlobalLibraryState(ctx, settings, mode, { operation = null, dire
     const activeId = settings.activePresetIds?.[mode];
     const libraryJson = JSON.stringify(settings.presetLibraries?.[mode]);
     const pending = (typeof ctx?.saveSettings === 'function'
-        ? Promise.resolve(ctx.saveSettings(0, directSave ? { directSave: true } : undefined)).then((outcome) => {
+        ? Promise.resolve().then(() => ctx.saveSettings(0, directSave ? { directSave: true } : undefined)).then((outcome) => {
             if (!outcome || typeof outcome !== 'object') return false;
             if (!outcome.ok) return false;
             if (!outcome.payload) return true;
             const saved = outcome.payload?.extension_settings?.orchestrator;
             return saved?.activePresetIds?.[mode] === activeId
                 && JSON.stringify(saved?.presetLibraries?.[mode]) === libraryJson;
-        })
+        }).catch(() => false)
         : saveSettingsViaContext(ctx).then(() => true, () => false));
     return enqueueGlobalPresetLifecycle(ctx, mode, operation, pending);
 }
@@ -350,15 +350,166 @@ function downloadJson(fileName, payload) {
 export function createPresetAccess(host) {
     const refreshed = (ctx) => refreshEditors(ctx);
     const opts = (ctx, avatar) => ({ context: ctx, avatar });
-    let desiredChangeListener = null;
-    const notifyDesiredChange = () => desiredChangeListener?.();
+    const desiredChangeListeners = new Set();
+    const notifyDesiredChange = async () => {
+        for (const fn of [...desiredChangeListeners]) {
+            await fn();
+        }
+    };
     const nameOf = (ctx, settings, mode, scope, avatar, id) => {
         const library = scope === 'character' ? getCharacterPresetLibrary(ctx, avatar, mode) : (settings.presetLibraries?.[mode] || {});
         return String(library?.[id]?.name || '').trim();
     };
+    const snapshotCharacterExt = (ctx, avatar) => {
+        if (!avatar) return null;
+        const idx = getCharacterIndexByAvatar(ctx, avatar);
+        if (idx < 0) return null;
+        const extObj = ctx.characters?.[idx]?.data?.extensions;
+        if (!extObj) return null;
+        const hadKey = Object.prototype.hasOwnProperty.call(extObj, 'orchestrator');
+        return { avatar, hadKey, prev: hadKey ? clone(extObj.orchestrator) : undefined };
+    };
+    const restoreCharacterExt = (ctx, snap) => {
+        if (!snap?.avatar) return;
+        const idx = getCharacterIndexByAvatar(ctx, snap.avatar);
+        if (idx < 0) return;
+        const extObj = ctx.characters?.[idx]?.data?.extensions;
+        if (!extObj) return;
+        if (snap.hadKey) {
+            extObj.orchestrator = clone(snap.prev);
+        } else {
+            delete extObj.orchestrator;
+        }
+    };
+    const snapshotGlobalState = (settings, mode) => {
+        const hadLibraries = Object.prototype.hasOwnProperty.call(settings, 'presetLibraries');
+        const hadModeLibrary = Boolean(hadLibraries && settings.presetLibraries && Object.prototype.hasOwnProperty.call(settings.presetLibraries, mode));
+        const hadActiveIds = Object.prototype.hasOwnProperty.call(settings, 'activePresetIds');
+        const hadModeActive = Boolean(hadActiveIds && settings.activePresetIds && Object.prototype.hasOwnProperty.call(settings.activePresetIds, mode));
+        return {
+            mode,
+            hadLibraries,
+            hadModeLibrary,
+            prevLibrary: hadModeLibrary ? clone(settings.presetLibraries[mode]) : undefined,
+            hadActiveIds,
+            hadModeActive,
+            prevActive: hadModeActive ? settings.activePresetIds[mode] : undefined,
+        };
+    };
+    let nextGlobalWriteEpoch = 0;
+    const activeGlobalWriteEpochs = new Map();
+    const captureGlobalPostMutation = (snap, settings) => {
+        if (!snap) return;
+        snap.prevEpoch = activeGlobalWriteEpochs.get(snap.mode) || 0;
+        const nextEpoch = ++nextGlobalWriteEpoch;
+        activeGlobalWriteEpochs.set(snap.mode, nextEpoch);
+        snap.epoch = nextEpoch;
+        snap.expectedLibraryJson = JSON.stringify(settings.presetLibraries?.[snap.mode]);
+        snap.expectedActive = settings.activePresetIds?.[snap.mode];
+    };
+    const restoreGlobalState = (settings, snap) => {
+        if (!snap) return false;
+        const hasExpected = Object.prototype.hasOwnProperty.call(snap, 'expectedLibraryJson');
+        if (hasExpected) {
+            const epochMatches = activeGlobalWriteEpochs.get(snap.mode) === snap.epoch;
+            const libraryMatches = JSON.stringify(settings.presetLibraries?.[snap.mode]) === snap.expectedLibraryJson;
+            const activeMatches = settings.activePresetIds?.[snap.mode] === snap.expectedActive;
+            // Both fields persist together and epochs prevent ABA clobbering;
+            // if a newer operation touched this mode, skip rollback.
+            if (!epochMatches || !libraryMatches || !activeMatches) {
+                return false;
+            }
+        }
+        if (snap.hadLibraries && settings.presetLibraries) {
+            if (snap.hadModeLibrary) {
+                settings.presetLibraries[snap.mode] = clone(snap.prevLibrary);
+            } else {
+                delete settings.presetLibraries[snap.mode];
+            }
+        } else if (!snap.hadLibraries) {
+            delete settings.presetLibraries;
+        }
+        if (snap.hadActiveIds && settings.activePresetIds) {
+            if (snap.hadModeActive) {
+                settings.activePresetIds[snap.mode] = snap.prevActive;
+            } else {
+                delete settings.activePresetIds[snap.mode];
+            }
+        } else if (!snap.hadActiveIds) {
+            delete settings.activePresetIds;
+        }
+        if (hasExpected) {
+            activeGlobalWriteEpochs.set(snap.mode, snap.prevEpoch);
+        }
+        return true;
+    };
+    const notifyDesiredChangeSafe = async () => {
+        try {
+            await notifyDesiredChange();
+        } catch {
+            // Best-effort UI resync during rollback.
+        }
+    };
+    const persistCharacterWithRollback = async (ctx, avatar, snap, { notify = true } = {}) => {
+        let saved = false;
+        try {
+            saved = await persistCharacterLibraryInPlace(ctx, avatar);
+        } catch (err) {
+            restoreCharacterExt(ctx, snap);
+            if (notify) {
+                refreshed(ctx);
+                await notifyDesiredChangeSafe();
+            }
+            throw err;
+        }
+        if (!saved) {
+            restoreCharacterExt(ctx, snap);
+            if (notify) {
+                refreshed(ctx);
+                await notifyDesiredChangeSafe();
+            }
+            return false;
+        }
+        return true;
+    };
+    const persistGlobalWithRollback = async (ctx, settings, mode, snap, persistOpts = undefined, onRollback = null) => {
+        let ok = false;
+        try {
+            ok = await persistGlobalLibraryState(ctx, settings, mode, persistOpts);
+        } catch (err) {
+            restoreGlobalState(settings, snap);
+            onRollback?.();
+            refreshed(ctx);
+            await notifyDesiredChangeSafe();
+            throw err;
+        }
+        if (!ok) {
+            restoreGlobalState(settings, snap);
+            onRollback?.();
+            refreshed(ctx);
+            await notifyDesiredChangeSafe();
+            return false;
+        }
+        return true;
+    };
+    const notifyOrRollback = async (ctx, settings, globalSnap, charSnap) => {
+        try {
+            await notifyDesiredChange();
+        } catch (err) {
+            restoreGlobalState(settings, globalSnap);
+            restoreCharacterExt(ctx, charSnap);
+            refreshed(ctx);
+            throw err;
+        }
+    };
     return {
         onDesiredChange(fn) {
-            desiredChangeListener = typeof fn === 'function' ? fn : null;
+            if (typeof fn === 'function') {
+                desiredChangeListeners.add(fn);
+                return () => { desiredChangeListeners.delete(fn); };
+            }
+            desiredChangeListeners.clear();
+            return () => {};
         },
 
         list(target) {
@@ -375,46 +526,82 @@ export function createPresetAccess(host) {
         async select(target, scope, presetId) {
             const { ctx, settings } = host();
             const { mode, avatar } = target;
+            if (!getPreset(settings, mode, scope, presetId, opts(ctx, avatar))) {
+                throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
+            }
             const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
+            const charSnap = (scope === 'character' || hadCardSlot) ? snapshotCharacterExt(ctx, avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, mode) : null;
             if (scope === 'global' && hadCardSlot) {
                 setActivePresetId(settings, mode, 'character', '', opts(ctx, avatar));
             }
             if (!setActivePresetId(settings, mode, scope, presetId, opts(ctx, avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
             }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
-            const globalSave = scope === 'global'
-                ? persistGlobalLibraryState(ctx, settings, mode, { directSave: hadCardSlot })
-                : null;
-            let cardSaved = true;
-            if (hadCardSlot || (scope === 'character' && avatar)) {
-                cardSaved = await persistCharacterLibraryInPlace(ctx, avatar);
-            }
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'global') {
-                const ok = await globalSave;
-                if (!ok || !cardSaved) throw new WriteError('write', i18n('Failed to save the settings'));
+                const ok = await persistGlobalWithRollback(
+                    ctx,
+                    settings,
+                    mode,
+                    globalSnap,
+                    { directSave: hadCardSlot },
+                    charSnap ? () => restoreCharacterExt(ctx, charSnap) : null,
+                );
+                if (!ok) {
+                    throw new WriteError('write', i18n('Failed to save the settings'));
+                }
+                if (hadCardSlot) {
+                    let cardSaved = false;
+                    let cardErr = null;
+                    try {
+                        cardSaved = await persistCharacterWithRollback(ctx, avatar, charSnap, { notify: false });
+                    } catch (err) {
+                        cardErr = err;
+                    }
+                    if (!cardSaved) {
+                        if (restoreGlobalState(settings, globalSnap)) {
+                            await persistGlobalLibraryState(ctx, settings, mode, { directSave: true }).catch(() => false);
+                        }
+                        refreshed(ctx);
+                        await notifyDesiredChangeSafe();
+                        if (cardErr) throw cardErr;
+                        throw new WriteError('write', i18n('Failed to save the settings'));
+                    }
+                }
                 return;
             }
-            if (!cardSaved) throw new WriteError('write', i18n('Failed to persist character override.'));
+            if (avatar) {
+                const cardSaved = await persistCharacterWithRollback(ctx, avatar, charSnap);
+                if (!cardSaved) throw new WriteError('write', i18n('Failed to persist character override.'));
+            }
         },
 
         async create(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
+            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
             const id = createPreset(settings, target.mode, scope, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
-                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                if (!await persistCharacterWithRollback(ctx, target.avatar, charSnap)) {
                     throw new WriteError('write', i18n('Failed to persist character override.'));
                 }
                 return;
             }
-            if (!await persistGlobalLibraryState(ctx, settings, target.mode)) {
+            if (!await persistGlobalWithRollback(ctx, settings, target.mode, globalSnap)) {
                 throw new WriteError('write', i18n('Failed to save the settings'));
             }
         },
@@ -423,67 +610,88 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
+            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
             const id = duplicatePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
-                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                if (!await persistCharacterWithRollback(ctx, target.avatar, charSnap)) {
                     throw new WriteError('write', i18n('Failed to persist character override.'));
                 }
                 await copyOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
                 return;
             }
-            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+            const ok = await persistGlobalWithRollback(ctx, settings, target.mode, globalSnap, {
                 operation: { action: 'duplicate', id, sourceId: target.presetId, oldName, newName: name },
             });
-            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
+            if (!ok) {
+                throw new WriteError('write', i18n('Failed to save the settings'));
+            }
         },
 
         async rename(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
+            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
             if (!renamePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
-                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                if (!await persistCharacterWithRollback(ctx, target.avatar, charSnap)) {
                     throw new WriteError('write', i18n('Failed to persist character override.'));
                 }
                 await renameOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
                 return;
             }
-            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+            const ok = await persistGlobalWithRollback(ctx, settings, target.mode, globalSnap, {
                 operation: { action: 'rename', id: target.presetId, oldName, newName: name },
             });
-            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
+            if (!ok) {
+                throw new WriteError('write', i18n('Failed to save the settings'));
+            }
         },
 
         async remove(target) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const name = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
+            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
             if (!deletePreset(settings, target.mode, scope, target.presetId, opts(ctx, target.avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
-                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                if (!await persistCharacterWithRollback(ctx, target.avatar, charSnap)) {
                     throw new WriteError('write', i18n('Failed to persist character override.'));
                 }
                 await emitOrchPresetDeleted(ctx, { mode: target.mode, name });
                 return;
             }
-            const ok = await persistGlobalLibraryState(ctx, settings, target.mode, {
+            const ok = await persistGlobalWithRollback(ctx, settings, target.mode, globalSnap, {
                 operation: { action: 'delete', id: target.presetId, oldName: name },
             });
-            if (!ok) throw new WriteError('write', i18n('Failed to save the settings'));
+            if (!ok) {
+                throw new WriteError('write', i18n('Failed to save the settings'));
+            }
         },
 
         async exportActive(target) {
@@ -509,19 +717,29 @@ export function createPresetAccess(host) {
             const scope = scopeOf(target);
             const { mode } = target;
             const profile = extractImportedProfileForMode(imported);
+            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, mode) : null;
             const id = createPreset(settings, mode, scope, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, mode, scope, id, opts(ctx, target.avatar))) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not create the preset.'));
             }
             const writeResult = writeActivePreset(settings, mode, scope, profile, opts(ctx, target.avatar));
-            if (!writeResult.ok) throw new WriteError('write', writeResult.hint || writeResult.reason);
+            if (!writeResult.ok) {
+                restoreCharacterExt(ctx, charSnap);
+                restoreGlobalState(settings, globalSnap);
+                refreshed(ctx);
+                throw new WriteError('write', writeResult.hint || writeResult.reason);
+            }
+            captureGlobalPostMutation(globalSnap, settings);
             refreshed(ctx);
-            await notifyDesiredChange();
+            await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
-                if (!await persistCharacterLibraryInPlace(ctx, target.avatar)) {
+                if (!await persistCharacterWithRollback(ctx, target.avatar, charSnap)) {
                     throw new WriteError('write', i18n('Failed to persist character override.'));
                 }
-            } else if (!await persistGlobalLibraryState(ctx, settings, mode)) {
+            } else if (!await persistGlobalWithRollback(ctx, settings, mode, globalSnap)) {
                 throw new WriteError('write', i18n('Failed to save the settings'));
             }
             const data = { ...profile };

@@ -771,4 +771,39 @@ describe('orchestrator/lens/iterate-target.js', () => {
             h.target.targetKey({ scope: 'global', mode: 'spec', presetId: 'p2' }),
         );
     });
+
+    test('activates character override and bases commit on global profile when an inactive default preset already exists on the card', async () => {
+        const gSpec = makeSpecProfile({
+            presets: {
+                distiller: { systemPrompt: 'Global distiller', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+                synthesizer: { systemPrompt: 'Global synth', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+            },
+        });
+        const staleCharSpec = makeSpecProfile({
+            presets: {
+                distiller: { systemPrompt: 'Stale inactive card distiller', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+                synthesizer: { systemPrompt: 'Stale inactive card synth', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+            },
+        });
+        const h = makeHarness({ mode: 'spec', hasCharOverride: false, globalProfile: gSpec });
+        // Pre-populate an inactive `default` preset on the character card (activePresetIds.spec is empty).
+        h.ctx.characters[0].data.extensions.orchestrator = {
+            presetLibraries: { spec: { default: { name: 'Default', ...staleCharSpec } } },
+            activePresetIds: { spec: '' },
+        };
+
+        const loaded = await h.target.load('character', h.ctx);
+        expect(loaded.target.hasOverride).toBe(false);
+        expect(loaded.live.presets.distiller.systemPrompt).toBe('Global distiller');
+
+        const edited = clone(loaded.live);
+        edited.presets.distiller.systemPrompt = 'Edited from global base';
+        await h.target.commit(loaded.target, loaded.live, edited, ['preset:distiller']);
+
+        const persistedExt = h.ctx.characters[0].data.extensions.orchestrator;
+        expect(persistedExt.activePresetIds.spec).toBe('default');
+        expect(persistedExt.presetLibraries.spec.default.presets.distiller.systemPrompt).toBe('Edited from global base');
+        // Non-edited unit must come from global base, NOT stale inactive card preset.
+        expect(persistedExt.presetLibraries.spec.default.presets.synthesizer.systemPrompt).toBe('Global synth');
+    });
 });

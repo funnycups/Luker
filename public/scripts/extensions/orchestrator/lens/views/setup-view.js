@@ -163,15 +163,24 @@ export function createSetupView(app) {
         const encode = (scope, id) => `${scope}:${id}`;
         const runLibraryAction = async (fn, done = '') => {
             let reloaded = false;
-            presets.onDesiredChange?.(async () => {
+            let actionFailed = false;
+            const dispose = presets.onDesiredChange?.(async () => {
                 reloaded = true;
                 await app.reload();
             });
             try {
-                await action(fn, done, { reloadAfter: false });
-                if (!reloaded) await app.reload();
+                await action(async () => {
+                    try {
+                        return await fn();
+                    } catch (err) {
+                        actionFailed = true;
+                        throw err;
+                    }
+                }, done, { reloadAfter: false });
+                if (!reloaded || actionFailed) await app.reload();
             } finally {
-                presets.onDesiredChange?.(null);
+                if (typeof dispose === 'function') dispose();
+                else presets.onDesiredChange?.(null);
             }
         };
         const select = h('select', {
