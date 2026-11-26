@@ -588,6 +588,70 @@ describe('final review regression fixes', () => {
         const badgeOffset = parseFloat(container.querySelector('.luker-toast-stack-badge').style.getPropertyValue('--deck-badge-offset-y'));
         expect(badgeOffset).toBeGreaterThanOrEqual(272);
     });
+
+    test('holds timed toast open while caller input is focused, ignores clicks on input, and resumes hide on blur', async () => {
+        jest.useFakeTimers();
+
+        const $toast = toastr.info('<input class="edit-box" />', '', {
+            timeOut: 1000,
+            extendedTimeOut: 500,
+            tapToDismiss: true,
+            escapeHtml: false,
+        });
+        const input = $toast.find('.edit-box')[0];
+        input.focus();
+        input.click();
+        expect(document.body.contains($toast[0])).toBe(true);
+
+        // Timer expiry must defer while caller input stays focused
+        jest.advanceTimersByTime(1200);
+        expect(document.body.contains($toast[0])).toBe(true);
+
+        // Blurring input schedules dismissal after extendedTimeOut
+        input.blur();
+        $toast[0].dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+        await flushMicrotasks();
+        jest.advanceTimersByTime(600);
+        expect(document.body.contains($toast[0])).toBe(false);
+    });
+
+    test('honors custom optionsOverride.iconClass and space-separated iconClass/positionClass without DOMException', () => {
+        const $toast = toastr.info('Multi-class', '', {
+            iconClass: 'custom-toast-icon extra-badge',
+            positionClass: 'toast-top-right custom-pos-extra',
+        });
+        expect($toast.hasClass('custom-toast-icon')).toBe(true);
+        expect($toast.hasClass('extra-badge')).toBe(true);
+        expect($toast.hasClass('toast-info')).toBe(false);
+        const container = document.getElementById('toast-container');
+        expect(container.classList.contains('toast-top-right')).toBe(true);
+        expect(container.classList.contains('custom-pos-extra')).toBe(true);
+    });
+
+    test('removes empty #toast-container after last toast closes even when onHidden is overridden', () => {
+        const onHidden = jest.fn();
+        const $toast = toastr.info('Custom hidden', '', { onHidden });
+        expect(document.getElementById('toast-container')).not.toBeNull();
+
+        toastr.clear($toast);
+        expect(onHidden).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('toast-container')).toBeNull();
+    });
+
+    test('second pointerdown cancels an active drag on a prior toast instead of stranding dragging state', () => {
+        const $t1 = toastr.info('First draggable', '', { timeOut: 60000 });
+        const $t2 = toastr.info('Second draggable', '', { timeOut: 60000 });
+        setRect($t1[0], { left: 200, top: 80, width: 320, height: 64 });
+        setRect($t2[0], { left: 200, top: 160, width: 320, height: 64 });
+
+        $t1[0].dispatchEvent(makePointerEvent('pointerdown', { clientX: 250, clientY: 100, pointerId: 1 }));
+        $t1[0].dispatchEvent(makePointerEvent('pointermove', { clientX: 350, clientY: 200, pointerId: 1 }));
+        expect($t1[0].classList.contains('luker-toast-dragging')).toBe(true);
+
+        // Second touch begins dragging $t2 without pointerup on $t1
+        $t2[0].dispatchEvent(makePointerEvent('pointerdown', { clientX: 250, clientY: 180, pointerId: 2 }));
+        expect($t1[0].classList.contains('luker-toast-dragging')).toBe(false);
+    });
 });
 
 

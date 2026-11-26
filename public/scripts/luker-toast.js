@@ -443,6 +443,10 @@ export function createToastEngine() {
         });
     }
 
+    function splitClassTokens(value) {
+        return String(value || '').trim().split(/\s+/).filter(Boolean);
+    }
+
     function ensureContainer(options, create) {
         const containerId = options.containerId || 'toast-container';
         let existing = typeof document !== 'undefined' ? document.getElementById(containerId) : null;
@@ -450,8 +454,9 @@ export function createToastEngine() {
         if (!existing && create && typeof document !== 'undefined') {
             existing = document.createElement('div');
             existing.id = containerId;
-            if (options.positionClass) {
-                existing.classList.add(options.positionClass);
+            const posTokens = splitClassTokens(options.positionClass);
+            if (posTokens.length > 0) {
+                existing.classList.add(...posTokens);
             }
             const topDialog = getTopmostOpenDialog();
             const mountTarget = topDialog
@@ -461,10 +466,11 @@ export function createToastEngine() {
         }
 
         if (existing) {
-            if (options.positionClass) {
+            const posTokens = splitClassTokens(options.positionClass);
+            if (posTokens.length > 0) {
                 const hasKnown = KNOWN_POSITION_CLASSES.some(cls => existing.classList.contains(cls));
                 if (!hasKnown) {
-                    existing.classList.add(options.positionClass);
+                    existing.classList.add(...posTokens);
                 }
             }
             if (containerEl !== existing) {
@@ -507,7 +513,7 @@ export function createToastEngine() {
         entry.hideEta = Date.now() + ms;
         entry.maxHideTime = ms;
         entry.hideTimer = setTimeout(() => {
-            hideEntry(entry, { forced: true });
+            hideEntry(entry, { forced: false });
         }, ms);
 
         if (entry.progressEl) {
@@ -676,6 +682,7 @@ export function createToastEngine() {
                 finalizeRemovedEntry(entry, { alreadyRemovedFromDom: true });
             }
         }
+        if (!containerEl) return;
 
         const positionClass = getActivePositionClass(containerEl);
         const docked = getDockedEntries();
@@ -807,6 +814,10 @@ export function createToastEngine() {
         }
 
         if (!existing.childNodes.length && entries.size === 0) {
+            if (containerObserver) {
+                containerObserver.disconnect();
+                containerObserver = null;
+            }
             existing.remove();
             if (containerEl === existing) {
                 containerEl = null;
@@ -817,10 +828,10 @@ export function createToastEngine() {
         if (existing.parentElement !== document.body) {
             document.body.appendChild(existing);
         }
-        const posClass = userOptions.positionClass || getDefaultOptions().positionClass;
-        if (posClass) {
+        const posTokens = splitClassTokens(userOptions.positionClass || getDefaultOptions().positionClass);
+        if (posTokens.length > 0) {
             existing.classList.remove(...KNOWN_POSITION_CLASSES);
-            existing.classList.add(posClass);
+            existing.classList.add(...posTokens);
         }
         refreshLayout();
     }
@@ -973,13 +984,24 @@ export function createToastEngine() {
         publish(entry.response);
 
         refreshLayout();
+
+        if (entries.size === 0 && containerEl && containerEl.childNodes.length === 0) {
+            if (containerObserver) {
+                containerObserver.disconnect();
+                containerObserver = null;
+            }
+            containerEl.remove();
+            containerEl = null;
+        }
     }
 
     function hideEntry(entry, { forced = false, immediate = false } = {}) {
         if (!entry || entry.finalized) return;
         if (!forced && isHeldByCallerInputFocus(entry)) {
+            entry.deferredAutoHide = true;
             return;
         }
+        entry.deferredAutoHide = false;
         if (entry.exiting && !immediate) return;
 
         entry.exiting = true;
@@ -1166,6 +1188,9 @@ export function createToastEngine() {
                 entry.zOrder = ++floatingZSeq;
                 el.style.zIndex = String(FLOATING_BASE_Z_INDEX + entry.zOrder);
             }
+            if (activeDrag) {
+                endActiveDrag({ cancelled: true });
+            }
             activeDrag = {
                 entry,
                 pointerId: event.pointerId,
@@ -1218,11 +1243,32 @@ export function createToastEngine() {
             }
         });
 
+        el.addEventListener('focusout', () => {
+            if (!entry.deferredAutoHide || entry.exiting || entry.finalized) return;
+            queueMicrotask(() => {
+                if (!entry.deferredAutoHide || entry.exiting || entry.finalized) return;
+                if (isHeldByCallerInputFocus(entry)) return;
+                entry.deferredAutoHide = false;
+                if (entry.hovered || (entry.state === 'docked' && isDeckExpanded())) return;
+                const resumeMs = entry.policy.effectiveExtendedTimeOut > 0
+                    ? entry.policy.effectiveExtendedTimeOut
+                    : entry.policy.rawTimeOut;
+                if (resumeMs > 0) {
+                    startEntryTimer(entry, resumeMs);
+                } else {
+                    hideEntry(entry, { forced: false });
+                }
+            });
+        });
+
         // Card click handler (dismiss / onclick / peeking behind-card expand).
         el.addEventListener('click', (event) => {
             if (entry.exiting || entry.state === 'minimized') return;
             const target = event.target;
             if (target instanceof Element && target.closest('.luker-toast-actions, .luker-toast-capsule')) {
+                return;
+            }
+            if (target instanceof Element && entry.messageEl?.contains(target) && target.closest(`${CALLER_FOCUS_HOLD_SELECTOR}, label`)) {
                 return;
             }
 
@@ -1340,9 +1386,12 @@ export function createToastEngine() {
         const isOngoingTask = policy.isPersistent && !policy.isClosable;
 
         const el = document.createElement('div');
-        const toastClasses = String(options.toastClass || 'toast').trim().split(/\s+/).filter(Boolean);
-        const iconClass = map.iconClass || options.iconClass || 'toast-info';
-        el.classList.add(...toastClasses, iconClass, 'luker-toast');
+        const toastClasses = splitClassTokens(options.toastClass || 'toast');
+        const overrideIconClass = map.optionsOverride && typeof map.optionsOverride.iconClass === 'string' && map.optionsOverride.iconClass.trim()
+            ? map.optionsOverride.iconClass
+            : '';
+        const iconClasses = splitClassTokens(overrideIconClass || map.iconClass || options.iconClass || 'toast-info');
+        el.classList.add(...toastClasses, ...iconClasses, 'luker-toast');
         if (options.rtl) el.classList.add('rtl');
         if (policy.canTapToDismiss) {
             el.classList.add('interactable');
