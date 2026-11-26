@@ -180,11 +180,11 @@ function getInvalidRegexScriptsToastMessage(scriptType, { readOnly = false } = {
 
     switch (scriptType) {
         case SCRIPT_TYPES.GLOBAL:
-            return t`Global regex entries contained invalid data. Invalid entries were removed before opening Regex Editor. Check the browser console for details.`;
+            return t`Global regex entries contained invalid data. Invalid entries were skipped in Regex Editor. Check the browser console for details.`;
         case SCRIPT_TYPES.SCOPED:
-            return t`Character-scoped regex entries contained invalid data. Invalid entries were removed before opening Regex Editor. Check the browser console for details.`;
+            return t`Character-scoped regex entries contained invalid data. Invalid entries were skipped in Regex Editor. Check the browser console for details.`;
         case SCRIPT_TYPES.PRESET:
-            return t`Preset regex entries contained invalid data. Invalid entries were removed before opening Regex Editor. Check the browser console for details.`;
+            return t`Preset regex entries contained invalid data. Invalid entries were skipped in Regex Editor. Check the browser console for details.`;
         default:
             return t`Some regex scripts were invalid and could not be shown in Regex Editor. Check the browser console for details.`;
     }
@@ -214,13 +214,14 @@ function summarizeInvalidRegexEntry(value, index) {
 }
 
 /**
- * Removes invalid entries from a script list before Regex Editor touches them.
+ * Filters invalid entries from a script list before rendering Regex Editor
+ * without performing implicit writes during read/render.
  * @param {RegexScript[] | unknown} scripts
  * @param {SCRIPT_TYPES} scriptType
  * @param {{ readOnly?: boolean, issues?: Set<string> }} [options]
- * @returns {Promise<RegexScript[]>}
+ * @returns {RegexScript[]}
  */
-async function sanitizeRegexScriptsForEditor(scripts, scriptType, { readOnly = false, issues = new Set() } = {}) {
+function sanitizeRegexScriptsForEditor(scripts, scriptType, { readOnly = false, issues = new Set() } = {}) {
     if (!Array.isArray(scripts)) {
         return [];
     }
@@ -247,22 +248,6 @@ async function sanitizeRegexScriptsForEditor(scripts, scriptType, { readOnly = f
         invalidCount: invalidEntries.length,
         invalidEntries,
     });
-
-    if (!readOnly) {
-        try {
-            await saveScriptsByType(validScripts, scriptType);
-            issues.add(getInvalidRegexScriptsToastMessage(scriptType, { readOnly }));
-        } catch (error) {
-            console.error('[Regex] Failed to save sanitized regex scripts while rendering Regex Editor', {
-                source,
-                invalidCount: invalidEntries.length,
-                error,
-            });
-            issues.add(t`Some regex scripts contained invalid data, but automatic cleanup could not be saved. Invalid entries were skipped. Check the browser console for details.`);
-        }
-        return validScripts;
-    }
-
     issues.add(getInvalidRegexScriptsToastMessage(scriptType, { readOnly }));
     return validScripts;
 }
@@ -598,15 +583,15 @@ class RegexPresetManager {
         // Build an isolated copy so failed persistence never mutates live records
         const nextList = targetList.map(script => ({
             ...structuredClone(script),
-            disabled: !presetList.some(p => p.id === script.id),
+            disabled: !(Boolean(script?.id) && presetList.some(p => Boolean(p?.id) && p.id === script.id)),
         }));
-        const originalOrder = new Map(nextList.map((script, idx) => [script.id, idx]));
+        const originalOrder = new Map(nextList.map((script, idx) => [script, idx]));
 
         // First sort by the order in the preset, then the original order
         nextList.sort((a, b) => {
-            const aIndex = presetList.findIndex(p => p.id === a.id);
-            const bIndex = presetList.findIndex(p => p.id === b.id);
-            return aIndex - bIndex || (originalOrder.get(a.id) ?? 0) - (originalOrder.get(b.id) ?? 0);
+            const aIndex = a?.id ? presetList.findIndex(p => Boolean(p?.id) && p.id === a.id) : -1;
+            const bIndex = b?.id ? presetList.findIndex(p => Boolean(p?.id) && p.id === b.id) : -1;
+            return aIndex - bIndex || (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0);
         });
 
         await saveFunction(nextList);
@@ -678,7 +663,10 @@ class RegexPresetManager {
             return null;
         }
 
-        return list.filter(isRegexScriptRecord).filter(x => !x.disabled).map(s => ({ id: s.id }));
+        return list
+            .filter(isRegexScriptRecord)
+            .filter(x => !x.disabled && typeof x.id === 'string' && x.id.length > 0)
+            .map(s => ({ id: s.id }));
     }
 
     /**
@@ -942,10 +930,12 @@ function setMoveButtonsVisibility() {
 
 function applyRegexScriptUpsert(scripts, scriptToSave, existingId = null, existingScriptIndex = -1) {
     const nextScripts = Array.isArray(scripts) ? scripts.map(item => structuredClone(item)) : [];
-    const lookupId = existingId || scriptToSave.id || null;
-    let targetIndex = lookupId ? nextScripts.findIndex(item => item?.id === lookupId) : -1;
-    if (targetIndex === -1 && existingScriptIndex >= 0 && existingScriptIndex < nextScripts.length && !lookupId) {
+    let targetIndex = existingId ? nextScripts.findIndex(item => item?.id === existingId) : -1;
+    if (targetIndex === -1 && !existingId && existingScriptIndex >= 0 && existingScriptIndex < nextScripts.length) {
         targetIndex = existingScriptIndex;
+    }
+    if (targetIndex === -1 && !existingId && existingScriptIndex < 0 && scriptToSave.id) {
+        targetIndex = nextScripts.findIndex(item => item?.id === scriptToSave.id);
     }
     if (targetIndex !== -1) {
         nextScripts[targetIndex] = structuredClone(scriptToSave);
@@ -960,11 +950,10 @@ function getRegexEditorSaveErrorMessage(scriptType, error) {
         return t`Could not save character-scoped regex script. Your edits remain open in the editor.`;
     }
     if (scriptType === SCRIPT_TYPES.PRESET) {
-        const message = String(error?.message || '');
-        if (message === 'Preset extension settings could not be saved' || message === 'Preset extension settings acknowledgement changed') {
-            return t`Could not save preset regex script. Your edits remain open in the editor.`;
+        if (error?.settingsSaved === true) {
+            return t`Preset regex settings were saved, but persisting the preset or character card failed. Your edits remain open in the editor.`;
         }
-        return t`Preset regex settings were saved, but persisting the preset or character card failed. Your edits remain open in the editor.`;
+        return t`Could not save preset regex script. Your edits remain open in the editor.`;
     }
     return t`Could not save global regex script. Your edits remain open in the editor.`;
 }
@@ -1042,6 +1031,7 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
     const scriptTypeLabel = REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType);
 
     // Assign a UUID if it doesn't exist
+    const hadPersistedId = Boolean(regexScript.id);
     if (!regexScript.id) {
         regexScript.id = uuidv4();
     }
@@ -1057,7 +1047,9 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
         scriptToSave.placement = [];
     }
 
-    const existingId = options?.existingId ?? (existingScriptIndex !== -1 ? scriptToSave.id : null);
+    const existingId = options?.existingId !== undefined
+        ? options.existingId
+        : (existingScriptIndex !== -1 && hadPersistedId ? scriptToSave.id : null);
     const currentPreviewScripts = getScriptsByType(scriptType, { target });
     const previewNext = applyRegexScriptUpsert(currentPreviewScripts, scriptToSave, existingId, existingScriptIndex);
 
@@ -1128,12 +1120,22 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
  */
 async function deleteRegexScript(id, scriptType, saveSettingsFlag = true, options = {}) {
     const target = options?.target || captureRegexTarget(scriptType);
+    const scriptIndex = Number.isInteger(options?.scriptIndex) ? options.scriptIndex : -1;
+    const removeMatching = (list) => {
+        if (id) {
+            return list.filter(script => script?.id !== id);
+        }
+        if (scriptIndex >= 0 && scriptIndex < list.length) {
+            return list.filter((_, idx) => idx !== scriptIndex);
+        }
+        return list;
+    };
     let deleted = false;
 
     switch (scriptType) {
         case SCRIPT_TYPES.GLOBAL: {
             const current = getScriptsByType(SCRIPT_TYPES.GLOBAL);
-            const next = current.filter(script => script.id !== id);
+            const next = removeMatching(current);
             if (next.length === current.length) {
                 return false;
             }
@@ -1145,7 +1147,7 @@ async function deleteRegexScript(id, scriptType, saveSettingsFlag = true, option
         }
         case SCRIPT_TYPES.SCOPED: {
             const result = await updateScopedRegexScripts((currentScripts) => {
-                const next = currentScripts.filter(script => script.id !== id);
+                const next = removeMatching(currentScripts);
                 return next.length === currentScripts.length ? null : next;
             }, target);
             deleted = result.changed;
@@ -1153,7 +1155,7 @@ async function deleteRegexScript(id, scriptType, saveSettingsFlag = true, option
         }
         case SCRIPT_TYPES.PRESET: {
             const current = getScriptsByType(SCRIPT_TYPES.PRESET, { target });
-            const next = current.filter(script => script.id !== id);
+            const next = removeMatching(current);
             if (next.length === current.length) {
                 return false;
             }
@@ -1170,7 +1172,9 @@ async function deleteRegexScript(id, scriptType, saveSettingsFlag = true, option
     }
 
     // Wipe any session-level state only after persistence succeeds.
-    resetRegexScriptState(id);
+    if (id) {
+        resetRegexScriptState(id);
+    }
 
     if (saveSettingsFlag) {
         if (scriptType !== SCRIPT_TYPES.GLOBAL || !options?.persistGlobalImmediately) {
@@ -1205,6 +1209,8 @@ async function moveRegexScript(script, toType, fromType = null, saveSettingsFlag
 
     const fromTarget = options?.fromTarget || captureRegexTarget(fromType);
     const toTarget = options?.toTarget || captureRegexTarget(toType);
+    const sourcePersistedId = options?.sourcePersistedId !== undefined ? options.sourcePersistedId : (script?.id || null);
+    const sourceIndex = Number.isInteger(options?.sourceIndex) ? options.sourceIndex : -1;
     const scriptCopy = structuredClone(script);
 
     try {
@@ -1228,8 +1234,9 @@ async function moveRegexScript(script, toType, fromType = null, saveSettingsFlag
     }
 
     try {
-        await deleteRegexScript(scriptCopy.id, fromType, false, {
+        await deleteRegexScript(sourcePersistedId, fromType, false, {
             target: fromTarget,
+            scriptIndex: sourceIndex,
             persistGlobalImmediately: fromType === SCRIPT_TYPES.GLOBAL,
         });
     } catch (error) {
@@ -1305,12 +1312,19 @@ async function loadRegexScripts() {
         // Have to clone here
         const scriptHtml = scriptTemplate.clone();
         const renderedTarget = readOnly ? null : captureRegexTarget(scriptType);
+        const persistedId = script.id ? String(script.id) : null;
 
         if (!script.id) {
             script.id = uuidv4();
         }
 
         scriptHtml.attr('id', script.id);
+        scriptHtml.attr('data-script-index', String(index));
+        scriptHtml.attr('data-script-type', String(scriptType));
+        if (persistedId) {
+            scriptHtml.attr('data-persisted-id', persistedId);
+        }
+        const findLiveScript = (list) => (persistedId ? list.find(s => s?.id === persistedId) : list[index]);
         const runtimeOwner = String(script.__runtime_owner || '').trim();
         const displayName = readOnly && runtimeOwner
             ? `${script.scriptName} (${runtimeOwner})`
@@ -1338,7 +1352,7 @@ async function loadRegexScripts() {
 
         scriptHtml.find('.disable_regex').on('input', async function () {
             const checkbox = $(this);
-            const latestScript = getScriptsByType(scriptType, { target: renderedTarget }).find(s => s?.id === script.id) || script;
+            const latestScript = findLiveScript(getScriptsByType(scriptType, { target: renderedTarget })) || script;
             const previousDisabled = Boolean(latestScript.disabled);
             const nextDisabled = !!checkbox.prop('checked');
             const updatedScript = { ...structuredClone(latestScript), disabled: nextDisabled };
@@ -1346,11 +1360,11 @@ async function loadRegexScripts() {
             try {
                 await saveRegexScript(updatedScript, index, scriptType, true, {
                     target: renderedTarget,
-                    existingId: script.id,
+                    existingId: persistedId,
                 });
             } catch (error) {
                 console.error('[Regex] Failed to save regex script toggle state', {
-                    scriptId: script.id,
+                    scriptId: persistedId || script.id,
                     scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
                     error,
                 });
@@ -1368,7 +1382,7 @@ async function loadRegexScripts() {
             scriptHtml.find('.disable_regex').prop('checked', false).trigger('input');
         });
         scriptHtml.find('.edit_existing_regex').on('click', async function () {
-            await onRegexEditorOpenClick(scriptHtml.attr('id'), scriptType);
+            await onRegexEditorOpenClick(persistedId, scriptType, { existingIndex: index });
         });
         scriptHtml.find('.move_to_global').on('click', async function () {
             const confirm = await callGenericPopup(t`Are you sure you want to move this regex script to global?`, POPUP_TYPE.CONFIRM);
@@ -1376,8 +1390,12 @@ async function loadRegexScripts() {
             if (!confirm) {
                 return;
             }
-            const latestScript = getScriptsByType(scriptType, { target: renderedTarget }).find(s => s?.id === script.id) || script;
-            await moveRegexScript(latestScript, SCRIPT_TYPES.GLOBAL, scriptType, true, { fromTarget: renderedTarget });
+            const latestScript = findLiveScript(getScriptsByType(scriptType, { target: renderedTarget })) || script;
+            await moveRegexScript(latestScript, SCRIPT_TYPES.GLOBAL, scriptType, true, {
+                fromTarget: renderedTarget,
+                sourceIndex: index,
+                sourcePersistedId: persistedId,
+            });
         });
         scriptHtml.find('.move_to_scoped').on('click', async function () {
             if (this_chid === undefined) {
@@ -1392,8 +1410,12 @@ async function loadRegexScripts() {
             if (!confirm) {
                 return;
             }
-            const latestScript = getScriptsByType(scriptType, { target: renderedTarget }).find(s => s?.id === script.id) || script;
-            await moveRegexScript(latestScript, SCRIPT_TYPES.SCOPED, scriptType, true, { fromTarget: renderedTarget });
+            const latestScript = findLiveScript(getScriptsByType(scriptType, { target: renderedTarget })) || script;
+            await moveRegexScript(latestScript, SCRIPT_TYPES.SCOPED, scriptType, true, {
+                fromTarget: renderedTarget,
+                sourceIndex: index,
+                sourcePersistedId: persistedId,
+            });
         });
         scriptHtml.find('.move_to_preset').on('click', async function () {
             const confirm = await callGenericPopup(
@@ -1403,11 +1425,15 @@ async function loadRegexScripts() {
             if (!confirm) {
                 return;
             }
-            const latestScript = getScriptsByType(scriptType, { target: renderedTarget }).find(s => s?.id === script.id) || script;
-            await moveRegexScript(latestScript, SCRIPT_TYPES.PRESET, scriptType, true, { fromTarget: renderedTarget });
+            const latestScript = findLiveScript(getScriptsByType(scriptType, { target: renderedTarget })) || script;
+            await moveRegexScript(latestScript, SCRIPT_TYPES.PRESET, scriptType, true, {
+                fromTarget: renderedTarget,
+                sourceIndex: index,
+                sourcePersistedId: persistedId,
+            });
         });
         scriptHtml.find('.export_regex').on('click', async function () {
-            const latestScript = getScriptsByType(scriptType, { target: renderedTarget }).find(s => s?.id === script.id) || script;
+            const latestScript = findLiveScript(getScriptsByType(scriptType, { target: renderedTarget })) || script;
             const fileName = `regex-${sanitizeFileName(latestScript.scriptName)}.json`;
             const fileData = JSON.stringify(latestScript, null, 4);
             download(fileData, fileName, 'application/json');
@@ -1418,13 +1444,16 @@ async function loadRegexScripts() {
                 return;
             }
             try {
-                const deleted = await deleteRegexScript(script.id, scriptType, true, { target: renderedTarget });
+                const deleted = await deleteRegexScript(persistedId, scriptType, true, {
+                    target: renderedTarget,
+                    scriptIndex: index,
+                });
                 if (deleted) {
                     await requestRegexChatReload();
                 }
             } catch (error) {
                 console.error('[Regex] Failed to delete regex script', {
-                    scriptId: script.id,
+                    scriptId: persistedId || script.id,
                     scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
                     error,
                 });
@@ -1467,10 +1496,29 @@ async function loadRegexScripts() {
     }
 
     const renderIssues = new Set();
-    const globalScripts = await sanitizeRegexScriptsForEditor(getScriptsByType(SCRIPT_TYPES.GLOBAL), SCRIPT_TYPES.GLOBAL, { issues: renderIssues });
-    const scopedScripts = await sanitizeRegexScriptsForEditor(getScriptsByType(SCRIPT_TYPES.SCOPED), SCRIPT_TYPES.SCOPED, { issues: renderIssues });
-    const presetScripts = await sanitizeRegexScriptsForEditor(getScriptsByType(SCRIPT_TYPES.PRESET), SCRIPT_TYPES.PRESET, { issues: renderIssues });
-    const runtimeScripts = await sanitizeRegexScriptsForEditor(getRuntimeRegexScripts(), SCRIPT_TYPE_UNKNOWN, { readOnly: true, issues: renderIssues });
+    const recordInvalid = (scriptType, readOnly = false) => () => {
+        renderIssues.add(getInvalidRegexScriptsToastMessage(scriptType, { readOnly }));
+    };
+    const globalScripts = sanitizeRegexScriptsForEditor(
+        getScriptsByType(SCRIPT_TYPES.GLOBAL, { onInvalid: recordInvalid(SCRIPT_TYPES.GLOBAL) }),
+        SCRIPT_TYPES.GLOBAL,
+        { issues: renderIssues },
+    );
+    const scopedScripts = sanitizeRegexScriptsForEditor(
+        getScriptsByType(SCRIPT_TYPES.SCOPED, { onInvalid: recordInvalid(SCRIPT_TYPES.SCOPED) }),
+        SCRIPT_TYPES.SCOPED,
+        { issues: renderIssues },
+    );
+    const presetScripts = sanitizeRegexScriptsForEditor(
+        getScriptsByType(SCRIPT_TYPES.PRESET, { onInvalid: recordInvalid(SCRIPT_TYPES.PRESET) }),
+        SCRIPT_TYPES.PRESET,
+        { issues: renderIssues },
+    );
+    const runtimeScripts = sanitizeRegexScriptsForEditor(
+        getRuntimeRegexScripts({ onInvalid: recordInvalid(SCRIPT_TYPE_UNKNOWN, true) }),
+        SCRIPT_TYPE_UNKNOWN,
+        { readOnly: true, issues: renderIssues },
+    );
 
     if (renderIssues.size) {
         toastr.error(Array.from(renderIssues).join('<br>'), t`Regex script error`, {
@@ -1640,13 +1688,13 @@ export async function onReadonlyRegexViewOpenClick(script, displayName = '') {
  * @param {SCRIPT_TYPES} scriptType Type of the script
  * @returns {Promise<void>}
  */
-export async function onRegexEditorOpenClick(existingId, scriptType) {
+export async function onRegexEditorOpenClick(existingId, scriptType, { existingIndex = -1 } = {}) {
     const capturedTarget = captureRegexTarget(scriptType);
     const editorHtml = $(await renderExtensionTemplateAsync('regex', 'editor'));
     const array = getScriptsByType(scriptType, { target: capturedTarget });
     const scriptTypeLabel = REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType);
-    const draftScriptId = existingId ? String(existingId) : uuidv4();
     const existingScriptId = existingId ? String(existingId) : null;
+    const draftScriptId = existingScriptId || uuidv4();
     const logEditorState = (event, extra = {}) => {
         console.info('[Regex] Editor interaction', {
             event,
@@ -1662,24 +1710,28 @@ export async function onRegexEditorOpenClick(existingId, scriptType) {
 
     console.info('[Regex] Editor opened', {
         existingId: existingId || null,
+        existingIndex,
         scriptType: scriptTypeLabel,
         currentScriptCount: array.length,
         chid: capturedTarget?.characterId ?? this_chid ?? null,
         selectedGroup: selected_group ?? null,
     });
 
-    // If an ID exists, fill in all the values
+    // If an ID or persisted index exists, fill in all the values
     let existingScriptIndex = -1;
     let preservedAllowSlow = false;
-    if (existingId) {
-        existingScriptIndex = array.findIndex((script) => script.id === existingId);
-        if (existingScriptIndex !== -1) {
-            const existingScript = array[existingScriptIndex];
-            preservedAllowSlow = Boolean(existingScript?.allowSlow);
-            if (!fillRegexEditorFields(editorHtml, existingScript)) {
-                toastr.error('This script doesn\'t have a name! Please delete it.');
-                return;
-            }
+    if (existingScriptId) {
+        existingScriptIndex = array.findIndex((script) => script.id === existingScriptId);
+    } else if (Number.isInteger(existingIndex) && existingIndex >= 0 && existingIndex < array.length) {
+        existingScriptIndex = existingIndex;
+    }
+
+    if (existingScriptIndex !== -1) {
+        const existingScript = array[existingScriptIndex];
+        preservedAllowSlow = Boolean(existingScript?.allowSlow);
+        if (!fillRegexEditorFields(editorHtml, existingScript)) {
+            toastr.error('This script doesn\'t have a name! Please delete it.');
+            return;
         }
     } else {
         editorHtml
@@ -2066,34 +2118,50 @@ function populateDebuggerRuleList(container, targets = {}) {
     const scopedTarget = hasScopedTarget ? targets.scopedTarget : null;
     const presetTarget = hasPresetTarget ? targets.presetTarget : null;
 
-    const globalScripts = getScriptsByType(SCRIPT_TYPES.GLOBAL).map(script => {
+    const globalScripts = getScriptsByType(SCRIPT_TYPES.GLOBAL).map((script, index) => {
         const scriptCopy = structuredClone(script);
         // @ts-ignore
         scriptCopy.type = SCRIPT_TYPES.GLOBAL;
+        // @ts-ignore
+        scriptCopy.__persistedId = script?.id ? String(script.id) : null;
+        // @ts-ignore
+        scriptCopy.__sourceIndex = index;
         return scriptCopy;
     });
     const presetScripts = (hasPresetTarget
         ? (presetTarget?.presetName ? getScriptsByType(SCRIPT_TYPES.PRESET, { target: presetTarget }) : [])
         : getScriptsByType(SCRIPT_TYPES.PRESET)
-    ).map(script => {
+    ).map((script, index) => {
         const scriptCopy = structuredClone(script);
         // @ts-ignore
         scriptCopy.type = SCRIPT_TYPES.PRESET;
+        // @ts-ignore
+        scriptCopy.__persistedId = script?.id ? String(script.id) : null;
+        // @ts-ignore
+        scriptCopy.__sourceIndex = index;
         return scriptCopy;
     });
     const scopedScripts = (hasScopedTarget
         ? (scopedTarget?.character ? getScriptsByType(SCRIPT_TYPES.SCOPED, { target: scopedTarget }) : [])
         : getScriptsByType(SCRIPT_TYPES.SCOPED)
-    ).map(script => {
+    ).map((script, index) => {
         const scriptCopy = structuredClone(script);
         // @ts-ignore
         scriptCopy.type = SCRIPT_TYPES.SCOPED;
+        // @ts-ignore
+        scriptCopy.__persistedId = script?.id ? String(script.id) : null;
+        // @ts-ignore
+        scriptCopy.__sourceIndex = index;
         return scriptCopy;
     });
-    const pluginScripts = getRuntimeRegexScripts().map(script => {
+    const pluginScripts = getRuntimeRegexScripts().map((script, index) => {
         const scriptCopy = structuredClone(script);
         // @ts-ignore
         scriptCopy.type = SCRIPT_TYPE_UNKNOWN;
+        // @ts-ignore
+        scriptCopy.__persistedId = script?.id ? String(script.id) : null;
+        // @ts-ignore
+        scriptCopy.__sourceIndex = index;
         return scriptCopy;
     });
 
@@ -2112,6 +2180,10 @@ function populateDebuggerRuleList(container, targets = {}) {
 
         ruleElement.attr('data-id', script.id);
         // @ts-ignore
+        ruleElement.attr('data-persisted-id', script.__persistedId || '');
+        // @ts-ignore
+        ruleElement.attr('data-source-index', String(Number.isInteger(script.__sourceIndex) ? script.__sourceIndex : -1));
+        // @ts-ignore
         ruleElement.find('.rule-name').text(script.scriptName);
         ruleElement.find('.rule-regex').text(script.findRegex);
         // @ts-ignore
@@ -2126,8 +2198,61 @@ function populateDebuggerRuleList(container, targets = {}) {
                 }[script.type],
             );
         ruleElement.find('.rule-enabled').prop('checked', !script.disabled);
-        // @ts-ignore
-        ruleElement.find('.edit_rule').on('click', () => onRegexEditorOpenClick(script.id, script.type));
+        if (script.type === SCRIPT_TYPE_UNKNOWN) {
+            const runtimeOwner = String(script.__runtime_owner || '').trim();
+            const displayName = runtimeOwner ? `${script.scriptName} (${runtimeOwner})` : script.scriptName;
+            ruleElement.find('.edit_rule').attr('title', String(t`Regex Editor`));
+            ruleElement.find('.edit_rule i').removeClass('fa-pencil').addClass('fa-eye');
+            ruleElement.find('.edit_rule').on('click', async () => {
+                await onReadonlyRegexViewOpenClick(script, displayName);
+            });
+        } else {
+            // @ts-ignore
+            ruleElement.find('.edit_rule').on('click', async () => {
+                // @ts-ignore
+                const existingPersistedId = script.__persistedId || false;
+                const prevDisabled = Boolean(script.disabled);
+                await onRegexEditorOpenClick(
+                    existingPersistedId,
+                    script.type,
+                    // @ts-ignore
+                    { existingIndex: existingPersistedId ? -1 : script.__sourceIndex },
+                );
+                const liveList = script.type === SCRIPT_TYPES.SCOPED
+                    ? (hasScopedTarget ? (scopedTarget?.character ? getScriptsByType(SCRIPT_TYPES.SCOPED, { target: scopedTarget }) : []) : getScriptsByType(SCRIPT_TYPES.SCOPED))
+                    : (script.type === SCRIPT_TYPES.PRESET
+                        ? (hasPresetTarget ? (presetTarget?.presetName ? getScriptsByType(SCRIPT_TYPES.PRESET, { target: presetTarget }) : []) : getScriptsByType(SCRIPT_TYPES.PRESET))
+                        : getScriptsByType(SCRIPT_TYPES.GLOBAL));
+                // @ts-ignore
+                const updated = existingPersistedId
+                    ? liveList.find(s => s?.id === existingPersistedId)
+                    // @ts-ignore
+                    : liveList[script.__sourceIndex];
+                if (updated) {
+                    const nextPersistedId = updated.id ? String(updated.id) : '';
+                    // @ts-ignore
+                    script.__persistedId = nextPersistedId || null;
+                    ruleElement.attr('data-persisted-id', nextPersistedId);
+                    ruleElement.find('.rule-name').text(updated.scriptName);
+                    ruleElement.find('.rule-regex').text(updated.findRegex);
+                    // Only sync the debugger-local checkbox when persisted disabled
+                    // actually changed, so cancelling the editor preserves local toggles.
+                    if (Boolean(updated.disabled) !== prevDisabled) {
+                        ruleElement.find('.rule-enabled').prop('checked', !updated.disabled);
+                    }
+                    const domId = script.id;
+                    const preservedType = script.type;
+                    // @ts-ignore
+                    const preservedIdx = script.__sourceIndex;
+                    Object.assign(script, structuredClone(updated), {
+                        id: domId,
+                        type: preservedType,
+                        __persistedId: nextPersistedId || null,
+                        __sourceIndex: preservedIdx,
+                    });
+                }
+            });
+        }
 
         ruleElement.on('click', function (event) {
             if ($(event.target).is('input, .menu_button, .menu_button i')) {
@@ -2290,32 +2415,54 @@ async function onRegexDebuggerOpenClick() {
     });
 
     debuggerHtml.find('#regex_debugger_save_order').on('click', async function () {
-        const mergeOrderedScripts = (orderedIds, liveScripts) => {
-            const byId = new Map(liveScripts.map(script => [String(script?.id || ''), script]));
-            const seen = new Set();
-            const merged = [];
-            for (const id of orderedIds) {
-                const key = String(id || '');
-                if (!key || seen.has(key) || !byId.has(key)) continue;
-                seen.add(key);
-                merged.push(byId.get(key));
-            }
-            for (const script of liveScripts) {
+        const readOrderedRefs = (selector) => $(selector).children('li').map((_, el) => {
+            const $el = $(el);
+            const rawIndex = Number($el.attr('data-source-index'));
+            return {
+                persistedId: String($el.attr('data-persisted-id') || ''),
+                sourceIndex: Number.isInteger(rawIndex) ? rawIndex : -1,
+            };
+        }).get();
+
+        const mergeOrderedScripts = (orderedRefs, liveScripts) => {
+            const byId = new Map();
+            liveScripts.forEach((script, idx) => {
                 const key = String(script?.id || '');
-                if (!seen.has(key)) {
+                if (key && !byId.has(key)) {
+                    byId.set(key, idx);
+                }
+            });
+            const seenIndexes = new Set();
+            const merged = [];
+            for (const ref of orderedRefs) {
+                let matchedIdx = -1;
+                if (ref.persistedId && byId.has(ref.persistedId)) {
+                    matchedIdx = byId.get(ref.persistedId);
+                } else if (!ref.persistedId
+                    && ref.sourceIndex >= 0
+                    && ref.sourceIndex < liveScripts.length
+                    && !liveScripts[ref.sourceIndex]?.id) {
+                    matchedIdx = ref.sourceIndex;
+                }
+                if (matchedIdx < 0 || seenIndexes.has(matchedIdx)) continue;
+                seenIndexes.add(matchedIdx);
+                merged.push(liveScripts[matchedIdx]);
+            }
+            liveScripts.forEach((script, idx) => {
+                if (!seenIndexes.has(idx)) {
                     merged.push(script);
                 }
-            }
+            });
             return merged;
         };
 
-        const globalIds = $('#regex_debugger_rules_global').children('li').map((_, el) => $(el).data('id')).get();
-        const scopedIds = $('#regex_debugger_rules_scoped').children('li').map((_, el) => $(el).data('id')).get();
-        const presetIds = $('#regex_debugger_rules_preset').children('li').map((_, el) => $(el).data('id')).get();
+        const globalRefs = readOrderedRefs('#regex_debugger_rules_global');
+        const scopedRefs = readOrderedRefs('#regex_debugger_rules_scoped');
+        const presetRefs = readOrderedRefs('#regex_debugger_rules_preset');
 
-        const newGlobalScripts = mergeOrderedScripts(globalIds, getScriptsByType(SCRIPT_TYPES.GLOBAL));
+        const newGlobalScripts = mergeOrderedScripts(globalRefs, getScriptsByType(SCRIPT_TYPES.GLOBAL));
         const newPresetScripts = debuggerPresetTarget?.presetName
-            ? mergeOrderedScripts(presetIds, getScriptsByType(SCRIPT_TYPES.PRESET, { target: debuggerPresetTarget }))
+            ? mergeOrderedScripts(presetRefs, getScriptsByType(SCRIPT_TYPES.PRESET, { target: debuggerPresetTarget }))
             : [];
 
         let failed = false;
@@ -2337,7 +2484,7 @@ async function onRegexDebuggerOpenClick() {
         if (debuggerScopedTarget?.character && $('#regex_debugger_rules_scoped').length) {
             try {
                 await updateScopedRegexScripts(
-                    currentScripts => mergeOrderedScripts(scopedIds, currentScripts),
+                    currentScripts => mergeOrderedScripts(scopedRefs, currentScripts),
                     debuggerScopedTarget,
                 );
                 succeeded = true;
@@ -2554,8 +2701,22 @@ async function toggleRegexCallback(args, scriptName) {
         isFalseBoolean(args?.state) ? 'disable' :
             'toggle';
 
-    const scripts = getEditableRegexScripts();
-    const script = scripts.find(s => equalsIgnoreCaseAndAccents(s.scriptName, scriptName));
+    let script = null;
+    let scriptType = SCRIPT_TYPE_UNKNOWN;
+    let target = null;
+    let index = -1;
+    for (const candidateType of [SCRIPT_TYPES.GLOBAL, SCRIPT_TYPES.SCOPED, SCRIPT_TYPES.PRESET]) {
+        const candidateTarget = captureRegexTarget(candidateType);
+        const list = getScriptsByType(candidateType, { target: candidateTarget });
+        const foundIndex = list.findIndex(s => equalsIgnoreCaseAndAccents(s.scriptName, scriptName));
+        if (foundIndex !== -1) {
+            script = list[foundIndex];
+            scriptType = candidateType;
+            target = candidateTarget;
+            index = foundIndex;
+            break;
+        }
+    }
 
     if (!script) {
         toastr.warning(t`Regex script '${scriptName}' not found.`);
@@ -2575,16 +2736,14 @@ async function toggleRegexCallback(args, scriptName) {
             break;
     }
 
-    const scriptType = getScriptType(script);
-    const target = captureRegexTarget(scriptType);
-    const index = getScriptsByType(scriptType, { target }).findIndex(s => s.id === script.id);
+    const persistedId = script.id ? String(script.id) : null;
 
     try {
-        await saveRegexScript(updatedScript, index, scriptType, true, { target, existingId: script.id });
+        await saveRegexScript(updatedScript, index, scriptType, true, { target, existingId: persistedId });
     } catch (error) {
         console.error('[Regex] Failed to toggle regex script via slash command', {
             scriptName,
-            scriptId: script.id,
+            scriptId: persistedId || updatedScript.id,
             scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
             error,
         });
@@ -2698,9 +2857,16 @@ async function onRegexImportFileChange(file, scriptType, options = {}) {
  * @returns {SCRIPT_TYPES} The script type.
  */
 function getScriptType(script) {
+    if (!script || typeof script !== 'object') {
+        return SCRIPT_TYPE_UNKNOWN;
+    }
     for (const scriptType of Object.values(SCRIPT_TYPES)) {
         const scripts = getScriptsByType(scriptType);
-        if (scripts.some(s => s.id === script.id)) {
+        if (script.id) {
+            if (scripts.some(s => s?.id === script.id)) {
+                return scriptType;
+            }
+        } else if (scripts.some(s => !s?.id && s?.scriptName === script.scriptName && s?.findRegex === script.findRegex && s?.replaceString === script.replaceString)) {
             return scriptType;
         }
     }
@@ -2715,13 +2881,45 @@ function getEditableRegexScripts() {
     ];
 }
 
-function getSelectedScripts() {
-    const scripts = getEditableRegexScripts();
+function getSelectedScriptRefs() {
     const selector = '#regex_container .regex-script-label:has(.regex_bulk_checkbox:checked)';
-    const selectedIds = Array.from(document.querySelectorAll(selector))
-        .map(e => e.getAttribute('id'))
-        .filter(id => id);
-    return scripts.filter(script => selectedIds.includes(script.id));
+    const listsByType = new Map([
+        [SCRIPT_TYPES.GLOBAL, getScriptsByType(SCRIPT_TYPES.GLOBAL)],
+        [SCRIPT_TYPES.SCOPED, getScriptsByType(SCRIPT_TYPES.SCOPED)],
+        [SCRIPT_TYPES.PRESET, getScriptsByType(SCRIPT_TYPES.PRESET)],
+    ]);
+    const refs = [];
+    for (const el of document.querySelectorAll(selector)) {
+        const rawType = el.getAttribute('data-script-type');
+        const scriptType = rawType !== null ? Number(rawType) : SCRIPT_TYPE_UNKNOWN;
+        const rawIndex = el.getAttribute('data-script-index');
+        const index = rawIndex !== null ? Number(rawIndex) : -1;
+        const persistedId = el.getAttribute('data-persisted-id') || null;
+        const domId = el.getAttribute('id') || '';
+        const list = listsByType.get(scriptType);
+        if (!Array.isArray(list)) {
+            continue;
+        }
+        let resolvedIndex = persistedId ? list.findIndex(s => s?.id === persistedId) : -1;
+        if (resolvedIndex === -1 && Number.isInteger(index) && index >= 0 && index < list.length) {
+            resolvedIndex = index;
+        }
+        if (resolvedIndex === -1) {
+            continue;
+        }
+        refs.push({
+            script: list[resolvedIndex],
+            scriptType,
+            index: resolvedIndex,
+            persistedId: list[resolvedIndex]?.id ? String(list[resolvedIndex].id) : null,
+            domId,
+        });
+    }
+    return refs;
+}
+
+function getSelectedScripts() {
+    return getSelectedScriptRefs().map(ref => ref.script);
 }
 
 function purgeEmbeddedRegexScripts({ character }) {
@@ -3226,19 +3424,32 @@ function setupRegexSortable() {
             },
             stop: async function () {
                 const target = captureRegexTarget(scriptType);
-                const orderedIds = $(selector).children().map(function () { return $(this).attr('id'); }).get().filter(Boolean);
+                const orderedRefs = $(selector).children().map(function () {
+                    const $child = $(this);
+                    const persistedId = $child.attr('data-persisted-id') || null;
+                    const rawIndex = $child.attr('data-script-index');
+                    const index = rawIndex !== undefined ? Number(rawIndex) : -1;
+                    return { persistedId, index };
+                }).get();
                 const reorderList = (sourceScripts) => {
-                    const byId = new Map(sourceScripts.map(script => [script.id, script]));
+                    const consumedIndices = new Set();
                     const next = [];
-                    for (const id of orderedIds) {
-                        const existingScript = byId.get(id);
-                        if (existingScript) {
-                            next.push(existingScript);
-                            byId.delete(id);
+                    for (const ref of orderedRefs) {
+                        let matchedIdx = ref.persistedId
+                            ? sourceScripts.findIndex((script, idx) => !consumedIndices.has(idx) && script?.id === ref.persistedId)
+                            : -1;
+                        if (matchedIdx === -1 && Number.isInteger(ref.index) && ref.index >= 0 && ref.index < sourceScripts.length && !consumedIndices.has(ref.index)) {
+                            matchedIdx = ref.index;
+                        }
+                        if (matchedIdx !== -1) {
+                            consumedIndices.add(matchedIdx);
+                            next.push(sourceScripts[matchedIdx]);
                         }
                     }
-                    for (const remaining of byId.values()) {
-                        next.push(remaining);
+                    for (let idx = 0; idx < sourceScripts.length; idx++) {
+                        if (!consumedIndices.has(idx)) {
+                            next.push(sourceScripts[idx]);
+                        }
                     }
                     return next;
                 };
@@ -3415,15 +3626,25 @@ export async function init() {
         await bulkToggleRegexScripts(false);
     });
 
-    function restoreBulkSelection(selectedIds) {
-        if (!Array.isArray(selectedIds) || selectedIds.length === 0) {
+    function restoreBulkSelection(selectedItems) {
+        if (!Array.isArray(selectedItems) || selectedItems.length === 0) {
             return;
         }
-        const idSet = new Set(selectedIds);
+        const idSet = new Set(selectedItems.filter(item => typeof item === 'string'));
+        const refItems = selectedItems.filter(item => item && typeof item === 'object');
         $('#regex_container .regex-script-label').each(function () {
-            const id = $(this).attr('id');
-            if (id && idSet.has(id)) {
-                $(this).find('.regex_bulk_checkbox').prop('checked', true);
+            const $el = $(this);
+            const id = $el.attr('id');
+            const persistedId = $el.attr('data-persisted-id') || '';
+            const scriptType = Number($el.attr('data-script-type'));
+            const scriptIndex = Number($el.attr('data-script-index'));
+            const matchedByString = Boolean(id && idSet.has(id));
+            const matchedByRef = refItems.some(ref =>
+                ref.scriptType === scriptType
+                && (ref.persistedId ? persistedId === ref.persistedId : (!persistedId && scriptIndex === ref.index)),
+            );
+            if (matchedByString || matchedByRef) {
+                $el.find('.regex_bulk_checkbox').prop('checked', true);
             }
         });
         setMoveButtonsVisibility();
@@ -3438,48 +3659,55 @@ export async function init() {
      * @returns {Promise<void>}
      */
     async function bulkToggleRegexScripts(newState) {
-        const scripts = getSelectedScripts().filter(script => script.disabled === newState);
-        if (scripts.length === 0) {
+        const refs = getSelectedScriptRefs().filter(ref => ref.script.disabled === newState);
+        if (refs.length === 0) {
             toastr.warning(newState
                 ? t`No regex scripts selected for enabling.`
                 : t`No regex scripts selected for disabling.`,
             );
             return;
         }
-        const idsByType = new Map();
+        const refsByType = new Map();
         const targetsByType = new Map();
-        for (const script of scripts) {
-            const scriptType = getScriptType(script);
-            if (scriptType === SCRIPT_TYPE_UNKNOWN) {
+        for (const ref of refs) {
+            if (ref.scriptType === SCRIPT_TYPE_UNKNOWN) {
                 continue;
             }
-            if (!idsByType.has(scriptType)) {
-                idsByType.set(scriptType, new Set());
-                targetsByType.set(scriptType, captureRegexTarget(scriptType));
+            if (!refsByType.has(ref.scriptType)) {
+                refsByType.set(ref.scriptType, []);
+                targetsByType.set(ref.scriptType, captureRegexTarget(ref.scriptType));
             }
-            idsByType.get(scriptType).add(script.id);
+            refsByType.get(ref.scriptType).push(ref);
         }
+
+        const matchesRefSet = (script, idx, scopeRefs) => scopeRefs.some(ref =>
+            (ref.persistedId ? script?.id === ref.persistedId : idx === ref.index),
+        );
 
         let anySucceeded = false;
         const failedIds = [];
-        for (const [scriptType, selectedIds] of idsByType.entries()) {
+        for (const [scriptType, scopeRefs] of refsByType.entries()) {
             const target = targetsByType.get(scriptType);
             try {
                 if (scriptType === SCRIPT_TYPES.SCOPED) {
                     await updateScopedRegexScripts((currentScripts) =>
-                        currentScripts.map(script => selectedIds.has(script.id) ? { ...script, disabled: !newState } : script),
+                        currentScripts.map((script, idx) => matchesRefSet(script, idx, scopeRefs) ? { ...script, disabled: !newState } : script),
                     target);
                 } else {
                     const nextScripts = getScriptsByType(scriptType, { target })
-                        .map(script => selectedIds.has(script.id) ? { ...script, disabled: !newState } : script);
+                        .map((script, idx) => matchesRefSet(script, idx, scopeRefs) ? { ...script, disabled: !newState } : script);
                     await saveScriptsByType(nextScripts, scriptType, { target });
                 }
                 anySucceeded = true;
             } catch (error) {
-                failedIds.push(...selectedIds);
+                failedIds.push(...scopeRefs.map(ref => ({
+                    scriptType: ref.scriptType,
+                    persistedId: ref.persistedId || null,
+                    index: ref.index,
+                })));
                 console.error('[Regex] Bulk toggle failed for script scope', {
                     scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
-                    count: selectedIds.size,
+                    count: scopeRefs.length,
                     error,
                 });
             }
@@ -3507,20 +3735,33 @@ export async function init() {
      * @param {SCRIPT_TYPES} toType destination type
      */
     async function bulkMoveRegexScript(toType) {
-        const scripts = getSelectedScripts();
-        if (scripts.length === 0) {
+        const refs = getSelectedScriptRefs();
+        if (refs.length === 0) {
             toastr.warning(t`No regex scripts selected for moving.`);
             return;
         }
         const toTarget = captureRegexTarget(toType);
-        const moves = scripts
-            .map(script => ({ script, fromType: getScriptType(script) }))
-            .filter(({ fromType }) => fromType !== SCRIPT_TYPE_UNKNOWN && fromType !== toType)
-            .map(entry => ({ ...entry, fromTarget: captureRegexTarget(entry.fromType) }));
+        // Process descending by index within each scope so index-based removal of
+        // scripts lacking a persisted id does not shift earlier unmoved entries.
+        const moves = refs
+            .filter(ref => ref.scriptType !== SCRIPT_TYPE_UNKNOWN && ref.scriptType !== toType)
+            .sort((a, b) => b.index - a.index)
+            .map(ref => ({
+                script: ref.script,
+                fromType: ref.scriptType,
+                fromTarget: captureRegexTarget(ref.scriptType),
+                sourceIndex: ref.index,
+                sourcePersistedId: ref.persistedId,
+            }));
 
         let anyChanged = false;
-        for (const { script, fromType, fromTarget } of moves) {
-            const outcome = await moveRegexScript(script, toType, fromType, false, { fromTarget, toTarget });
+        for (const { script, fromType, fromTarget, sourceIndex, sourcePersistedId } of moves) {
+            const outcome = await moveRegexScript(script, toType, fromType, false, {
+                fromTarget,
+                toTarget,
+                sourceIndex,
+                sourcePersistedId,
+            });
             if (outcome?.ok || outcome?.partial) {
                 anyChanged = true;
             }
@@ -3568,8 +3809,8 @@ export async function init() {
     });
 
     $('#bulk_delete_regex').on('click', async function () {
-        const scripts = getSelectedScripts();
-        if (scripts.length === 0) {
+        const refs = getSelectedScriptRefs();
+        if (refs.length === 0) {
             toastr.warning(t`No regex scripts selected for deletion.`);
             return;
         }
@@ -3577,40 +3818,47 @@ export async function init() {
         if (!confirm) {
             return;
         }
-        const idsByType = new Map();
+        const refsByType = new Map();
         const targetsByType = new Map();
-        for (const script of scripts) {
-            const scriptType = getScriptType(script);
-            if (scriptType === SCRIPT_TYPE_UNKNOWN) {
+        for (const ref of refs) {
+            if (ref.scriptType === SCRIPT_TYPE_UNKNOWN) {
                 continue;
             }
-            if (!idsByType.has(scriptType)) {
-                idsByType.set(scriptType, new Set());
-                targetsByType.set(scriptType, captureRegexTarget(scriptType));
+            if (!refsByType.has(ref.scriptType)) {
+                refsByType.set(ref.scriptType, []);
+                targetsByType.set(ref.scriptType, captureRegexTarget(ref.scriptType));
             }
-            idsByType.get(scriptType).add(script.id);
+            refsByType.get(ref.scriptType).push(ref);
         }
+
+        const shouldDeleteScript = (script, idx, scopeRefs) => scopeRefs.some(ref =>
+            (ref.persistedId ? script?.id === ref.persistedId : idx === ref.index),
+        );
 
         let anySucceeded = false;
         let anyFailed = false;
-        for (const [scriptType, idsToDelete] of idsByType.entries()) {
+        for (const [scriptType, scopeRefs] of refsByType.entries()) {
             const target = targetsByType.get(scriptType);
             try {
                 if (scriptType === SCRIPT_TYPES.SCOPED) {
                     const result = await updateScopedRegexScripts((currentScripts) => {
-                        const next = currentScripts.filter(script => !idsToDelete.has(script.id));
+                        const next = currentScripts.filter((script, idx) => !shouldDeleteScript(script, idx, scopeRefs));
                         return next.length === currentScripts.length ? null : next;
                     }, target);
                     if (result.changed) {
-                        for (const id of idsToDelete) resetRegexScriptState(id);
+                        for (const ref of scopeRefs) {
+                            if (ref.persistedId) resetRegexScriptState(ref.persistedId);
+                        }
                         anySucceeded = true;
                     }
                 } else {
                     const current = getScriptsByType(scriptType, { target });
-                    const next = current.filter(script => !idsToDelete.has(script.id));
+                    const next = current.filter((script, idx) => !shouldDeleteScript(script, idx, scopeRefs));
                     if (next.length !== current.length) {
                         await saveScriptsByType(next, scriptType, { target });
-                        for (const id of idsToDelete) resetRegexScriptState(id);
+                        for (const ref of scopeRefs) {
+                            if (ref.persistedId) resetRegexScriptState(ref.persistedId);
+                        }
                         anySucceeded = true;
                     }
                 }
@@ -3618,7 +3866,7 @@ export async function init() {
                 anyFailed = true;
                 console.error('[Regex] Bulk delete failed for script scope', {
                     scriptType: REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType),
-                    count: idsToDelete.size,
+                    count: scopeRefs.length,
                     error,
                 });
             }

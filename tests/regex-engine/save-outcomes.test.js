@@ -180,61 +180,53 @@ describe('regex engine scoped save outcomes and isolation', () => {
         expect(charB.data.extensions.regex_scripts[0].scriptName).toBe('Beacon B');
     });
 
-    test('persisted invalid-entry cleanup does not mutate live array before acknowledgement and reports cleanup failure honestly', async () => {
+    test('getScriptsByType skips invalid persisted entries read-only without triggering background writes', async () => {
         characters[0].data.extensions.regex_scripts = [makeScript('script-a', 'Beacon A'), null];
-        writeExtensionFieldImpl = async () => false;
+        const writeSpy = jest.fn(async () => true);
+        writeExtensionFieldImpl = writeSpy;
 
         const visible = engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED);
         expect(visible).toHaveLength(1);
         expect(visible[0].id).toBe('script-a');
 
-        // Live persisted array retains the invalid entry until storage acknowledges cleanup.
-        expect(characters[0].data.extensions.regex_scripts).toHaveLength(2);
-        expect(characters[0].data.extensions.regex_scripts[1]).toBeNull();
-
         await flushMicrotasks();
 
+        // Reading never mutates live data or schedules unprompted background persistence.
+        expect(writeSpy).not.toHaveBeenCalled();
         expect(characters[0].data.extensions.regex_scripts).toHaveLength(2);
         expect(characters[0].data.extensions.regex_scripts[1]).toBeNull();
-        expect(globalThis.toastr.error).toHaveBeenCalledTimes(1);
-        const [message] = globalThis.toastr.error.mock.calls[0];
-        expect(String(message)).not.toMatch(/were removed automatically/i);
     });
 
-    test('persisted invalid-entry cleanup racing a real edit computes at the serialized boundary and preserves the new sibling', async () => {
+    test('explicit saveScriptsByType drops invalid entries and persists the new sibling cleanly', async () => {
         characters[0].data.extensions.regex_scripts = [makeScript('script-a', 'Beacon A'), null];
         let persistCount = 0;
-        writeExtensionFieldImpl = async (characterId, key, value, options = {}) => {
-            const character = characters[characterId];
-            if (typeof value === 'function') {
-                // Mirror real writeExtensionField: isCurrent() is checked BEFORE and AFTER callback.
-                if (options.isCurrent && !options.isCurrent()) {
-                    return false;
-                }
-                const replacement = await value(structuredClone(character.data.extensions[key]));
-                if (options.isCurrent && !options.isCurrent()) {
-                    return false;
-                }
-                persistCount += 1;
-                character.data.extensions[key] = structuredClone(replacement);
-                return true;
-            }
+        writeExtensionFieldImpl = async (characterId, key, value) => {
             persistCount += 1;
-            character.data.extensions[key] = structuredClone(value);
+            characters[characterId].data.extensions[key] = structuredClone(value);
             return true;
         };
 
-        // Reading triggers scheduled cleanup microtask.
         const initialVisible = engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED);
         expect(initialVisible.map(s => s.id)).toEqual(['script-a']);
 
-        // Before microtask runs, a real edit saves a new sibling script.
         const newSibling = makeScript('script-sibling', 'Lantern Sibling');
         await engine.saveScriptsByType([...initialVisible, newSibling], engine.SCRIPT_TYPES.SCOPED);
         await flushMicrotasks();
 
-        // Only the real save persisted; cleanup observed clean state and did not overwrite script-sibling.
         expect(persistCount).toBe(1);
         expect(characters[0].data.extensions.regex_scripts.map(s => s.id)).toEqual(['script-a', 'script-sibling']);
+    });
+
+    test('getScriptsByType supports zero-clone hot-path reads while defaulting to isolated clones', () => {
+        const liveRef = characters[0].data.extensions.regex_scripts[0];
+        const cloned = engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED);
+        const nonCloned = engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED, { clone: false });
+
+        expect(cloned[0]).not.toBe(liveRef);
+        expect(nonCloned[0]).toBe(liveRef);
+
+        const replaced = engine.getRegexedString('a lantern glows', 1);
+        expect(replaced).toBe('a beacon glows');
+        expect(characters[0].data.extensions.regex_scripts[0]).toBe(liveRef);
     });
 });
