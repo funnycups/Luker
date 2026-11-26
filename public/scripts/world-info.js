@@ -224,6 +224,7 @@ function normalizeWorldInfoSaveOptions(options = null) {
 const pendingWorldInfoSaves = new Map();
 const worldInfoCacheWriteTokens = new Map();
 const worldInfoCacheRollbackBaselines = new Map();
+const worldInfoDeleteEpochs = new Map();
 let worldInfoSaveChain = Promise.resolve();
 
 function restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken) {
@@ -241,6 +242,11 @@ function restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken) {
     } else {
         worldInfoCache.delete(normalizedName);
     }
+    if (baseline.hadSnapshot) {
+        worldInfoSnapshotCache.set(normalizedName, baseline.previousSnapshot);
+    } else {
+        worldInfoSnapshotCache.delete(normalizedName);
+    }
 }
 
 const saveWorldDebounced = debounce(async () => {
@@ -252,7 +258,7 @@ const saveWorldDebounced = debounce(async () => {
         }
         pendingWorldInfoSaves.delete(name);
         try {
-            await _save(name, entry.data, entry.options);
+            await _save(name, entry.data, entry.options, entry.cacheWriteToken);
         } catch (error) {
             restoreWorldInfoCacheIfOwned(name, entry.cacheWriteToken);
             console.error(`[WI] Failed to save "${name}"`, error);
@@ -1783,7 +1789,7 @@ export const wi_anchor_position = {
  *
  * @type {StructuredCloneMap<string,object>}
  * */
-export const worldInfoCache = new StructuredCloneMap({ cloneOnGet: true, cloneOnSet: false });
+export const worldInfoCache = new StructuredCloneMap({ cloneOnGet: true, cloneOnSet: true });
 const worldInfoSnapshotCache = new Map();
 const worldInfoRequestCache = new Map();
 const worldInfoRequestGeneration = new Map();
@@ -3082,7 +3088,9 @@ export async function loadWorldInfoBatch(names) {
     for (const name of uniqueNames) {
         if (worldInfoCache.has(name)) {
             const cached = worldInfoCache.get(name);
-            if (!worldInfoSnapshotCache.has(name)) {
+            // Never seed the persisted-baseline snapshot cache from an
+            // unpersisted optimistic write still awaiting save acknowledgement.
+            if (!worldInfoSnapshotCache.has(name) && !worldInfoCacheRollbackBaselines.has(name)) {
                 rememberWorldInfoSnapshot(name, cached);
             }
             results.set(name, cached);
@@ -8244,7 +8252,13 @@ export function createWorldInfoEntry(_name, data) {
     return newEntry;
 }
 
-async function saveWorldInfoInternal(name, data, options = {}) {
+async function saveWorldInfoInternal(name, data, options = {}, cacheWriteToken = null) {
+    const isDeletedSinceStart = () => Boolean(cacheWriteToken)
+        && (worldInfoDeleteEpochs.get(name) || 0) !== cacheWriteToken.deleteEpoch;
+    if (isDeletedSinceStart()) {
+        return;
+    }
+
     let saved = false;
     invalidateWorldInfoRequestCache([name]);
     const payload = cloneAsJsonWire(data);
@@ -8254,6 +8268,9 @@ async function saveWorldInfoInternal(name, data, options = {}) {
 
     if (canPatch && !normalizedOptions.onSaved) {
         const operations = await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 16000 });
+        if (isDeletedSinceStart()) {
+            return;
+        }
         if (operations.length === 0) {
             saved = true;
         } else {
@@ -8264,6 +8281,11 @@ async function saveWorldInfoInternal(name, data, options = {}) {
             });
             saved = patchResult.ok;
         }
+    }
+
+    if (isDeletedSinceStart()) {
+        invalidateWorldInfoManagerEntrySearch();
+        return;
     }
 
     if (!saved) {
@@ -8278,7 +8300,37 @@ async function saveWorldInfoInternal(name, data, options = {}) {
         normalizedOptions.onSaved?.(fullSaveResult);
     }
 
-    cacheWorldInfoData(name, payload, { invalidateSearch: true });
+    if (isDeletedSinceStart()) {
+        // A deletion completed after this save began; never re-seed snapshot
+        // cache, overwrite a post-delete save's rollback baseline, or emit
+        // WORLDINFO_UPDATED for the deleted book.
+        invalidateWorldInfoManagerEntrySearch();
+        return;
+    }
+
+    const isLatestOwner = !cacheWriteToken || worldInfoCacheWriteTokens.get(name) === cacheWriteToken;
+    if (isLatestOwner) {
+        cacheWorldInfoData(name, payload, { invalidateSearch: true });
+    } else if (worldInfoCacheWriteTokens.has(name)) {
+        // A newer optimistic write superseded this save while it was in flight.
+        // Keep the newer cache entry and ownership token, while advancing the
+        // persisted snapshot and rollback baseline to this acknowledged payload.
+        rememberWorldInfoSnapshot(name, payload);
+        if (worldInfoCacheRollbackBaselines.has(name)) {
+            const persistedCopy = cloneAsJsonWire(payload);
+            worldInfoCacheRollbackBaselines.set(name, {
+                hadCached: true,
+                previousCached: persistedCopy,
+                hadSnapshot: true,
+                previousSnapshot: cloneAsJsonWire(payload),
+            });
+        }
+        invalidateWorldInfoManagerEntrySearch();
+    } else {
+        // The book's write token was cleared while this save was in flight;
+        // do not re-seed snapshot cache.
+        invalidateWorldInfoManagerEntrySearch();
+    }
     await eventSource.emit(event_types.WORLDINFO_UPDATED, name, payload);
 
     if (normalizedOptions.refreshEditor) {
@@ -8289,7 +8341,7 @@ async function saveWorldInfoInternal(name, data, options = {}) {
     }
 }
 
-async function _save(name, data, options = {}) {
+async function _save(name, data, options = {}, cacheWriteToken = null) {
     const normalizedName = String(name || '').trim();
     if (!normalizedName) {
         return;
@@ -8306,7 +8358,7 @@ async function _save(name, data, options = {}) {
     // Keep saves serialized so WORLDINFO_UPDATED keeps the same one-at-a-time
     // order, but chain every request instead of letting the last queued one
     // overwrite the previous.
-    const run = () => saveWorldInfoInternal(normalizedName, data, normalizedOptions);
+    const run = () => saveWorldInfoInternal(normalizedName, data, normalizedOptions, cacheWriteToken);
     const result = worldInfoSaveChain.then(run);
     worldInfoSaveChain = result.catch(() => {});
     return result;
@@ -8338,12 +8390,23 @@ export async function saveWorldInfo(name, data, immediately = false, options = {
         return;
     }
 
+    // Invalidate any in-flight load GET immediately so it cannot overwrite this
+    // newer optimistic write while a debounced save is waiting to flush.
+    invalidateWorldInfoRequestCache([normalizedName]);
+
     if (!worldInfoCacheRollbackBaselines.has(normalizedName)) {
         const hadCached = worldInfoCache.has(normalizedName);
         const previousCached = hadCached ? worldInfoCache.get(normalizedName) : undefined;
-        worldInfoCacheRollbackBaselines.set(normalizedName, { hadCached, previousCached });
+        const hadSnapshot = worldInfoSnapshotCache.has(normalizedName);
+        const previousSnapshot = hadSnapshot ? worldInfoSnapshotCache.get(normalizedName) : undefined;
+        worldInfoCacheRollbackBaselines.set(normalizedName, {
+            hadCached,
+            previousCached,
+            hadSnapshot,
+            previousSnapshot,
+        });
     }
-    const cacheWriteToken = {};
+    const cacheWriteToken = { deleteEpoch: worldInfoDeleteEpochs.get(normalizedName) || 0 };
     worldInfoCacheWriteTokens.set(normalizedName, cacheWriteToken);
 
     // Update cache immediately, so any future call can pull from this
@@ -8352,7 +8415,7 @@ export async function saveWorldInfo(name, data, immediately = false, options = {
 
     if (immediately) {
         try {
-            return await _save(normalizedName, data, normalizedOptions);
+            return await _save(normalizedName, data, normalizedOptions, cacheWriteToken);
         } catch (error) {
             restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken);
             throw error;
@@ -8573,6 +8636,7 @@ export async function deleteWorldInfo(worldInfoName, { expectedVersion, onlyIfUn
     if (worldInfoCache.has(resolvedWorldInfoName)) {
         worldInfoCache.delete(resolvedWorldInfoName);
     }
+    worldInfoDeleteEpochs.set(resolvedWorldInfoName, (worldInfoDeleteEpochs.get(resolvedWorldInfoName) || 0) + 1);
     worldInfoCacheWriteTokens.delete(resolvedWorldInfoName);
     worldInfoCacheRollbackBaselines.delete(resolvedWorldInfoName);
     worldInfoSnapshotCache.delete(resolvedWorldInfoName);

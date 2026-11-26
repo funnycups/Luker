@@ -170,6 +170,8 @@ jest.unstable_mockModule('../../public/scripts/undo-toast.js', () => ({
     showUndoToast: noop,
 }));
 
+let deleteWorldInfo;
+let loadWorldInfo;
 let saveWorldInfo;
 let worldInfoCache;
 
@@ -185,6 +187,12 @@ beforeAll(async () => {
         removeClass: () => jqChain,
         empty: () => jqChain,
         append: () => jqChain,
+        remove: () => jqChain,
+        attr: () => jqChain,
+        children: () => jqChain,
+        text: () => jqChain,
+        data: () => null,
+        each: () => jqChain,
         trigger: () => jqChain,
         length: 0,
     };
@@ -192,7 +200,7 @@ beforeAll(async () => {
     globalThis.jQuery = globalThis.$;
     globalThis.document = { addEventListener: noop, querySelector: () => null, querySelectorAll: () => [] };
     globalThis.window = globalThis;
-    ({ saveWorldInfo, worldInfoCache } = await import('../../public/scripts/world-info.js'));
+    ({ deleteWorldInfo, loadWorldInfo, saveWorldInfo, worldInfoCache } = await import('../../public/scripts/world-info.js'));
 });
 
 beforeEach(() => {
@@ -312,5 +320,210 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
             .rejects.toThrow(/Failed to save world info: 500/);
 
         expect(worldInfoCache.get('BookAfterSuccess')).toEqual(v1);
+    });
+
+    test('restores unmutated persisted state when caller mutates previously cached object in place before a failed save', async () => {
+        const book = { entries: { 0: { uid: 0, content: 'persisted-clean' } } };
+        globalThis.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+        await saveWorldInfo('BookInPlace', book, true);
+
+        // Mutate the exact object reference previously passed to saveWorldInfo in place.
+        book.entries[0].content = 'poisoned-in-place';
+        globalThis.fetch = jest.fn(async () => ({ ok: false, status: 500 }));
+        await expect(saveWorldInfo('BookInPlace', book, true)).rejects.toThrow(/Failed to save world info: 500/);
+
+        expect(worldInfoCache.get('BookInPlace')).toEqual({
+            entries: { 0: { uid: 0, content: 'persisted-clean' } },
+        });
+    });
+
+    test('does not poison worldInfoSnapshotCache when loadWorldInfo reads an unpersisted queued save', async () => {
+        let releaseBlocker;
+        const blockerGate = new Promise((res) => { releaseBlocker = res; });
+        const savedRequests = [];
+
+        globalThis.fetch = jest.fn(async (url, init) => {
+            const body = init?.body ? JSON.parse(init.body) : {};
+            savedRequests.push({ url, body });
+            if (body.name === 'BlockerBook') {
+                await blockerGate;
+            }
+            return { ok: true, status: 200 };
+        });
+
+        const blockerSave = saveWorldInfo('BlockerBook', { entries: { 0: { uid: 0, content: 'block' } } }, true);
+        const queuedNewBook = { entries: { 1: { uid: 1, content: 'must-persist' } } };
+        const newBookSave = saveWorldInfo('QueuedNewBook', queuedNewBook, true);
+
+        // Read before QueuedNewBook's save executes on worldInfoSaveChain.
+        const loaded = await loadWorldInfo('QueuedNewBook');
+        expect(loaded).toEqual(queuedNewBook);
+
+        releaseBlocker();
+        await blockerSave;
+        await newBookSave;
+
+        const persistedNewBook = savedRequests.find((req) => req.body.name === 'QueuedNewBook');
+        expect(persistedNewBook).toBeDefined();
+        expect(persistedNewBook.url).toBe('/api/worldinfo/edit');
+        expect(persistedNewBook.body.data).toEqual(queuedNewBook);
+    });
+
+    test('does not regress newer optimistic cache write when an earlier overlapping save succeeds, and rolls back to that persisted save if the newer save fails', async () => {
+        let releaseFirst;
+        const firstGate = new Promise((res) => { releaseFirst = res; });
+        let releaseSecond;
+        const secondGate = new Promise((res) => { releaseSecond = res; });
+        let callIndex = 0;
+
+        globalThis.fetch = jest.fn(async () => {
+            callIndex += 1;
+            if (callIndex === 1) {
+                await firstGate;
+                return { ok: true, status: 200 };
+            }
+            await secondGate;
+            return { ok: false, status: 500 };
+        });
+
+        const v1 = { entries: { 0: { uid: 0, content: 'v1-persisted' } } };
+        const v2 = { entries: { 0: { uid: 0, content: 'v2-fails' } } };
+        const firstSave = saveWorldInfo('BookOverlapKeepNewer', v1, true);
+        const secondSave = saveWorldInfo('BookOverlapKeepNewer', v2, true);
+
+        releaseFirst();
+        await firstSave;
+        // While secondSave is still in flight, cache must keep v2 (not regress to v1).
+        expect(worldInfoCache.get('BookOverlapKeepNewer')).toEqual(v2);
+
+        releaseSecond();
+        await expect(secondSave).rejects.toThrow(/Failed to save world info: 500/);
+        // Once secondSave fails, cache must roll back to the acknowledged v1.
+        expect(worldInfoCache.get('BookOverlapKeepNewer')).toEqual(v1);
+    });
+
+    test('in-flight save completing after deleteWorldInfo does not re-seed snapshot cache and block recreating with identical content', async () => {
+        let releaseInitialSave;
+        const initialSaveGate = new Promise((res) => { releaseInitialSave = res; });
+        const editCalls = [];
+
+        globalThis.fetch = jest.fn(async (url, init) => {
+            const body = init?.body ? JSON.parse(init.body) : {};
+            if (url === '/api/worldinfo/edit') {
+                editCalls.push(body);
+                if (editCalls.length === 1) {
+                    await initialSaveGate;
+                }
+                return { ok: true, status: 200 };
+            }
+            if (url === '/api/worldinfo/delete') {
+                return { ok: true, status: 200 };
+            }
+            return { ok: true, status: 200, json: async () => ({ world_names: [] }) };
+        });
+
+        const v1 = { entries: { 0: { uid: 0, content: 'recreated-content' } } };
+        const initialSave = saveWorldInfo('BookDeletedMidSave', v1, true);
+        // Delete completes before the earlier in-flight save resolves.
+        await deleteWorldInfo('BookDeletedMidSave');
+
+        releaseInitialSave();
+        await initialSave;
+
+        // Recreating/undoing with the exact same content must send /api/worldinfo/edit.
+        await saveWorldInfo('BookDeletedMidSave', v1, true);
+        expect(editCalls).toHaveLength(2);
+        expect(editCalls[1]).toEqual({ name: 'BookDeletedMidSave', data: v1 });
+    });
+
+    test('pre-delete in-flight save does not poison snapshot cache or rollback baseline when a post-delete recreate queues before it settles', async () => {
+        let releaseInitialSave;
+        const initialSaveGate = new Promise((res) => { releaseInitialSave = res; });
+        const editCalls = [];
+
+        globalThis.fetch = jest.fn(async (url, init) => {
+            const body = init?.body ? JSON.parse(init.body) : {};
+            if (url === '/api/worldinfo/edit') {
+                editCalls.push(body);
+                if (editCalls.length === 1) {
+                    await initialSaveGate;
+                }
+                return { ok: true, status: 200 };
+            }
+            if (url === '/api/worldinfo/delete') {
+                return { ok: true, status: 200 };
+            }
+            return { ok: true, status: 200, json: async () => ({ world_names: [] }) };
+        });
+
+        const v1 = { entries: { 0: { uid: 0, content: 'undo-same-content' } } };
+        const initialSave = saveWorldInfo('BookDeletedBeforeRecreate', v1, true);
+        await deleteWorldInfo('BookDeletedBeforeRecreate');
+
+        // Start recreate BEFORE releasing the pre-delete in-flight save.
+        const recreateSave = saveWorldInfo('BookDeletedBeforeRecreate', v1, true);
+        releaseInitialSave();
+        await Promise.all([initialSave, recreateSave]);
+
+        expect(editCalls).toHaveLength(2);
+        expect(editCalls[1]).toEqual({ name: 'BookDeletedBeforeRecreate', data: v1 });
+
+        // Also verify a failed post-delete recreate evicts cache rather than restoring pre-delete v1.
+        let releasePreDelete2;
+        const preDelete2Gate = new Promise((res) => { releasePreDelete2 = res; });
+        let editCount2 = 0;
+        globalThis.fetch = jest.fn(async (url) => {
+            if (url === '/api/worldinfo/edit') {
+                editCount2 += 1;
+                if (editCount2 === 1) {
+                    await preDelete2Gate;
+                    return { ok: true, status: 200 };
+                }
+                return { ok: false, status: 500 };
+            }
+            if (url === '/api/worldinfo/delete') {
+                return { ok: true, status: 200 };
+            }
+            return { ok: true, status: 200, json: async () => ({ world_names: [] }) };
+        });
+
+        const preSave2 = saveWorldInfo('BookDeletedFailRecreate', v1, true);
+        await deleteWorldInfo('BookDeletedFailRecreate');
+        const failedRecreate = saveWorldInfo('BookDeletedFailRecreate', { entries: { 0: { uid: 0, content: 'v2-fails' } } }, true);
+        releasePreDelete2();
+        await preSave2;
+        await expect(failedRecreate).rejects.toThrow(/Failed to save world info: 500/);
+        expect(worldInfoCache.has('BookDeletedFailRecreate')).toBe(false);
+    });
+
+    test('queued pre-delete save on worldInfoSaveChain aborts without calling /api/worldinfo/edit after deleteWorldInfo', async () => {
+        let releaseBlocker;
+        const blockerGate = new Promise((res) => { releaseBlocker = res; });
+        const editNames = [];
+
+        globalThis.fetch = jest.fn(async (url, init) => {
+            const body = init?.body ? JSON.parse(init.body) : {};
+            if (url === '/api/worldinfo/edit') {
+                editNames.push(body.name);
+                if (body.name === 'QueueBlockerBook') {
+                    await blockerGate;
+                }
+                return { ok: true, status: 200 };
+            }
+            if (url === '/api/worldinfo/delete') {
+                return { ok: true, status: 200 };
+            }
+            return { ok: true, status: 200, json: async () => ({ world_names: [] }) };
+        });
+
+        const blocker = saveWorldInfo('QueueBlockerBook', { entries: { 0: { uid: 0, content: 'hold' } } }, true);
+        const queuedPreDelete = saveWorldInfo('BookDeletedWhileQueued', { entries: { 0: { uid: 0, content: 'stale' } } }, true);
+
+        await deleteWorldInfo('BookDeletedWhileQueued');
+        releaseBlocker();
+        await Promise.all([blocker, queuedPreDelete]);
+
+        expect(editNames).toEqual(['QueueBlockerBook']);
+        expect(worldInfoCache.has('BookDeletedWhileQueued')).toBe(false);
     });
 });
