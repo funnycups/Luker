@@ -33,6 +33,7 @@ const MIN_HEIGHT = 160;
 const NARROW_WIDTH = 280;
 const DEFAULT_POS = { right: 20, bottom: 84 };
 const DEFAULT_MOBILE_POS = { right: 12, bottom: 150 };
+const MOBILE_COMPOSER_MAX_WIDTH = 1000; // cap-ok: viewport hardware breakpoint matching mobile-styles.css and lens.css full-width composer
 const MOBILE_DEFAULT_WIDTH = 356;
 const SHRINK_AFTER_MS = 4000;
 
@@ -176,6 +177,7 @@ function fitToViewport(root, { layout = null } = {}) {
         if (!frame) frame = win.requestAnimationFrame(apply);
     }
     function onOrientation() {
+        if (!root.isConnected) return;
         schedule();
         clearTimeout(lateTimer);
         lateTimer = setTimeout(schedule, 350);
@@ -679,6 +681,15 @@ export function createDock({
     }
 
     const scrimFit = fitToViewport(scrim);
+    function ownTranslate(el) {
+        const tf = globalThis.getComputedStyle?.(el)?.transform;
+        if (!tf || tf === 'none') return { x: 0, y: 0 };
+        const m2 = /^matrix\([^,]+,[^,]+,[^,]+,[^,]+,\s*([-\d.]+),\s*([-\d.]+)\)$/.exec(tf);
+        if (m2) return { x: Number(m2[1]) || 0, y: Number(m2[2]) || 0 };
+        const m3 = /^matrix3d\((?:[^,]+,){12}\s*([-\d.]+),\s*([-\d.]+),/.exec(tf);
+        if (m3) return { x: Number(m3[1]) || 0, y: Number(m3[2]) || 0 };
+        return { x: 0, y: 0 };
+    }
     function clampPillPos(pos, pillW = 180, pillH = 38) {
         const { vw, vh } = viewportSize();
         return {
@@ -688,21 +699,34 @@ export function createDock({
     }
     function currentPillMargin(compact, pillW, pillH) {
         const custom = compact ? wantMobilePillPos : wantPillPos;
-        const fallback = compact ? DEFAULT_MOBILE_POS : floatPos;
-        return clampPillPos(custom || fallback, pillW, pillH);
+        if (custom) return clampPillPos(custom, pillW, pillH);
+        if (compact) return clampPillPos(DEFAULT_MOBILE_POS, pillW, pillH);
+        const { vw } = viewportSize();
+        const fallback = (!prefs.pos && vw <= MOBILE_COMPOSER_MAX_WIDTH)
+            ? { right: floatPos.right, bottom: DEFAULT_MOBILE_POS.bottom }
+            : floatPos;
+        return clampPillPos(fallback, pillW, pillH);
     }
     function placePill() {
         if (pill.hidden || !pill.isConnected) return;
-        const vv = globalThis.visualViewport;
-        const vw = Math.round(vv?.width ?? innerWidth);
-        const vh = Math.round(vv?.height ?? innerHeight);
+        const { vw, vh, ox, oy } = viewportSize();
         const compact = isCompact();
         pill.classList.toggle('is-compact', compact);
-        pill.style.left = '0px'; pill.style.top = '0px'; pill.style.right = 'auto'; pill.style.bottom = 'auto';
+        pill.style.left = 'auto';
+        pill.style.right = '0px';
+        pill.style.top = '0px';
+        pill.style.bottom = 'auto';
         const r = pill.getBoundingClientRect();
-        const { right: marginRight, bottom: marginBottom } = currentPillMargin(compact, r.width || 180, r.height || 38);
-        pill.style.left = `${vw - marginRight - r.width - r.left + Math.round(vv?.offsetLeft ?? 0)}px`;
-        pill.style.top = `${vh - marginBottom - r.height - r.top + Math.round(vv?.offsetTop ?? 0)}px`;
+        const tr = ownTranslate(pill);
+        const rawScale = pill.offsetHeight > 0 && r.height > 0 ? r.height / pill.offsetHeight : 1;
+        const scale = Math.abs(rawScale - 1) < 0.01 ? 1 : rawScale;
+        const { right: marginRight, bottom: marginBottom } = currentPillMargin(compact, (r.width / scale) || 180, (r.height / scale) || 38);
+        const cbRight = r.width > 0 ? (r.right - tr.x) : (globalThis.innerWidth || vw);
+        const cbTop = r.top - tr.y;
+        pill.style.left = 'auto';
+        pill.style.right = `${(cbRight - (ox + vw)) / scale + marginRight}px`;
+        pill.style.top = `${(oy + vh - r.height - cbTop) / scale - marginBottom}px`;
+        pill.style.bottom = 'auto';
     }
 
     let cancelPillDrag = null;
@@ -783,8 +807,21 @@ export function createDock({
         globalThis.addEventListener('pointercancel', cancel);
         globalThis.addEventListener('blur', onBlur);
     });
+    let orientTimer = 0;
     const onResize = () => { placeFloat(); placePill(); };
+    const onOrientation = () => {
+        if (!root.isConnected) return;
+        onResize();
+        clearTimeout(orientTimer);
+        orientTimer = setTimeout(onResize, 350);
+    };
+    const dockCssLink = (container?.ownerDocument || document).getElementById(DOCK_CSS_ID);
+    dockCssLink?.addEventListener?.('load', onResize);
+    (container?.ownerDocument || document).fonts?.ready?.then?.(() => {
+        if (!destroyed && !pill.hidden) placePill();
+    });
     globalThis.addEventListener('resize', onResize);
+    globalThis.addEventListener('orientationchange', onOrientation);
     globalThis.visualViewport?.addEventListener('resize', onResize);
     globalThis.visualViewport?.addEventListener('scroll', onResize);
 
@@ -1032,14 +1069,16 @@ export function createDock({
                 : view.source === 'sd'
                     ? i18n('Generating image')
                     : `${i18n('Orchestrating')}${summary ? ` · ${summary}` : ''}`;
+            const pillText = liveRun
+                ? `${liveLabel} · ${formatDuration(view.duration)}`
+                : `${i18nFormat('${0} ${1}', source, statusLabel(view.status))} · ${formatDuration(view.duration)}`;
             pill.dataset.status = liveRun ? 'running' : view.status;
             pillClose.hidden = liveRun;
             put(clear(pillMain), liveRun ? h('span', { class: 'rp-pulse' }) : h('span', { class: 'rp-dock-pill-dot', 'aria-hidden': 'true' }),
-                h('span', { class: 'rp-dock-pill-text', text: liveRun
-                    ? `${liveLabel} · ${formatDuration(view.duration)}`
-                    : `${i18nFormat('${0} ${1}', source, statusLabel(view.status))} · ${formatDuration(view.duration)}` }));
-            if (pillWasHidden || pill.dataset.len !== String(pill.textContent.length)) {
-                pill.dataset.len = String(pill.textContent.length);
+                h('span', { class: 'rp-dock-pill-text', text: pillText }));
+            const pillSig = `${pillClose.hidden ? '0' : '1'}:${pillText}`;
+            if (pillWasHidden || pill.dataset.sig !== pillSig) {
+                pill.dataset.sig = pillSig;
                 placePill();
             }
         }
@@ -1175,11 +1214,14 @@ export function createDock({
             clearInterval(ticker);
             clearTimeout(shrinkTimer);
             clearTimeout(toastTimer);
+            clearTimeout(orientTimer);
             renderSoon.cancel?.();
             document.removeEventListener('pointerdown', onOutside, true);
             compactMql?.removeEventListener?.('change', onCompact);
             scrimFit.destroy();
+            dockCssLink?.removeEventListener?.('load', onResize);
             globalThis.removeEventListener('resize', onResize);
+            globalThis.removeEventListener('orientationchange', onOrientation);
             globalThis.visualViewport?.removeEventListener('resize', onResize);
             globalThis.visualViewport?.removeEventListener('scroll', onResize);
             root.remove();

@@ -221,13 +221,13 @@
     --rp-pill-h: 34px;
     position: fixed;
     left: auto;
-    right: calc(var(--rp-pill-float-right, 20px) + var(--rp-pill-vv-right, 0px));
-    top: max(8px, calc(var(--rp-pill-vh, 100vh) - var(--rp-pill-float-bottom, 84px) - var(--rp-pill-h)));
-    top: max(8px, calc(var(--rp-pill-vh, 100dvh) - var(--rp-pill-float-bottom, 84px) - var(--rp-pill-h)));
+    right: 20px;
+    top: max(8px, calc(100vh - 84px - var(--rp-pill-h)));
+    top: max(8px, calc(100dvh - 84px - var(--rp-pill-h)));
     bottom: auto;
     z-index: 9001;
     display: inline-flex; align-items: center; height: var(--rp-pill-h);
-    width: auto;
+    width: auto; max-width: calc(100vw - 24px);
     border-radius: 999px; font-size: 12.5px; font-weight: 550;
     color: var(--lw-text); background: var(--lw-raised);
     border: 1px solid color-mix(in srgb, var(--rp-running) 50%, var(--lw-border-strong));
@@ -249,6 +249,7 @@
 .rpdock .rp-dock-pill-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--lw-accent); }
 .rpdock.rp-dock-pill[data-status="error"] .rp-dock-pill-dot,
 .rpdock.rp-dock-pill[data-status="failed"] .rp-dock-pill-dot { background: var(--lw-danger); }
+.rpdock .rp-dock-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rpdock.rp-dock-pill[data-status="running"] .rp-dock-pill-text { min-width: 12ch; }
 @keyframes rp-pill-in { from { opacity: 0; transform: translateY(6px); } }
 .rpdock.rp-dock-scrim { display: none; }
@@ -340,10 +341,9 @@
     .rpdock.rp-dock .rp-dock-agent-head,
     .rpdock.rp-dock[data-size="small"] .rp-dock-agent-head { height: auto; min-height: 42px; }
     .rpdock.rp-dock-pill.is-compact,
-    .rpdock.rp-dock-pill { height: 40px; max-width: calc(100vw - 24px); }
+    .rpdock.rp-dock-pill { --rp-pill-h: 40px; height: 40px; }
     .rpdock.rp-dock-pill .rp-dock-pill-main { padding: 0 12px 0 14px; }
     .rpdock.rp-dock-pill .rp-dock-pill-x { width: 36px; height: 36px; margin: 0 2px 0 -4px; }
-    .rpdock .rp-dock-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

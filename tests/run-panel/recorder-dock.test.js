@@ -685,13 +685,16 @@ describe('run-panel recorder & dock', () => {
             const liveCollapseBtn = [...headEl.querySelectorAll('button')].find(b => b.title === 'Collapse');
             liveCollapseBtn.click();
             expect(pillEl.hidden).toBe(false);
+            expect(pillEl.style.left).not.toMatch(/px$/);
+            expect(pillEl.style.right).toBe('12px');
             expect(pillEl.style.top).toBe(`${844 - 150}px`);
-            const pillLeftBeforeHover = pillEl.style.left;
+            const pillRightBeforeHover = pillEl.style.right;
             const pillTopBeforeHover = pillEl.style.top;
             firePtr(pillEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 300, clientY: 660 });
             firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 302, clientY: 661 });
             firePtr(pillEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 200, clientY: 500 });
-            expect(pillEl.style.left).toBe(pillLeftBeforeHover);
+            expect(pillEl.style.left).not.toMatch(/px$/);
+            expect(pillEl.style.right).toBe(pillRightBeforeHover);
             expect(pillEl.style.top).toBe(pillTopBeforeHover);
 
             // Drag pill (>=6px) without clicking pillMain, then click .rp-dock-pill-x -> closes on first click
@@ -706,6 +709,131 @@ describe('run-panel recorder & dock', () => {
             dock.destroy();
             recorder.detach();
         } finally {
+            globalThis.matchMedia = origMatchMedia;
+            globalThis.innerWidth = origW;
+            globalThis.innerHeight = origH;
+        }
+    });
+
+    test('dock pill enforces single-line nowrap above 640px, anchors via right, clears mobile composer at 641-1000px, and re-places on same-length finish', () => {
+        const dockCss = readFileSync(fileURLToPath(new URL('../../public/scripts/run-panel/dock.css', import.meta.url)), 'utf8');
+        const baseCss = dockCss.split('@media (max-width: 640px)')[0];
+        expect(baseCss).toMatch(/\.rpdock\.rp-dock-pill\s*\{[^}]*max-width:\s*calc\(100vw - 24px\);/);
+        expect(baseCss).toMatch(/\.rpdock\s+\.rp-dock-pill-text\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
+        expect(dockCss).not.toContain('--rp-pill-float-right');
+
+        const origMatchMedia = globalThis.matchMedia;
+        const origW = globalThis.innerWidth;
+        const origH = globalThis.innerHeight;
+        const origGetComputedStyle = globalThis.getComputedStyle;
+        jest.useFakeTimers();
+        try {
+            globalThis.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+            globalThis.innerWidth = 768;
+            globalThis.innerHeight = 1024;
+            setAccountContext({
+                accountsEnabled: true,
+                handle: 'alice',
+                settingsReady: true,
+                translate: (key) => ({
+                    'Search': '搜索',
+                    'Searching': '搜索中',
+                    'Complete': '完成',
+                    '${0} ${1}': '${0}${1}',
+                    '${0} s': '${0} 秒',
+                }[key] ?? key),
+            });
+            globalThis.localStorage.setItem('orchestraLens.dock.v1::alice', JSON.stringify({
+                autoOpen: false,
+            }));
+
+            const searchStore = createRunStore();
+            const recorder = createRecorder({ storage: accountLocalStorage() });
+            recorder.attach(searchStore, 'search');
+            const dock = createDock({ recorder });
+            const pillEl = document.querySelector('.rp-dock-pill');
+            const closeBtn = pillEl.querySelector('.rp-dock-pill-x');
+
+            // Simulate browser layout where closing hidden -> visible widens the pill,
+            // and mid-entrance rp-pill-in animation applies translateY(6px).
+            const origRect = pillEl.getBoundingClientRect.bind(pillEl);
+            let pillTransform = 'matrix(1, 0, 0, 1, 0, 6)';
+            globalThis.getComputedStyle = (el, ...rest) => {
+                const cs = origGetComputedStyle(el, ...rest);
+                if (el !== pillEl) return cs;
+                return new Proxy(cs, {
+                    get(target, prop) {
+                        if (prop === 'transform') return pillTransform;
+                        const v = target[prop];
+                        return typeof v === 'function' ? v.bind(target) : v;
+                    },
+                });
+            };
+            pillEl.getBoundingClientRect = () => {
+                const width = closeBtn.hidden ? 130 : 165;
+                const height = 34;
+                const ty = pillTransform === 'none' ? 0 : 6;
+                return {
+                    left: 768 - width,
+                    right: 768,
+                    top: ty,
+                    bottom: ty + height,
+                    width,
+                    height,
+                    x: 768 - width,
+                    y: ty,
+                    toJSON: () => origRect(),
+                };
+            };
+
+            const nowSpy = jest.spyOn(performance, 'now').mockReturnValue(10_000);
+            const runId = searchStore.startRun({ mode: 'search' });
+            nowSpy.mockReturnValue(19_500); // 9.5s -> "搜索中 · 9.5 秒" (11 chars, closeBtn hidden)
+            dock.refresh();
+
+            expect(pillEl.hidden).toBe(false);
+            expect(pillEl.textContent).toBe('搜索中 · 9.5 秒');
+            expect(pillEl.textContent.length).toBe(11);
+            expect(closeBtn.hidden).toBe(true);
+            expect(pillEl.style.left).not.toMatch(/px$/);
+            expect(pillEl.style.right).toBe('20px');
+            // Clears full-width mobile composer (bottom: 150) and strips translateY(6px) animation offset.
+            expect(pillEl.style.top).toBe(`${1024 - 150 - 34}px`);
+
+            // Drag pill all the way to the left edge so a wider pill must re-clamp right margin.
+            pillTransform = 'none';
+            const firePtr = (el, type, props = {}) => {
+                const ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.assign(ev, { pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1, ...props });
+                el.dispatchEvent(ev);
+            };
+            firePtr(pillEl, 'pointerdown', { clientX: 700, clientY: 850 });
+            firePtr(globalThis, 'pointermove', { clientX: 0, clientY: 850 });
+            firePtr(globalThis, 'pointerup', { clientX: 0, clientY: 850, buttons: 0 });
+            expect(pillEl.style.right).toBe(`${768 - 130 - 6}px`);
+
+            // Finish at 18s -> "搜索完成 · 18 秒" (also 11 chars, but closeBtn becomes visible and width grows to 165px).
+            nowSpy.mockReturnValue(28_000);
+            searchStore.finishRun({ runId, status: 'committed', finalText: 'found' });
+            jest.advanceTimersByTime(60);
+
+            expect(pillEl.textContent).toBe('搜索完成 · 18 秒');
+            expect(pillEl.textContent.length).toBe(11);
+            expect(closeBtn.hidden).toBe(false);
+            expect(pillEl.style.left).not.toMatch(/px$/);
+            // Re-clamped using the new 165px width so the left edge stays 6px inside the viewport.
+            expect(pillEl.style.right).toBe(`${768 - 165 - 6}px`);
+
+            // orientationchange schedules late re-place and destroy cleans up all timers.
+            globalThis.dispatchEvent(new Event('orientationchange'));
+            dock.destroy();
+            expect(jest.getTimerCount()).toBe(0);
+
+            recorder.detach();
+            nowSpy.mockRestore();
+        } finally {
+            jest.useRealTimers();
+            globalThis.getComputedStyle = origGetComputedStyle;
             globalThis.matchMedia = origMatchMedia;
             globalThis.innerWidth = origW;
             globalThis.innerHeight = origH;
