@@ -675,6 +675,7 @@ describe('TTS settings.html mounting via real init(), cross-refresh, jQuery trig
         }));
         jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
             oai_settings: {},
+            proxies: [],
         }));
         jest.unstable_mockModule('../../public/scripts/secrets.js', () => ({
             SECRET_KEYS: {},
