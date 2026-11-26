@@ -54,6 +54,7 @@ import {
     setPipPrimingEnabled,
 } from './luker-keep-alive.js';
 import { initAppEndpointControls } from './app-endpoint-controls.js';
+import { applyComposerDraftLayout, refreshComposerDraftLayout } from './composer-draft-layout.js';
 import {
     groups,
 } from './group-chats.js';
@@ -423,6 +424,7 @@ const themeManager = createThemeManager({
             $textarea.val(next);
         }
         themeManager.applyCustomStyleTag(next);
+        applyComposerDraftLayout();
         syncIosSystemBarsColor();
     },
     onPalettesApplied: (themeName, palettes) => {
@@ -433,6 +435,7 @@ const themeManager = createThemeManager({
         console.warn(`Ignored write to "${field}" on read-only built-in theme "${themeName}". Create an editable copy first.`);
     },
     onStylesheetLoaded: () => {
+        applyComposerDraftLayout();
         syncThemeChromeColors();
         syncIosSystemBarsColor();
     },
@@ -2234,6 +2237,7 @@ function applyCustomCSS() {
         $textarea.val(cssText);
     }
     themeManager.applyCustomStyleTag(cssText);
+    applyComposerDraftLayout();
     syncThemeActionControls();
     syncIosSystemBarsColor();
 }
@@ -2258,10 +2262,12 @@ function applyFontScale(type) {
     //this is to allow forced setting on page load, theme swap, etc
     if (type === 'forced') {
         document.documentElement.style.setProperty('--fontScale', String(power_user.font_scale));
+        refreshComposerDraftLayout();
     } else {
         //this is to prevent the slider from updating page in real time
         $('#font_scale').off('mouseup touchend').on('mouseup touchend', () => {
             document.documentElement.style.setProperty('--fontScale', String(power_user.font_scale));
+            refreshComposerDraftLayout();
         });
     }
 

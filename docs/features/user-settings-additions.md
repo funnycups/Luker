@@ -20,6 +20,28 @@ The top row adds three troubleshooting controls:
 
 The Logs viewer and the frontend log buffer are described in more detail under [Logging](/features/logging).
 
+## Compact composer themes
+
+Themes with a compact three-column composer can opt into keeping long drafts expanded when the textarea loses focus. Set `--composer-compact-padding-x` to the compact textarea's padding on each side in pixels. Luker adds `data-composer-draft-wrap` to the send form when the draft has a newline or is wider than the compact text column. Keep the middle grid track the same width in both layouts so the threshold stays stable.
+
+```css
+#nonQRFormItems {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    --composer-compact-padding-x: 4px;
+}
+#leftSendForm { grid-area: 1 / 1; }
+#rightSendForm { grid-area: 1 / 3; }
+#nonQRFormItems > #send_textarea {
+    grid-area: 1 / 2;
+    min-width: 0;
+    width: 100%;
+    padding-inline: var(--composer-compact-padding-x);
+}
+#send_form[data-composer-draft-wrap] #send_textarea { grid-area: 1 / 1 / 2 / -1; }
+#send_form[data-composer-draft-wrap] :is(#leftSendForm, #rightSendForm) { grid-row: 2; }
+```
+
 ## Immersive mode
 
 **Enter immersive mode** hides the interface chrome and goes fullscreen where the browser allows it. It is intended for reading long replies without interface distractions. Exit from the same button, from the on-screen exit control, with `Esc`, or — in the Android app — with the back gesture. Luker remembers whether you were in immersive mode and restores it.
