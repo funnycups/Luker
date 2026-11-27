@@ -13441,7 +13441,9 @@ function attachObjectPatchTests(previousState, operations) {
         guardedOperations.push(operation);
 
         try {
-            const patchResult = applyJsonPatch(workingState, [operation], true, false);
+            // workingState is a local clone owned by this function; mutating it
+            // in place avoids O(K * M) full-document deep clones per save.
+            const patchResult = applyJsonPatch(workingState, [operation], true, true);
             workingState = patchResult?.newDocument;
         } catch {
             // Keep operation list intact even if local simulation fails.
@@ -13468,15 +13470,28 @@ function extractTopMessageIndexFromPath(path) {
 }
 
 function attachChatMessagePatchTests(previousMessages, operations) {
-    const baseMessages = Array.isArray(previousMessages) ? cloneAsJsonWire(previousMessages) : null;
     const sourceOperations = Array.isArray(operations)
         ? operations.filter(op => op && typeof op === 'object')
         : [];
-    if (!Array.isArray(baseMessages) || sourceOperations.length === 0) {
+    if (!Array.isArray(previousMessages) || sourceOperations.length === 0) {
         return sourceOperations;
     }
 
-    let workingMessages = baseMessages;
+    // Shallow-copy the message array while normalizing top-level non-JSON slots
+    // to match JSON wire form, then copy individual messages on write only when
+    // an operation mutates a nested path inside them.
+    let workingMessages = Array.from(previousMessages, (item) => {
+        if (item === undefined || typeof item === 'function' || typeof item === 'symbol' || (typeof item === 'number' && !Number.isFinite(item))) {
+            return null;
+        }
+        return item === 0 ? 0 : item;
+    });
+    const originalMessageRefs = new Set();
+    for (const item of workingMessages) {
+        if (item !== null && typeof item === 'object') {
+            originalMessageRefs.add(item);
+        }
+    }
     let lastTestedIndex = null;
     /** @type {object[]} */
     const guardedOperations = [];
@@ -13516,7 +13531,23 @@ function attachChatMessagePatchTests(previousMessages, operations) {
         guardedOperations.push(operation);
 
         try {
-            const patchResult = applyJsonPatch(workingMessages, [operation], true, false);
+            // Detach a touched message before in-place nested mutation so
+            // previousMessages (and any aliased slots) are never mutated.
+            if (
+                Number.isInteger(index)
+                && index >= 0
+                && index < workingMessages.length
+                && typeof operation.path === 'string'
+                && operation.path.indexOf('/', 1) !== -1
+            ) {
+                const currentMessage = workingMessages[index];
+                if (currentMessage !== null && typeof currentMessage === 'object' && originalMessageRefs.has(currentMessage)) {
+                    workingMessages[index] = cloneAsJsonWire(currentMessage);
+                }
+            }
+            // workingMessages is owned by this function; mutating it in place
+            // avoids cloning the entire chat array on every patch operation.
+            const patchResult = applyJsonPatch(workingMessages, [operation], true, true);
             if (Array.isArray(patchResult?.newDocument)) {
                 workingMessages = patchResult.newDocument;
             }
