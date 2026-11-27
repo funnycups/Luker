@@ -31,14 +31,6 @@ import { loadReferenceInputs } from '../../../media-input-loader.js';
 import { extractImageMeta } from '../../../request-inspector.js';
 import path from 'node:path';
 
-// The ws WebSocket ctor is injectable via `__setWebSocketForTest` so unit
-// tests can swap a fake without depending on ESM mocking of the `ws`
-// package (which is CJS and does not play cleanly with
-// jest.unstable_mockModule in the current toolchain).
-let WebSocket = WebSocketLib;
-export function __setWebSocketForTest(ctor) { WebSocket = ctor || WebSocketLib; }
-export function __resetWebSocketForTest() { WebSocket = WebSocketLib; }
-
 export async function uploadComfyReferences({ directories, baseUrl, auth, references, fetchFn, signal }) {
     const loadedRefs = await loadReferenceInputs(directories, references);
     if (loadedRefs.length === 0) {
@@ -91,7 +83,6 @@ export async function uploadComfyReferences({ directories, baseUrl, auth, refere
     return filenames;
 }
 
-const TIMEOUT_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 2000;
 const POLL_RETRY_MAX = 3;
 const WS_MAX_RETRIES = 3;
@@ -101,24 +92,20 @@ const WS_OPEN_TIMEOUT_MS = 5000;
 /**
  * Wait for prompt completion using execution events or history polling.
  */
-async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFetch) {
+async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFetch, WebSocketCtor = WebSocketLib) {
     const parsedBase = new URL(baseUrl);
     const wsProtocol = parsedBase.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${parsedBase.host}/ws?clientId=${clientId}`;
-    const deadline = Date.now() + TIMEOUT_MS;
 
     for (let attempt = 0; attempt <= WS_MAX_RETRIES; attempt++) {
         if (signal?.aborted) throw new Error('Aborted');
-        if (Date.now() >= deadline) break;
 
         try {
-            const ws = new WebSocket(wsUrl);
+            const ws = new WebSocketCtor(wsUrl);
 
             const result = await new Promise((resolve, reject) => {
-                let timeout;
                 function cleanup() {
                     clearTimeout(openTimeout);
-                    clearTimeout(timeout);
                     signal?.removeEventListener('abort', onAbort);
                 }
                 function fail(error) {
@@ -141,9 +128,6 @@ async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFe
                     } else {
                         console.debug('[ComfyUI] WebSocket connected, waiting for completion...');
                     }
-                    timeout = setTimeout(() => {
-                        fail(new Error('ComfyUI generation timed out'));
-                    }, Math.max(deadline - Date.now(), 1000));
                 });
 
                 if (signal) {
@@ -192,9 +176,7 @@ async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFe
     console.debug('[ComfyUI] Using polling fallback (2s interval)...');
     const historyUrl = new URL(urlJoin(baseUrl, `/history/${promptId}`));
 
-    while (Date.now() < deadline) {
-        if (signal?.aborted) throw new Error('Aborted');
-
+    while (!signal?.aborted) {
         let lastError = null;
         for (let retry = 0; retry < POLL_RETRY_MAX; retry++) {
             try {
@@ -216,7 +198,7 @@ async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFe
         }
         await delay(POLL_INTERVAL_MS);
     }
-    throw new Error('ComfyUI generation timed out (polling)');
+    throw new Error('Aborted');
 }
 
 /**
@@ -323,7 +305,7 @@ export async function dispatchSdComfy(ctx) {
             ctx.signal.addEventListener('abort', onAbort, { once: true });
         }
 
-        await waitForComfyCompletion(baseUrl, promptId, clientId, ctx.signal, ctx.fetch);
+        await waitForComfyCompletion(baseUrl, promptId, clientId, ctx.signal, ctx.fetch, ctx.WebSocket);
         settled = true;
 
         const historyUrl = new URL(urlJoin(baseUrl, `/history/${promptId}`));

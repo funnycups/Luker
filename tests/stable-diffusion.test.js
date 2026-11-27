@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
-import { EventEmitter } from 'node:events';
+import { afterAll, beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { WebSocketServer } from 'ws';
 
 const fetchMock = jest.fn();
 jest.unstable_mockModule('node-fetch', () => ({ default: fetchMock }));
@@ -9,48 +9,39 @@ jest.unstable_mockModule('../src/endpoints/secrets.js', () => ({
     SECRET_KEYS: {},
 }));
 
-// Fake WebSocket injected through comfy.js's test hook: the dispatch waits
-// for an `executing`/`node: null` message before reading /history. Stands in
-// for the upstream `ws` module (CJS + ESM mock friction).
-class FakeWebSocket extends EventEmitter {
-    static instances = [];
-    static onNew = null;
-    constructor(url) {
-        super();
-        this.url = url;
-        this.terminated = false;
-        this.closed = false;
-        FakeWebSocket.instances.push(this);
-        if (FakeWebSocket.onNew) {
-            setImmediate(() => FakeWebSocket.onNew(this));
-        }
-    }
-    terminate() { this.terminated = true; }
-    close(code = 1000) {
-        if (this.closed) return;
-        this.closed = true;
-        setImmediate(() => this.emit('close', code));
-    }
-}
-
 describe('ComfyUI generation', () => {
     /** @type {import('node:http').Server} */
     let server;
     let baseUrl;
-    /** @type {(ctor: any) => void} */
-    let setWebSocketForTest;
-    /** @type {() => void} */
-    let resetWebSocketForTest;
+    /** @type {WebSocketServer} */
+    let wsServer;
+    let comfyBaseUrl;
+    /** @type {string | null} */
+    let activePromptId = null;
     /** @type {(requestId: string, owner: string) => any} */
     let getTaskByRequestId;
 
     beforeAll(async () => {
         const { default: express } = await import('express');
         const { router } = await import('../src/endpoints/stable-diffusion.js');
-        const comfy = await import('../src/luker-dispatch/providers/sd/comfy.js');
-        setWebSocketForTest = comfy.__setWebSocketForTest;
-        resetWebSocketForTest = comfy.__resetWebSocketForTest;
         ({ getTaskByRequestId } = await import('../src/endpoints/backends/luker-generation.js'));
+
+        wsServer = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+        await new Promise(resolve => wsServer.once('listening', resolve));
+        const wsAddress = wsServer.address();
+        comfyBaseUrl = `http://127.0.0.1:${wsAddress.port}`;
+        wsServer.on('connection', (socket) => {
+            const promptId = activePromptId;
+            if (!promptId) return;
+            setTimeout(() => {
+                if (socket.readyState === socket.OPEN) {
+                    socket.send(JSON.stringify({
+                        type: 'executing',
+                        data: { prompt_id: promptId, node: null },
+                    }));
+                }
+            }, 10);
+        });
 
         const app = express();
         app.use(express.json());
@@ -69,18 +60,13 @@ describe('ComfyUI generation', () => {
     });
 
     afterAll(async () => {
+        await new Promise((resolve, reject) => wsServer.close(error => error ? reject(error) : resolve()));
         await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     });
 
     beforeEach(() => {
         fetchMock.mockReset();
-        FakeWebSocket.instances.length = 0;
-        FakeWebSocket.onNew = null;
-        setWebSocketForTest(FakeWebSocket);
-    });
-
-    afterEach(() => {
-        resetWebSocketForTest();
+        activePromptId = null;
     });
 
     /**
@@ -89,21 +75,13 @@ describe('ComfyUI generation', () => {
      * payload through generation-job events, so assertions read the job.
      */
     async function runComfy(jobId, promptId) {
-        FakeWebSocket.onNew = (ws) => {
-            ws.emit('open');
-            setTimeout(() => {
-                ws.emit('message', Buffer.from(JSON.stringify({
-                    type: 'executing',
-                    data: { prompt_id: promptId, node: null },
-                })));
-            }, 10);
-        };
+        activePromptId = promptId;
 
         const response = await fetch(`${baseUrl}/comfy/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                url: 'http://127.0.0.1:8188',
+                url: comfyBaseUrl,
                 prompt: '{}',
                 luker_generation: { job_id: jobId },
             }),

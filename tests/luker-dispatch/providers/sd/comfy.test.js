@@ -1,15 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { jest } from '@jest/globals';
 import { EventEmitter } from 'node:events';
-import {
-    dispatchSdComfy,
-    __setWebSocketForTest,
-    __resetWebSocketForTest,
-} from '../../../../src/luker-dispatch/providers/sd/comfy.js';
+import { dispatchSdComfy } from '../../../../src/luker-dispatch/providers/sd/comfy.js';
 
-// Fake WebSocket that stands in for the upstream `ws` module. Injected via
-// the module's __setWebSocketForTest hook — this avoids ESM mock friction
-// (`ws` is CJS and does not play cleanly with jest.unstable_mockModule).
+// Fake WebSocket boundary stub passed via ctx.WebSocket (alongside ctx.fetch).
 class FakeWebSocket extends EventEmitter {
     static instances = [];
     static onNew = null;
@@ -46,6 +40,7 @@ function fakeCtx({ body = {}, onFetch, signal } = {}) {
         user: { handle, directories: {}, profile: { handle } },
         signal: signal || ac.signal,
         fetch: onFetch,
+        WebSocket: FakeWebSocket,
         abort: jest.fn(() => ac.abort()),
         onRequestClose: jest.fn((cb) => {
             closeHandlers.add(cb);
@@ -116,11 +111,6 @@ function buildStandardFetch({ interruptOnPromptId } = {}) {
 beforeEach(() => {
     FakeWebSocket.instances.length = 0;
     FakeWebSocket.onNew = null;
-    __setWebSocketForTest(FakeWebSocket);
-});
-
-afterEach(() => {
-    __resetWebSocketForTest();
 });
 
 describe('dispatchSdComfy', () => {
