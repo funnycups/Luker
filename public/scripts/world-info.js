@@ -35,6 +35,7 @@ import { initActionableSingleSelect, refreshOpenDropdown } from './select2-actio
 import { buildBulkDeleteConfirmBody } from './select2-multiselect.js';
 import { downloadTextFilesAsZip } from './zip-export.js';
 import { showUndoToast } from './undo-toast.js';
+import { createWorldInfoPersistenceCoordinator } from './lib/world-info-cache-coordinator.js';
 
 function buildWorldInfoDragHelper(item) {
     const itemEl = item?.get?.(0) || item?.[0] || item;
@@ -214,57 +215,6 @@ export let world_info_use_group_scoring = false;
 export let world_info_character_strategy = world_info_insertion_strategy.character_first;
 export let world_info_budget_cap = 0;
 export let world_info_max_recursion_steps = 0;
-function normalizeWorldInfoSaveOptions(options = null) {
-    return {
-        refreshEditor: options?.refreshEditor === true,
-        onSaved: options?.onSaved,
-    };
-}
-
-const pendingWorldInfoSaves = new Map();
-const worldInfoCacheWriteTokens = new Map();
-const worldInfoCacheRollbackBaselines = new Map();
-const worldInfoDeleteEpochs = new Map();
-let worldInfoSaveChain = Promise.resolve();
-
-function restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken) {
-    if (worldInfoCacheWriteTokens.get(normalizedName) !== cacheWriteToken) {
-        return;
-    }
-    worldInfoCacheWriteTokens.delete(normalizedName);
-    const baseline = worldInfoCacheRollbackBaselines.get(normalizedName);
-    worldInfoCacheRollbackBaselines.delete(normalizedName);
-    if (!baseline) {
-        return;
-    }
-    if (baseline.hadCached) {
-        worldInfoCache.set(normalizedName, baseline.previousCached);
-    } else {
-        worldInfoCache.delete(normalizedName);
-    }
-    if (baseline.hadSnapshot) {
-        worldInfoSnapshotCache.set(normalizedName, baseline.previousSnapshot);
-    } else {
-        worldInfoSnapshotCache.delete(normalizedName);
-    }
-}
-
-const saveWorldDebounced = debounce(async () => {
-    const names = [...pendingWorldInfoSaves.keys()];
-    await Promise.allSettled(names.map(async (name) => {
-        const entry = pendingWorldInfoSaves.get(name);
-        if (!entry) {
-            return;
-        }
-        pendingWorldInfoSaves.delete(name);
-        try {
-            await _save(name, entry.data, entry.options, entry.cacheWriteToken);
-        } catch (error) {
-            restoreWorldInfoCacheIfOwned(name, entry.cacheWriteToken);
-            console.error(`[WI] Failed to save "${name}"`, error);
-        }
-    }));
-}, debounce_timeout.relaxed);
 const saveSettingsDebounced = () => {
     Object.assign(world_info, { globalSelect: selected_world_info });
     scheduleSettingsSaveDebounced();
@@ -1782,9 +1732,6 @@ export const wi_anchor_position = {
  * @type {StructuredCloneMap<string,object>}
  * */
 export const worldInfoCache = new StructuredCloneMap({ cloneOnGet: true, cloneOnSet: true });
-const worldInfoSnapshotCache = new Map();
-const worldInfoRequestCache = new Map();
-const worldInfoRequestGeneration = new Map();
 
 function isPlainObject(value) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -1794,51 +1741,27 @@ function isPlainObject(value) {
     return prototype === Object.prototype || prototype === null;
 }
 
-function cloneAsJsonWire(value) {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? undefined : JSON.parse(serialized);
-}
-
-function rememberWorldInfoSnapshot(name, data) {
-    const key = String(name || '').trim();
-    if (!key) {
-        return;
-    }
-    if (!isPlainObject(data)) {
-        worldInfoSnapshotCache.delete(key);
-        return;
-    }
-    const snapshot = cloneAsJsonWire(data);
-    if (isPlainObject(snapshot)) {
-        worldInfoSnapshotCache.set(key, snapshot);
-    } else {
-        worldInfoSnapshotCache.delete(key);
-    }
-}
-
-function getWorldInfoSnapshot(name) {
-    const key = String(name || '').trim();
-    if (!key) {
-        return null;
-    }
-    const snapshot = worldInfoSnapshotCache.get(key);
-    return isPlainObject(snapshot) ? cloneAsJsonWire(snapshot) : null;
-}
-
-function getWorldInfoRequestGeneration(name) {
-    const key = String(name || '').trim();
-    return Math.max(0, Number(worldInfoRequestGeneration.get(key) || 0));
-}
-
-function invalidateWorldInfoRequestCache(names = []) {
-    const normalizedNames = [...new Set((Array.isArray(names) ? names : [names])
-        .map((name) => String(name || '').trim())
-        .filter(Boolean))];
-    for (const name of normalizedNames) {
-        worldInfoRequestGeneration.set(name, getWorldInfoRequestGeneration(name) + 1);
-        worldInfoRequestCache.delete(name);
-    }
-}
+const worldInfoPersistence = createWorldInfoPersistenceCoordinator({
+    worldInfoCache,
+    resolveWorldInfoName,
+    getRequestHeaders,
+    buildObjectPatchOperationsAsync,
+    readWorldInfoDocument,
+    debounce,
+    cancelDebounce,
+    debounceTimeoutMs: debounce_timeout.relaxed,
+    onWorldInfoUpdated: (name, payload) => eventSource.emit(event_types.WORLDINFO_UPDATED, name, payload),
+    onInvalidateSearch: () => invalidateWorldInfoManagerEntrySearch(),
+    onRefreshEditor: async (name) => {
+        if (!hasWorldInfoName(name)) {
+            await updateWorldInfoList();
+        }
+        reloadEditor(name);
+    },
+    onLoadError: (name) => {
+        toastr.error(t`Failed to load World Info ${name}.`, t`Error`, { preventDuplicates: true });
+    },
+});
 
 /**
  * Gets the world info based on chat messages.
@@ -3072,93 +2995,11 @@ export async function showWorldEditor(name) {
  * @return {Promise<Object|null>} A promise that resolves to the loaded world information, or null if the request fails.
  */
 export async function loadWorldInfoBatch(names) {
-    const uniqueNames = [...new Set((Array.isArray(names) ? names : []).map((name) => String(name || '').trim()).filter(Boolean))];
-    const results = new Map();
-    const awaitedRequests = [];
-    const pendingNames = [];
-
-    for (const name of uniqueNames) {
-        if (worldInfoCache.has(name)) {
-            const cached = worldInfoCache.get(name);
-            // Never seed the persisted-baseline snapshot cache from an
-            // unpersisted optimistic write still awaiting save acknowledgement.
-            if (!worldInfoSnapshotCache.has(name) && !worldInfoCacheRollbackBaselines.has(name)) {
-                rememberWorldInfoSnapshot(name, cached);
-            }
-            results.set(name, cached);
-            continue;
-        }
-
-        if (worldInfoRequestCache.has(name)) {
-            awaitedRequests.push(worldInfoRequestCache.get(name).then((data) => {
-                results.set(name, data);
-            }));
-            continue;
-        }
-
-        pendingNames.push(name);
-    }
-
-    if (pendingNames.length) {
-        const requestGenerationByName = new Map(
-            pendingNames.map((name) => [name, getWorldInfoRequestGeneration(name)]),
-        );
-        const batchPromise = (async () => {
-            const batchResults = new Map();
-            await Promise.all(pendingNames.map(async (name) => {
-                let data = null;
-                try {
-                    data = await readWorldInfoDocument(name);
-                } catch (error) {
-                    if (error?.code === 'http_error' && error.status === 404) {
-                        data = { entries: {} };
-                    } else {
-                        console.warn(`Failed to load World Info ${name}`, error);
-                        toastr.error(t`Failed to load World Info ${name}.`, t`Error`, { preventDuplicates: true });
-                    }
-                }
-                if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
-                    cacheWorldInfoData(name, data);
-                    // The cache keeps this reading. Hand callers their own copy:
-                    // the World Editor fills in template fields and displayIndex
-                    // while rendering, and those runtime-only values must not be
-                    // mistaken for unsaved edits by later readers.
-                    data = cloneAsJsonWire(data);
-                }
-                batchResults.set(name, data);
-            }));
-            return batchResults;
-        })();
-
-        for (const name of pendingNames) {
-            worldInfoRequestCache.set(name, batchPromise.then((batchResults) => batchResults.get(name) ?? null));
-        }
-
-        try {
-            const batchResults = await batchPromise;
-            for (const name of pendingNames) {
-                results.set(name, batchResults.get(name) ?? null);
-            }
-        } finally {
-            pendingNames.forEach((name) => worldInfoRequestCache.delete(name));
-        }
-    }
-
-    if (awaitedRequests.length) {
-        await Promise.all(awaitedRequests);
-    }
-
-    return results;
+    return worldInfoPersistence.loadWorldInfoBatch(names);
 }
 
 export async function loadWorldInfo(name) {
-    const resolvedName = resolveWorldInfoName(name);
-    if (!resolvedName) {
-        return;
-    }
-
-    const results = await loadWorldInfoBatch([resolvedName]);
-    return results.get(resolvedName) ?? null;
+    return worldInfoPersistence.loadWorldInfo(name);
 }
 
 export async function updateWorldInfoList() {
@@ -3219,24 +3060,6 @@ export async function updateWorldInfoList() {
 
     invalidateWorldInfoManagerEntrySearch();
     renderWorldInfoManager();
-}
-
-function cacheWorldInfoData(name, data, { invalidateSearch = false } = {}) {
-    // Cache keys are trimmed so writes from raw card-supplied names match
-    // reads from `loadWorldInfoBatch` (which always trims) — otherwise an
-    // import of a book whose name has trailing whitespace splits the cache
-    // and the editor opens against an unrelated entry.
-    const key = String(name || '').trim();
-    if (!key) {
-        return;
-    }
-    worldInfoCacheWriteTokens.set(key, {});
-    worldInfoCacheRollbackBaselines.delete(key);
-    worldInfoCache.set(key, data);
-    rememberWorldInfoSnapshot(key, data);
-    if (invalidateSearch) {
-        invalidateWorldInfoManagerEntrySearch();
-    }
 }
 
 function syncGlobalWorldInfoSettingsState() {
@@ -8244,127 +8067,8 @@ export function createWorldInfoEntry(_name, data) {
     return newEntry;
 }
 
-async function saveWorldInfoInternal(name, data, options = {}, cacheWriteToken = null) {
-    const isDeletedSinceStart = () => Boolean(cacheWriteToken)
-        && (worldInfoDeleteEpochs.get(name) || 0) !== cacheWriteToken.deleteEpoch;
-    if (isDeletedSinceStart()) {
-        return;
-    }
-
-    let saved = false;
-    invalidateWorldInfoRequestCache([name]);
-    const payload = cloneAsJsonWire(data);
-    const previousSnapshot = getWorldInfoSnapshot(name);
-    const canPatch = isPlainObject(previousSnapshot) && isPlainObject(payload);
-    const normalizedOptions = normalizeWorldInfoSaveOptions(options);
-
-    if (canPatch && !normalizedOptions.onSaved) {
-        const operations = await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 16000 });
-        if (isDeletedSinceStart()) {
-            return;
-        }
-        if (operations.length === 0) {
-            saved = true;
-        } else {
-            const patchResult = await fetch('/api/worldinfo/patch', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ name, operations }),
-            });
-            saved = patchResult.ok;
-        }
-    }
-
-    if (isDeletedSinceStart()) {
-        invalidateWorldInfoManagerEntrySearch();
-        return;
-    }
-
-    if (!saved) {
-        const fullSaveResult = await fetch('/api/worldinfo/edit', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ name: name, data: payload }),
-        });
-        if (!fullSaveResult.ok) {
-            throw new Error(`Failed to save world info: ${fullSaveResult.status}`);
-        }
-        normalizedOptions.onSaved?.(fullSaveResult);
-    }
-
-    if (isDeletedSinceStart()) {
-        // A deletion completed after this save began; never re-seed snapshot
-        // cache, overwrite a post-delete save's rollback baseline, or emit
-        // WORLDINFO_UPDATED for the deleted book.
-        invalidateWorldInfoManagerEntrySearch();
-        return;
-    }
-
-    const isLatestOwner = !cacheWriteToken || worldInfoCacheWriteTokens.get(name) === cacheWriteToken;
-    if (isLatestOwner) {
-        cacheWorldInfoData(name, payload, { invalidateSearch: true });
-    } else if (worldInfoCacheWriteTokens.has(name)) {
-        // A newer optimistic write superseded this save while it was in flight.
-        // Keep the newer cache entry and ownership token, while advancing the
-        // persisted snapshot and rollback baseline to this acknowledged payload.
-        rememberWorldInfoSnapshot(name, payload);
-        if (worldInfoCacheRollbackBaselines.has(name)) {
-            const persistedCopy = cloneAsJsonWire(payload);
-            worldInfoCacheRollbackBaselines.set(name, {
-                hadCached: true,
-                previousCached: persistedCopy,
-                hadSnapshot: true,
-                previousSnapshot: cloneAsJsonWire(payload),
-            });
-        }
-        invalidateWorldInfoManagerEntrySearch();
-    } else {
-        // The book's write token was cleared while this save was in flight;
-        // do not re-seed snapshot cache.
-        invalidateWorldInfoManagerEntrySearch();
-    }
-    await eventSource.emit(event_types.WORLDINFO_UPDATED, name, payload);
-
-    if (normalizedOptions.refreshEditor) {
-        if (!hasWorldInfoName(name)) {
-            await updateWorldInfoList();
-        }
-        reloadEditor(name);
-    }
-}
-
-async function _save(name, data, options = {}, cacheWriteToken = null) {
-    const normalizedName = String(name || '').trim();
-    if (!normalizedName) {
-        return;
-    }
-
-    const normalizedOptions = normalizeWorldInfoSaveOptions(options);
-
-    // An immediate save takes over this book's pending debounced save.
-    pendingWorldInfoSaves.delete(normalizedName);
-    if (pendingWorldInfoSaves.size === 0) {
-        cancelDebounce(saveWorldDebounced);
-    }
-
-    // Keep saves serialized so WORLDINFO_UPDATED keeps the same one-at-a-time
-    // order, but chain every request instead of letting the last queued one
-    // overwrite the previous.
-    const run = () => saveWorldInfoInternal(normalizedName, data, normalizedOptions, cacheWriteToken);
-    const result = worldInfoSaveChain.then(run);
-    worldInfoSaveChain = result.catch(() => {});
-    return result;
-}
-
-
 /**
  * Saves the world info
- *
- * This will also refresh the `worldInfoCache`.
- * Note, for performance reasons the saved cache will not make a deep clone of the data.
- * It is your responsibility to not modify the saved data object after calling this function, or there will be data inconsistencies.
- * Call `loadWorldInfoData` or query directly from cache if you need the object again.
- *
  * @param {string} name - The name of the world info
  * @param {any} data - The data to be saved
  * @param {boolean} [immediately=false] - Whether to save immediately or use debouncing
@@ -8372,53 +8076,7 @@ async function _save(name, data, options = {}, cacheWriteToken = null) {
  * @return {Promise<void>} A promise that resolves when the world info is saved
  */
 export async function saveWorldInfo(name, data, immediately = false, options = {}) {
-    if (!name || !data) {
-        return;
-    }
-
-    // Trim so eager cache writes match the trimmed reads in `loadWorldInfoBatch`.
-    const normalizedName = String(name).trim();
-    if (!normalizedName) {
-        return;
-    }
-
-    // Invalidate any in-flight load GET immediately so it cannot overwrite this
-    // newer optimistic write while a debounced save is waiting to flush.
-    invalidateWorldInfoRequestCache([normalizedName]);
-
-    if (!worldInfoCacheRollbackBaselines.has(normalizedName)) {
-        const hadCached = worldInfoCache.has(normalizedName);
-        const previousCached = hadCached ? worldInfoCache.get(normalizedName) : undefined;
-        const hadSnapshot = worldInfoSnapshotCache.has(normalizedName);
-        const previousSnapshot = hadSnapshot ? worldInfoSnapshotCache.get(normalizedName) : undefined;
-        worldInfoCacheRollbackBaselines.set(normalizedName, {
-            hadCached,
-            previousCached,
-            hadSnapshot,
-            previousSnapshot,
-        });
-    }
-    const cacheWriteToken = { deleteEpoch: worldInfoDeleteEpochs.get(normalizedName) || 0 };
-    worldInfoCacheWriteTokens.set(normalizedName, cacheWriteToken);
-
-    // Update cache immediately, so any future call can pull from this
-    worldInfoCache.set(normalizedName, data);
-    const normalizedOptions = normalizeWorldInfoSaveOptions(options);
-
-    if (immediately) {
-        try {
-            return await _save(normalizedName, data, normalizedOptions, cacheWriteToken);
-        } catch (error) {
-            restoreWorldInfoCacheIfOwned(normalizedName, cacheWriteToken);
-            throw error;
-        }
-    }
-
-    // Keep the latest state per book and move it to the end so the flush order
-    // follows the last edit. One debounce timer then flushes every book.
-    pendingWorldInfoSaves.delete(normalizedName);
-    pendingWorldInfoSaves.set(normalizedName, { data, options: normalizedOptions, cacheWriteToken });
-    saveWorldDebounced();
+    return worldInfoPersistence.saveWorldInfo(name, data, immediately, options);
 }
 
 async function renameWorldInfo(name, data) {
@@ -8586,53 +8244,13 @@ async function updateWorldInfoLinks(oldName, newName, { retargetPersonaLore } = 
  * @throws {Error} Conditional HTTP refusal with code/resourceState, or unconfirmed transport failure
  */
 export async function deleteWorldInfo(worldInfoName, { expectedVersion, onlyIfUnbound } = {}) {
-    const resolvedWorldInfoName = resolveWorldInfoName(worldInfoName);
-    if (!resolvedWorldInfoName) {
+    const { deleted, resolvedName: resolvedWorldInfoName } = await worldInfoPersistence.deleteWorldInfoRecord(
+        worldInfoName,
+        { expectedVersion, onlyIfUnbound },
+    );
+    if (!deleted) {
         return false;
     }
-    invalidateWorldInfoRequestCache([resolvedWorldInfoName]);
-
-    let response;
-    try {
-        response = await fetch('/api/worldinfo/delete', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ name: resolvedWorldInfoName, expectedVersion, onlyIfUnbound }),
-        });
-    } catch (error) {
-        error.resourceState = 'unknown';
-        throw error;
-    }
-
-    if (!response.ok && (expectedVersion !== undefined || onlyIfUnbound === true)) {
-        let failure = {};
-        try {
-            const parsed = await response.json();
-            if (parsed && typeof parsed === 'object') failure = parsed;
-        } catch {
-            failure = {};
-        }
-        const code = failure.code || response.statusText || 'error';
-        throw Object.assign(new Error(`World book '${resolvedWorldInfoName}' deletion was not acknowledged: HTTP ${response.status} ${code}`), failure);
-    }
-    if (!response.ok) {
-        return false;
-    }
-
-    // Drop any debounced save for this book so it cannot recreate the file.
-    pendingWorldInfoSaves.delete(resolvedWorldInfoName);
-    if (pendingWorldInfoSaves.size === 0) {
-        cancelDebounce(saveWorldDebounced);
-    }
-
-    if (worldInfoCache.has(resolvedWorldInfoName)) {
-        worldInfoCache.delete(resolvedWorldInfoName);
-    }
-    worldInfoDeleteEpochs.set(resolvedWorldInfoName, (worldInfoDeleteEpochs.get(resolvedWorldInfoName) || 0) + 1);
-    worldInfoCacheWriteTokens.delete(resolvedWorldInfoName);
-    worldInfoCacheRollbackBaselines.delete(resolvedWorldInfoName);
-    worldInfoSnapshotCache.delete(resolvedWorldInfoName);
-    invalidateWorldInfoManagerEntrySearch();
 
     const existingWorldIndex = selected_world_info.findIndex((e) => areLookupNamesEqual(e, resolvedWorldInfoName));
     if (existingWorldIndex !== -1) {

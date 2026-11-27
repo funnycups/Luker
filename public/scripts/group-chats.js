@@ -1,4 +1,5 @@
 import { Fuse } from '../lib.js';
+import { parseServerChatPayload } from './lib/chat-integrity-recovery.js';
 
 import {
     shuffle,
@@ -247,8 +248,11 @@ export async function loadGroupChat(chatId) {
         const data = await response.json().catch(() => {
             throw new Error('Invalid JSON response');
         });
-        if (!Array.isArray(data) || (data.length > 0 && (!data[0] || typeof data[0] !== 'object' || Array.isArray(data[0])))) {
-            throw new Error('Expected a chat message array');
+        const parsed = parseServerChatPayload(data, { isGroup: true });
+        if (!parsed.ok) {
+            const err = new Error(parsed.error);
+            if (parsed.corrupted) err.corrupted = true;
+            throw err;
         }
         return data;
     } catch (error) {

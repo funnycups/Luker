@@ -1,13 +1,12 @@
-import { registerDebugFunction } from './power-user.js';
-import { updateSecretDisplay } from './secrets.js';
 import { buildScopedI18n } from './lib/scoped-i18n.js';
 import { registerLensSharedLocaleData } from './lens-shared/locale-data.js';
 import { registerRunPanelLocaleData } from './run-panel/locale-data.js';
 import { registerWorkbenchLocaleData } from './workbench/locale-data.js';
 
 const storageKey = 'language';
-const overrideLanguage = localStorage.getItem(storageKey);
-const localeFile = String(overrideLanguage || navigator.language || navigator.userLanguage || 'en').toLowerCase();
+const overrideLanguage = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+const navigatorLanguage = typeof navigator !== 'undefined' ? (navigator.language || navigator.userLanguage) : '';
+const localeFile = String(overrideLanguage || navigatorLanguage || 'en').toLowerCase();
 const localeFallbacks = {
     'zh-cn': ['zh-tw'],
     'zh-tw': ['zh-cn'],
@@ -60,26 +59,34 @@ function getLocaleLoadOrder(language) {
 }
 
 /**
- * An observer that will check if any new i18n elements are added to the document
- * @type {MutationObserver}
+ * An observer that will check if any new i18n elements are added to the document.
+ * Created lazily in initLocales() so pure translator imports stay DOM-free.
+ * @type {MutationObserver|null}
  */
-const observer = new MutationObserver(mutations => {
-    mutations.forEach(mutation => {
-        mutation.addedNodes.forEach(node => {
-            if (node.nodeType === Node.ELEMENT_NODE && node instanceof Element) {
-                if (node.hasAttribute('data-i18n')) {
-                    translateElement(node);
-                }
-                node.querySelectorAll('[data-i18n]').forEach(element => {
-                    translateElement(element);
+let observer = null;
+
+function ensureObserver() {
+    if (!observer && typeof MutationObserver !== 'undefined') {
+        observer = new MutationObserver(mutations => {
+            mutations.forEach(mutation => {
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.ELEMENT_NODE && node instanceof Element) {
+                        if (node.hasAttribute('data-i18n')) {
+                            translateElement(node);
+                        }
+                        node.querySelectorAll('[data-i18n]').forEach(element => {
+                            translateElement(element);
+                        });
+                    }
                 });
-            }
+                if (mutation.attributeName === 'data-i18n' && mutation.target instanceof Element) {
+                    translateElement(mutation.target);
+                }
+            });
         });
-        if (mutation.attributeName === 'data-i18n' && mutation.target instanceof Element) {
-            translateElement(mutation.target);
-        }
-    });
-});
+    }
+    return observer;
+}
 
 /**
  * Translates a template string with named arguments
@@ -365,6 +372,10 @@ function addLanguagesToDropdown() {
 }
 
 export async function initLocales() {
+    const [{ registerDebugFunction }, { updateSecretDisplay }] = await Promise.all([
+        import('./power-user.js'),
+        import('./secrets.js'),
+    ]);
     langs = await fetch('/locales/lang.json').then(response => response.json());
     localeData = await getLocaleData(localeFile);
     registerLensSharedLocaleData(addLocaleData);
@@ -387,7 +398,7 @@ export async function initLocales() {
         location.reload();
     });
 
-    observer.observe(document, {
+    ensureObserver()?.observe(document, {
         childList: true,
         subtree: true,
         attributes: true,

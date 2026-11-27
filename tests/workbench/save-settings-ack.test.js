@@ -1,343 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
-import { installDomReadyJQuery } from '../util/browser-module-context.js';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { compare, applyPatch } from '../../public/scripts/util/fast-json-patch.js';
+import { createSettingsSaveCoordinator } from '../../public/scripts/lib/settings-save-coordinator.js';
 import { saveSettingsChecked } from '../../public/scripts/workbench/model/patch.js';
 
-const noop = () => {};
-const asyncNoop = async () => {};
-
-function stubExports(names, overrides = {}) {
-    const out = { ...overrides };
-    for (const name of names) {
-        if (!(name in out)) out[name] = noop;
-    }
-    return out;
-}
-
-class StubClass {}
-
-// Minimal module stubs for public/script.js's browser-UI dependencies so we
-// can import and execute the REAL saveSettings / saveSettingsInternal /
-// mergeSettingsSaveOptions / getSettings implementation under Jest.
-jest.unstable_mockModule('../../public/scripts/RossAscends-mods.js', () => stubExports([
-    'humanizedDateTime', 'favsToHotswap', 'getMessageTimeStamp', 'dragElement',
-    'isMobile', 'initNavPanelPins', 'initRossMods', 'initSendTextareaState',
-]));
-jest.unstable_mockModule('../../public/scripts/stats.js', () => stubExports(['userStatsHandler', 'statMesProcess', 'initStats']));
-jest.unstable_mockModule('../../public/scripts/kai-settings.js', () => stubExports([
-    'generateKoboldWithStreaming', 'hydrateKoboldPresetData', 'loadKoboldSettings',
-    'getKoboldGenerationData', 'initKoboldSettings',
-], { kai_settings: {}, kai_flags: {}, koboldai_settings: {}, koboldai_setting_names: {} }));
-jest.unstable_mockModule('../../public/scripts/textgen-settings.js', () => stubExports([
-    'hydrateTextGenPresetData', 'loadTextGenSettings', 'generateTextGenWithStreaming',
-    'getTextGenGenerationData', 'parseTextgenLogprobs', 'parseTabbyLogprobs', 'initTextGenSettings',
-], { textgenerationwebui_settings: {}, textgenerationwebui_presets: [], textgenerationwebui_preset_names: [], textgen_types: {} }));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => stubExports([
-    'getWorldInfoPrompt', 'setWorldInfoSettings', 'importEmbeddedWorldInfo',
-    'checkEmbeddedWorld', 'setWorldInfoButtonClass', 'initWorldInfo',
-    'charUpdatePrimaryWorld', 'charSetAuxWorlds', 'deleteWorldInfoWithUndo',
-], {
-    world_info: {},
-    world_names: [],
-    wi_anchor_position: {},
-    world_info_include_names: {},
-    getWorldInfoSettings: () => ({}),
-}));
-jest.unstable_mockModule('../../public/scripts/group-chats.js', () => stubExports([
-    'saveGroupChat', 'getGroups', 'primeGroupsSnapshot', 'generateGroupWrapper',
-    'resetSelectedGroup', 'select_group_chats', 'regenerateGroup', 'getGroupChat',
-    'loadGroupChat', 'renameGroupMember', 'createNewGroupChat', 'editGroup',
-    'getGroupAvatar', 'deleteGroupChat', 'renameGroupChat', 'importGroupChat',
-    'getGroupBlock', 'getGroupCharacterCardsLazy', 'getGroupDepthPrompts',
-], { groups: [], selected_group: null, is_group_generating: false, group_generation_id: null }));
-jest.unstable_mockModule('../../public/scripts/power-user.js', () => stubExports([
-    'collapseNewlines', 'loadPowerUserSettings', 'playMessageSound', 'fixMarkdown',
-    'loadMovingUIState', 'getCustomStoppingStrings', 'renderStoryString',
-    'sortEntitiesList', 'registerDebugFunction', 'flushEphemeralStoppingStrings',
-    'resetMovableStyles', 'forceCharacterEditorTokenize', 'applyPowerUserSettings',
-    'generatedTextFiltered', 'applyStylePins', 'notifyMessageComplete',
-    'notifyMessageFailure', 'notifyMessageProgressStart', 'clearMessageProgressNotification',
-], {
-    power_user: {},
-    persona_description_positions: {},
-    MAX_CONTEXT_DEFAULT: 4096,
-    MAX_RESPONSE_DEFAULT: 300,
-}));
-jest.unstable_mockModule('../../public/scripts/openai.js', () => stubExports([
-    'setOpenAIMessageExamples', 'setOpenAIMessages', 'setupChatCompletionPromptManager',
-    'prepareOpenAIMessages', 'sendOpenAIRequest', 'isLastOpenAIReplyPersistedByServer',
-    'getLastOpenAIGenerationId', 'hydrateOpenAIPresetData', 'loadOpenAISettings',
-    'getChatCompletionModel', 'loadProxyPresets', 'bindCurrentChatCompletionPresetToCharacter',
-    'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'initOpenAI',
-    'captureCharacterBoundSettingsSave',
-], {
-    oai_settings: {},
-    openai_settings: [],
-    openai_setting_names: {},
-    openai_messages_count: 0,
-    chat_completion_sources: {},
-    proxies: [],
-    selected_proxy: '',
-}));
-jest.unstable_mockModule('../../public/scripts/character/manage-bound-presets-dialog.js', () => ({ openManageBoundPresetsDialog: noop }));
-jest.unstable_mockModule('../../public/scripts/character/card-binding-preservation.js', () => ({ handlePostReplaceBindings: noop }));
-jest.unstable_mockModule('../../public/scripts/character/post-replace-actions.js', () => ({ handlePostReplaceWorldBook: noop }));
-jest.unstable_mockModule('../../public/scripts/character/resource-read.js', () => ({
-    invalidateCharacterResource: noop,
-    loadCharacterResource: asyncNoop,
-}));
-jest.unstable_mockModule('../../public/scripts/nai-settings.js', () => stubExports([
-    'generateNovelWithStreaming', 'getNovelGenerationData', 'getKayraMaxContextTokens',
-    'hydrateNovelPresetData', 'loadNovelSettings', 'adjustNovelInstructionPrompt',
-    'parseNovelAILogprobs', 'initNovelAISettings',
-], { nai_settings: {}, novelai_settings: {}, novelai_setting_names: {} }));
-jest.unstable_mockModule('../../public/scripts/bookmarks.js', () => stubExports(['initBookmarks', 'showBookmarksButtons', 'updateBookmarkDisplay']));
-jest.unstable_mockModule('../../public/scripts/horde.js', () => stubExports([
-    'loadHordeSettings', 'generateHorde', 'getStatusHorde', 'getHordeModels',
-    'adjustHordeGenerationParams', 'isHordeGenerationNotAllowed', 'initHorde',
-], { horde_settings: {}, MIN_LENGTH: 1 }));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => stubExports([
-    'debounce', 'cancelDebounce', 'delay', 'trimToEndSentence', 'countOccurrences',
-    'isOdd', 'sortMoments', 'timestampToMoment', 'isDataURL', 'getCharaFilename',
-    'waitUntilCondition', 'escapeRegex', 'resetScrollHeight', 'onlyUnique',
-    'getBase64Async', 'humanFileSize', 'isValidUrl', 'ensureImageFormatSupported',
-    'flashHighlight', 'toggleDrawer', 'isElementInViewport', 'copyText', 'escapeHtml',
-    'saveBase64AsFile', 'uuidv4', 'equalsIgnoreCaseAndAccents', 'findCanonicalNameInList',
-    'localizePagination', 'renderPaginationDropdown', 'paginationDropdownChangeHandler',
-    'importFromExternalUrl', 'shiftUpByOne', 'shiftDownByOne', 'canUseNegativeLookbehind',
-    'trimSpaces', 'clamp', 'shakeElement', 'createTimeout',
-], { PAGINATION_TEMPLATE: '', Stopwatch: StubClass }));
-jest.unstable_mockModule('../../public/scripts/luker-download.js', () => ({ downloadFromServer: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => stubExports([
-    'bootstrapExtensions', 'cancelDebouncedMetadataSave', 'doDailyExtensionUpdatesCheck',
-    'initExtensions', 'primeExtensionSettings', 'runGenerationInterceptors', 'saveMetadataDebounced',
-], { extension_settings: {} }));
-jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => stubExports([
-    'consumeEphemeralScriptInjectsForMainGeneration', 'executeSlashCommandsOnChatInput',
-    'initDefaultSlashCommands', 'initSlashCommandAutoComplete', 'isExecutingCommandsFromChatInput',
-    'pauseScriptExecution', 'processChatSlashCommands', 'stopScriptExecution',
-], { COMMENT_NAME_DEFAULT: '', CONNECT_API_MAP: {}, UNIQUE_APIS: {} }));
-jest.unstable_mockModule('../../public/scripts/tags.js', () => stubExports([
-    'filterByTagState', 'isBogusFolder', 'isBogusFolderOpen', 'chooseBogusFolder',
-    'getTagBlock', 'loadTagsSettings', 'printTagFilters', 'getTagKeyForEntity',
-    'printTagList', 'createTagMapFromList', 'renameTagKey', 'importTags',
-    'compareTagsForSort', 'initTags', 'applyTagsOnCharacterSelect',
-    'applyTagsOnGroupSelect', 'applyCharacterTagsToMessageDivs',
-], { tag_map: {}, tags: [], tag_filter_type: {}, tag_import_setting: {} }));
-jest.unstable_mockModule('../../public/scripts/secrets.js', () => stubExports([
-    'checkOpenRouterAuth', 'initSecrets', 'primeSecretStateSnapshot', 'readSecretState',
-]));
-jest.unstable_mockModule('../../public/scripts/showdown-exclusion.js', () => ({ markdownExclusionExt: {} }));
-jest.unstable_mockModule('../../public/scripts/showdown-underscore.js', () => ({ markdownUnderscoreExt: {} }));
-jest.unstable_mockModule('../../public/scripts/authors-note.js', () => stubExports([
-    'initAuthorsNote', 'setFloatingPrompt', 'shouldWIAddPrompt',
-], { NOTE_MODULE_NAME: '', metadata_keys: {} }));
-jest.unstable_mockModule('../../public/scripts/PromptManager.js', () => ({ registerPromptManagerMigration: noop }));
-jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-    getRegexedString: (s) => s,
-    regex_placement: {},
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/auto-continue-truncated.js', () => ({
-    getAutoContinueOnTruncated: () => false,
-    isTruncatedFinishReason: () => false,
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-retry.js', () => ({ withProfileRetry: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/request-timeout.js', () => ({ getRequestTimeoutMs: () => 0 }));
-jest.unstable_mockModule('../../public/scripts/logprobs.js', () => ({ initLogprobs: noop, saveLogprobsForActiveMessage: noop }));
-jest.unstable_mockModule('../../public/scripts/filters.js', () => ({ FILTER_STATES: {}, FILTER_TYPES: {}, FilterHelper: StubClass, isFilterState: () => false }));
-jest.unstable_mockModule('../../public/scripts/cfg-scale.js', () => ({ getCfgPrompt: () => '', getGuidanceScale: () => 1, initCfg: noop }));
-jest.unstable_mockModule('../../public/scripts/instruct-mode.js', () => stubExports([
-    'formatInstructModeChat', 'formatInstructModePrompt', 'formatInstructModeExamples',
-    'formatInstructModeStoryString', 'getInstructStoppingSequences',
-], { force_output_sequence: {} }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    initLocales: asyncNoop,
-    addLocaleData: noop,
-    getCurrentLocale: () => 'en',
-    translate: (s) => String(s ?? ''),
-    createScopedI18n: () => ({ i18n: (s) => String(s ?? ''), i18nFormat: (s) => String(s ?? '') }),
-    t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
-}));
-jest.unstable_mockModule('../../public/scripts/tokenizers.js', () => stubExports([
-    'getFriendlyTokenizerName', 'getTokenCount', 'getTokenCountAsync',
-    'initTokenizers', 'saveTokenCacheDebounced', 'flushTokenCacheSave',
-]));
-jest.unstable_mockModule('../../public/scripts/last-usage.js', () => ({ consumeLastUsage: noop }));
-jest.unstable_mockModule('../../public/scripts/personas.js', () => stubExports([
-    'getUserAvatars', 'getUserAvatar', 'setUserAvatar', 'primeUserAvatarsSnapshot',
-    'initPersonas', 'setPersonaDescription', 'initUserAvatar', 'updatePersonaConnectionsAvatarList',
-    'isPersonaPanelOpen',
-], { user_avatar: 'default.png' }));
-jest.unstable_mockModule('../../public/scripts/backgrounds.js', () => ({ initBackgrounds: noop, loadBackgroundSettings: noop, background_settings: {} }));
-jest.unstable_mockModule('../../public/scripts/loader.js', () => ({ hideLoader: asyncNoop, isLoaderVisible: () => false, showLoader: noop }));
-jest.unstable_mockModule('../../public/scripts/action-loader.js', () => ({ loader: {} }));
-jest.unstable_mockModule('../../public/scripts/BulkEditOverlay.js', () => ({ BulkEditOverlay: StubClass }));
-jest.unstable_mockModule('../../public/scripts/textgen-models.js', () => ({ initTextGenModels: noop, initTextGenModelSelects: noop }));
-jest.unstable_mockModule('../../public/scripts/chats.js', () => stubExports([
-    'appendFileContent', 'hasPendingFileAttachment', 'populateFileAttachment', 'decodeStyleTags',
-    'encodeStyleTags', 'hideChatMessageRange', 'isExternalMediaAllowed', 'preserveNeutralChat',
-    'restoreNeutralChat', 'formatCreatorNotes', 'initChatUtilities', 'addDOMPurifyHooks',
-]));
-jest.unstable_mockModule('../../public/scripts/chat-merge-split.js', () => ({ wireEntryPoints: noop }));
-jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({ getPresetManager: () => null, initPresetManager: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/macros.js', () => ({ evaluateMacros: (s) => s, getLastMessageId: () => -1, initMacros: noop }));
-jest.unstable_mockModule('../../public/scripts/variable-op-log/index.js', () => ({ initVariableOpLog: noop, extractMessageById: noop, pushFloorVarOp: noop }));
-jest.unstable_mockModule('../../public/scripts/variable-op-log/extractor.js', () => ({ extractFromText: noop }));
-jest.unstable_mockModule('../../public/scripts/variable-op-log/panel.js', () => ({ initVarOpsPanelHandler: noop }));
-jest.unstable_mockModule('../../public/scripts/media-deletion-dialog.js', () => stubExports([
-    'fetchMediaDeletionCandidates', 'deleteMediaFiles', 'promptMediaDeletion', 'notifyMediaDeleteResult',
-]));
-jest.unstable_mockModule('../../public/scripts/frontend-log-manager.js', () => ({
-    installFrontendLogCapture: noop,
-    setFrontendConsoleDebugLoggingEnabled: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/debug-export.js', () => ({ initDebugExportButton: noop }));
-jest.unstable_mockModule('../../public/scripts/debug-menu-capture.js', () => ({ initDebugMenuCapture: noop }));
-jest.unstable_mockModule('../../public/scripts/luker-android-debug-trail.js', () => ({ initAndroidDebugTrail: noop }));
-jest.unstable_mockModule('../../public/scripts/user.js', () => ({
-    currentUser: null,
-    getConfigValidationMessage: () => '',
-    isAdmin: () => false,
-    setUserControls: asyncNoop,
-}));
-jest.unstable_mockModule('../../public/scripts/sync-status.js', () => ({}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    POPUP_RESULT: {},
-    POPUP_TYPE: {},
-    Popup: StubClass,
-    callGenericPopup: asyncNoop,
-    fixToastrForDialogs: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/templates.js', () => ({ renderTemplate: () => '', renderTemplateAsync: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/scrapers.js', () => ({ initScrapers: noop }));
-jest.unstable_mockModule('../../public/scripts/samplerSelect.js', () => ({ initCustomSelectedSamplers: noop, validateDisabledSamplers: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/dragdrop.js', () => ({ DragAndDropHandler: StubClass }));
-jest.unstable_mockModule('../../public/scripts/keyboard.js', () => ({ INTERACTABLE_CONTROL_CLASS: '', initKeyboard: noop }));
-jest.unstable_mockModule('../../public/scripts/dynamic-styles.js', () => ({ initDynamicStyles: noop }));
-jest.unstable_mockModule('../../public/scripts/input-md-formatting.js', () => ({ initInputMarkdown: noop }));
-jest.unstable_mockModule('../../public/scripts/sysprompt.js', () => ({ initSystemPrompts: noop }));
-jest.unstable_mockModule('../../public/scripts/extensions-slashcommands.js', () => ({ registerExtensionSlashCommands: noop }));
-jest.unstable_mockModule('../../public/scripts/tool-calling.js', () => ({ ToolManager: {} }));
-jest.unstable_mockModule('../../public/scripts/tool-invocation-hide.js', () => ({ classifyInvocationSummary: noop, getOpenToolTaskTailStart: () => 0 }));
-jest.unstable_mockModule('../../public/scripts/skills/embed-lifecycle.js', () => ({ registerSkillEmbedLifecycle: noop }));
-jest.unstable_mockModule('../../public/scripts/util/showdown-patch.js', () => ({ addShowdownPatch: noop }));
-jest.unstable_mockModule('../../public/scripts/browser-fixes.js', () => ({ applyBrowserFixes: noop }));
-jest.unstable_mockModule('../../public/scripts/server-history.js', () => ({ initServerHistory: noop }));
-jest.unstable_mockModule('../../public/scripts/setting-search.js', () => ({ initSettingsSearch: noop }));
-jest.unstable_mockModule('../../public/scripts/bulk-edit.js', () => ({ initBulkEdit: noop }));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({ getContext: () => ({}) }));
-jest.unstable_mockModule('../../public/scripts/lukerContext.js', () => ({}));
-jest.unstable_mockModule('../../public/scripts/reasoning.js', () => stubExports([
-    'extractReasoningBlocksFromData', 'extractReasoningDetailsFromData', 'extractReasoningFromData',
-    'extractReasoningSignatureFromData', 'initReasoning', 'parseReasoningInSwipes', 'PromptReasoning',
-    'registerReasoningSlashCommands', 'removeReasoningFromString', 'updateReasoningUI',
-], {
-    extractNativeTurnFromData: () => ({ nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null }),
-    ReasoningHandler: StubClass,
-    ReasoningType: {},
-}));
-jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
-    accountStorage: { getState: () => ({}), init: noop },
-}));
-jest.unstable_mockModule('../../public/scripts/welcome-screen.js', () => stubExports([
-    'fetchRecentChatsSnapshot', 'initWelcomeScreen', 'openPermanentAssistantChat',
-    'openPermanentAssistantCard', 'getPermanentAssistantAvatar', 'openWelcomeScreen',
-    'primeRecentChatsSnapshotPromise',
-]));
-jest.unstable_mockModule('../../public/scripts/data-maid.js', () => ({ initDataMaid: noop }));
-jest.unstable_mockModule('../../public/scripts/itemized-prompts.js', () => stubExports([
-    'clearItemizedPrompts', 'deleteItemizedPromptForMessage', 'deleteItemizedPrompts',
-    'findItemizedPromptSet', 'flushItemizedPromptsSave', 'initItemizedPrompts', 'loadItemizedPrompts',
-    'promptItemize', 'replaceItemizedPromptText', 'saveItemizedPrompts',
-    'saveItemizedPromptsDebounced', 'swapItemizedPrompts',
-], { itemizedParams: {}, itemizedPrompts: [] }));
-jest.unstable_mockModule('../../public/scripts/system-messages.js', () => stubExports([
-    'getSystemMessageByType', 'initSystemMessages', 'sendSystemMessage',
-], { SAFETY_CHAT: '', system_message_types: {}, system_messages: {} }));
-jest.unstable_mockModule('../../public/scripts/announcements.js', () => ({ initAnnouncements: noop, whenCriticalAnnouncementsDone: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/floor-state.js', () => stubExports([
-    'settleChatChanged', 'settleMessageDeleted', 'settleMessageSwipeDeleted', 'settleMessageSwiped',
-]));
-jest.unstable_mockModule('../../public/scripts/a11y.js', () => ({ initAccessibility: noop }));
-jest.unstable_mockModule('../../public/scripts/util/stream-fadein.js', () => ({ applyStreamFadeIn: noop }));
-jest.unstable_mockModule('../../public/scripts/dom-handlers.js', () => ({ initDomHandlers: noop }));
-jest.unstable_mockModule('../../public/scripts/audio-player.js', () => ({ AudioPlayer: StubClass }));
-jest.unstable_mockModule('../../public/scripts/macros/engine/MacroEnvBuilder.js', () => ({ MacroEnvBuilder: StubClass }));
-jest.unstable_mockModule('../../public/scripts/message-formatter.js', () => ({ MessageFormatter: StubClass }));
-jest.unstable_mockModule('../../public/scripts/macros/engine/MacroEngine.js', () => ({ MacroEngine: StubClass }));
-jest.unstable_mockModule('../../public/scripts/chat-backups.js', () => ({ addChatBackupsBrowser: noop }));
-jest.unstable_mockModule('../../public/scripts/macros/engine/MacroDiagnostics.js', () => ({ onboardingExperimentalMacroEngine: noop }));
-jest.unstable_mockModule('../../public/scripts/undo-toast.js', () => ({ showUndoToast: noop }));
-jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({ setRequestCompressionConfig: noop }));
-jest.unstable_mockModule('../../public/scripts/swipe-picker.js', () => ({
-    canJumpToSwipeForMessage: () => false,
-    canOpenSwipePickerForMessage: () => false,
-    initSwipePicker: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/self-profiler.js', () => ({ bootSelfProfilerFromStorage: noop }));
-jest.unstable_mockModule('../../public/scripts/ws-delivery.js', () => ({
-    createLukerDelivery: noop,
-    getLukerResponseMeta: () => null,
-    installFetchProxy: noop,
-    installFetchProxyForAllIframes: noop,
-    installLifecycleHooks: noop,
-    onLukerResponseMeta: () => noop,
-}));
-jest.unstable_mockModule('../../public/scripts/settings-resource-read.js', () => ({ loadSettingsEnvelope: asyncNoop }));
-jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
-    listPresetDocuments: async () => [],
-    loadPresetResources: async () => ({}),
-    readPresetDocument: async () => null,
-}));
-jest.unstable_mockModule('../../public/scripts/workbench/index.js', () => ({ initWorkbench: noop }));
-
-globalThis.document = {
-    readyState: 'complete',
-    addEventListener: noop,
-    removeEventListener: noop,
-    documentElement: { style: { setProperty: noop } },
-    getElementById: () => null,
-    querySelector: () => null,
-    querySelectorAll: () => [],
-};
-globalThis.window = Object.assign(globalThis, {
-    addEventListener: noop,
-    removeEventListener: noop,
-});
-globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
-const jqueryEnv = installDomReadyJQuery({
-    selectionMethods: {
-        css: () => '',
-    },
-    staticProperties: { ajaxPrefilter: noop },
-});
-Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: { getItem: () => null, setItem: noop, removeItem: noop },
-});
-
-const scriptMod = await import('../../public/script.js');
-const { saveSettings, getSettings } = scriptMod;
-const { extension_settings } = await import('../../public/scripts/extensions.js');
-const toastrStub = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
-globalThis.toastr = toastrStub;
-
-afterAll(() => {
-    jqueryEnv.restore();
-});
-
-describe('public/script.js saveSettings onSaved ack chain', () => {
+describe('settings-save-coordinator saveSettings onSaved ack chain', () => {
     let origFetch;
-
-    beforeAll(async () => {
-        await getSettings({ payload: { result: 'file not find' } });
-    });
+    let extensionSettings;
+    let coordinator;
 
     beforeEach(() => {
         origFetch = globalThis.fetch;
+        extensionSettings = {};
         jest.spyOn(console, 'error').mockImplementation(() => {});
-        globalThis.toastr.error.mockClear();
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+        coordinator = createSettingsSaveCoordinator({
+            buildSettingsPayload: () => structuredClone({ extension_settings: extensionSettings }),
+            getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+        });
     });
 
     afterEach(() => {
@@ -352,19 +33,22 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
             return { ok: true, status: 200, statusText: 'OK' };
         });
 
-        await expect(saveSettingsChecked({ saveSettings: (lc, opts) => saveSettings(lc, { ...opts, directSave: true }) }))
-            .resolves.toBeUndefined();
+        await expect(saveSettingsChecked({
+            saveSettings: (lc, opts) => coordinator.saveSettings(lc, { ...opts, directSave: true }),
+        })).resolves.toBeUndefined();
         expect(calls).toEqual(['/api/settings/save']);
     });
 
     test('does not invoke onSaved when /api/settings/save returns 500 or throws, so saveSettingsChecked rejects', async () => {
         globalThis.fetch = jest.fn(async () => ({ ok: false, status: 500, statusText: 'Internal Server Error' }));
-        await expect(saveSettingsChecked({ saveSettings: (lc, opts) => saveSettings(lc, { ...opts, directSave: true }) }))
-            .rejects.toMatchObject({ code: 'write-failed' });
+        await expect(saveSettingsChecked({
+            saveSettings: (lc, opts) => coordinator.saveSettings(lc, { ...opts, directSave: true }),
+        })).rejects.toMatchObject({ code: 'write-failed' });
 
         globalThis.fetch = jest.fn(async () => { throw new Error('network down'); });
-        await expect(saveSettingsChecked({ saveSettings: (lc, opts) => saveSettings(lc, { ...opts, directSave: true }) }))
-            .rejects.toMatchObject({ code: 'write-failed' });
+        await expect(saveSettingsChecked({
+            saveSettings: (lc, opts) => coordinator.saveSettings(lc, { ...opts, directSave: true }),
+        })).rejects.toMatchObject({ code: 'write-failed' });
     });
 
     test('serializes overlapping saveSettings attempts and invokes each onSaved callback in completion order', async () => {
@@ -381,33 +65,28 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         });
 
         const order = [];
-        const p1 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack1') });
+        const p1 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack1') });
         expect(fetchUrls).toHaveLength(1);
 
-        // Overlapping saves capture their own snapshots and chain onto settingsSaveInFlight
-        extension_settings.wb_queued = { step: 2 };
-        const p2 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack2') });
-        extension_settings.wb_queued = { step: 3 };
-        const p3 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack3') });
+        extensionSettings.wb_queued = { step: 2 };
+        const p2 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack2') });
+        extensionSettings.wb_queued = { step: 3 };
+        const p3 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack3') });
 
-        // Second fetch has not fired while the first save is still in flight
         expect(fetchUrls).toHaveLength(1);
 
-        // Complete first save -> ack1 fires, then p2 triggers second fetch
         deferred[0].resolve({ ok: true, status: 200, statusText: 'OK' });
         await p1;
         await started[1].promise;
         expect(order).toEqual(['ack1']);
         expect(fetchUrls).toHaveLength(2);
 
-        // Complete second save -> ack2 fires, then p3 triggers third fetch
         deferred[1].resolve({ ok: true, status: 200, statusText: 'OK' });
         await p2;
         await started[2].promise;
         expect(order).toEqual(['ack1', 'ack2']);
         expect(fetchUrls).toHaveLength(3);
 
-        // Complete third save -> ack3 fires
         deferred[2].resolve({ ok: true, status: 200, statusText: 'OK' });
         await Promise.all([p1, p2, p3]);
         expect(order).toEqual(['ack1', 'ack2', 'ack3']);
@@ -425,10 +104,10 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         });
 
         const order = [];
-        const p1 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack1') });
-        extension_settings.wb_queued_fail = { step: 2 };
-        const p2 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack2') });
-        const p3 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack3') });
+        const p1 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack1') });
+        extensionSettings.wb_queued_fail = { step: 2 };
+        const p2 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack2') });
+        const p3 = coordinator.saveSettings(0, { directSave: true, onSaved: () => order.push('ack3') });
 
         deferred[0].resolve({ ok: true, status: 200, statusText: 'OK' });
         await p1;
@@ -443,5 +122,284 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         deferred[2].resolve({ ok: false, status: 500, statusText: 'Server Error' });
         await Promise.all([p1, p2, p3]);
         expect(order).toEqual(['ack1']);
+    });
+});
+
+describe('settings-save-coordinator patch authority, deferrals, and refusal contracts', () => {
+    let origFetch;
+
+    beforeEach(() => {
+        origFetch = globalThis.fetch;
+        jest.spyOn(console, 'error').mockImplementation(() => {});
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+        jest.restoreAllMocks();
+    });
+
+    function createStatefulHarness(overrides = {}) {
+        const live = { extension_settings: { ledger: { value: 'baseline' } }, oai_settings: { extensions: {} } };
+        let snapshot = null;
+        let persisted = null;
+        let ready = true;
+        let blocked = false;
+        let tempOverridden = false;
+        let readPublications = 0;
+        const scheduled = [];
+        const notifications = [];
+        const events = [];
+        let restoredTemp = 0;
+
+        const coord = createSettingsSaveCoordinator({
+            isBlockedForImport: () => blocked,
+            isSettingsReady: () => ready,
+            scheduleDebouncedSave: (lc, opts) => scheduled.push({ lc, opts }),
+            isTempResponseLengthCustomized: () => tempOverridden,
+            restoreTempResponseLength: () => {
+                restoredTemp += 1;
+                tempOverridden = false;
+            },
+            buildSettingsPayload: () => JSON.parse(JSON.stringify(live)),
+            getSettingsSnapshot: () => snapshot,
+            rememberSettingsSnapshot: (next) => {
+                snapshot = next ? JSON.parse(JSON.stringify(next)) : null;
+            },
+            onSettingsPersisted: (next) => {
+                persisted = next;
+            },
+            buildObjectPatchOperations: (prev, next) => compare(prev, next),
+            applyCommittedSnapshotOperations: (prev, ops) => applyPatch(JSON.parse(JSON.stringify(prev)), ops, true, false).newDocument,
+            shouldUseSettingsPatch: (ops) => ops.length > 0,
+            getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+            incrementReadPublication: () => { readPublications += 1; },
+            emitSettingsUpdated: async (info) => {
+                events.push(info);
+                if (overrides.onEmitSettingsUpdated) {
+                    await overrides.onEmitSettingsUpdated(info);
+                }
+            },
+            notifySaveError: (err) => notifications.push(err),
+            ...overrides,
+        });
+
+        return {
+            live,
+            coord,
+            getSnapshot: () => snapshot,
+            getPersisted: () => persisted,
+            setReady: (v) => { ready = v; },
+            setBlocked: (v) => { blocked = v; },
+            setTempOverridden: (v) => { tempOverridden = v; },
+            getRestoredTemp: () => restoredTemp,
+            getReadPublications: () => readPublications,
+            scheduled,
+            notifications,
+            events,
+        };
+    }
+
+    test('defers with not_ready, data_import, and temporary_response_length without firing onSaved', async () => {
+        const h = createStatefulHarness();
+        const fetchMock = jest.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }));
+        globalThis.fetch = fetchMock;
+        const onSaved = jest.fn();
+
+        h.setBlocked(true);
+        await expect(h.coord.saveSettings(0, { onSaved })).resolves.toEqual({ ok: false, status: 'deferred', reason: 'data_import' });
+        h.setBlocked(false);
+
+        h.setReady(false);
+        await expect(h.coord.saveSettings(0, { onSaved })).resolves.toEqual({ ok: false, status: 'deferred', reason: 'not_ready' });
+        expect(h.scheduled).toHaveLength(1);
+        h.setReady(true);
+
+        h.setTempOverridden(true);
+        await expect(h.coord.saveSettings(0, { onSaved })).resolves.toEqual({ ok: false, status: 'deferred', reason: 'temporary_response_length' });
+        expect(h.scheduled).toHaveLength(2);
+        expect(h.scheduled[1].lc).toBe(1);
+        expect(onSaved).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        // Reaching retry limit restores temporary override and persists normally.
+        const finalOutcome = await h.coord.saveSettings(3, { onSaved });
+        expect(h.getRestoredTemp()).toBe(1);
+        expect(finalOutcome.ok).toBe(true);
+        expect(onSaved).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('preserves repeated/shared object references and isolates returned payloads from stored snapshot', async () => {
+        const h = createStatefulHarness();
+        const requests = [];
+        globalThis.fetch = jest.fn(async (url, init) => {
+            requests.push({ url, body: JSON.parse(init.body) });
+            return { ok: true, status: 200, statusText: 'OK' };
+        });
+
+        const schema = { type: 'object', properties: { ledger: { type: 'string' } } };
+        h.live.extension_settings.shared = { first: schema, second: schema };
+
+        const baseline = await h.coord.saveSettings(0, { directSave: true });
+        expect(baseline.ok).toBe(true);
+        expect(baseline.payload.extension_settings.shared).toEqual({ first: schema, second: schema });
+        expect(requests[0].url).toBe('/api/settings/save');
+
+        // Mutating caller's returned outcome.payload or onSettingsPersisted copy must not corrupt coordinator baseline.
+        baseline.payload.oai_settings.extensions.sibling = 'tampered';
+        h.getPersisted().oai_settings.extensions.sibling = 'tampered-persisted';
+        h.live.oai_settings.extensions.sibling = 'tampered';
+
+        const next = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(next.ok).toBe(true);
+        expect(requests[1].url).toBe('/api/settings/patch');
+        expect(requests[1].body.operations).toContainEqual({ op: 'add', path: '/oai_settings/extensions/sibling', value: 'tampered' });
+
+        // Explicit directSave persists unchanged payload rather than treating it as a no-op.
+        const forced = await h.coord.saveSettings(0, { directSave: true });
+        expect(forced.ok).toBe(true);
+        expect(requests[2].url).toBe('/api/settings/save');
+    });
+
+    test('lost response invalidates snapshot so next write sends full /api/settings/save even when reverting to baseline', async () => {
+        const h = createStatefulHarness();
+        const calls = [];
+        let failNext = false;
+        globalThis.fetch = jest.fn(async (url, init) => {
+            calls.push({ url, body: JSON.parse(init.body) });
+            if (failNext) {
+                failNext = false;
+                throw new Error('ConnectionReset');
+            }
+            return { ok: true, status: 200, statusText: 'OK' };
+        });
+
+        // Establish baseline snapshot.
+        expect((await h.coord.saveSettings(0, { directSave: true })).ok).toBe(true);
+        expect(calls[0].url).toBe('/api/settings/save');
+
+        // Patch request fails after network drop -> snapshot authority cleared.
+        h.live.extension_settings.ledger = { value: 'committed' };
+        failNext = true;
+        const failed = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(failed).toMatchObject({ ok: false, status: 'failed' });
+        expect(calls[1].url).toBe('/api/settings/patch');
+        expect(h.getSnapshot()).toBeNull();
+
+        // Reverting live state to baseline must send a full /api/settings/save rather than a no-op.
+        h.live.extension_settings.ledger = { value: 'baseline' };
+        const repaired = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(repaired.ok).toBe(true);
+        expect(calls[2].url).toBe('/api/settings/save');
+        expect(calls[2].body.extension_settings.ledger).toEqual({ value: 'baseline' });
+    });
+
+    test('409 missing-parent patch falls back to full save, while 409 world_deleted/world_deletion_unknown aborts without fallback or losing snapshot', async () => {
+        const h = createStatefulHarness();
+        const urls = [];
+        const queue = [
+            async () => ({ ok: true, status: 200, statusText: 'OK' }),
+            // Missing-parent 409 (not world_deleted) -> falls back to full save
+            async () => ({ ok: false, status: 409, statusText: 'Conflict', json: async () => ({ code: 'patch_conflict' }) }),
+            async () => ({ ok: true, status: 200, statusText: 'OK' }),
+            // Typed world_deleted 409 -> refuses immediately without full-save retry and preserves snapshot
+            async () => ({ ok: false, status: 409, statusText: 'Conflict', json: async () => ({ code: 'world_deleted', details: { name: 'owned-book' } }) }),
+            // Typed world_deletion_unknown 409 -> refuses immediately without full-save retry and preserves snapshot
+            async () => ({ ok: false, status: 409, statusText: 'Conflict', json: async () => ({ code: 'world_deletion_unknown', details: { name: 'owned-book' } }) }),
+        ];
+        globalThis.fetch = jest.fn(async (url) => {
+            urls.push(url);
+            return queue.shift()();
+        });
+
+        expect((await h.coord.saveSettings(0, { directSave: true })).ok).toBe(true);
+
+        h.live.extension_settings.ledger = { value: 'fallback' };
+        const fallbackRes = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(fallbackRes.ok).toBe(true);
+        expect(urls.slice(1)).toEqual(['/api/settings/patch', '/api/settings/save']);
+
+        const ackBeforeRefusal = structuredClone(h.getSnapshot());
+        const pubsBeforeRefusal = h.getReadPublications();
+
+        h.live.extension_settings.ledger = { value: 'dangling-1' };
+        const deletedRes = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(deletedRes).toMatchObject({ ok: false, status: 'failed' });
+        expect(deletedRes.error).toContain('owned-book');
+        expect(urls).toEqual(['/api/settings/save', '/api/settings/patch', '/api/settings/save', '/api/settings/patch']);
+        expect(h.getSnapshot()).toEqual(ackBeforeRefusal);
+        expect(h.getReadPublications()).toBe(pubsBeforeRefusal + 1);
+
+        h.live.extension_settings.ledger = { value: 'dangling-2' };
+        const unknownRes = await h.coord.saveSettings(0, { asyncDiff: false });
+        expect(unknownRes).toMatchObject({ ok: false, status: 'failed' });
+        expect(unknownRes.error).toContain('owned-book');
+        expect(urls).toHaveLength(5);
+        expect(h.getSnapshot()).toEqual(ackBeforeRefusal);
+    });
+
+    test('mixed queued patch/direct and async/sync saves retain per-call options and allow recursive SETTINGS_UPDATED saves', async () => {
+        const workerCalls = [];
+        let triggeredNested = false;
+        let nestedOutcome = null;
+        const h = createStatefulHarness({
+            diffSerializedSettingsWithWorker: async (prev, serialized) => {
+                workerCalls.push(JSON.parse(serialized).extension_settings.ledger.value);
+                const next = JSON.parse(serialized);
+                return {
+                    operations: compare(prev, next),
+                    commit: () => {},
+                    discard: () => {},
+                };
+            },
+            onEmitSettingsUpdated: async () => {
+                if (triggeredNested) return;
+                triggeredNested = true;
+                h.live.extension_settings.ledger = { value: 'nested' };
+                nestedOutcome = await h.coord.saveSettings(0, { asyncDiff: false });
+            },
+        });
+
+        const urls = [];
+        globalThis.fetch = jest.fn(async (url) => {
+            urls.push(url);
+            return { ok: true, status: 200, statusText: 'OK' };
+        });
+
+        // Prime baseline and trigger recursive save inside SETTINGS_UPDATED without deadlocking.
+        const outer = await h.coord.saveSettings(0, { directSave: true });
+        expect(outer.ok).toBe(true);
+        expect(nestedOutcome.ok).toBe(true);
+        expect(nestedOutcome.payload.extension_settings.ledger).toEqual({ value: 'nested' });
+
+        // Queue mixed options while first write is in flight.
+        urls.length = 0;
+        const gates = [];
+        globalThis.fetch = jest.fn((url) => {
+            urls.push(url);
+            const gate = Promise.withResolvers();
+            gates.push(gate);
+            return gate.promise;
+        });
+
+        h.live.extension_settings.ledger = { value: 'async-patch' };
+        const p1 = h.coord.saveSettings(0, { directSave: false, asyncDiff: true });
+        h.live.extension_settings.ledger = { value: 'sync-full' };
+        const p2 = h.coord.saveSettings(0, { directSave: true, asyncDiff: false });
+        h.live.extension_settings.ledger = { value: 'sync-patch' };
+        const p3 = h.coord.saveSettings(0, { directSave: false, asyncDiff: false });
+        h.live.extension_settings.ledger = { value: 'async-full' };
+        const p4 = h.coord.saveSettings(0, { directSave: true, asyncDiff: true });
+
+        for (let i = 0; i < 4; i++) {
+            while (gates.length <= i) await Promise.resolve();
+            gates[i].resolve({ ok: true, status: 200, statusText: 'OK' });
+            await Promise.resolve();
+        }
+        const results = await Promise.all([p1, p2, p3, p4]);
+        expect(urls).toEqual(['/api/settings/patch', '/api/settings/save', '/api/settings/patch', '/api/settings/save']);
+        expect(results.map(r => r.payload.extension_settings.ledger.value)).toEqual(['async-patch', 'sync-full', 'sync-patch', 'async-full']);
+        expect(workerCalls).toEqual(['async-patch']);
     });
 });

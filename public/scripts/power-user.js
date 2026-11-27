@@ -28,8 +28,6 @@ import {
     doNewChat,
     online_status,
     messageFormatting,
-    extension_prompt_types,
-    extension_prompt_roles,
     deleteMessage,
     settingsReady,
     name2,
@@ -87,7 +85,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { extractDominantColor, generateThemePalette, deriveBackgroundName } from './util/ThemeGenerator.js';
 import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.js';
 import { bindModelTemplates } from './chat-templates.js';
-import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
+import { extension_prompt_roles, extension_prompt_types, IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
 import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable, getAndroidDebugRecordingActualState } from './luker-android-debug-trail.js';
 import { t, translate } from './i18n.js';

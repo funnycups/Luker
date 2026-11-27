@@ -138,6 +138,17 @@ import { openManageBoundPresetsDialog } from './scripts/character/manage-bound-p
 import { handlePostReplaceBindings } from './scripts/character/card-binding-preservation.js';
 import { handlePostReplaceWorldBook } from './scripts/character/post-replace-actions.js';
 import { invalidateCharacterResource, loadCharacterResource } from './scripts/character/resource-read.js';
+import {
+    createChatIntegrityStore,
+    decideChatConflictRecovery,
+    getChatStateTargetKey,
+    isPlainObject,
+    parseServerChatPayload,
+    summarizeAppendedMessages,
+    summarizeChatStateDivergence,
+    summarizeJsonPatchOperations,
+    validateChatWriteAckPayload,
+} from './scripts/lib/chat-integrity-recovery.js';
 
 import {
     generateNovelWithStreaming,
@@ -213,7 +224,7 @@ import {
     shakeElement,
     createTimeout,
 } from './scripts/utils.js';
-import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
@@ -377,6 +388,8 @@ import { setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks, onLukerResponseMeta } from './scripts/ws-delivery.js';
+import { createGenerationMetaTracker } from './scripts/lib/response-meta-subscription.js';
+import { createSettingsSaveCoordinator, persistFirstRunCompletion } from './scripts/lib/settings-save-coordinator.js';
 import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
 import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 import { initWorkbench } from './scripts/workbench/index.js';
@@ -502,31 +515,24 @@ let lukerRecoveryLastSeq = 0;
 let lukerRecoveryFinalizeBusy = false;
 const LUKER_RECOVERY_PREVIEW_ID = 'luker_generation_recovery_preview';
 const LUKER_SERVER_PERSISTENCE_APIS = new Set(['openai', 'textgenerationwebui', 'kobold', 'novel']);
-let lastLukerGenerationId = '';
-let lastLukerReplyPersistedByServer = false;
-let lukerGenerationEpoch = 0;
-let disposeLukerResponseMetaListener = null;
+const lukerMetaTracker = createGenerationMetaTracker({
+    onLukerResponseMeta,
+    onLog: (eventName, details) => logLukerPersistenceDebug(main_api, eventName, details),
+});
 
 function supportsLukerServerPersistence(api = main_api) {
     return LUKER_SERVER_PERSISTENCE_APIS.has(api);
 }
 
 function setLukerResponseMetaDisposer(dispose) {
-    const previous = disposeLukerResponseMetaListener;
-    disposeLukerResponseMetaListener = typeof dispose === 'function' ? dispose : null;
-    if (previous && previous !== dispose) {
-        previous();
-    }
+    lukerMetaTracker.setActiveDisposer(dispose);
 }
 
 function resetLukerGenerationState(api = main_api) {
     if (api === 'openai') {
         return;
     }
-    lukerGenerationEpoch += 1;
-    setLukerResponseMetaDisposer(null);
-    lastLukerGenerationId = '';
-    lastLukerReplyPersistedByServer = false;
+    lukerMetaTracker.beginGeneration();
 }
 
 function summarizeLukerPersistTargetForDebug(persistTarget) {
@@ -577,88 +583,22 @@ function applyLukerGenerationMetaForApi(api = main_api, { generationId = '', per
     if (api === 'openai') {
         return;
     }
-    if (typeof generationId === 'string' && generationId) {
-        lastLukerGenerationId = generationId;
-    }
-    if (typeof persisted === 'boolean') {
-        lastLukerReplyPersistedByServer = persisted;
-    }
+    lukerMetaTracker.applyMeta({ generationId, persisted });
 }
 
 function applyLukerGenerationMetaFromHeaders(api, response, { expectedEpoch, expectedGenerationId = '', signal = null } = {}) {
     if (!response || api === 'openai' || main_api !== api) {
         return null;
     }
-    if (expectedEpoch !== undefined && expectedEpoch !== lukerGenerationEpoch) {
-        return null;
-    }
-    const generationEpoch = expectedEpoch ?? lukerGenerationEpoch;
-    const headerGenerationId = response.headers.get('x-luker-generation-id') || '';
-    let trackedGenerationId = expectedGenerationId || headerGenerationId;
-    if (headerGenerationId && expectedGenerationId && headerGenerationId !== expectedGenerationId) {
-        return null;
-    }
-    const persistedHeader = response.headers.get('x-luker-server-persisted');
-    const persisted = persistedHeader === '1' ? true : persistedHeader === '0' ? false : undefined;
-    applyLukerGenerationMetaForApi(api, {
-        generationId: headerGenerationId,
-        persisted,
+    const { cleanup, attached } = lukerMetaTracker.attachResponse({
+        response,
+        expectedEpoch: expectedEpoch ?? lukerMetaTracker.getEpoch(),
+        expectedGenerationId,
+        signal,
+        isApiActive: () => main_api === api,
+        metaEventName: 'response_meta',
     });
-    if (headerGenerationId || typeof persisted === 'boolean') {
-        logLukerPersistenceDebug(api, 'response_header_meta', {
-            generation_id: headerGenerationId || '',
-            ...(typeof persisted === 'boolean' ? { persisted } : {}),
-        });
-    }
-    const rawDispose = onLukerResponseMeta(response, (meta) => {
-        if (main_api !== api || generationEpoch !== lukerGenerationEpoch) {
-            return;
-        }
-        const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
-        // Ignore stale late metadata from an older generation after a newer one started.
-        if (trackedGenerationId && lastLukerGenerationId && lastLukerGenerationId !== trackedGenerationId) {
-            return;
-        }
-        if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
-            return;
-        }
-        if (metaGenerationId && !trackedGenerationId) {
-            trackedGenerationId = metaGenerationId;
-        }
-        const update = {};
-        if (metaGenerationId) {
-            update.generationId = metaGenerationId;
-        }
-        if (typeof meta?.persisted === 'boolean') {
-            update.persisted = meta.persisted;
-        }
-        if (Object.keys(update).length > 0) {
-            applyLukerGenerationMetaForApi(api, update);
-            logLukerPersistenceDebug(api, 'response_meta', {
-                ...(update.generationId ? { generation_id: update.generationId } : {}),
-                ...(typeof update.persisted === 'boolean' ? { persisted: update.persisted } : {}),
-            });
-        }
-    });
-    let disposed = false;
-    const dispose = () => {
-        if (disposed) return;
-        disposed = true;
-        signal?.removeEventListener?.('abort', dispose);
-        if (disposeLukerResponseMetaListener === dispose) {
-            disposeLukerResponseMetaListener = null;
-        }
-        rawDispose?.();
-    };
-    setLukerResponseMetaDisposer(dispose);
-    if (signal) {
-        if (signal.aborted) {
-            dispose();
-        } else {
-            signal.addEventListener('abort', dispose, { once: true });
-        }
-    }
-    return dispose;
+    return attached ? cleanup : null;
 }
 
 export function getLastLukerGenerationIdForApi(api = main_api) {
@@ -668,7 +608,7 @@ export function getLastLukerGenerationIdForApi(api = main_api) {
     if (!supportsLukerServerPersistence(api)) {
         return '';
     }
-    return lastLukerGenerationId;
+    return lukerMetaTracker.getLastGenerationId();
 }
 
 function isLastLukerReplyPersistedByServerForApi(api = main_api) {
@@ -678,7 +618,7 @@ function isLastLukerReplyPersistedByServerForApi(api = main_api) {
     if (!supportsLukerServerPersistence(api)) {
         return false;
     }
-    return lastLukerReplyPersistedByServer;
+    return lukerMetaTracker.isLastReplyPersisted();
 }
 
 function shouldUseLukerServerPersistenceForType(type) {
@@ -1492,8 +1432,11 @@ let dialogueResolve = null;
 let dialogueCloseStop = false;
 /** @type {ChatMetadata} */
 export let chat_metadata = {};
-const chatMetadataSnapshotCache = new Map();
-const chatMessageSnapshotCache = new Map();
+const chatIntegrityStore = createChatIntegrityStore({
+    getActiveTarget: () => resolveChatStateTarget(),
+    getLiveChatMetadata: () => chat_metadata,
+    clone: cloneAsJsonWire,
+});
 /** @type {StreamingProcessor} */
 export let streamingProcessor = null;
 let crop_data = undefined;
@@ -1521,24 +1464,7 @@ export const saveCharacterDebounced = debounce(() => $('#create_button').trigger
 export const printCharactersDebounced = debounce(() => { printCharacters(false); }, DEFAULT_PRINT_TIMEOUT);
 let isCharacterDeletionInProgress = false;
 
-/**
- * @enum {number} Extension prompt types
- */
-export const extension_prompt_types = {
-    NONE: -1,
-    IN_PROMPT: 0,
-    IN_CHAT: 1,
-    BEFORE_PROMPT: 2,
-};
-
-/**
- * @enum {number} Extension prompt roles
- */
-export const extension_prompt_roles = {
-    SYSTEM: 0,
-    USER: 1,
-    ASSISTANT: 2,
-};
+export { extension_prompt_types, extension_prompt_roles };
 
 export const MAX_INJECTION_DEPTH = 10000;
 
@@ -2074,7 +2000,6 @@ let this_edit_mes_id = undefined;
 //settings
 export let settings;
 let settingsSnapshotCache = null;
-let settingsSaveInFlight = null;
 let settingsSaveBlockedForImport = false;
 let forceAsyncDiffForNextSettingsSave = false;
 let forceAsyncDiffForNextSettingsSaveTimer = null;
@@ -11097,7 +11022,7 @@ export async function sendGenerationRequest(type, data, options = {}, signal = a
     if (shouldTrackLukerGenerationState) {
         resetLukerGenerationState(requestApi);
     }
-    const generationEpoch = lukerGenerationEpoch;
+    const generationEpoch = lukerMetaTracker.getEpoch();
     const lukerGenerationOptions = shouldTrackLukerGenerationState
         ? buildLukerGenerationRequestOptions(type, requestApi)
         : null;
@@ -11197,14 +11122,15 @@ export async function sendStreamingRequest(type, data, options = {}) {
             data = { ...data, luker_generation: lukerGenerationOptions };
         }
     }
-    const generationEpoch = lukerGenerationEpoch;
+    const generationEpoch = lukerMetaTracker.getEpoch();
     const onLukerMeta = shouldTrackLukerGenerationState
         ? (meta) => {
-            if (main_api !== requestApi || generationEpoch !== lukerGenerationEpoch) {
+            if (main_api !== requestApi || generationEpoch !== lukerMetaTracker.getEpoch()) {
                 return;
             }
             const incomingGenerationId = typeof meta?.generationId === 'string' ? meta.generationId : '';
-            if (trackedGenerationId && lastLukerGenerationId && lastLukerGenerationId !== trackedGenerationId) {
+            const currentGenerationId = lukerMetaTracker.getLastGenerationId();
+            if (trackedGenerationId && currentGenerationId && currentGenerationId !== trackedGenerationId) {
                 return;
             }
             if (incomingGenerationId && trackedGenerationId && incomingGenerationId !== trackedGenerationId) {
@@ -11224,7 +11150,7 @@ export async function sendStreamingRequest(type, data, options = {}) {
         : null;
     const onLukerMetaDisposer = shouldTrackLukerGenerationState
         ? (dispose) => {
-            if (main_api !== requestApi || generationEpoch !== lukerGenerationEpoch) {
+            if (main_api !== requestApi || generationEpoch !== lukerMetaTracker.getEpoch()) {
                 dispose?.();
                 return;
             }
@@ -13099,18 +13025,6 @@ async function invalidateAllPresetStateRequestCache(target) {
     });
 }
 
-function getChatStateTargetKey(target) {
-    if (!target || typeof target !== 'object') {
-        return '';
-    }
-
-    if (target.is_group) {
-        return `group:${String(target.id || '').trim()}`;
-    }
-
-    return `chat:${String(target.avatar_url || '').trim()}:${String(target.file_name || '').trim()}`;
-}
-
 function getChatStateRequestKey(target, namespace) {
     return `${getChatStateTargetKey(target)}::${normalizeStateNamespace(namespace)}`;
 }
@@ -13137,38 +13051,11 @@ async function invalidateChatStateRequestCache(target, namespaces = []) {
     }, normalizedNamespaces);
 }
 
-function isPlainObject(value) {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-        return false;
-    }
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-}
-
 export { cloneAsJsonWire, listPresetDocuments, readPresetDocument };
 
 function normalizeJsonObject(value) {
     const normalized = cloneAsJsonWire(value);
     return isPlainObject(normalized) ? normalized : {};
-}
-
-function getChatMetadataSnapshotKey(target = resolveChatStateTarget()) {
-    if (!target || typeof target !== 'object') {
-        return '';
-    }
-    if (target.is_group) {
-        return `group:${String(target.id || '').trim()}`;
-    }
-    const avatar = String(target.avatar_url || '').trim();
-    const file = String(target.file_name || '').trim();
-    if (!avatar || !file) {
-        return '';
-    }
-    return `char:${avatar}:${file}`;
-}
-
-function getChatMessageSnapshotKey(target = resolveChatStateTarget()) {
-    return getChatMetadataSnapshotKey(target);
 }
 
 let objectPatchWorker = null;
@@ -13580,11 +13467,7 @@ export async function buildChatMetadataPatchOperationsAsync(previousMetadata, ne
 }
 
 function rememberChatMetadataSnapshot(target = resolveChatStateTarget(), metadata = chat_metadata) {
-    const key = getChatMetadataSnapshotKey(target);
-    if (!key) {
-        return;
-    }
-    chatMetadataSnapshotCache.set(key, cloneAsJsonWire(isPlainObject(metadata) ? metadata : {}));
+    chatIntegrityStore.rememberMetadataSnapshot(target, metadata);
 }
 
 export function seedChatMetadataSnapshot(target = null, metadata = chat_metadata) {
@@ -13593,32 +13476,11 @@ export function seedChatMetadataSnapshot(target = null, metadata = chat_metadata
 }
 
 export function getChatMetadataSnapshot(target = null) {
-    const resolvedTarget = resolveChatStateTarget(target);
-    const key = getChatMetadataSnapshotKey(resolvedTarget);
-    if (!key) {
-        return null;
-    }
-    const snapshot = chatMetadataSnapshotCache.get(key);
-    return isPlainObject(snapshot) ? cloneAsJsonWire(snapshot) : null;
+    return chatIntegrityStore.getMetadataSnapshot(resolveChatStateTarget(target));
 }
 
 function rememberChatMessageSnapshot(target = resolveChatStateTarget(), messages = chat) {
-    const key = getChatMessageSnapshotKey(target);
-    if (!key) {
-        return;
-    }
-    if (!Array.isArray(messages)) {
-        chatMessageSnapshotCache.delete(key);
-        return;
-    }
-    // Wire-format clone (not structured clone): snapshot mirrors what server
-    // holds, which is the result of JSON-parsing our last sent wire payload.
-    // Stock ST helpers occasionally produce sparse swipe_info / variables
-    // arrays in chat[i]; structuredClone preserves those slots verbatim, but
-    // JSON.stringify on the network path collapses them to null. Diffing a
-    // structured-form snapshot against a wire-form server state then ships
-    // phantom replace ops or fires false test failures (the conflict toast).
-    chatMessageSnapshotCache.set(key, cloneAsJsonWire(messages));
+    chatIntegrityStore.rememberMessageSnapshot(target, messages);
 }
 
 export function seedChatMessageSnapshot(target = null, messages = chat) {
@@ -13627,55 +13489,22 @@ export function seedChatMessageSnapshot(target = null, messages = chat) {
 }
 
 export function getChatMessageSnapshot(target = null) {
-    const resolvedTarget = resolveChatStateTarget(target);
-    const key = getChatMessageSnapshotKey(resolvedTarget);
-    if (!key) {
-        return null;
-    }
-    const snapshot = chatMessageSnapshotCache.get(key);
-    return Array.isArray(snapshot) ? cloneAsJsonWire(snapshot) : null;
+    return chatIntegrityStore.getMessageSnapshot(resolveChatStateTarget(target));
 }
 
 let chatWriteQueue = Promise.resolve();
 let activeChatSaveContext = null;
 
-/**
- * Targets whose next save should carry `force:true` to bypass server-side
- * integrity check. Set by conflict-recovery paths in
- * resolveChatWriteConflictForTarget as an explicit FE-wins signal, consumed by
- * saveChatInternal / saveChatMetadataInternal / saveGroupChatInternal at fetch
- * time. Replaces the older "delete chat_metadata.integrity" signal which
- * (a) left chat_metadata.integrity falsy for arbitrarily long stretches until
- * the next successful write refilled it, tripping the empty-integrity data-loss
- * guard on every intervening save, and (b) collided semantically with the
- * half-open state (getChat failed → chat_metadata is empty and integrity is
- * absent because it was never populated). With the marker, the two states are
- * distinguishable: recovery is an explicit per-target Map entry, half-open is
- * "no marker and no integrity".
- * @type {Map<string, string>}
- */
-const pendingForceOverwriteTargets = new Map();
-
 export function markTargetForForceOverwriteOnNextSave(target, reason) {
-    const key = getChatStateTargetKey(target);
-    if (!key) return;
-    pendingForceOverwriteTargets.set(key, String(reason || 'unknown'));
+    chatIntegrityStore.markTargetForForceOverwriteOnNextSave(target, reason);
 }
 
 export function consumePendingForceOverwrite(target) {
-    const key = getChatStateTargetKey(target);
-    if (!key) return null;
-    const reason = pendingForceOverwriteTargets.get(key);
-    if (reason !== undefined) {
-        pendingForceOverwriteTargets.delete(key);
-        return reason;
-    }
-    return null;
+    return chatIntegrityStore.consumePendingForceOverwrite(target);
 }
 
 function hasPendingForceOverwrite(target) {
-    const key = getChatStateTargetKey(target);
-    return Boolean(key && pendingForceOverwriteTargets.has(key));
+    return chatIntegrityStore.hasPendingForceOverwrite(target);
 }
 
 export function runSerializedChatWrite(task) {
@@ -13692,88 +13521,19 @@ export function runSerializedChatWrite(task) {
 }
 
 function syncCurrentChatIntegrityFromMetadata(metadata = null) {
-    if (!chat_metadata || typeof chat_metadata !== 'object') {
-        return;
-    }
-    // A late write acknowledgement or snapshot refresh must not re-authorize a
-    // half-open chat whose integrity was cleared by a pending or failed load.
-    const currentIntegrity = typeof chat_metadata.integrity === 'string'
-        ? chat_metadata.integrity.trim()
-        : '';
-    if (!currentIntegrity) {
-        return;
-    }
-
-    const nextIntegrity = typeof metadata?.integrity === 'string'
-        ? metadata.integrity.trim()
-        : '';
-
-    // Rotate only when the server provides a non-empty token; never delete the
-    // live token because a snapshot omitted it, which would permanently trip
-    // the empty-integrity data-loss guard.
-    if (nextIntegrity) {
-        chat_metadata.integrity = nextIntegrity;
-    }
+    chatIntegrityStore.syncCurrentChatIntegrityFromMetadata(metadata);
 }
 
 function isActiveChatStateTarget(target = null) {
-    return getChatStateTargetKey(resolveChatStateTarget(target)) === getChatStateTargetKey(resolveChatStateTarget());
+    return chatIntegrityStore.isActiveTarget(resolveChatStateTarget(target));
 }
 
 export function applyIntegrityFromWritePayloadToTarget(payload, target = null, metadata = null) {
-    const nextIntegrity = typeof payload?.integrity === 'string' ? payload.integrity.trim() : '';
-    if (!nextIntegrity) {
-        return;
-    }
-
-    if (metadata && typeof metadata === 'object') {
-        metadata.integrity = nextIntegrity;
-    }
-
-    // Incremental acknowledgements rotate only the accepted target's cached token,
-    // not its unsent metadata fields or a missing initialization baseline.
-    if (target?.is_group) {
-        const snapshot = getChatMetadataSnapshot(target);
-        if (snapshot) rememberChatMetadataSnapshot(target, { ...snapshot, integrity: nextIntegrity });
-    }
-
-    if (isActiveChatStateTarget(target)) {
-        syncCurrentChatIntegrityFromMetadata({ integrity: nextIntegrity });
-    }
+    chatIntegrityStore.applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
 }
 
-/**
- * Refreshes a queued write's token without replacing its captured metadata.
- * Group acknowledgements remain target-owned while live metadata is unloaded
- * or another chat is active. Both solo and group writes preserve their captured
- * token when live integrity is empty so server integrity checks are not bypassed.
- */
 export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
-    if (!isPlainObject(metadata)) {
-        return;
-    }
-    if (target?.is_group) {
-        const acknowledgedIntegrity = getChatMetadataSnapshot(target)?.integrity;
-        if (acknowledgedIntegrity) {
-            metadata.integrity = acknowledgedIntegrity;
-            return;
-        }
-    }
-    if (!isActiveChatStateTarget(target)) {
-        return;
-    }
-    if (!chat_metadata || typeof chat_metadata !== 'object') {
-        return;
-    }
-    const liveIntegrity = typeof chat_metadata.integrity === 'string'
-        ? chat_metadata.integrity.trim()
-        : '';
-    // Keep the queued write's captured token when live integrity is empty so
-    // an unloaded/failed active state cannot strip it and bypass server checks.
-    if (!liveIntegrity) {
-        return;
-    }
-    metadata.integrity = liveIntegrity;
+    chatIntegrityStore.refreshSnapshotIntegrityFromActiveLive(target, metadata);
 }
 
 async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget(), { throwOnError = false } = {}) {
@@ -13784,21 +13544,21 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget(),
 
     if (resolvedTarget.is_group) {
         const payload = await loadGroupChat(resolvedTarget.id);
-        if (payload.length === 0) {
-            return {
-                target: resolvedTarget,
-                metadata: {},
-                messages: [],
-                existsOnServer: false,
-            };
+        const parsed = parseServerChatPayload(payload, { isGroup: true, clone: cloneAsJsonWire });
+        if (!parsed.ok) {
+            if (throwOnError) {
+                const error = new Error(parsed.error);
+                if (parsed.corrupted) error.corrupted = true;
+                else error.useGenericSaveToast = true;
+                throw error;
+            }
+            return null;
         }
-        const hasHeader = Object.hasOwn(payload[0] ?? {}, 'chat_metadata');
         return {
             target: resolvedTarget,
-            metadata: isPlainObject(payload[0]?.chat_metadata) ? cloneAsJsonWire(payload[0].chat_metadata) : {},
-            // Snapshot guards use stored bytes, not rendering-time media migration.
-            messages: hasHeader ? payload.slice(1) : payload,
-            existsOnServer: true,
+            metadata: parsed.metadata,
+            messages: parsed.messages,
+            existsOnServer: parsed.existsOnServer,
         };
     }
 
@@ -13839,57 +13599,28 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget(),
             return null;
         }
 
-        // Never swallow JSON parse failures: a truncated stream must fail rather
-        // than masquerade as an empty chat.
         const payload = await response.json();
-
-        // /api/chats/get may return HTTP 200 { corrupted: true } for an unreadable file.
-        if (payload?.corrupted) {
-            console.warn('Server reported corrupted chat while fetching snapshot', resolvedTarget);
+        const parsed = parseServerChatPayload(payload, { isGroup: false, clone: cloneAsJsonWire });
+        if (!parsed.ok) {
+            console.warn(parsed.corrupted ? 'Server reported corrupted chat while fetching snapshot' : 'Unexpected server chat snapshot payload', resolvedTarget);
             if (throwOnError) {
-                const error = new Error('Server reported corrupted chat');
-                error.corrupted = true;
+                const error = new Error(parsed.error);
+                if (parsed.corrupted) error.corrupted = true;
+                else error.useGenericSaveToast = true;
                 throw error;
             }
             return null;
         }
 
-        // Only an explicit { new_chat: true } means the chat does not exist on disk yet.
-        if (isPlainObject(payload) && payload.new_chat === true) {
-            return {
-                target: resolvedTarget,
-                metadata: {},
-                messages: [],
-                existsOnServer: false,
-            };
+        if (parsed.existsOnServer) {
+            parsed.messages.forEach(ensureMessageMediaIsArray);
         }
-
-        // An existing chat must return a non-empty array with a plain object header.
-        if (!Array.isArray(payload) || payload.length === 0 || !isPlainObject(payload[0])) {
-            console.warn('Unexpected server chat snapshot payload', resolvedTarget);
-            if (throwOnError) {
-                const error = new Error('Unexpected server chat snapshot payload');
-                error.useGenericSaveToast = true;
-                throw error;
-            }
-            return null;
-        }
-
-        const [header, ...rawMessages] = payload;
-        const metadata = isPlainObject(header?.chat_metadata)
-            ? cloneAsJsonWire(header.chat_metadata)
-            : {};
-        const messages = rawMessages
-            .map(message => cloneAsJsonWire(message))
-            .filter(message => message && typeof message === 'object');
-
-        messages.forEach(ensureMessageMediaIsArray);
 
         return {
             target: resolvedTarget,
-            metadata,
-            messages,
-            existsOnServer: true,
+            metadata: parsed.metadata,
+            messages: parsed.messages,
+            existsOnServer: parsed.existsOnServer,
         };
     } catch (error) {
         console.warn('Failed to fetch current server chat snapshot', error);
@@ -13904,48 +13635,19 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget(),
 }
 
 function applyServerChatSnapshot(snapshot, metadataToSync = null) {
-    if (!snapshot) {
-        return null;
-    }
-
-    // When the chat does not exist on the server yet ({ new_chat: true } or []),
-    // invalidate caches so the next write performs a full create-save without
-    // poisoning caches with [] or clearing in-memory integrity.
-    if (snapshot.existsOnServer === false) {
-        invalidateChatWriteSnapshot(snapshot.target);
-        return snapshot;
-    }
-
-    rememberChatMetadataSnapshot(snapshot.target, snapshot.metadata);
-    rememberChatMessageSnapshot(snapshot.target, snapshot.messages);
-
-    if (metadataToSync && typeof metadataToSync === 'object') {
-        const nextIntegrity = typeof snapshot.metadata?.integrity === 'string'
-            ? snapshot.metadata.integrity.trim()
-            : '';
-        if (nextIntegrity) {
-            metadataToSync.integrity = nextIntegrity;
-        }
-    }
-
-    if (getChatStateTargetKey(snapshot.target) === getChatStateTargetKey(resolveChatStateTarget())) {
-        syncCurrentChatIntegrityFromMetadata(snapshot.metadata);
-    }
-
-    return snapshot;
+    return chatIntegrityStore.applyServerChatSnapshot(snapshot, metadataToSync);
 }
 
 async function applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadataToSync = null, { allowNonForcedReadFailure = false } = {}) {
-    // Reuse the single snapshot fetch already issued during conflict diagnostics
-    // to avoid back-to-back full chat fetches on 409 recovery.
-    if (conflictSnapshot?.attempted) {
-        if (conflictSnapshot.error) {
-            if (!allowNonForcedReadFailure || conflictSnapshot.corrupted || hasPendingForceOverwrite(target)) {
-                throw conflictSnapshot.error;
-            }
-            return null;
-        }
-        return applyServerChatSnapshot(conflictSnapshot.snapshot, metadataToSync);
+    const decision = chatIntegrityStore.evaluateConflictSnapshotReuse(target, conflictSnapshot, { allowNonForcedReadFailure });
+    if (decision.action === 'rethrow') {
+        throw decision.error;
+    }
+    if (decision.action === 'skip') {
+        return null;
+    }
+    if (decision.action === 'apply') {
+        return applyServerChatSnapshot(decision.snapshot, metadataToSync);
     }
 
     try {
@@ -14792,13 +14494,7 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
 }
 
 export function invalidateChatWriteSnapshot(target = resolveChatStateTarget()) {
-    const snapshotKey = getChatMessageSnapshotKey(target);
-    if (!snapshotKey) {
-        return;
-    }
-
-    chatMessageSnapshotCache.delete(snapshotKey);
-    chatMetadataSnapshotCache.delete(snapshotKey);
+    chatIntegrityStore.invalidateWriteSnapshot(target);
 }
 
 async function readChatWriteConflictPayload(response) {
@@ -14811,174 +14507,6 @@ async function readChatWriteConflictPayload(response) {
     } catch {
         return null;
     }
-}
-
-/**
- * Compares two message arrays and returns a compact human-readable summary of
- * where they differ. Used on 409 to surface which positions / fields are out
- * of sync — far more actionable than the generic "Chat patch conflict" string.
- *
- * Equality uses plain `JSON.stringify` to match the server's fast-json-patch
- * `test` op semantics exactly (server compares via JSON.stringify literal
- * equality). This means:
- *   - Date object vs ISO string with same value → reported as equal
- *     (both stringify to the same `"...Z"` literal)
- *   - Same fields in different insertion order → reported as different
- *     (server sees them as different too — this is the actual cause when
- *     it happens)
- *
- * Output examples:
- *   /3 client+[variables_initialized,is_ejs_processed]
- *   /5 mutated:[mes,extra]; +2 more position(s)
- */
-function serverEqJsonString(value) {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return undefined;
-    }
-}
-
-function isServerEqJsonShape(a, b) {
-    const sa = serverEqJsonString(a);
-    const sb = serverEqJsonString(b);
-    return sa !== undefined && sa === sb;
-}
-
-function summarizeChatStateDivergence(clientMessages, serverMessages, maxDivergences = 2) {
-    if (!Array.isArray(clientMessages) || !Array.isArray(serverMessages)) {
-        return null;
-    }
-    const length = Math.max(clientMessages.length, serverMessages.length);
-    /** @type {string[]} */
-    const lines = [];
-    /** @type {Array<{index:number, client:any, server:any, kind:string}>} */
-    const details = [];
-    let extraCount = 0;
-    for (let i = 0; i < length; i++) {
-        const c = clientMessages[i];
-        const s = serverMessages[i];
-        if (isServerEqJsonShape(c, s)) continue;
-
-        if (lines.length >= maxDivergences) {
-            extraCount++;
-            continue;
-        }
-
-        if (c === undefined || s === undefined) {
-            lines.push(`/${i} ${c === undefined ? 'missing-on-client' : 'missing-on-server'}`);
-            details.push({ index: i, client: c, server: s, kind: c === undefined ? 'missing-on-client' : 'missing-on-server' });
-            continue;
-        }
-        if (!isPlainObject(c) || !isPlainObject(s)) {
-            lines.push(`/${i} type-mismatch`);
-            details.push({ index: i, client: c, server: s, kind: 'type-mismatch' });
-            continue;
-        }
-
-        const cKeys = Object.keys(c);
-        const sKeys = Object.keys(s);
-        const onlyInClient = cKeys.filter(k => !(k in s));
-        const onlyInServer = sKeys.filter(k => !(k in c));
-        const sharedDiffered = cKeys.filter(k => (k in s) && !isServerEqJsonShape(c[k], s[k]));
-        // If both sides have the same field names but server's JSON differs,
-        // it's almost certainly an insertion-order issue (since JSON.stringify
-        // is order-sensitive). Surface that explicitly so we don't have to
-        // hunt for a content diff that doesn't exist.
-        const sameFields = onlyInClient.length === 0 && onlyInServer.length === 0 && sharedDiffered.length === 0;
-
-        // For each top-level mutated field, look one level deeper to identify
-        // which nested key actually differs. `mutated:[extra.luker_generation_id]`
-        // is dramatically more useful than `mutated:[extra]` when extra is a
-        // big bag of optional metadata fields.
-        const mutatedDetailed = sharedDiffered.map(k => {
-            const nested = describeNestedDivergence(c[k], s[k]);
-            return nested ? `${k}.${nested}` : k;
-        });
-
-        const parts = [];
-        if (onlyInClient.length) parts.push(`client+[${onlyInClient.join(',')}]`);
-        if (onlyInServer.length) parts.push(`server+[${onlyInServer.join(',')}]`);
-        if (mutatedDetailed.length) parts.push(`mutated:[${mutatedDetailed.join(',')}]`);
-        if (sameFields) parts.push('key-order-only');
-        lines.push(`/${i} ${parts.join(' ')}`);
-        details.push({ index: i, client: c, server: s, kind: parts.join(' ') });
-    }
-
-    if (lines.length === 0) {
-        return null;
-    }
-    if (extraCount > 0) {
-        lines.push(`+${extraCount} more position(s)`);
-    }
-    return { summary: lines.join('; '), details };
-}
-
-/**
- * Given two values known to differ, return a short string identifying the
- * nested location of the difference. Recurses through plain objects only;
- * arrays and primitives are treated as leaves (the answer at that point is
- * "this whole thing differs", which is what the caller already knows).
- *
- * Returns the first divergent path it finds. Multiple nested differences
- * collapse to one — keeping the toast short is intentional.
- */
-function describeNestedDivergence(c, s, depth = 0) {
-    if (depth >= 3) return null;
-    if (!isPlainObject(c) || !isPlainObject(s)) return null;
-
-    const cKeys = Object.keys(c);
-    const sKeys = Object.keys(s);
-
-    for (const k of cKeys) {
-        if (!(k in s)) return `${k}(client-only)`;
-    }
-    for (const k of sKeys) {
-        if (!(k in c)) return `${k}(server-only)`;
-    }
-    for (const k of cKeys) {
-        if (!isServerEqJsonShape(c[k], s[k])) {
-            const deeper = describeNestedDivergence(c[k], s[k], depth + 1);
-            return deeper ? `${k}.${deeper}` : k;
-        }
-    }
-    return null;
-}
-
-/**
- * Builds a short, human-readable summary of a JSON Patch operations array.
- * Caps at 3 ops so the toast doesn't blow up. Used as `opSummary` in the 409
- * diagnostic — tells the user (and us, when triaging) which path the patch
- * was working on when the test guard failed.
- */
-function summarizeJsonPatchOperations(operations) {
-    if (!Array.isArray(operations) || operations.length === 0) {
-        return null;
-    }
-    const previewed = operations.slice(0, 3).map(op => {
-        if (!op || typeof op !== 'object') return '?';
-        const opName = String(op.op || '?');
-        const path = String(op.path || '');
-        return `${opName} ${path}`.trim();
-    });
-    if (operations.length > 3) {
-        previewed.push(`+${operations.length - 3} more`);
-    }
-    return previewed.join(', ');
-}
-
-/**
- * Builds a short summary of a chat-message array being appended. Includes
- * message count and the role of the first message — enough to identify the
- * append path without dumping full payloads.
- */
-function summarizeAppendedMessages(messages) {
-    if (!Array.isArray(messages) || messages.length === 0) {
-        return null;
-    }
-    const first = messages[0];
-    const role = first?.is_user ? 'user' : first?.is_system ? 'system' : 'assistant';
-    return `append ${messages.length}× (first: ${role})`;
 }
 
 /**
@@ -15095,8 +14623,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     // of 409. Integrity drift on the surface often means content changed too —
     // skipping the diff in that branch loses real signal about which message
     // a concurrent writer touched.
-    const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
-    const clientSnapshot = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+    const clientSnapshot = target ? chatIntegrityStore.getRawMessageSnapshot(target) : null;
     let divergenceSummary = null;
     let divergenceDetails = null;
     const onServerSnapshot = typeof requestContext?.onServerSnapshot === 'function'
@@ -15128,64 +14655,27 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         }
     }
 
-    if (errorType === 'integrity') {
-        if (currentIntegrity) {
-            if (metadata && typeof metadata === 'object') {
-                metadata.integrity = currentIntegrity;
-            }
-            if (isActiveChatStateTarget(target)) {
-                syncCurrentChatIntegrityFromMetadata({ integrity: currentIntegrity });
-            }
-        } else if (!serverSnapshotCorrupted) {
-            // Server has no current integrity to sync against. Do NOT delete
-            // chat_metadata.integrity here — the empty-integrity data-loss
-            // guard on saveChatInternal would then refuse every subsequent
-            // write until the chat is reloaded. Instead, mark the target so
-            // the recovery save (queued next) carries force:true; the server
-            // skips its integrity check and accepts the overwrite, and its
-            // 200 response's integrity refills client state.
-            markTargetForForceOverwriteOnNextSave(target, 'integrity-409-empty-current');
+    const decision = decideChatConflictRecovery({
+        status: response.status,
+        retryCount,
+        errorType,
+        currentIntegrity,
+        serverSnapshotCorrupted,
+    });
+    if (decision.nextIntegrity) {
+        if (metadata && typeof metadata === 'object') {
+            metadata.integrity = decision.nextIntegrity;
         }
-        // Invalidate the message snapshot too so the caller's saveChatConditional
-        // fallback skips the diff-patch path and writes a full /api/chats/save,
-        // overwriting the server file with the FE chat array (FE-wins).
-        invalidateChatWriteSnapshot(target);
-        notifyChatWriteConflict({
-            kind: 'integrity',
-            errorType,
-            target,
-            retryCount,
-            currentIntegrity,
-            requestContext,
-            divergence: divergenceSummary,
-            divergenceDetails,
-        });
-        return 'integrity';
+        if (isActiveChatStateTarget(target)) {
+            syncCurrentChatIntegrityFromMetadata({ integrity: decision.nextIntegrity });
+        }
     }
-
-    // Non-integrity 409 (JSON Patch test failed): the integrity token matched
-    // but at least one position's stored value diverges from our snapshot.
-    // Keep local in-memory edits/generation state intact. Reloading chat here can
-    // overwrite current local mutations (e.g. regenerate/edit-in-progress) and
-    // make behavior look like random refresh or duplicate replies.
     invalidateChatWriteSnapshot(target);
-    // FE-wins recovery signal for the next save on this target. Formerly this
-    // path did `delete chat_metadata.integrity`, which relied on server
-    // treating a missing slug as "no check needed" so the follow-up
-    // saveChatConditional would silently overwrite. That collision with the
-    // half-open state (also produces missing integrity) meant the empty-
-    // integrity data-loss guard couldn't tell the two apart and had to either
-    // let both through (unsafe half-open write) or block both (breaks recovery
-    // on every 409, which is what the append/patch optimistic-snapshot vs
-    // BE-normalization drift makes routinely common). The marker keeps
-    // chat_metadata.integrity intact so the guard still blocks half-open
-    // writes, and signals the intended overwrite explicitly. Never arm force
-    // overwrite when the server explicitly reported the file as corrupted.
-    if (!serverSnapshotCorrupted) {
-        markTargetForForceOverwriteOnNextSave(target, 'snapshot-409-recovery');
+    if (decision.shouldArmForceOverwrite && decision.forceReason) {
+        markTargetForForceOverwriteOnNextSave(target, decision.forceReason);
     }
     notifyChatWriteConflict({
-        kind: 'snapshot',
+        kind: decision.resolution,
         errorType,
         target,
         retryCount,
@@ -15194,7 +14684,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         divergence: divergenceSummary,
         divergenceDetails,
     });
-    return 'snapshot';
+    return decision.resolution;
 }
 
 /**
@@ -15245,14 +14735,13 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
         // after the await, which absorbed any plugin / streaming / swipe mutation
         // happening on `chat[i]` during the await window and silently smuggled
         // those changes into snapshot without ever sending them to BE → drift.
-        const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
-        const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+        const previousMessages = target ? chatIntegrityStore.getRawMessageSnapshot(target) : null;
         // An unacknowledged group initialization needs the caller's complete
         // save, not an append that would omit its displayed greeting.
         if (target?.is_group && !Array.isArray(previousMessages)) {
             return false;
         }
-        if (Array.isArray(previousMessages) && snapshotKey) {
+        if (Array.isArray(previousMessages) && target) {
             // rememberChatMessageSnapshot deep-clones internally, so spreading
             // raw references is safe here — they get frozen on `.set`.
             rememberChatMessageSnapshot(target, [...previousMessages, ...messages]);
@@ -15276,13 +14765,14 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
-                if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
+                const ack = validateChatWriteAckPayload(payload, { requireAppended: true });
+                if (!ack.valid) {
                     // Truncated or malformed 200 body: do not misinterpret as server dedup
                     // and trigger a full snapshot fetch; drop optimistic snapshot so caller falls back.
                     invalidateChatWriteSnapshot(target);
                     return false;
                 }
-                const appendedCount = payload.appended;
+                const appendedCount = ack.appended;
                 const skippedCount = Number(payload?.skipped || 0);
                 console.debug('[ChatWrite]', {
                     phase: 'append_result',
@@ -15352,13 +14842,14 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
-            if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
+            const ack = validateChatWriteAckPayload(payload, { requireAppended: true });
+            if (!ack.valid) {
                 // Truncated or malformed 200 body: do not misinterpret as server dedup
                 // and trigger a full snapshot fetch; drop optimistic snapshot so caller falls back.
                 invalidateChatWriteSnapshot(target);
                 return false;
             }
-            const appendedCount = payload.appended;
+            const appendedCount = ack.appended;
             const skippedCount = Number(payload?.skipped || 0);
             console.debug('[ChatWrite]', {
                 phase: 'append_result',
@@ -15463,19 +14954,10 @@ async function patchChatMessagesInternal(operations, retryCount = 0, context = n
     let target = null;
     try {
         target = context?.target ?? resolveChatStateTarget();
-        const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
-        const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+        const previousMessages = target ? chatIntegrityStore.getRawMessageSnapshot(target) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
 
-        // Optimistic snapshot commit: compute what snapshot will be after BE
-        // applies our ops, then set it BEFORE the fetch. `chat[]` does not
-        // factor in — only the ops we actually send to BE define the new
-        // BE state. Previously we set the snapshot from a deep-clone of
-        // `chat` after the await, which silently absorbed any plugin /
-        // streaming mutation happening on chat[i] during the await window
-        // and smuggled those changes into snapshot without ever sending
-        // them to BE → permanent drift.
-        if (Array.isArray(previousMessages) && snapshotKey) {
+        if (Array.isArray(previousMessages) && target) {
             try {
                 const patchResult = applyJsonPatch(previousMessages, normalizedOperations, false, false);
                 if (Array.isArray(patchResult?.newDocument)) {
@@ -15736,8 +15218,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
         const forceRecovery = consumePendingForceOverwrite(target);
         const effectiveForce = Boolean(forceRecovery);
 
-        const snapshotKey = getChatMetadataSnapshotKey(target);
-        const previousMetadata = snapshotKey ? chatMetadataSnapshotCache.get(snapshotKey) : null;
+        const previousMetadata = target ? chatIntegrityStore.getRawMetadataSnapshot(target) : null;
         const operations = await buildChatMetadataPatchOperationsAsync(previousMetadata, metadata);
 
         // Nothing changed.
@@ -16042,7 +15523,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         // force (typically false) if not.
         const forceRecovery = consumePendingForceOverwrite(writeTarget);
         const effectiveForce = force || Boolean(forceRecovery);
-        const previousMessages = chatMessageSnapshotCache.get(getChatMessageSnapshotKey(writeTarget));
+        const previousMessages = chatIntegrityStore.getRawMessageSnapshot(writeTarget);
 
         if (!effectiveForce && Array.isArray(previousMessages)) {
             const operations = await buildChatMessagePatchOperations(previousMessages, trimmedChat);
@@ -16071,7 +15552,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
 
                 if (patchResult.ok) {
                     const payload = await patchResult.json().catch(() => null);
-                    if (payload?.ok === true && typeof payload.integrity === 'string' && payload.integrity.trim()) {
+                    if (validateChatWriteAckPayload(payload).valid) {
                         applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
                         rememberChatMetadataSnapshot(writeTarget, metadata);
                         return;
@@ -16138,7 +15619,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
 
         if (result.ok) {
             const payload = await result.json().catch(() => null);
-            if (payload?.ok === true && typeof payload.integrity === 'string' && payload.integrity.trim()) {
+            if (validateChatWriteAckPayload(payload).valid) {
                 applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
                 rememberChatMetadataSnapshot(writeTarget, metadata);
                 return;
@@ -16885,7 +16366,7 @@ function bindOnboardingImportActions(template, importState) {
                 // queued or boot-time saves from writing stale browser state.
                 settingsSaveBlockedForImport = true;
                 cancelDebounce(saveSettingsDebounced);
-                await settingsSaveInFlight;
+                await settingsSaveCoordinator.getInFlightPromise();
             }
             const result = await uploadOnboardingImport(endpoint, file, {
                 onProgress: ({ loaded, total, done }) => {
@@ -17124,8 +16605,8 @@ export async function getSettings(options = {}) {
     const useBootstrap = options?.bootstrap === true;
     const suppliedPayload = options?.payload;
     const publication = settingsReadPublication;
-    const pendingSaveAtStart = settingsSaveInFlight;
-    const isOverlapped = () => suppliedPayload == null && (publication !== settingsReadPublication || pendingSaveAtStart || settingsSaveInFlight);
+    const pendingSaveAtStart = settingsSaveCoordinator.getInFlightPromise();
+    const isOverlapped = () => suppliedPayload == null && (publication !== settingsReadPublication || pendingSaveAtStart || settingsSaveCoordinator.getInFlightPromise());
     let data = suppliedPayload;
     if (data == null) {
         try {
@@ -17286,25 +16767,10 @@ export async function getSettings(options = {}) {
                     if (!completed) {
                         return;
                     }
-                    firstRun = false;
-                    let persisted = false;
-                    try {
-                        const outcome = await saveSettings(0, {
-                            directSave: true,
-                            onSaved: () => {
-                                persisted = true;
-                            },
-                        });
-                        if (!outcome?.ok && outcome?.status !== 'deferred') {
-                            firstRun = true;
-                            console.error('Failed to persist firstRun completion', outcome);
-                        }
-                    } catch (error) {
-                        if (!persisted) {
-                            firstRun = true;
-                        }
-                        console.error('Failed to persist firstRun completion', error);
-                    }
+                    await persistFirstRunCompletion({
+                        setFirstRun: (value) => { firstRun = value; },
+                        saveSettings,
+                    });
                 })
                 .catch((error) => {
                     console.error('Onboarding failed', error);
@@ -17431,112 +16897,35 @@ function buildRawSettingsObject() {
     };
 }
 
-function parseNormalizedSettingsObject(serialized) {
-    const parsed = JSON.parse(serialized);
-    return isPlainObject(parsed) ? parsed : {};
-}
-
 function buildSettingsPayload() {
     return cloneAsJsonWire(buildRawSettingsObject());
 }
 
-//MARK: saveSettings()
-async function saveSettingsInternal(payload, options = {}) {
-    async function rejectDeletedWorldReference(response) {
-        let refusal;
-        try {
-            refusal = await response.json();
-        } catch {
-            return;
-        }
-        // Ownership refusal is terminal for this captured payload.
-        if (refusal?.code === 'world_deleted' || refusal?.code === 'world_deletion_unknown') {
-            const reason = refusal.code === 'world_deleted' ? 'deleted' : 'whose deletion outcome is unconfirmed';
-            throw Object.assign(new Error(`Settings reference a world book ${reason} during this write: ${refusal.details?.name ?? 'unknown'}. Reload the world book list before retrying.`), refusal);
-        }
-    }
-
-    let workerDiff = null;
-    try {
-        const serializedPayload = JSON.stringify(payload);
-        let nextSnapshot = null;
-        let saved = false;
-        const previousSnapshot = getSettingsSnapshot();
-
-        if (!options.directSave && isPlainObject(previousSnapshot)) {
-            if (options.asyncDiff) {
-                try {
-                    workerDiff = await diffSerializedSettingsWithWorker(previousSnapshot, serializedPayload, { maxOperations: 4000 });
-                } catch (error) {
-                    console.warn('Falling back to synchronous object patch diff', error);
-                    workerDiff = null;
-                }
-            }
-
-            let operations;
-            if (workerDiff) {
-                operations = workerDiff.operations;
-            } else {
-                nextSnapshot = parseNormalizedSettingsObject(serializedPayload);
-                operations = buildObjectPatchOperations(previousSnapshot, nextSnapshot, { maxOperations: 4000 });
-            }
-
-            if (operations.length === 0) {
-                workerDiff?.discard();
-                workerDiff = null;
-                return { ok: true, status: 'saved', payload: structuredClone(previousSnapshot) };
-            } else if (shouldUseSettingsPatch(operations)) {
-                // The existing operations threshold selects patch versus full
-                // replacement without serializing the entire payload twice.
-                settingsReadPublication += 1;
-                const patchResult = await fetch('/api/settings/patch', {
-                    method: 'POST',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({ operations }),
-                    cache: 'no-cache',
-                });
-                saved = patchResult.ok;
-                if (patchResult.status === 409) await rejectDeletedWorldReference(patchResult);
-                if (saved) {
-                    workerDiff?.commit();
-                    nextSnapshot = nextSnapshot ?? applyCommittedSnapshotOperations(previousSnapshot, operations);
-                } else {
-                    workerDiff?.discard();
-                    workerDiff = null;
-                }
-            }
-            // HTTP patch refusal falls back to the same captured full payload.
-            // Transport rejection remains a failed attempt, not another request.
-        }
-
-        if (!saved) {
-            settingsReadPublication += 1;
-            const result = await fetch('/api/settings/save', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: serializedPayload,
-                cache: 'no-cache',
-            });
-            if (result.status === 409) await rejectDeletedWorldReference(result);
-            if (!result.ok) throw new Error(`Failed to save settings: HTTP ${result.status} ${result.statusText}`);
-            workerDiff?.commit();
-            nextSnapshot = nextSnapshot ?? parseNormalizedSettingsObject(serializedPayload);
-        }
-
-        settings = structuredClone(nextSnapshot);
-        rememberSettingsSnapshot(nextSnapshot, { serialized: serializedPayload, syncWorker: !workerDiff });
-        return { ok: true, status: 'saved', payload: structuredClone(nextSnapshot) };
-    } catch (error) {
-        workerDiff?.discard();
-        // Uncertain failures invalidate snapshot authority. An explicit
-        // reference-ownership refusal left the stored settings unchanged.
-        if (error?.code !== 'world_deleted' && error?.code !== 'world_deletion_unknown') rememberSettingsSnapshot(null);
-        console.error('Error saving settings:', error);
+const settingsSaveCoordinator = createSettingsSaveCoordinator({
+    isBlockedForImport: () => settingsSaveBlockedForImport,
+    isSettingsReady: () => settingsReady,
+    scheduleDebouncedSave: (loopCounter, options) => saveSettingsDebounced(loopCounter, options),
+    isTempResponseLengthCustomized: () => TempResponseLength.isCustomized(),
+    restoreTempResponseLength: () => TempResponseLength.restore(null),
+    normalizeOptions: normalizeSettingsSaveOptions,
+    buildSettingsPayload,
+    captureCharacterBoundSettingsSave,
+    getSettingsSnapshot,
+    rememberSettingsSnapshot,
+    onSettingsPersisted: (nextSnapshot) => { settings = nextSnapshot; },
+    diffSerializedSettingsWithWorker,
+    buildObjectPatchOperations,
+    applyCommittedSnapshotOperations,
+    shouldUseSettingsPatch,
+    getRequestHeaders,
+    incrementReadPublication: () => { settingsReadPublication += 1; },
+    emitSettingsUpdated: (payload) => eventSource.emit(event_types.SETTINGS_UPDATED, payload),
+    notifySaveError: () => {
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
-        return { ok: false, status: 'failed', error: String(error?.message || error) };
-    }
-}
+    },
+});
 
+//MARK: saveSettings()
 /**
  * Persist a snapshot captured at invocation, after preceding persistence attempts.
  * A failed or deferred attempt resolves with ok:false and never emits SETTINGS_UPDATED.
@@ -17544,52 +16933,7 @@ async function saveSettingsInternal(payload, options = {}) {
  * The returned payload belongs to this attempt, not subsequent queued changes.
  */
 export async function saveSettings(loopCounter = 0, options = null) {
-    if (settingsSaveBlockedForImport) {
-        return { ok: false, status: 'deferred', reason: 'data_import' };
-    }
-    const normalizedOptions = normalizeSettingsSaveOptions(options);
-    if (!settingsReady) {
-        console.warn('Settings not ready, scheduling another save');
-        saveSettingsDebounced(loopCounter, normalizedOptions);
-        return { ok: false, status: 'deferred', reason: 'not_ready' };
-    }
-
-    // Preserve the existing debounce retry policy before restoring a stranded
-    // temporary generation override. Never serialize the overridden length.
-    const MAX_RETRIES = 3; // cap-ok: existing temporary-generation override recovery policy, not a request retry limit.
-    if (TempResponseLength.isCustomized()) {
-        if (loopCounter < MAX_RETRIES) {
-            console.warn('Response length is currently being overridden, scheduling another save');
-            saveSettingsDebounced(++loopCounter, normalizedOptions);
-            return { ok: false, status: 'deferred', reason: 'temporary_response_length' };
-        }
-        console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
-        TempResponseLength.restore(null);
-    }
-
-    let payload;
-    let cardPresetSave;
-    try {
-        payload = buildSettingsPayload();
-        cardPresetSave = captureCharacterBoundSettingsSave(payload.oai_settings, options?.cardPresetOwner);
-    } catch (error) {
-        console.error('Error capturing settings:', error);
-        toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
-        return { ok: false, status: 'failed', error: String(error?.message || error) };
-    }
-    const previous = settingsSaveInFlight;
-    const attempt = (async () => {
-        if (previous) await previous;
-        return saveSettingsInternal(payload, normalizedOptions);
-    })();
-    settingsSaveInFlight = attempt;
-    const outcome = await attempt;
-    if (settingsSaveInFlight === attempt) settingsSaveInFlight = null;
-    if (outcome.ok) {
-        normalizedOptions.onSaved?.();
-        await eventSource.emit(event_types.SETTINGS_UPDATED, { cardPresetSave });
-    }
-    return outcome;
+    return settingsSaveCoordinator.saveSettings(loopCounter, options);
 }
 
 

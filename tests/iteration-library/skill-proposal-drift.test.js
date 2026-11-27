@@ -8,7 +8,7 @@
  * browser skills API and the REST router over a real on-disk repository.
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import express from 'express';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,16 +17,15 @@ import { createHash } from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { createSkillsRouter } from '../../src/endpoints/skills.js';
 import { createSkillRepository } from '../../src/skills/repository.js';
+import { createSkillsApi } from '../../public/scripts/skills/api-client.js';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
+import { skillAuthor } from '/scripts/iteration-library/proposal-bus/kinds/skill-author.js';
+import { runSkillIterStudioTool, ensureSkillRegistryTarget } from '/scripts/iteration-library/tools/skill-iter-studio.js';
 
-jest.unstable_mockModule('../../public/script.js', () => ({
+const skillsApi = createSkillsApi({
     getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
-}));
-
-const { skillsApi } = await import('../../public/scripts/skills/api.js');
-const { createBus } = await import('/scripts/iteration-library/proposal-bus/bus.js');
-const { clearRegistry } = await import('/scripts/iteration-library/storage/target-registry.js');
-const { skillAuthor } = await import('/scripts/iteration-library/proposal-bus/kinds/skill-author.js');
-const { runSkillIterStudioTool, ensureSkillRegistryTarget } = await import('/scripts/iteration-library/tools/skill-iter-studio.js');
+});
 
 const GLOBAL = { kind: 'global' };
 const NAME = 'harbor-watch';

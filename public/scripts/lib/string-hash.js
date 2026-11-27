@@ -2,11 +2,9 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Import-free copy of the upstream `utils.js` `getStringHash` for modules
- * that must load without the app bundle (plugins under Jest, lib, the
- * iteration library). Hash outputs are persisted (anchor hashes, vector
- * item hashes), so the body must stay identical to `utils.js`;
- * `tests/lib/string-hash.test.js` asserts that.
+ * Import-free cyrb53 string hash shared by `utils.js`, `lib/`, plugins, and
+ * the iteration library. Hash outputs are persisted (anchor hashes, vector
+ * item hashes), so the implementation is canonical across the codebase.
  *
  * cyrb53 (c) 2018 bryc ({@link https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js|github.com/bryc})
  * License: Public domain (or MIT if needed). Attribution appreciated.

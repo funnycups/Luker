@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { createExtensionFieldWriter } from '../../public/scripts/lib/extension-field-writer.js';
 
 function deleteByPath(obj, path) {
     const parts = path.split('.');
@@ -22,102 +23,6 @@ function setByPath(obj, path, value) {
     cur[parts[parts.length - 1]] = value;
 }
 
-const liveState = {
-    characters: [],
-    characterId: 0,
-    menuType: '',
-};
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    eventSource: { on: () => {}, emit: async () => {} },
-    event_types: {},
-    saveSettings: async () => ({ ok: true }),
-    saveSettingsDebounced: () => {},
-    getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
-    animation_duration: 0,
-    EXTENSIONS_CLIENT_VERSION: '1.0.0',
-    buildObjectPatchOperationsAsync: async () => [],
-    buildObjectPatchOperations: () => [],
-    cloneAsJsonWire: (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))),
-    ensureFullSettingsLoaded: async () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    POPUP_RESULT: {},
-    POPUP_TYPE: {},
-    Popup: class {},
-    callGenericPopup: async () => null,
-}));
-jest.unstable_mockModule('../../public/scripts/templates.js', () => ({
-    renderTemplate: () => '',
-    renderTemplateAsync: async () => '',
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    delay: async () => {},
-    deleteValueByPath: deleteByPath,
-    equalsIgnoreCaseAndAccents: (a, b) => a === b,
-    escapeHtml: (s) => String(s ?? ''),
-    isSubsetOf: () => false,
-    sanitizeSelector: (s) => s,
-    setValueByPath: setByPath,
-    versionCompare: () => 0,
-}));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({
-    getContext: () => liveState,
-}));
-jest.unstable_mockModule('../../public/scripts/user.js', () => ({ isAdmin: () => false }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    getCurrentLocale: () => 'en',
-    t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
-}));
-jest.unstable_mockModule('../../public/scripts/constants.js', () => ({
-    debounce_timeout: { relaxed: 10, quick: 10 },
-}));
-jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
-    accountStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-}));
-jest.unstable_mockModule('../../public/scripts/util/SimpleMutex.js', () => ({
-    SimpleMutex: class {},
-}));
-jest.unstable_mockModule('../../public/scripts/state-resource.js', () => ({
-    invalidateStateResources: () => {},
-    readStateEnvelope: async () => ({}),
-}));
-
-let writeExtensionField;
-let writeExtensionFieldBulk;
-
-const moduleIntervals = [];
-
-beforeAll(async () => {
-    const jq = () => ({
-        val: () => {},
-        children: () => ({ filter: () => ({ length: 1 }) }),
-        css: () => 'block',
-        toggle: () => {},
-        length: 0,
-    });
-    globalThis.$ = jq;
-    globalThis.jQuery = jq;
-    const realSetInterval = globalThis.setInterval;
-    globalThis.setInterval = (...args) => {
-        const handle = realSetInterval(...args);
-        moduleIntervals.push(handle);
-        handle?.unref?.();
-        return handle;
-    };
-    try {
-        ({ writeExtensionField, writeExtensionFieldBulk } = await import('../../public/scripts/extensions.js'));
-    } finally {
-        globalThis.setInterval = realSetInterval;
-    }
-});
-
-afterAll(() => {
-    for (const handle of moduleIntervals) clearInterval(handle);
-    moduleIntervals.length = 0;
-});
-
 function deferred() {
     let resolve;
     let reject;
@@ -134,14 +39,33 @@ function makeResponse(ok, body = null, status = ok ? 200 : 500) {
     };
 }
 
-describe('extensions.js writeExtensionField & writeExtensionFieldBulk concurrency', () => {
+describe('extension-field-writer writeExtensionField & writeExtensionFieldBulk concurrency', () => {
+    let liveState;
+    let writeExtensionField;
+    let writeExtensionFieldBulk;
+    let origFetch;
+
     beforeEach(() => {
-        liveState.characters = [
-            { avatar: 'alice.png', data: { extensions: { mod: { v: 0 } } } },
-            { avatar: 'bob.png', data: { extensions: { mod: { v: 0 } } } },
-        ];
-        liveState.characterId = 0;
-        liveState.menuType = '';
+        origFetch = globalThis.fetch;
+        liveState = {
+            characters: [
+                { avatar: 'alice.png', data: { extensions: { mod: { v: 0 } } } },
+                { avatar: 'bob.png', data: { extensions: { mod: { v: 0 } } } },
+            ],
+            characterId: 0,
+            menuType: '',
+        };
+        ({ writeExtensionField, writeExtensionFieldBulk } = createExtensionFieldWriter({
+            getContext: () => liveState,
+            getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+            cloneAsJsonWire: (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))),
+            setValueByPath: setByPath,
+            deleteValueByPath: deleteByPath,
+        }));
+    });
+
+    afterEach(() => {
+        globalThis.fetch = origFetch;
     });
 
     test('writeExtensionField publishes locally even when character index shifts while request is in flight', async () => {

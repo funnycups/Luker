@@ -16,9 +16,31 @@ export {
 
 export { showConflictResolution } from '../lib/edits/conflict-ui.js';
 
-export * as render from './render.js';
+import { ensureMarkdownDeps, renderMessageMarkdown } from './render.js';
+import {
+    STYLESHEET_HREF,
+    STYLESHEET_ID,
+    ensureStylesheetInjected,
+    formatDiffValue,
+    renderInlineTextDiffElement,
+    renderInlineTextDiffHtml,
+    sanitizeDiffPlaceholderValue,
+} from './text-diff.js';
+
+export const render = Object.freeze({
+    ensureMarkdownDeps,
+    renderMessageMarkdown,
+});
 export * as runner from './runner.js';
-export * as textDiff from './text-diff.js';
+export const textDiff = Object.freeze({
+    STYLESHEET_HREF,
+    STYLESHEET_ID,
+    ensureStylesheetInjected,
+    formatDiffValue,
+    renderInlineTextDiffElement,
+    renderInlineTextDiffHtml,
+    sanitizeDiffPlaceholderValue,
+});
 export * as zoomOverlay from './zoom-overlay.js';
 export * as ui from './ui/index.js';
 export * as tools from './tools/index.js';

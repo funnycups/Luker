@@ -1,213 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { StructuredCloneMap } from '../../public/scripts/util/StructuredCloneMap.js';
+import { createWorldInfoPersistenceCoordinator } from '../../public/scripts/lib/world-info-cache-coordinator.js';
 
-const noop = () => {};
-const asyncNoop = async () => {};
-class StubClass {}
+describe('world-info-cache-coordinator saveWorldInfo cache rollback and delete fencing', () => {
+    let origFetch;
+    let worldInfoCache;
+    let coordinator;
 
-const realStructuredCloneMap = await import('../../public/scripts/util/StructuredCloneMap.js');
+    beforeEach(() => {
+        origFetch = globalThis.fetch;
+        worldInfoCache = new StructuredCloneMap({ cloneOnGet: true, cloneOnSet: true });
+        coordinator = createWorldInfoPersistenceCoordinator({
+            worldInfoCache,
+            getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+            buildObjectPatchOperationsAsync: async () => [{ op: 'replace', path: '/entries', value: {} }],
+            readWorldInfoDocument: async () => null,
+            debounce: (fn) => {
+                const wrapped = (...args) => fn(...args);
+                wrapped.cancel = () => {};
+                return wrapped;
+            },
+            cancelDebounce: () => {},
+            debounceTimeoutMs: 10,
+        });
+    });
 
-jest.unstable_mockModule('../../public/script.js', () => ({
-    saveSettingsDebounced: noop,
-    substituteParams: (s) => s,
-    getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
-    chat_metadata: {},
-    this_chid: 0,
-    characters: [],
-    saveCharacterDebounced: noop,
-    menu_type: '',
-    eventSource: { on: noop, emit: asyncNoop },
-    event_types: { WORLDINFO_UPDATED: 'worldinfo_updated' },
-    getExtensionPromptByName: () => '',
-    saveMetadata: asyncNoop,
-    getCurrentChatId: () => '',
-    extension_prompt_roles: {},
-    create_save: {},
-    name1: '',
-    buildObjectPatchOperationsAsync: async () => [{ op: 'replace', path: '/entries', value: {} }],
-    requestAsyncDiffForNextSettingsSave: noop,
-    getOneCharacter: asyncNoop,
-    select_selected_character: asyncNoop,
-}));
-jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
-    readWorldInfoDocument: async () => null,
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    areLookupNamesEqual: (a, b) => a === b,
-    download: noop,
-    debounce: (fn) => {
-        const wrapped = (...args) => fn(...args);
-        wrapped.cancel = noop;
-        return wrapped;
-    },
-    findCanonicalIndexInList: () => -1,
-    findCanonicalNameInList: () => null,
-    initScrollHeight: noop,
-    resetScrollHeight: noop,
-    parseJsonFile: async () => ({}),
-    extractDataFromPng: async () => null,
-    getFileBuffer: async () => new ArrayBuffer(0),
-    getCharaFilename: () => '',
-    escapeRegex: (s) => s,
-    PAGINATION_TEMPLATE: '',
-    navigation_option: {},
-    waitUntilCondition: asyncNoop,
-    isTrueBoolean: () => false,
-    setValueByPath: noop,
-    flashHighlight: noop,
-    select2ModifyOptions: noop,
-    getSelect2OptionId: () => '',
-    dynamicSelect2DataViaAjax: noop,
-    highlightRegex: (s) => s,
-    select2ChoiceClickSubscribe: noop,
-    isFalseBoolean: () => false,
-    getSanitizedFilename: (s) => s,
-    checkOverwriteExistingData: async () => true,
-    getStringHash: () => 0,
-    parseStringArray: () => [],
-    cancelDebounce: noop,
-    findChar: () => null,
-    onlyUnique: () => true,
-    equalsIgnoreCaseAndAccents: (a, b) => a === b,
-    uuidv4: () => 'uuid-1',
-    normalizeArray: (a) => a,
-    getUniqueName: (s) => s,
-    logSlashCommandWarn: noop,
-    addLongPressEvent: noop,
-    escapeHtml: (s) => String(s ?? ''),
-    setInfoBlock: noop,
-    clearInfoBlock: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: {},
-    getContext: () => ({ characters: [] }),
-    writeExtensionField: async () => true,
-}));
-jest.unstable_mockModule('../../public/scripts/authors-note.js', () => ({
-    NOTE_MODULE_NAME: '',
-    metadata_keys: {},
-    shouldWIAddPrompt: () => false,
-}));
-jest.unstable_mockModule('../../public/scripts/RossAscends-mods.js', () => ({ isMobile: () => false }));
-jest.unstable_mockModule('../../public/scripts/filters.js', () => ({
-    FILTER_TYPES: {},
-    FilterHelper: StubClass,
-    WORLD_INFO_SEARCH_MODES: {},
-    keywordSearchWorldInfo: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/tokenizers.js', () => ({ getTokenCountAsync: async () => 0 }));
-jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({ power_user: {} }));
-jest.unstable_mockModule('../../public/scripts/tags.js', () => ({ getTagKeyForEntity: () => '' }));
-jest.unstable_mockModule('../../public/scripts/constants.js', () => ({
-    debounce_timeout: { relaxed: 10 },
-    GENERATION_TYPE_TRIGGERS: [],
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-    getRegexedString: (s) => s,
-    regex_placement: {},
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandParser.js', () => ({
-    SlashCommandParser: { addCommandObject: noop },
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommand.js', () => ({
-    SlashCommand: { fromProps: () => ({}) },
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandArgument.js', () => ({
-    ARGUMENT_TYPE: {},
-    SlashCommandArgument: { fromProps: () => ({}) },
-    SlashCommandNamedArgument: { fromProps: () => ({}) },
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandEnumValue.js', () => ({
-    SlashCommandEnumValue: StubClass,
-    enumTypes: {},
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandCommonEnumsProvider.js', () => ({
-    commonEnumProviders: {},
-    enumIcons: {},
-}));
-jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandClosure.js', () => ({
-    SlashCommandClosure: StubClass,
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    callGenericPopup: asyncNoop,
-    Popup: StubClass,
-    POPUP_RESULT: {},
-    POPUP_TYPE: {},
-}));
-jest.unstable_mockModule('../../public/scripts/util/StructuredCloneMap.js', () => realStructuredCloneMap);
-jest.unstable_mockModule('../../public/scripts/templates.js', () => ({ renderTemplateAsync: async () => '' }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
-    translate: (s) => String(s ?? ''),
-}));
-jest.unstable_mockModule('../../public/scripts/world-info-bulk-edit.js', () => ({
-    BULK_PATCH_KEEP_SENTINEL: Symbol('keep'),
-    inferCommonValue: noop,
-    buildBulkFieldPatchSnapshot: noop,
-    applyPatchToEntries: noop,
-    restoreEntriesFromSnapshot: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
-    accountStorage: { getItem: () => null, setItem: noop, removeItem: noop },
-}));
-jest.unstable_mockModule('../../public/scripts/personas.js', () => ({
-    getOrCreatePersonaDescriptor: () => ({}),
-    setPersonaDescription: noop,
-    user_avatar: '',
-}));
-jest.unstable_mockModule('../../public/scripts/select2-actionable-single.js', () => ({
-    initActionableSingleSelect: noop,
-    refreshOpenDropdown: noop,
-}));
-jest.unstable_mockModule('../../public/scripts/select2-multiselect.js', () => ({
-    buildBulkDeleteConfirmBody: () => '',
-}));
-jest.unstable_mockModule('../../public/scripts/zip-export.js', () => ({
-    downloadTextFilesAsZip: asyncNoop,
-}));
-jest.unstable_mockModule('../../public/scripts/undo-toast.js', () => ({
-    showUndoToast: noop,
-}));
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+    });
 
-let deleteWorldInfo;
-let loadWorldInfo;
-let saveWorldInfo;
-let worldInfoCache;
+    const saveWorldInfo = (...args) => coordinator.saveWorldInfo(...args);
+    const loadWorldInfo = (...args) => coordinator.loadWorldInfo(...args);
+    const deleteWorldInfo = async (name, opts) => (await coordinator.deleteWorldInfoRecord(name, opts)).deleted;
 
-beforeAll(async () => {
-    const jqChain = {
-        on: () => jqChain,
-        off: () => jqChain,
-        find: () => jqChain,
-        val: () => '',
-        prop: () => false,
-        toggleClass: () => jqChain,
-        addClass: () => jqChain,
-        removeClass: () => jqChain,
-        empty: () => jqChain,
-        append: () => jqChain,
-        remove: () => jqChain,
-        attr: () => jqChain,
-        children: () => jqChain,
-        text: () => jqChain,
-        data: () => null,
-        each: () => jqChain,
-        trigger: () => jqChain,
-        length: 0,
-    };
-    globalThis.$ = () => jqChain;
-    globalThis.jQuery = globalThis.$;
-    globalThis.document = { addEventListener: noop, querySelector: () => null, querySelectorAll: () => [] };
-    globalThis.window = globalThis;
-    ({ deleteWorldInfo, loadWorldInfo, saveWorldInfo, worldInfoCache } = await import('../../public/scripts/world-info.js'));
-});
-
-beforeEach(() => {
-    worldInfoCache.clear();
-});
-
-describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
     test('restores previous worldInfoCache entry when immediate save fails (HTTP 500)', async () => {
         const previous = { entries: { 0: { uid: 0, content: 'persisted' } } };
         worldInfoCache.set('BookA', previous);
@@ -327,7 +154,6 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
         globalThis.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
         await saveWorldInfo('BookInPlace', book, true);
 
-        // Mutate the exact object reference previously passed to saveWorldInfo in place.
         book.entries[0].content = 'poisoned-in-place';
         globalThis.fetch = jest.fn(async () => ({ ok: false, status: 500 }));
         await expect(saveWorldInfo('BookInPlace', book, true)).rejects.toThrow(/Failed to save world info: 500/);
@@ -355,7 +181,6 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
         const queuedNewBook = { entries: { 1: { uid: 1, content: 'must-persist' } } };
         const newBookSave = saveWorldInfo('QueuedNewBook', queuedNewBook, true);
 
-        // Read before QueuedNewBook's save executes on worldInfoSaveChain.
         const loaded = await loadWorldInfo('QueuedNewBook');
         expect(loaded).toEqual(queuedNewBook);
 
@@ -393,12 +218,10 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
 
         releaseFirst();
         await firstSave;
-        // While secondSave is still in flight, cache must keep v2 (not regress to v1).
         expect(worldInfoCache.get('BookOverlapKeepNewer')).toEqual(v2);
 
         releaseSecond();
         await expect(secondSave).rejects.toThrow(/Failed to save world info: 500/);
-        // Once secondSave fails, cache must roll back to the acknowledged v1.
         expect(worldInfoCache.get('BookOverlapKeepNewer')).toEqual(v1);
     });
 
@@ -424,13 +247,11 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
 
         const v1 = { entries: { 0: { uid: 0, content: 'recreated-content' } } };
         const initialSave = saveWorldInfo('BookDeletedMidSave', v1, true);
-        // Delete completes before the earlier in-flight save resolves.
         await deleteWorldInfo('BookDeletedMidSave');
 
         releaseInitialSave();
         await initialSave;
 
-        // Recreating/undoing with the exact same content must send /api/worldinfo/edit.
         await saveWorldInfo('BookDeletedMidSave', v1, true);
         expect(editCalls).toHaveLength(2);
         expect(editCalls[1]).toEqual({ name: 'BookDeletedMidSave', data: v1 });
@@ -460,7 +281,6 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
         const initialSave = saveWorldInfo('BookDeletedBeforeRecreate', v1, true);
         await deleteWorldInfo('BookDeletedBeforeRecreate');
 
-        // Start recreate BEFORE releasing the pre-delete in-flight save.
         const recreateSave = saveWorldInfo('BookDeletedBeforeRecreate', v1, true);
         releaseInitialSave();
         await Promise.all([initialSave, recreateSave]);
@@ -468,7 +288,6 @@ describe('world-info.js saveWorldInfo cache rollback on failed _save', () => {
         expect(editCalls).toHaveLength(2);
         expect(editCalls[1]).toEqual({ name: 'BookDeletedBeforeRecreate', data: v1 });
 
-        // Also verify a failed post-delete recreate evicts cache rather than restoring pre-delete v1.
         let releasePreDelete2;
         const preDelete2Gate = new Promise((res) => { releasePreDelete2 = res; });
         let editCount2 = 0;

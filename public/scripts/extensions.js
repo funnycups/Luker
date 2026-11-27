@@ -19,8 +19,13 @@ import {
     formatConflictHint,
     formatValidationArgsHint,
 } from './lib/state-errors-format.js';
+import {
+    UNSET_VALUE,
+    createExtensionFieldWriter,
+} from './lib/extension-field-writer.js';
 
 export {
+    UNSET_VALUE,
     getContext,
     SimpleMutex as ModuleWorkerWrapper,
 };
@@ -2113,215 +2118,27 @@ export async function runGenerationInterceptors(chat, contextSize, type) {
  * Using this sentinel will delete the key from the character card.
  * @type {string}
  */
-export const UNSET_VALUE = '__@@UNSET@@__';
-
-// Only the latest request for a character field owns local publication.
-// A WeakMap keeps replaced character objects out of future acknowledgements.
-const extensionFieldWrites = new WeakMap();
-const extensionFieldMutations = new WeakMap();
-const extensionFieldPersists = new WeakMap();
-const extensionFieldPersistTokens = new WeakMap();
-
-async function enqueueExtensionFieldPersist(persists, persistTokens, key, run) {
-    const previous = persists.get(key) || Promise.resolve();
-    const next = previous.catch(() => {}).then(() => {
-        const persistToken = {};
-        persistTokens.set(key, persistToken);
-        return run(persistToken);
-    });
-    persists.set(key, next);
-    try { return await next; } finally { if (persists.get(key) === next) persists.delete(key); }
-}
-
-function isCharacterPresent(context, character) {
-    return Boolean(character) && Array.isArray(context?.characters) && context.characters.includes(character);
-}
-
-function stripUnsetSentinels(node) {
-    if (!node || typeof node !== 'object') return node;
-    if (Array.isArray(node)) {
-        return node.map(item => stripUnsetSentinels(item));
-    }
-    const out = {};
-    for (const [k, v] of Object.entries(node)) {
-        if (v === UNSET_VALUE) continue;
-        out[k] = stripUnsetSentinels(v);
-    }
-    return out;
-}
+const extensionFieldWriter = createExtensionFieldWriter({
+    getContext,
+    getRequestHeaders,
+    cloneAsJsonWire,
+    setValueByPath,
+    deleteValueByPath,
+    syncActiveCharacterJsonData: (jsonData) => {
+        $('#character_json_data').val(jsonData);
+    },
+});
 
 /**
  * Writes `data.extensions[key]` on a character card and persists.
- *
- * Replace semantics: the full `value` argument becomes the new
- * `data.extensions[key]` on disk. Sibling subkeys present in the previous
- * on-disk value are NOT preserved — callers wanting a partial update must
- * read the previous value, spread it, and overlay changes before calling.
- *
- * Other extension keys under `data.extensions.*` (other plugins' data) are
- * never touched: the server scopes the replace to exactly the requested
- * key.
- *
- * Pass {@link UNSET_VALUE} as `value` to delete the key entirely.
- * Plain `null` writes a literal `null` (the key remains).
- *
  * @param {number|string} characterId Index in the character array
  * @param {string} key Field name
  * @param {any|function(any): any} value Field value, deletion sentinel, or serialized read/modify/write callback
- * @param {object} [options] Additional ownership of preparation and local acknowledgement
- * @param {() => boolean} [options.isCurrent] False refuses preparation or publication without undoing a server commit
- * @param {object} [options.ifMatch] Original server write versions for a conditional update
- * @param {(response: Response) => void} [options.onAcknowledged] Observe a successful, locally owned acknowledgement
- * @param {boolean} [options.requireSaved] Throw on missing character or failed merge if true
- * @returns {Promise<boolean>} HTTP success, or false for a missing character or non-OK response
- * @throws {TypeError|Error} A network failure rejects without publishing the value locally; throws Error when requireSaved is true and merge fails.
+ * @param {object} [options]
+ * @returns {Promise<boolean>}
  */
-export async function writeExtensionField(characterId, key, value, { isCurrent = () => true, ifMatch, onAcknowledged, requireSaved = false } = {}) {
-    const context = getContext();
-    const character = context.characters[characterId];
-    if (!character) {
-        if (requireSaved) throw new Error('Character not found');
-        console.warn('Character not found', characterId);
-        return false;
-    }
-    const writes = extensionFieldWrites.get(character) || new Map();
-    extensionFieldWrites.set(character, writes);
-    const persists = extensionFieldPersists.get(character) || new Map();
-    extensionFieldPersists.set(character, persists);
-    const persistTokens = extensionFieldPersistTokens.get(character) || new Map();
-    extensionFieldPersistTokens.set(character, persistTokens);
-    // Read/modify/write consumers resolve their mutation only after the prior
-    // mutation settled. Failed values never become the next operation's base.
-    if (typeof value === 'function') {
-        const queues = extensionFieldMutations.get(character) || new Map();
-        extensionFieldMutations.set(character, queues);
-        const previous = queues.get(key) || Promise.resolve();
-        const next = previous.catch(() => {}).then(async () => {
-            while (persists.has(key)) {
-                await persists.get(key).catch(() => {});
-            }
-            if (!isCharacterPresent(getContext(), character) || !isCurrent()) return false;
-            const current = character.data?.extensions?.[key];
-            const source = JSON.stringify(current);
-            const token = {};
-            writes.set(key, token);
-            const replacement = await value(cloneAsJsonWire(current));
-            // Preparation belongs to the original target and source. A direct
-            // request or local edit during an async callback is a conflict, not
-            // a new baseline. The callback is never retried.
-            if (!isCharacterPresent(getContext(), character) || writes.get(key) !== token || JSON.stringify(character.data?.extensions?.[key]) !== source || !isCurrent()) return false;
-            return enqueueExtensionFieldPersist(persists, persistTokens, key, persistToken =>
-                persistExtensionField(characterId, character, key, replacement, writes, token, source, {
-                    isCurrent,
-                    ifMatch,
-                    onAcknowledged,
-                    requireSaved,
-                    isWriteOwned: () => persistTokens.get(key) === persistToken,
-                }),
-            );
-        });
-        queues.set(key, next);
-        try { return await next; } finally { if (queues.get(key) === next) queues.delete(key); }
-    }
-
-    if (!isCurrent()) return false;
-    const token = {};
-    writes.set(key, token);
-    return enqueueExtensionFieldPersist(persists, persistTokens, key, persistToken => {
-        if (!isCharacterPresent(getContext(), character) || !isCurrent()) return false;
-        return persistExtensionField(characterId, character, key, value, writes, token, JSON.stringify(character.data?.extensions?.[key]), {
-            isCurrent,
-            ifMatch,
-            onAcknowledged,
-            requireSaved,
-            isWriteOwned: () => persistTokens.get(key) === persistToken,
-        });
-    });
-}
-
-async function persistExtensionField(characterId, character, key, value, writes, token, previous, { isCurrent, ifMatch, onAcknowledged, requireSaved = false, isWriteOwned = () => writes.get(key) === token }) {
-    const summary = Array.isArray(value)
-        ? {
-            kind: 'array',
-            length: value.length,
-            sampleIds: value.slice(0, 5).map(item => String(item?.id || '')),
-            serializedLength: JSON.stringify(value).length,
-        }
-        : {
-            kind: typeof value,
-            serializedLength: JSON.stringify(value ?? null).length,
-        };
-
-    const extensionPath = `data.extensions.${key}`;
-    const isUnset = value === UNSET_VALUE;
-    console.info('[Extensions] writeExtensionField requested', {
-        characterId,
-        contextCharacterId: getContext().characterId,
-        avatar: character.avatar || null,
-        key,
-        path: extensionPath,
-        hasJsonData: Boolean(character.json_data),
-        valueSummary: summary,
-        isUnset,
-    });
-
-    // Save data to the server
-    const saveDataRequest = {
-        avatar: character.avatar,
-        data: {
-            extensions: {
-                [key]: value,
-            },
-        },
-        replacePaths: [`data.extensions.${key}`],
-    };
-    if (ifMatch !== undefined) saveDataRequest.ifMatch = ifMatch;
-    // Serialize once so later mutations of the caller's value cannot change
-    // either the request or the value published after its acknowledgement.
-    const body = JSON.stringify(saveDataRequest);
-    const parsedWrittenValue = JSON.parse(body).data.extensions[key];
-    const writtenValue = !isUnset && parsedWrittenValue && typeof parsedWrittenValue === 'object'
-        ? stripUnsetSentinels(parsedWrittenValue)
-        : parsedWrittenValue;
-    const mergeResponse = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body,
-    });
-
-    console.info('[Extensions] writeExtensionField merge response', {
-        characterId,
-        avatar: character.avatar || null,
-        key,
-        status: mergeResponse.status,
-        ok: mergeResponse.ok,
-        statusText: mergeResponse.statusText,
-    });
-
-    if (!mergeResponse.ok) {
-        if (requireSaved) {
-            throw new Error(`Failed to save extension field (${mergeResponse.status}): ${mergeResponse.statusText}`);
-        }
-        console.error('Failed to save extension field', mergeResponse.statusText);
-        return false;
-    }
-    if (!isCurrent()) return false;
-    // A refresh or another edit while the request was pending owns the live
-    // object now. Do not overwrite it with this older acknowledgement.
-    const live = getContext();
-    if (isWriteOwned() && isCharacterPresent(live, character) && JSON.stringify(character.data?.extensions?.[key]) === previous) {
-        if (isUnset) deleteValueByPath(character, extensionPath);
-        else setValueByPath(character, extensionPath, writtenValue);
-        if (character.json_data) {
-            const jsonData = JSON.parse(character.json_data);
-            if (isUnset) deleteValueByPath(jsonData, extensionPath);
-            else setValueByPath(jsonData, extensionPath, writtenValue);
-            character.json_data = JSON.stringify(jsonData);
-            if (character.avatar && live.characters[live.characterId] === character && live.menuType !== 'create') $('#character_json_data').val(character.json_data);
-        }
-        onAcknowledged?.(mergeResponse);
-    }
-    return mergeResponse.ok;
+export async function writeExtensionField(characterId, key, value, options) {
+    return extensionFieldWriter.writeExtensionField(characterId, key, value, options);
 }
 
 /**
@@ -3013,148 +2830,8 @@ export async function deleteGlobalState(namespace) {
  * @returns {Promise<BulkExtensionFieldResult>} Summary of the bulk operation
  * @throws {Error} HTTP failures reject. Network failures also propagate.
  */
-export async function writeExtensionFieldBulk(avatars, key, value, { filterPath } = {}) {
-    const extensionPath = `data.extensions.${key}`;
-    const isUnset = value === UNSET_VALUE;
-    const avatarList = Array.isArray(avatars) && avatars.length > 0 ? avatars : [];
-    const avatarFilter = avatarList.length > 0 ? new Set(avatarList) : null;
-
-    // Build and serialize once so later mutations of caller-owned objects
-    // cannot alter the request or the values published after acknowledgement.
-    const requestBody = {
-        avatars: avatarList,
-        data: {
-            data: {
-                extensions: {
-                    [key]: value,
-                },
-            },
-        },
-        replacePaths: [`data.extensions.${key}`],
-    };
-
-    // Default filter: when unsetting, only touch characters that have the field
-    const resolvedFilterPath = filterPath ?? (isUnset ? extensionPath : undefined);
-    if (resolvedFilterPath) {
-        requestBody.filter = { path: resolvedFilterPath };
-    }
-
-    const body = JSON.stringify(requestBody);
-    const parsedWrittenValue = JSON.parse(body).data.data.extensions[key];
-    const writtenValue = !isUnset && parsedWrittenValue && typeof parsedWrittenValue === 'object'
-        ? stripUnsetSentinels(parsedWrittenValue)
-        : parsedWrittenValue;
-
-    // Drain any in-flight per-character persists for targeted characters until
-    // truly settled, then claim write & persist ownership across the bulk
-    // request so queued read/modify/write mutations wait and newer writes are
-    // never overwritten.
-    while (true) {
-        const currentContext = getContext();
-        const currentChars = (Array.isArray(currentContext.characters) ? currentContext.characters : [])
-            .filter(character => character && (!avatarFilter || avatarFilter.has(character.avatar)));
-        const priorPersists = [];
-        for (const character of currentChars) {
-            const persists = extensionFieldPersists.get(character);
-            if (persists?.has(key)) priorPersists.push(persists.get(key));
-        }
-        if (priorPersists.length === 0) break;
-        await Promise.allSettled(priorPersists);
-    }
-
-    const bulkToken = {};
-    let resolveBulkDone;
-    const bulkDone = new Promise(resolve => { resolveBulkDone = resolve; });
-    const trackedChars = [];
-    const trackedSet = new Set();
-    const preFetchContext = getContext();
-    for (const character of (Array.isArray(preFetchContext.characters) ? preFetchContext.characters : [])) {
-        if (!character || (avatarFilter && !avatarFilter.has(character.avatar))) continue;
-        let writes = extensionFieldWrites.get(character);
-        if (!writes) extensionFieldWrites.set(character, writes = new Map());
-        let persists = extensionFieldPersists.get(character);
-        if (!persists) extensionFieldPersists.set(character, persists = new Map());
-        let persistTokens = extensionFieldPersistTokens.get(character);
-        if (!persistTokens) extensionFieldPersistTokens.set(character, persistTokens = new Map());
-        writes.set(key, bulkToken);
-        persistTokens.set(key, bulkToken);
-        persists.set(key, bulkDone);
-        trackedChars.push({ character, persists });
-        trackedSet.add(character);
-    }
-
-    try {
-        const mergeResponse = await fetch('/api/characters/merge-attributes', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body,
-        });
-
-        if (!mergeResponse.ok) {
-            console.error('Bulk extension field update failed', mergeResponse.statusText);
-            throw new Error(`Bulk extension field update failed: ${mergeResponse.status} ${mergeResponse.statusText}`);
-        }
-
-        /** @type {BulkExtensionFieldResult} */
-        const result = await mergeResponse.json();
-
-        // Re-read live context after await; only publish to characters whose
-        // persist turn is still owned by this bulk write (or freshly loaded
-        // with no concurrent write). A single write queued behind bulkDone has
-        // already updated `writes` but will not take `persistTokens` until
-        // bulkDone resolves in finally, so this bulk write still publishes its
-        // acknowledged baseline first.
-        const live = getContext();
-        const updatedSet = new Set(result.updated);
-        const locallyUpdated = new Set();
-        for (const character of (Array.isArray(live.characters) ? live.characters : [])) {
-            if (!character || !updatedSet.has(character.avatar)) continue;
-            const writes = extensionFieldWrites.get(character);
-            const persistTokens = extensionFieldPersistTokens.get(character);
-            if (trackedSet.has(character)) {
-                if (persistTokens?.get(key) !== bulkToken) continue;
-            } else if (writes?.has(key) || persistTokens?.has(key)) {
-                continue;
-            }
-
-            const perCharacterValue = !isUnset && writtenValue && typeof writtenValue === 'object'
-                ? structuredClone(writtenValue)
-                : writtenValue;
-
-            if (isUnset) {
-                deleteValueByPath(character, extensionPath);
-            } else {
-                setValueByPath(character, extensionPath, perCharacterValue);
-            }
-
-            // Keep json_data in sync
-            if (character.json_data) {
-                const jsonData = JSON.parse(character.json_data);
-                if (isUnset) {
-                    deleteValueByPath(jsonData, extensionPath);
-                } else {
-                    setValueByPath(jsonData, extensionPath, structuredClone(perCharacterValue));
-                }
-                character.json_data = JSON.stringify(jsonData);
-            }
-            locallyUpdated.add(character);
-        }
-
-        // If the currently active character was updated (and not in create mode), sync the hidden input
-        if (live.characterId !== undefined && live.menuType !== 'create') {
-            const activeChar = live.characters[live.characterId];
-            if (activeChar && locallyUpdated.has(activeChar) && activeChar.json_data) {
-                $('#character_json_data').val(activeChar.json_data);
-            }
-        }
-
-        return result;
-    } finally {
-        for (const { persists } of trackedChars) {
-            if (persists.get(key) === bulkDone) persists.delete(key);
-        }
-        resolveBulkDone();
-    }
+export async function writeExtensionFieldBulk(avatars, key, value, options) {
+    return extensionFieldWriter.writeExtensionFieldBulk(avatars, key, value, options);
 }
 
 /**

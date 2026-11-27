@@ -17,6 +17,10 @@ import { groups, selected_group } from './group-chats.js';
 import { getCurrentLocale, t } from './i18n.js';
 import { importWorldInfo } from './world-info.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
+import { escapeHtml } from './lib/html-escape.js';
+import { getStringHash } from './lib/string-hash.js';
+
+export { escapeHtml, getStringHash };
 
 export const shiftUpByOne = (e, i, a) => a[i] = e + 1;
 export const shiftDownByOne = (e, i, a) => a[i] = e - 1;
@@ -192,20 +196,6 @@ export function ensurePlainObject(obj) {
     }
 
     return obj;
-}
-
-/**
- * Escapes text for safe HTML rendering.
- * @param {string?} str
- * @returns {string}
- */
-export function escapeHtml(str) {
-    return String(str ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -619,35 +609,6 @@ export async function parseJsonFile(file) {
         fileReader.onload = event => resolve(JSON.parse(String(event.target.result)));
         fileReader.onerror = error => reject(error);
     });
-}
-
-/**
- * Calculates a hash code for a string.
- * cyrb53 (c) 2018 bryc ({@link https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js|github.com/bryc})
- * License: Public domain (or MIT if needed). Attribution appreciated.
- * A fast and simple 53-bit string hash function with decent collision resistance.
- * Largely inspired by MurmurHash2/3, but with a focus on speed/simplicity.
- * @param {string} str The string to hash.
- * @param {number} [seed=0] The seed to use for the hash.
- * @returns {number} The hash code.
- */
-export function getStringHash(str, seed = 0) {
-    if (typeof str !== 'string') {
-        return 0;
-    }
-
-    let h1 = 0xdeadbeef ^ seed,
-        h2 = 0x41c6ce57 ^ seed;
-    for (let i = 0, ch; i < str.length; i++) {
-        ch = str.charCodeAt(i);
-        h1 = Math.imul(h1 ^ ch, 2654435761);
-        h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-
-    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 
 /**
