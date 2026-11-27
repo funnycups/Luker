@@ -437,14 +437,6 @@ export class ResourceScope {
         return id;
     }
 
-    async captureDiagnostic() {
-        return null;
-    }
-
-    async diagnostic() {
-        return null;
-    }
-
     async continuation({ label, start }) {
         if (typeof label !== 'string' || !label || typeof start !== 'function') {
             throw new TypeError('Scope continuation requires a label and start callback');

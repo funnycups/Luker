@@ -1,9 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { CONTRACT_HARNESSES } from './harness/contract-harness.js';
-import { currentScopeForResources } from '../harness/storage-scope.js';
 import { seedExactWorld, seedReferenceCard, exactWorldState, referenceCardState, holdSettingsRead } from './harness/world-identity.js';
 import { initStorage, getWorldInfoRepo, getSettingsRepo, getStorageEngine } from '../../src/storage/index.js';
 import { router } from '../../src/endpoints/worldinfo.js';
@@ -19,13 +17,6 @@ const FIRST_DOC = { entries: { '1': { content: 'First archive', key: ['north'] }
 const SECOND_DOC = { entries: { '2': { content: 'Adopted separate archive', key: ['south'] } }, extensions: { retained: ['second'] } };
 const KEEP_DOC = { entries: { '3': { content: 'Independent archive' } }, retained: ['book sibling'] };
 const SOURCE = { world_info_settings: { world_info: { charLore: [], retained: { setting: ['world sibling'] } } }, retained: { settings: ['untouched'] } };
-async function observe(name, value) {
-    await currentScopeForResources().captureDiagnostic({
-        name: `${name}-${randomUUID()}.json`,
-        contentType: 'application/json',
-        bytes: Buffer.from(JSON.stringify(value, null, 2) + '\n'),
-    });
-}
 
 async function seed(h, settings, adoption) {
     await seedExactWorld(h, FIRST, FIRST_DOC);
@@ -79,6 +70,7 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
             let waits;
             do { waits = await lock.waits(); } while (waits.length === 0);
             const ordinary = await deletion({ name: FIRST });
+            expect(ordinary.status).toBe(200);
             const afterOrdinary = await exactWorldState(h);
             const intended = { ...before.settings, world_info_settings: { world_info: { ...before.settings.world_info_settings.world_info, charLore: [{ name: 'keeper', extraBooks: [SECOND] }, { name: 'other', extraBooks: ['Unchanged'] }] } } };
             // Admission is synchronous at this actual repository call and overlaps
@@ -91,7 +83,6 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
             const writer = await writing;
             const patchWriter = await patching;
             const actual = await snapshot(h, settings);
-            await observe(`http-disappearance-${h.kind}-${adoption}`, { request: { name: FIRST, onlyIfUnbound: true }, adoption, before, blocking: { pid: lock.pid, waits }, ordinary, afterOrdinary, intended, composed, result, writer, patchWriter, actual });
             expect(ordinary).toEqual({ status: 200, body: 'OK' });
             expect(afterOrdinary).toEqual({ [SECOND]: before.books[SECOND], Unchanged: before.books.Unchanged });
             expect(result).toEqual({ status: 404, body: { code: 'world_missing', resourceState: 'missing' } });
@@ -102,7 +93,6 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
             await worlds.patch(h.handle, SECOND, [{ op: 'replace', path: '/entries/2/content', value: 'Later ordinary edit' }]);
             await settings.patch(h.handle, [{ op: 'replace', path: '/retained/settings/0', value: 'later' }]);
             const later = await snapshot(h, settings);
-            await observe(`http-recovery-${h.kind}-${adoption}`, { actual, later });
             expect(later.books[SECOND].doc).toEqual({ ...SECOND_DOC, entries: { '2': { ...SECOND_DOC.entries['2'], content: 'Later ordinary edit' } } });
             expect(later.books[SECOND].revision).not.toBe(before.books[SECOND].revision);
             expect(later.books.Unchanged).toEqual(before.books.Unchanged);
@@ -125,10 +115,10 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
             let waits;
             do { waits = await lock.waits(); } while (waits.length === 0);
             const ordinary = await deletion({ name: FIRST });
+            expect(ordinary.status).toBe(200);
             await lock.release();
             const result = await conditional;
             const actual = await snapshot(h, settings);
-            await observe(`http-version-disappearance-${h.kind}`, { before, waits, ordinary, result, actual });
             expect(result).toEqual({ status: 409, body: { code: 'world_changed', resourceState: 'missing' } });
             expect(actual).toEqual({ books: { [SECOND]: before.books[SECOND], Unchanged: before.books.Unchanged }, settings: before.settings, cards: before.cards });
         } finally { await lock.close(); if (conditional) await conditional; }
@@ -147,7 +137,6 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
             await lock.release();
             const result = await conditional;
             const actual = await snapshot(h, settings);
-            await observe(`http-initial-absence-${h.kind}-${created}`, { before, createdState, created, waits, result, actual });
             expect(result).toEqual({ status: 404, body: { code: 'world_missing', resourceState: 'missing' } });
             expect(actual).toEqual({ books: createdState, settings: before.settings, cards: before.cards });
         } finally { await lock.close(); if (conditional) await conditional; }
@@ -161,7 +150,6 @@ describeSql('conditional HTTP identity on $name', ({ make }) => {
         const afterRefusal = await snapshot(h, settings);
         const ordinary = await deletion({ name: FIRST });
         const afterOrdinary = await snapshot(h, settings);
-        await observe(`http-stable-${h.kind}-${adoption}`, { before, success, retained, refused, afterRefusal, ordinary, afterOrdinary });
         expect(success).toEqual({ status: 200, body: 'OK' });
         expect(retained).toEqual({ books: { [SECOND]: before.books[SECOND], Unchanged: before.books.Unchanged }, settings: before.settings, cards: before.cards });
         expect(refused).toEqual({ status: 409, body: { code: 'world_in_use', details: adoption === 'auxiliary' ? { name: SECOND, reference: 'auxiliary' } : { name: SECOND, avatar: 'keeper.png' }, resourceState: 'present' } });
@@ -189,7 +177,6 @@ describe.each(CONTRACT_HARNESSES)('captured conditional identity controls on $na
             await assertWorldNotBound(h.dirs.characters, name, undefined, await settings.get(h.handle), resolveName);
         } });
         const actual = await snapshot(h, settings);
-        await observe(`callback-disappearance-${h.kind}-${request}`, { name, target, survivor, before, source, result, actual });
         expect(result).toBe(false);
         expect(actual).toEqual({ books: { [survivor]: before.books[survivor], Unchanged: before.books.Unchanged }, settings: source, cards: before.cards });
     });
@@ -201,7 +188,6 @@ describe.each(CONTRACT_HARNESSES)('captured conditional identity controls on $na
             expect(await resolveName('Late Book')).toBeNull();
         } });
         const actual = await snapshot(h, settings);
-        await observe(`initial-absence-${h.kind}-${created}`, { before, created, result, actual });
         expect(result).toBe(false);
         expect(actual.books[created].doc).toEqual(FIRST_DOC);
         expect(typeof actual.books[created].revision).toBe('string');
@@ -223,7 +209,6 @@ describe.each(CONTRACT_HARNESSES)('captured conditional identity controls on $na
         } });
         const writer = await writing, siblingWriter = await siblingWriting;
         const actual = await snapshot(h, settings);
-        await observe(`stable-alias-receipt-${h.kind}`, { before, intended, siblingIntended, version, result, writer, siblingWriter, actual });
         expect(result).toBe(true);
         expect(writer).toEqual({ saved: false, code: 'world_deleted', details: { name: 'Alias Book' } });
         expect(siblingWriter).toEqual({ saved: true });
@@ -234,7 +219,6 @@ describe.each(CONTRACT_HARNESSES)('captured conditional identity controls on $na
         const before = await seed(h, settings, 'primary');
         const result = await worlds.delete(h.handle, 'Late Book', { expectedVersion: 'original-version', beforeDelete: () => worlds.save(h.handle, 'Late Book', FIRST_DOC) }).then(deleted => ({ deleted }), error => ({ code: error.code }));
         const actual = await snapshot(h, settings);
-        await observe(`missing-version-${h.kind}`, { before, result, actual });
         expect(result).toEqual({ code: 'world_changed' });
         expect(actual.books['Late Book'].doc).toEqual(FIRST_DOC);
         expect(typeof actual.books['Late Book'].revision).toBe('string');
@@ -253,7 +237,6 @@ describe.each(CONTRACT_HARNESSES.filter(h => h.name === 'FsEngine'))('captured f
             const before = await snapshot(h, settings);
             const result = await worlds.delete(h.handle, FIRST, { expectedVersion: before.books[FIRST].revision });
             const actual = await snapshot(h, settings);
-            await observe('legacy-extension-fs', { before, result, actual });
             expect(result).toBe(true);
             expect(actual).toEqual({ books: { [SECOND]: before.books[SECOND], Unchanged: before.books.Unchanged }, settings: before.settings, cards: before.cards });
         } finally { await h.cleanup(); }

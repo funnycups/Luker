@@ -111,10 +111,6 @@ async function forceTerminateElectronApp(electronApp) {
     if (closeError) throw closeError;
 }
 
-function sanitizeDiagnosticSegment(value) {
-    return String(value ?? 'default').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'default';
-}
-
 /**
  * @param {{
  *   scope: object,
@@ -159,7 +155,7 @@ export async function launchLukerDesktop({
     artifactManifest = null,
     signal,
 } = {}) {
-    assertManagedScope(scope, ['directory', 'verifyDirectory', 'borrowDirectory', 'onFinalize', 'release', 'captureDiagnostic']);
+    assertManagedScope(scope, ['directory', 'verifyDirectory', 'borrowDirectory', 'onFinalize', 'release']);
     if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
         throw new TypeError('Desktop port must be an integer TCP port from 1 to 65535');
     }
@@ -268,16 +264,6 @@ export async function launchLukerDesktop({
             finalizing = true;
             await closeApp();
         },
-    });
-
-    await scope.captureDiagnostic({
-        name: `desktop-runtime-${sanitizeDiagnosticSegment(scenarioId)}.json`,
-        contentType: 'application/json',
-        bytes: Buffer.from(JSON.stringify({
-            scenarioId,
-            ...artifact,
-            userDataOwnership: autoDirectory ? 'auto-owned' : directory.ownership,
-        }, null, 2)),
     });
 
     if (!userData && seed !== false) {

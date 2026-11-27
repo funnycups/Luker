@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CONTRACT_HARNESSES } from './harness/contract-harness.js';
-import { currentScopeForResources } from '../harness/storage-scope.js';
 import { WorldInfoRepo } from '../../src/storage/repositories/world-info-repo.js';
 import { SettingsRepo } from '../../src/storage/repositories/settings-repo.js';
 import { MysqlEngine } from '../../src/storage/engines/mysql-engine.js';
@@ -14,13 +13,6 @@ import { TransactionOutcomeUnknownError } from '../../src/storage/transaction-ou
 const sqlOnly = CONTRACT_HARNESSES.filter(harness => ['MysqlEngine', 'PgEngine'].includes(harness.name));
 const describeSql = sqlOnly.length ? describe.each(sqlOnly) : () => {};
 
-async function observe(name, data) {
-    await currentScopeForResources().captureDiagnostic({
-        name: `${name}-${randomUUID()}.json`,
-        contentType: 'application/json',
-        bytes: Buffer.from(JSON.stringify(data, null, 2) + '\n'),
-    });
-}
 
 async function seedDistinct(h, name, doc) {
     const revision = randomUUID();
@@ -63,7 +55,6 @@ describe.each(CONTRACT_HARNESSES)('exact world identity on $name', ({ make }) =>
         expect(await deletion).toBe(true);
         const outcome = await writing;
         const actual = { deleted: await worlds.get(h.handle, 'Archive Ledger'), survivor: await worlds.get(h.handle, 'Archive  Ledger'), settings: await settings.get(h.handle) };
-        await observe('exact-identity-' + h.kind, { source, intended, outcome, actual, expectedDeleted: deleted, expectedSurvivor: survivor });
         expect(outcome).toEqual({ saved: true });
         expect(actual).toEqual({ deleted: survivor, survivor, settings: intended });
         expect(await worlds.listNames(h.handle)).toEqual(['Archive  Ledger']);
@@ -79,7 +70,6 @@ describe.each(CONTRACT_HARNESSES)('exact world identity on $name', ({ make }) =>
         const version = await worlds.getVersion(h.handle, 'Archive Ledger');
         const outcome = await worlds.delete(h.handle, 'Archive Ledger', { expectedVersion: version, beforeDelete: async resolveName => assertWorldNotBound(h.dirs.characters, 'Archive Ledger', undefined, await settings.get(h.handle), resolveName) }).then(deleted => ({ deleted }), error => ({ error: error.code }));
         const actual = { settings: await settings.get(h.handle), names: await worlds.listNames(h.handle), survivor: await worlds.get(h.handle, 'Archive  Ledger') };
-        await observe('exact-adoption-' + h.kind, { first, second, expected, outcome, actual });
         expect(outcome).toEqual({ deleted: true }); expect(actual).toEqual({ settings: expected, names: ['Archive  Ledger'], survivor: second });
     });
 
@@ -95,7 +85,6 @@ describe.each(CONTRACT_HARNESSES)('exact world identity on $name', ({ make }) =>
         const writing = settings.save(h.handle, { ...source, world_info_settings: { world_info: { charLore: [{ name: 'keeper', extraBooks: [alias] }] } } }).then(() => ({ saved: true }), error => ({ saved: false, code: error.code }));
         expect(await deletion).toBe(true); const outcome = await writing;
         const actual = { settings: await settings.get(h.handle), resolvedAfter: await worlds.resolveName(h.handle, alias), names: await worlds.listNames(h.handle), book: await worlds.get(h.handle, survivor) };
-        await observe('alias-lifetime-' + h.kind, { alias, originalTarget, survivor, first, second, source, outcome, actual });
         expect(outcome).toEqual({ saved: false, code: 'world_deleted' }); expect(actual.settings).toEqual(source); expect(actual.resolvedAfter).toBe(survivor); expect(actual.names).toEqual([survivor]); expect(actual.book).toEqual(survivor === 'Archive Ledger' ? first : second);
     });
 });
@@ -104,7 +93,6 @@ describeSql('unknown commit ownership on $name', ({ make }) => {
     let h, fault, engine;
     beforeEach(async () => { h = await make(); await h.engine.ping(h.handle); });
     afterEach(async () => {
-        if (fault) await observe('fault-shutdown-' + h.kind, { database: h.dbName || h.schemaName, observations: fault.observations, errors: fault.errors });
         try { if (fault) await fault.close(); } finally { try { if (engine) await engine.close(); } finally { await h.cleanup(); } }
     });
 
@@ -132,7 +120,6 @@ describeSql('unknown commit ownership on $name', ({ make }) => {
         const writing = settings.save(h.handle, intended).then(() => ({ saved: true }), error => ({ saved: false, code: error.code }));
         await fault.drop();
         const outcome = { deletion: await deletion, writing: await writing, book: await independent.get(h.handle, 'Owned'), settings: await new SettingsRepo({ engine: h.engine }).get(h.handle) };
-        await observe('commit-outcome-' + h.kind, { acknowledgement, observationStart, observations: fault.observations, errors: fault.errors, source, intended, outcome });
         expect(outcome.writing).toEqual({ saved: false, code: 'world_deletion_unknown' });
         expect(outcome.settings).toEqual(source); expect(outcome.book).toBeNull();
         expect(outcome.deletion.code).toBe('transaction_outcome_unknown');
@@ -182,7 +169,6 @@ describeSql('confirmed rollback on $name', ({ make }) => {
         await Promise.all([write('north', ['North', 'South'], northLocked), write('south', ['South', 'North'], southLocked)]);
         const expected = { ...original, entries: { '7': { content: committed.at(-1) } } };
         const actual = { north: await worlds.get(h.handle, 'North'), south: await worlds.get(h.handle, 'South') };
-        await observe('known-rollback-' + h.kind, { original, attempts, errors, committed, expected, actual });
         expect(errors).toMatchObject([{ code: h.kind === 'mysql' ? 'ER_LOCK_DEADLOCK' : '40P01' }]);
         expect(Object.values(attempts).sort()).toEqual([1, 2]);
         expect(actual).toEqual({ north: expected, south: expected });

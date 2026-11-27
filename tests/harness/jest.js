@@ -33,9 +33,7 @@ function createLazyCaseScope(label) {
         verifyDirectory: forward('verifyDirectory'),
         borrowDirectory: forward('borrowDirectory'),
         process: forward('process'),
-        captureDiagnostic: forward('captureDiagnostic'),
         onFinalize: forward('onFinalize'),
-        diagnostic: forward('diagnostic'),
         continuation: forward('continuation'),
         release: forward('release'),
         async dispose() {

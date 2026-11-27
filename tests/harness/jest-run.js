@@ -43,9 +43,17 @@ function finishRun() {
                 catch (error) { errors.push(error); }
             }
             const observed = globalThis.__lukerJestFailures;
-            if (Array.isArray(observed)) for (const error of observed) run.recordError(error);
+            const observedErrors = new Set();
+            if (Array.isArray(observed)) {
+                for (const error of observed) observedErrors.add(run.recordError(error));
+            }
             try {
-                await run.finish({ status: failed || (Array.isArray(observed) && observed.length) ? 'failed' : 'passed' });
+                const result = await run.finish({ status: failed || (Array.isArray(observed) && observed.length) ? 'failed' : 'passed' });
+                for (const error of result?.errors || []) {
+                    if (!observedErrors.has(error) && !errors.includes(error)) {
+                        errors.push(error);
+                    }
+                }
             } catch (error) {
                 errors.push(error);
             }

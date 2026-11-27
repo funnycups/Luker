@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test as nativeTest, expect } from '@playwright/test';
 import { createRun } from './resources/run.js';
+import { failureGroup } from './resources/errors.js';
 import { startServer } from './server.js';
 import { setCurrentResourceScope, clearCurrentResourceScope } from './storage-scope.js';
 
@@ -71,8 +72,6 @@ function createWorkerResources(run, workerScope, projectName) {
         releaseShared: resource => workerScope.releaseShared(resource),
         release: resource => workerScope.release(resource),
         onFinalize: descriptor => workerScope.onFinalize(descriptor),
-        captureDiagnostic: descriptor => workerScope.captureDiagnostic(descriptor),
-        diagnostic: descriptor => workerScope.diagnostic(descriptor),
         continuation: descriptor => workerScope.continuation(descriptor),
         async openCase(testInfo) {
             await disposeScenarioIfDifferent(testInfo.file);
@@ -80,7 +79,10 @@ function createWorkerResources(run, workerScope, projectName) {
         },
         async closeWorker() {
             activeScenario = null;
-            await run.finish({ status: 'passed' });
+            const result = await run.finish({ status: 'passed' });
+            if (result?.errors?.length) {
+                throw failureGroup(result.errors, 'Managed Playwright worker cleanup failed');
+            }
         },
     });
 }

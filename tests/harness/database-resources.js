@@ -72,10 +72,6 @@ const postgresProvider = Object.freeze({
     dispose: disposePhysical,
 });
 
-export function registerDatabaseProviders() {
-    // Providers are passed directly to scope.acquire; kept as a no-op export for compatibility.
-}
-
 export async function acquireDatabase(scope, rootUrl, { fresh = false, reuse = false, label }, backend) {
     if (scope && typeof scope.resolveScope === 'function') scope = await scope.resolveScope();
     if (!scope || typeof scope.acquire !== 'function') {

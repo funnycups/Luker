@@ -1,9 +1,7 @@
 import { test as nativeTest, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import express from 'express';
@@ -30,7 +28,10 @@ const test = (name, callback) => nativeTest(name, async context => {
 });
 after(async () => {
     await scope.dispose();
-    await run.finish({ status: failed ? 'failed' : 'passed' });
+    const finishResult = await run.finish({ status: failed ? 'failed' : 'passed' });
+    if (!failed && finishResult?.errors?.length) {
+        throw new AggregateError(finishResult.errors, 'Managed integration run cleanup failed');
+    }
 });
 const { initStorage, getWorldInfoRepo, getSettingsRepo, getStorageEngine } = await import('../../src/storage/index.js');
 const { assertWorldNotBound } = await import('../../src/character-world-ownership.js');
@@ -44,13 +45,6 @@ const KEEP_DOC = { entries: { '3': { content: 'Independent archive' } }, extensi
 const SOURCE = { world_info_settings: { world_info: { charLore: [], retained: { setting: ['world sibling'] } } }, retained: { settings: ['untouched'] } };
 const canonicalBytes = JSON.stringify(CANONICAL_DOC, null, 4) + '\n';
 const legacyBytes = JSON.stringify(LEGACY_DOC) + '\n';
-async function observe(name, value) {
-    await scope.captureDiagnostic({
-        name: `${name}-${randomUUID()}.json`,
-        contentType: 'application/json',
-        bytes: Buffer.from(JSON.stringify(value, null, 2) + '\n'),
-    });
-}
 
 async function fixture(t, spellings = 'both') {
     const h = await makeTempFsEngine({ scope });
@@ -86,7 +80,6 @@ async function fixture(t, spellings = 'both') {
     const snapshot = async (directory = h.dirs.worlds) => ({ physical: worldFilenameState(directory), settings: await settings.get(h.handle), cards: referenceCardState(h) });
     const before = await snapshot();
     const selected = await selection();
-    await observe('fixture', { platform: process.platform, arch: process.arch, node: process.version, kernel: os.release(), root: h.dataRoot, sharedObjects: process.report.getReport().sharedObjects, spellings, before, selected });
     assert.deepEqual(before.physical.files[KEEP].doc, KEEP_DOC);
     if (spellings === 'both') {
         assert.deepEqual(before.physical.enumeration, [LEGACY, CANONICAL, KEEP]);
@@ -139,7 +132,6 @@ for (const versioned of [true, false]) {
         const result = await f.request(request);
         const actual = await f.snapshot();
         const selected = await f.selection();
-        await observe('coexisting', { versioned, request, before: f.before, originalSelection: f.selected, result, actual, selected });
         assert.deepEqual(result, { status: 200, body: 'OK' });
         assert.deepEqual(actual, { ...f.before, physical: { enumeration: [LEGACY, KEEP], files: { [LEGACY]: f.before.physical.files[LEGACY], [KEEP]: f.before.physical.files[KEEP] } } });
         assert.deepEqual(selected, { doc: LEGACY_DOC, version: f.before.physical.files[LEGACY].version, name: NAME, capturedName: NAME });
@@ -152,7 +144,6 @@ for (const versioned of [true, false]) {
         const result = await f.request(request);
         const native = await release();
         const actual = await f.snapshot();
-        await observe('canonical-disappearance', { request, before: f.before, native, result, actual });
         assert.equal(native.nativeFifo, true);
         assert.deepEqual(native.before, f.before.physical);
         assert.deepEqual(result, { status: versioned ? 409 : 404, body: { code: versioned ? 'world_changed' : 'world_missing', resourceState: 'missing' } });
@@ -167,7 +158,6 @@ for (const versioned of [true, false]) {
         const native = await release();
         const actual = await f.snapshot();
         const selected = await f.selection();
-        await observe('later-canonical', { request, before: f.before, originalSelection: f.selected, native, result, actual, selected });
         assert.equal(native.nativeFifo, true);
         assert.deepEqual(native.before, f.before.physical);
         assert.deepEqual(result, { status: 200, body: 'OK' });
@@ -184,7 +174,6 @@ for (const versioned of [true, false]) {
         const result = await f.request(request);
         const native = await release();
         const actual = await f.snapshot();
-        await observe('legacy-disappearance', { request, before: f.before, native, result, actual });
         assert.equal(native.nativeFifo, true);
         assert.deepEqual(result, { status: versioned ? 409 : 404, body: { code: versioned ? 'world_changed' : 'world_missing', resourceState: 'missing' } });
         assert.deepEqual(actual, { ...f.before, physical: native.after });
@@ -199,7 +188,6 @@ for (const versioned of [true, false]) {
         const result = await f.request(request);
         const native = await release();
         const actual = await f.snapshot();
-        await observe('captured-absence', { request, before: f.before, native, result, actual });
         assert.equal(native.nativeFifo, true);
         assert.deepEqual(f.selected, { doc: null, version: null, name: null, capturedName: null });
         assert.deepEqual(result, { status: versioned ? 409 : 404, body: { code: versioned ? 'world_changed' : 'world_missing', resourceState: 'missing' } });
@@ -214,7 +202,6 @@ for (const conditional of [false, true]) {
         const selected = await f.selection('Archive  Ledger');
         const result = await f.request({ name: 'Archive  Ledger', ...(conditional ? { onlyIfUnbound: true, expectedVersion: selected.version } : {}) });
         const actual = await f.snapshot();
-        await observe('uppercase-only-alias', { conditional, before: f.before, selected, result, actual });
         assert.deepEqual(selected, { doc: LEGACY_DOC, version: f.before.physical.files[LEGACY].version, name: NAME, capturedName: NAME });
         assert.deepEqual(result, { status: 200, body: 'OK' });
         assert.deepEqual(actual, { ...f.before, physical: { enumeration: [KEEP], files: { [KEEP]: f.before.physical.files[KEEP] } } });
@@ -225,7 +212,6 @@ for (const conditional of [false, true]) {
         const selected = await f.selection('Archive  Ledger');
         const result = await f.request({ name: 'Archive  Ledger', ...(conditional ? { onlyIfUnbound: true, expectedVersion: selected.version } : {}) });
         const actual = await f.snapshot();
-        await observe('coexisting-alias', { conditional, before: f.before, selected, result, actual });
         assert.deepEqual(selected, { doc: LEGACY_DOC, version: f.before.physical.files[LEGACY].version, name: NAME, capturedName: NAME });
         assert.deepEqual(result, { status: 200, body: 'OK' });
         assert.deepEqual(actual, { ...f.before, physical: { enumeration: [CANONICAL, KEEP], files: { [CANONICAL]: f.before.physical.files[CANONICAL], [KEEP]: f.before.physical.files[KEEP] } } });
@@ -236,7 +222,6 @@ test('ordinary exact HTTP deletion keeps canonical filename precedence', async t
     const f = await fixture(t);
     const result = await f.request({ name: NAME });
     const actual = await f.snapshot();
-    await observe('ordinary-canonical', { before: f.before, result, actual });
     assert.deepEqual(result, { status: 200, body: 'OK' });
     assert.deepEqual(actual, { ...f.before, physical: { enumeration: [LEGACY, KEEP], files: { [LEGACY]: f.before.physical.files[LEGACY], [KEEP]: f.before.physical.files[KEEP] } } });
 });
@@ -246,7 +231,6 @@ test('version-only HTTP deletion retains the inspected canonical locator', async
     const request = { name: NAME, expectedVersion: f.selected.version };
     const result = await f.request(request);
     const actual = await f.snapshot();
-    await observe('version-only-canonical', { request, before: f.before, result, actual });
     assert.deepEqual(result, { status: 200, body: 'OK' });
     assert.deepEqual(actual, { ...f.before, physical: { enumeration: [LEGACY, KEEP], files: { [LEGACY]: f.before.physical.files[LEGACY], [KEEP]: f.before.physical.files[KEEP] } } });
 });
@@ -255,7 +239,6 @@ test('stale version refuses without changing either complete physical resource',
     const f = await fixture(t);
     const result = await f.request({ name: NAME, onlyIfUnbound: true, expectedVersion: f.before.physical.files[LEGACY].version });
     const actual = await f.snapshot();
-    await observe('stale-version', { before: f.before, result, actual });
     assert.deepEqual(result, { status: 409, body: { code: 'world_changed', resourceState: 'present' } });
     assert.deepEqual(actual, f.before);
 });
@@ -267,7 +250,6 @@ test('refused legacy deletion reports present after a later canonical file chang
     const result = await f.request(request);
     const native = await release();
     const actual = await f.snapshot();
-    await observe('legacy-still-present', { request, before: f.before, native, result, actual });
     assert.equal(native.nativeFifo, true);
     assert.deepEqual(result, { status: 409, body: { code: 'world_changed', resourceState: 'present' } });
     assert.deepEqual(actual, { ...f.before, physical: native.after });
@@ -286,7 +268,6 @@ for (const reference of ['auxiliary', 'primary']) {
         const before = await f.snapshot();
         const result = await f.request({ name: NAME, onlyIfUnbound: true });
         const actual = await f.snapshot();
-        await observe('binding-refusal', { reference, before, result, actual });
         assert.deepEqual(result, { status: 409, body: { code: 'world_in_use', details: reference === 'auxiliary' ? { name: NAME, reference } : { name: NAME, avatar: 'keeper.png' }, resourceState: 'present' } });
         assert.deepEqual(actual, before);
     });
@@ -306,14 +287,12 @@ test('a legacy deletion receipt retains its original aliases after canonical cre
     } });
     const writer = await writing, siblingWriter = await siblingWriting;
     const actual = await f.snapshot();
-    await observe('legacy-receipt', { before: f.before, intended, sibling, created, result, writer, siblingWriter, actual });
     assert.equal(result, true);
     assert.deepEqual(writer, { saved: false, code: 'world_deleted', details: { name: NAME } });
     assert.deepEqual(siblingWriter, { saved: true });
     assert.deepEqual(actual, { ...f.before, settings: sibling, physical: { enumeration: [CANONICAL, KEEP], files: { [CANONICAL]: created.files[CANONICAL], [KEEP]: f.before.physical.files[KEEP] } } });
     await f.settings.save(f.h.handle, intended);
     const recovered = await f.snapshot();
-    await observe('legacy-receipt-recovery', { actual, intended, recovered });
     assert.deepEqual(recovered, { ...actual, settings: intended });
 });
 
@@ -332,7 +311,6 @@ test('coexisting receipts distinguish the deleted locator from a retained same-s
     } }).then(deleted => ({ deleted }), error => ({ code: error.code, name: error.name, details: error.details }));
     const targetWriter = await targetWriting, retainedWriter = await retainedWriting;
     const actual = await f.snapshot();
-    await observe('coexisting-receipts', { before: f.before, alias, selected, targetSource, retainedSource, result, targetWriter, retainedWriter, actual });
     assert.deepEqual(selected, { doc: LEGACY_DOC, version: f.before.physical.files[LEGACY].version, name: NAME, capturedName: NAME });
     assert.deepEqual(result, { deleted: true });
     assert.deepEqual(targetWriter, { saved: false, code: 'world_deleted', details: { name: NAME } });
@@ -348,7 +326,6 @@ test('inspection failure reports unknown without replacing the binding conflict 
     const result = await f.request({ name: NAME, onlyIfUnbound: true });
     const native = await release();
     const actual = await f.snapshot(native.retainedDirectory);
-    await observe('unknown-state', { before: f.before, source, native, result, actual, obstruction: fs.readFileSync(f.h.dirs.worlds, 'utf8') });
     assert.equal(native.nativeFifo, true);
     assert.deepEqual(result, { status: 409, body: { code: 'world_in_use', details: { name: NAME, reference: 'auxiliary' }, resourceState: 'unknown' } });
     assert.deepEqual(actual, { ...f.before, settings: source });
@@ -386,17 +363,6 @@ for (const adoption of ['auxiliary', 'primary']) {
                 };
                 const result = await f.request(request);
                 const actual = await f.snapshot();
-                await observe('cross-locator-adoption', {
-                    adoption,
-                    versioned,
-                    direction: direction.label,
-                    before,
-                    targetSelection,
-                    adoptedSelection,
-                    request,
-                    result,
-                    actual,
-                });
 
                 assert.deepEqual(result, { status: 200, body: 'OK' });
                 assert.deepEqual(actual, {
