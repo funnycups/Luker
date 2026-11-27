@@ -9,8 +9,9 @@
 // `/api/vector/*` calls via EmbeddingService, and the high-level
 // `findSimilarNodes` / `syncVectorIndex` orchestration.
 
-import { getEmbeddingProfileById, getRerankProfileById } from '../connection-manager/embed-rerank.js';
-const EmbeddingService = Luker.getContext().embeddingService;
+function getEmbeddingService() {
+    return Luker.getContext().embeddingService;
+}
 import {
     validateVectorConfig,
     buildCollectionId,
@@ -40,7 +41,7 @@ export {
 export function getVectorConfigFromSettings(settings) {
     const id = String(settings?.embeddingProfileId || '').trim();
     if (!id) return null;
-    return getEmbeddingProfileById(id) || null;
+    return Luker.getContext().connectionProfiles.embedding.getById(id) || null;
 }
 
 /**
@@ -52,7 +53,7 @@ export function getVectorConfigFromSettings(settings) {
 export function getRerankProfileFromSettings(settings) {
     const id = String(settings?.rerankProfileId || '').trim();
     if (!id) return null;
-    return getRerankProfileById(id) || null;
+    return Luker.getContext().connectionProfiles.rerank.getById(id) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ export function getRerankProfileFromSettings(settings) {
 export async function insertVectorItems(collectionId, profile, items, signal) {
     if (!items?.length) return;
     if (!profile) return;
-    await EmbeddingService.insert({
+    await getEmbeddingService().insert({
         profile,
         collectionId,
         items: items.map(item => ({
@@ -94,7 +95,7 @@ export async function insertVectorItems(collectionId, profile, items, signal) {
  */
 export async function queryVectorCollection(collectionId, profile, searchText, topK = 10, threshold = 0.0, signal, includeVectors = false) {
     if (!profile) return [];
-    const response = await EmbeddingService.query({
+    const response = await getEmbeddingService().query({
         profile,
         collectionId,
         searchText,
@@ -119,7 +120,7 @@ export async function queryVectorCollection(collectionId, profile, searchText, t
 export async function deleteVectorItems(collectionId, profile, hashes, signal) {
     if (!hashes?.length) return;
     if (!profile) return;
-    await EmbeddingService.deleteByHashes({
+    await getEmbeddingService().deleteByHashes({
         profile,
         collectionId,
         hashes,
@@ -131,7 +132,7 @@ export async function deleteVectorItems(collectionId, profile, hashes, signal) {
  * Purge a collection across all sources. Profile-agnostic.
  */
 export async function purgeVectorCollection(collectionId, signal) {
-    await EmbeddingService.purgeCollection({ collectionId, signal });
+    await getEmbeddingService().purgeCollection({ collectionId, signal });
 }
 
 /**
@@ -140,7 +141,7 @@ export async function purgeVectorCollection(collectionId, signal) {
 export async function rerankDocuments(query, documents, rerankProfile, topK = 10, signal) {
     if (!rerankProfile) return [];
     const docObjects = (documents || []).map((text, index) => ({ text: String(text || ''), index }));
-    const results = await EmbeddingService.rerank({
+    const results = await getEmbeddingService().rerank({
         profile: rerankProfile,
         query,
         documents: docObjects,
@@ -217,7 +218,7 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
     // user data path change). Ask the server what's actually stored instead.
     let remoteHashes = new Set();
     try {
-        const hashList = await EmbeddingService.listHashes({ profile, collectionId, signal });
+        const hashList = await getEmbeddingService().listHashes({ profile, collectionId, signal });
         remoteHashes = new Set((hashList || []).map(h => Number(h)));
     } catch (error) {
         console.warn('[memory-graph/vector-index] listHashes failed, treating remote as empty:', error);

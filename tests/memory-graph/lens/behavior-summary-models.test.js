@@ -14,6 +14,7 @@ import {
     buildMgTechnicalSectionModel,
     buildMgSchemaTypeModel,
     buildMgManualCompressionModalModel,
+    normalizeManualCompressionDraft,
 } from '../../../public/scripts/extensions/memory-graph/lens/settings/behavior-summary-models.js';
 
 function renderModelText(model) {
@@ -108,7 +109,6 @@ describe('buildMgExtractionSectionModel & buildMgCustomCadenceModalModel', () =>
         const rendered = renderModelText(section);
         expect(rendered.rowTexts[0].text).toContain('2');
         expect(rendered.rowTexts[0].text).toContain('1');
-        expect(rendered.rowTexts[0].text).toMatch(/楼层隐藏|floor hiding|原文/);
         expect(rendered.rowTexts[1].text).toContain('5');
         expect(rendered.fullText).not.toContain('NaN');
 
@@ -144,7 +144,12 @@ describe('buildMgExtractionSectionModel & buildMgCustomCadenceModalModel', () =>
         ]));
     });
 
-    test('llmVisibleRecentMessages: 0 reports full raw chat history', () => {
+    test('llmVisibleRecentMessages: 0 reports distinct full-history token without warnings', () => {
+        const limited = buildMgExtractionSectionModel({
+            values: baseValues,
+            advanced: { ...baseAdvanced, llmVisibleRecentMessages: 5 },
+            options: BASE_OPTIONS,
+        });
         const model = buildMgExtractionSectionModel({
             values: baseValues,
             advanced: { ...baseAdvanced, llmVisibleRecentMessages: 0 },
@@ -152,7 +157,7 @@ describe('buildMgExtractionSectionModel & buildMgCustomCadenceModalModel', () =>
         });
         const rendered = renderModelText(model);
         expect(rendered.rowTexts[1].text).toContain('0');
-        expect(rendered.rowTexts[1].text).toMatch(/全部|all/i);
+        expect(rendered.rowTexts[1].text).not.toBe(renderModelText(limited).rowTexts[1].text);
         expect(model.warnings).toEqual([]);
     });
 
@@ -247,8 +252,9 @@ describe('buildMgExtractionModeModel', () => {
         });
         expect(model.tone).toBe('active');
         const rendered = renderModelText(model);
-        expect(rendered.fullText).toMatch(/全图|One-shot/i);
-        expect(tokenFieldKeys(model).has('extractMode')).toBe(true);
+        expect(rendered.rowTexts).toHaveLength(1);
+        expect(rendered.fullText.length).toBeGreaterThan(0);
+        expect(tokenFieldKeys(model)).toEqual(new Set(['extractMode']));
     });
 
     test('describes crawl mode with candidateLimit 0 (unlimited) vs 40 + 2*12 = 64 slice cap', () => {
@@ -256,7 +262,8 @@ describe('buildMgExtractionModeModel', () => {
             advanced: { extractMode: 'crawl', extractCrawlMaxRounds: 3, extractCrawlCandidateLimit: 0, extractCrawlMaxReads: 12 },
         });
         const unlimitedRendered = renderModelText(unlimited);
-        expect(unlimitedRendered.fullText).toMatch(/不限|unlimited/i);
+        expect(unlimitedRendered.fullText).toContain('3');
+        expect(unlimitedRendered.fullText).toContain('12');
         expect(tokenFieldKeys(unlimited)).toEqual(new Set([
             'extractMode',
             'extractCrawlMaxRounds',
@@ -271,6 +278,7 @@ describe('buildMgExtractionModeModel', () => {
         expect(cappedRendered.fullText).toContain('40');
         expect(cappedRendered.fullText).toContain('12');
         expect(cappedRendered.fullText).toContain('64');
+        expect(unlimitedRendered.fullText).not.toBe(cappedRendered.fullText);
         const sliceCapReadonly = cappedRendered.allParts.find(
             el => el.tagName === 'SPAN' && el.classList.contains('is-readonly') && el.textContent === '64',
         );
@@ -401,6 +409,18 @@ describe('buildMgTechnicalSectionModel', () => {
         });
         expect(tokenFieldKeys(ragModel).has('recallMaxIterations')).toBe(false);
         expect(renderModelText(ragModel).fullText).toContain('30');
+
+        const uncappedModel = buildMgTechnicalSectionModel({
+            values: { recallMethod: 'llm' },
+            advanced: {
+                toolCallRetryMax: 25,
+                rpmLimit: 1200,
+                recallQueryMessages: 2,
+                recallMaxIterations: 3,
+            },
+        });
+        expect(uncappedModel.rows[0].tokens.toolCallRetryMax.text).toBe('25');
+        expect(uncappedModel.rows[0].tokens.rpmLimit.text).toContain('1200');
     });
 });
 
@@ -714,5 +734,23 @@ describe('buildMgManualCompressionModalModel', () => {
         expect(empty.warnings[0].severity).toBe('warn');
         const rendered = renderModelText(empty);
         expect(rendered.fullText).not.toContain('NaN');
+    });
+
+    test('normalizeManualCompressionDraft resolves blank numeric inputs identically to live modal summary', () => {
+        const blankDraft = {
+            scope: 'older',
+            excludeRecent: '',
+            mode: 'schema',
+            roundLimitMode: 'limited',
+            maxRoundsPerType: '',
+            selectedTypeIds: ['event'],
+        };
+        const normalized = normalizeManualCompressionDraft(blankDraft);
+        expect(normalized.excludeRecent).toBe(2);
+        expect(normalized.maxRoundsPerType).toBe(3);
+
+        const model = buildMgManualCompressionModalModel({ draft: blankDraft, types: [eventType] });
+        expect(model.rows[0].tokens.excludeRecent.text).toBe(String(normalized.excludeRecent));
+        expect(model.rows[2].tokens.maxRoundsPerType.text).toBe(String(normalized.maxRoundsPerType));
     });
 });

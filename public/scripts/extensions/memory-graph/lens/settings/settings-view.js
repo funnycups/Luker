@@ -9,7 +9,7 @@
 import { h, clear, put } from '../../../../lens-shared/util.js';
 import { escapeHtml } from '../../../../lib/html-escape.js';
 import { renderFieldHelpButtonElement } from '../../../../lib/field-help-button.js';
-import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
+import { createBehaviorSummary, createExternalFieldFocuser } from '../../../../lens-shared/behavior-summary.js';
 import { CONFIG_FIELDS } from '../../config-iteration/fields.js';
 import { resolveStartSeqFromFloor } from '../../primitives.js';
 import { i18n, i18nFormat } from '../i18n.js';
@@ -31,6 +31,7 @@ import {
     buildMgRecallSectionModel,
     buildMgTechnicalSectionModel,
     buildMgManualCompressionModalModel,
+    normalizeManualCompressionDraft,
 } from './behavior-summary-models.js';
 import { typeDisplayName } from '../schema/schema-model.js';
 import { createCadenceVisualizer } from './cadence-visualizer.js';
@@ -332,13 +333,12 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             }),
         });
 
-        let modalPulseTimer = 0;
+        const modalFieldFocuser = createExternalFieldFocuser();
         let modalCleaned = false;
         function cleanupModal() {
             if (modalCleaned) return;
             modalCleaned = true;
-            clearTimeout(modalPulseTimer);
-            modalPulseTimer = 0;
+            modalFieldFocuser.clear();
             modalSummary.destroy();
             modalViz.destroy();
             if (activeModalCleanup === cleanupModal) activeModalCleanup = null;
@@ -402,20 +402,9 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             requestAnimationFrame(() => {
                 const key = String(focusField);
                 const wrap = [...content.querySelectorAll('[data-field-key]')].find(n => n.dataset.fieldKey === key);
-                const input = wrap?.querySelector('input, select, textarea');
+                const input = wrap?.querySelector('input, select, textarea') || wrap;
                 if (input) {
-                    input.focus?.({ preventScroll: true });
-                    input.select?.();
-                }
-                if (wrap) {
-                    wrap.classList.remove('luker-bsum-field-pulse');
-                    void wrap.offsetWidth;
-                    wrap.classList.add('luker-bsum-field-pulse');
-                    clearTimeout(modalPulseTimer);
-                    modalPulseTimer = setTimeout(() => {
-                        modalPulseTimer = 0;
-                        wrap.classList.remove('luker-bsum-field-pulse');
-                    }, 1200);
+                    modalFieldFocuser.focus(input, { highlightEl: wrap || input, select: true });
                 }
             });
         }
@@ -853,14 +842,15 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                     app.notify(i18n('Select at least one type to compress.'));
                     return false;
                 }
-                const maxRoundsPerType = draft.roundLimitMode === 'limited'
-                    ? Math.max(1, Math.floor(Number(draft.maxRoundsPerType) || 1))
+                const normalized = normalizeManualCompressionDraft(draft);
+                const maxRoundsPerType = normalized.roundLimitMode === 'limited'
+                    ? normalized.maxRoundsPerType
                     : null;
                 cleanupModal();
                 void run(() => source.ops.compress({
-                    scope: draft.scope,
-                    mode: draft.mode,
-                    excludeRecent: Math.max(0, Math.floor(Number(draft.excludeRecent) || 0)),
+                    scope: normalized.scope,
+                    mode: normalized.mode,
+                    excludeRecent: normalized.excludeRecent,
                     maxRoundsPerType,
                     selectedTypeIds: draft.selectedTypeIds.slice(),
                 }));

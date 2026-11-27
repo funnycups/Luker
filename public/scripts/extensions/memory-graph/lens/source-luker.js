@@ -3,8 +3,6 @@
 // Data source backed by the memory-graph extension.
 
 import { requestToolCallsWithRetry } from '../../../iteration-library/runner.js';
-import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
-import { listEmbeddingProfiles, listRerankProfiles } from '../../connection-manager/embed-rerank.js';
 import { getEffectiveNodeTypeSchema, getEffectiveSettings } from '../character-overrides.js';
 import { buildSchemaExportPayload, getSchemaExportFileName, parseSchemaImportPayload } from '../import-export.js';
 import {
@@ -322,9 +320,10 @@ function createSettingsAccess(resolveApi) {
         read() {
             const view = getMemorySettingsView(getContext());
             const brief = ({ id, name }) => ({ id, name });
-            view.options.embeddingProfiles = listEmbeddingProfiles().map(brief);
-            view.options.rerankProfiles = listRerankProfiles().map(brief);
-            view.options.connections = (getChatCompletionConnectionProfiles() || []).map(p => p.name).filter(Boolean);
+            const profiles = getContext().connectionProfiles;
+            view.options.embeddingProfiles = profiles.embedding.list().map(brief);
+            view.options.rerankProfiles = profiles.rerank.list().map(brief);
+            view.options.connections = (profiles.list() || []).map(p => p.name).filter(Boolean);
             return view;
         },
         set: (key, value) => setMemorySetting(key, value),

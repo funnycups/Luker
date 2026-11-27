@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
-import { extensionSettingsMock } from './_mocks/main-module-stack.js';
-import { loadStateErrorsApi } from '../util/browser-module-context.js';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    installDomReadyJQuery,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 
-const baseLukerCtx = globalThis.Luker.getContext();
+installDomReadyJQuery();
+globalThis.window = globalThis.window || globalThis;
+globalThis.document = globalThis.document || {
+    addEventListener: () => {}, removeEventListener: () => {},
+    querySelector: () => null, querySelectorAll: () => [],
+};
+
+const extensionSettingsMock = { memory_graph: {} };
 const stateErrors = await loadStateErrorsApi();
+const extensionRegistry = createExtensionRegistry();
 const customLukerCtx = {
-    ...baseLukerCtx,
     constants: {
         promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
         promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
@@ -19,7 +30,7 @@ const customLukerCtx = {
         avatar_url: 'avatar.png',
         file_name: 'chat-rollup-projection-write-guard',
     }),
-    saveSettings: () => Promise.resolve(),
+    saveSettings: async () => ({ ok: true, status: 'saved' }),
     saveSettingsDebounced: () => {},
     extensionSettings: extensionSettingsMock,
     download: () => {},
@@ -27,20 +38,18 @@ const customLukerCtx = {
     getStringHash: () => '',
     worldInfoEntry: {
         template: {},
-        setGlobalSelection: () => {},
+        setGlobalSelection: async () => false,
     },
     stateErrors,
     regex: { getScripts: () => [], saveScripts: () => {} },
-    getExtensionApi: baseLukerCtx.getExtensionApi,
-    registerExtensionApi: () => {},
+    getExtensionApi: extensionRegistry.getExtensionApi,
+    registerExtensionApi: extensionRegistry.registerExtensionApi,
     translate: (s) => String(s ?? ''),
     addLocaleData: () => {},
     getCurrentLocale: () => 'en-US',
 };
 
-globalThis.Luker = { getContext: () => customLukerCtx };
-globalThis.st = globalThis.Luker;
-globalThis.SillyTavern = globalThis.Luker;
+installBrowserModuleContext(customLukerCtx);
 
 let createEmptyStore;
 let defaultSettings;
@@ -64,13 +73,13 @@ beforeAll(async () => {
     getDefaultNodeTypeSchema = main.getDefaultNodeTypeSchema;
     createNode = main._createNodeForTest;
     createRollupWithChildren = main.createRollupWithChildren;
-    isRollupNode = main._isRollupNodeForTest;
-    buildFocusTablesText = main._buildFocusTablesTextForTest;
+    isRollupNode = main.isRollupNode;
+    buildFocusTablesText = main.buildFocusTablesText;
     buildGraphNodeHints = main.buildGraphNodeHints;
-    buildGraphNodeRow = main._buildGraphNodeRowForTest;
+    buildGraphNodeRow = main.buildGraphNodeRow;
     formatNodeBrief = main.formatNodeBrief;
     applyExtractionOpsImpl = main.applyExtractionOpsImpl;
-    runExtractionForStore = main._runExtractionForStoreForTest;
+    runExtractionForStore = main.runExtractionForStore;
 });
 
 function makeMomentSpec(overrides = {}) {

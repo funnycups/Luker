@@ -90,8 +90,11 @@ export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
                 recallMethod: String(latest?.values?.recallMethod || 'llm'),
                 ragDefaultPerTypeK: Math.max(0, Math.floor(Number(latest?.values?.ragDefaultPerTypeK) || 0)),
             };
-        } catch {
-            // Keep existing globalSettings if settings read is unavailable.
+        } catch (err) {
+            console.error('[memory-graph/schema] Failed to read global settings:', err);
+            if (typeof app.showToast === 'function') {
+                app.showToast(String(err?.message || err || i18n('Failed to read advanced settings.')), { error: true, duration: 3500 });
+            }
         }
     }
 

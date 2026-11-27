@@ -85,7 +85,6 @@ import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
 import { cookPluginFloorText } from '../../lib/plugin-floors.js';
 import { markPluginFloorMessage } from '../../lib/plugin-prompt-regex.js';
 import { normalizeToolCallRetryMax, requestToolCallsWithRetry } from '../../lib/iter-tool-calling.js';
-import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { getConnectionProfileNames, getOpenAIPresetNames } from '../../lens-shared/preset-selectors.js';
 import { runRagRecall, hasRecallableNodes } from './retriever.js';
 import {
@@ -98,11 +97,6 @@ import {
     buildCollectionId,
     purgeVectorCollection,
 } from './vector-index.js';
-import {
-    upsertEmbeddingProfile,
-    upsertRerankProfile,
-} from '../connection-manager/embed-rerank.js';
-import { getEmbeddingProfileById } from '../connection-manager/embed-rerank.js';
 import { resolveGraphVectorProfile, syncGraphVectorsAfterMutation as runGraphVectorSync } from './graph-iteration/vector-sync.js';
 import {
     getFloorStateInstance,
@@ -294,7 +288,7 @@ function migrateLegacyProfileSettings() {
             source,
         };
         if (model) profile.model = model;
-        const stored = upsertEmbeddingProfile(profile);
+        const stored = Luker.getContext().connectionProfiles.embedding.upsert(profile);
         if (stored) {
             s.embeddingProfileId = stored.id;
             changed = true;
@@ -311,7 +305,7 @@ function migrateLegacyProfileSettings() {
             source,
         };
         if (model) profile.model = model;
-        const stored = upsertRerankProfile(profile);
+        const stored = Luker.getContext().connectionProfiles.rerank.upsert(profile);
         if (stored) {
             s.rerankProfileId = stored.id;
             changed = true;
@@ -604,7 +598,7 @@ export function getSettings() {
 }
 
 function getConnectionProfiles() {
-    return getChatCompletionConnectionProfiles();
+    return Luker.getContext().connectionProfiles.list();
 }
 
 export function getChatKey(context, explicitTarget = null) {
@@ -1472,7 +1466,7 @@ function emitStoreCommit(chatKey) {
  */
 export async function syncGraphVectorsAfterMutation(context, chatKey, store) {
     const effectiveSettings = getEffectiveSettings(context, getSettings());
-    const profile = resolveGraphVectorProfile(effectiveSettings, getEmbeddingProfileById);
+    const profile = resolveGraphVectorProfile(effectiveSettings, Luker.getContext().connectionProfiles.embedding.getById);
     return await runGraphVectorSync({
         store,
         chatKey,
@@ -10421,14 +10415,16 @@ export function _setPersistentDrainHookForTest(hook) {
     __testPersistentDrainHook = (typeof hook === 'function') ? hook : null;
 }
 export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
-export { runScheduledExtractionPass as _runScheduledExtractionPassForTest };
-export { isRollupNode as _isRollupNodeForTest };
-export { summarizeRollupWithLLM as _summarizeRollupWithLLMForTest };
-export { buildCompressionRuleMatcher as _buildCompressionRuleMatcherForTest };
-export { runCompressionLoop as _runCompressionLoopForTest };
-export { runExtractionForStore as _runExtractionForStoreForTest };
-export { buildGraphNodeRow as _buildGraphNodeRowForTest };
-export { buildFocusTablesText as _buildFocusTablesTextForTest };
+export {
+    runScheduledExtractionPass,
+    isRollupNode,
+    summarizeRollupWithLLM,
+    buildCompressionRuleMatcher,
+    runCompressionLoop,
+    runExtractionForStore,
+    buildGraphNodeRow,
+    buildFocusTablesText,
+};
 
 async function initializeCharacterPromptDefaults(context) {
     try {

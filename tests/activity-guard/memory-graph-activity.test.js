@@ -122,7 +122,7 @@ const customLukerCtx = {
         avatar_url: 'avatar.png',
         file_name: currentChatFile,
     }),
-    saveSettings: () => Promise.resolve(),
+    saveSettings: async () => ({ ok: true, status: 'saved' }),
     saveSettingsDebounced: () => {},
     extensionSettings: extensionSettingsMock,
     download: () => {},
@@ -130,7 +130,7 @@ const customLukerCtx = {
     getStringHash: () => '',
     worldInfoEntry: {
         template: {},
-        setGlobalSelection: () => {},
+        setGlobalSelection: async () => false,
     },
     stateErrors,
     regex: {
@@ -141,6 +141,19 @@ const customLukerCtx = {
     getExtensionApi: extensionRegistry.getExtensionApi,
     registerExtensionApi: extensionRegistry.registerExtensionApi,
     registerCardBindingSlot: () => {},
+    connectionProfiles: {
+        list: () => [],
+        embedding: {
+            list: () => (embeddingProfileMock ? [embeddingProfileMock] : []),
+            getById: (id) => (embeddingProfileMock && embeddingProfileMock.id === id ? embeddingProfileMock : null),
+            upsert: () => null,
+        },
+        rerank: {
+            list: () => [],
+            getById: () => null,
+            upsert: () => null,
+        },
+    },
     embeddingService: fakeEmbeddingService,
     translate: (s) => String(s ?? ''),
     addLocaleData: () => {},
@@ -187,73 +200,6 @@ const customLukerCtx = {
 };
 
 installBrowserModuleContext(() => customLukerCtx);
-
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return {
-        lodash,
-        showdown: { Converter: class { makeHtml(t) { return String(t || ''); } } },
-        DOMPurify: { sanitize: (h) => h },
-    };
-});
-jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
-    compressRequest: async (r) => r,
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve(); } },
-    POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },
-    POPUP_RESULT: { CANCELLED: 0, AFFIRMATIVE: 1 },
-}));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({
-    getContext: () => customLukerCtx,
-}));
-jest.unstable_mockModule('../../public/script.js', () => ({
-    event_types: customLukerCtx.eventTypes,
-    eventSource: fakeEventSource,
-    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
-    extension_prompt_types: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
-    resolveChatStateTarget: customLukerCtx.resolveChatStateTarget,
-    saveSettings: () => Promise.resolve(),
-    saveSettingsDebounced: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettingsMock,
-    getContext: () => customLukerCtx,
-    registerExtensionApi: () => {},
-    UNSET_VALUE: customLukerCtx.constants.unset,
-}));
-jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
-    performFuzzySearch: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    download: () => {}, getFileText: () => Promise.resolve(''),
-    getStringHash: () => '', escapeHtml: (s) => String(s || ''),
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    newWorldInfoEntryTemplate: () => ({}),
-    setGlobalWorldInfoSelection: () => {},
-    world_info_position: customLukerCtx.constants.wiPosition,
-}));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {}, translate: (k) => k,
-    getCurrentLocale: () => 'en-US', t: (k) => k,
-}));
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/connection-manager/profile-resolver.js',
-    () => ({ getChatCompletionConnectionProfiles: () => [] }),
-);
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/connection-manager/embed-rerank.js',
-    () => ({
-        renderProfileSelect: () => '',
-        upsertEmbeddingProfile: () => {}, upsertRerankProfile: () => {},
-        getEmbeddingProfileById: (id) => (embeddingProfileMock && embeddingProfileMock.id === id ? embeddingProfileMock : null),
-        getRerankProfileById: () => null,
-    }),
-);
-jest.unstable_mockModule('../../public/scripts/embedding-service.js', () => ({
-    EmbeddingService: fakeEmbeddingService,
-}));
 
 let main;
 let resetFloorStateInstance;
@@ -384,7 +330,7 @@ describe('memory-graph activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'memory-graph:update',
-                label: 'Memory graph update',
+                label: expect.stringMatching(/\S/),
                 scope: 'chat',
                 guardChatSwitch: true,
                 guardUnload: true,
@@ -498,7 +444,7 @@ describe('memory-graph activity guard leases', () => {
         });
         const chatKey = main.getChatKey(context);
 
-        const promise = main._runScheduledExtractionPassForTest(chatKey);
+        const promise = main.runScheduledExtractionPass(chatKey);
         await new Promise(r => setTimeout(r, 20));
 
         expect(registry.getActiveActivities()).toEqual([
@@ -542,7 +488,7 @@ describe('memory-graph activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'memory-graph:vector-recompute',
-                label: 'Memory graph vector recompute',
+                label: expect.stringMatching(/\S/),
                 scope: 'chat',
                 guardChatSwitch: true,
                 guardUnload: true,

@@ -51,7 +51,7 @@ const mockLukerContext = {
     escapeHtml: (s) => String(s || ''),
     worldInfoEntry: {
         template: () => ({}),
-        setGlobalSelection: () => {},
+        setGlobalSelection: async () => false,
     },
     addLocaleData: () => {},
     translate: (k) => String(k ?? ''),

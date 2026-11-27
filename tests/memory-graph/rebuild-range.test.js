@@ -41,7 +41,7 @@ const customLukerCtx = {
         avatar_url: 'avatar.png',
         file_name: 'chat-rebuild-range',
     }),
-    saveSettings: () => Promise.resolve(),
+    saveSettings: async () => ({ ok: true, status: 'saved' }),
     saveSettingsDebounced: () => {},
     extensionSettings: extensionSettingsMock,
     download: () => {},
@@ -49,7 +49,7 @@ const customLukerCtx = {
     getStringHash: () => '',
     worldInfoEntry: {
         template: {},
-        setGlobalSelection: () => {},
+        setGlobalSelection: async () => false,
     },
     stateErrors,
     regex: { getScripts: () => [], saveScripts: () => {} },
@@ -61,72 +61,6 @@ const customLukerCtx = {
 };
 
 installBrowserModuleContext(customLukerCtx);
-
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return {
-        lodash,
-        showdown: { Converter: class { makeHtml(t) { return String(t || ''); } } },
-        DOMPurify: { sanitize: (h) => h },
-    };
-});
-jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
-    compressRequest: async (r) => r,
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve(); } },
-    POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },
-    POPUP_RESULT: { CANCELLED: 0, AFFIRMATIVE: 1 },
-}));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({
-    getContext: () => customLukerCtx,
-}));
-jest.unstable_mockModule('../../public/script.js', () => ({
-    event_types: {},
-    eventSource: { on: () => {}, off: () => {}, emit: () => {} },
-    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
-    extension_prompt_types: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
-    resolveChatStateTarget: customLukerCtx.resolveChatStateTarget,
-    saveSettings: () => Promise.resolve(),
-    saveSettingsDebounced: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettingsMock,
-    getContext: () => customLukerCtx,
-    registerExtensionApi: () => {},
-    UNSET_VALUE: customLukerCtx.constants.unset,
-}));
-jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
-    performFuzzySearch: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    download: () => {}, getFileText: () => Promise.resolve(''),
-    getStringHash: () => '', escapeHtml: (s) => String(s || ''),
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    newWorldInfoEntryTemplate: () => ({}),
-    setGlobalWorldInfoSelection: () => {},
-    world_info_position: customLukerCtx.constants.wiPosition,
-}));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {}, translate: (k) => k,
-    getCurrentLocale: () => 'en-US', t: (k) => k,
-}));
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/connection-manager/profile-resolver.js',
-    () => ({ getChatCompletionConnectionProfiles: () => [] }),
-);
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/connection-manager/embed-rerank.js',
-    () => ({
-        renderProfileSelect: () => '',
-        upsertEmbeddingProfile: () => {}, upsertRerankProfile: () => {},
-        getEmbeddingProfileById: () => null, getRerankProfileById: () => null,
-    }),
-);
-jest.unstable_mockModule('../../public/scripts/embedding-service.js', () => ({
-    EmbeddingService: class {},
-}));
 
 let getRebuildableRange;
 let resolveStartSeqFromFloor;

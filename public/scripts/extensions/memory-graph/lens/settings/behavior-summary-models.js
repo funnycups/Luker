@@ -4,9 +4,18 @@
 // Custom Cadence modal, and Schema Type Editor (1E). No DOM dependencies.
 
 import { i18n, i18nFormat, listSeparator } from '../i18n.js';
+import { CONFIG_FIELDS } from '../../config-iteration/fields.js';
 import { detectVisibilityGap } from './settings-model.js';
 
 const IDENTITY_CANDIDATES = ['title', 'name', 'aliases'];
+
+function boundsOf(key) {
+    const def = CONFIG_FIELDS[`settings.${key}`];
+    return {
+        min: Number.isFinite(def?.min) ? def.min : -Infinity,
+        max: Number.isFinite(def?.max) ? def.max : Infinity,
+    };
+}
 
 function safeInt(raw, fallback, { min = -Infinity, max = Infinity } = {}) {
     const isBlank = raw === '' || raw === null || raw === undefined
@@ -597,10 +606,10 @@ export function buildMgRecallSectionModel({ values = {}, advanced = {}, options 
  */
 export function buildMgTechnicalSectionModel({ values = {}, advanced = {} } = {}) {
     const concurrent = Boolean(advanced?.extractConcurrent);
-    const retries = safeInt(advanced?.toolCallRetryMax, 2, { min: 0, max: 10 });
-    const rpm = safeInt(advanced?.rpmLimit, 0, { min: 0, max: 600 });
-    const queryMsgs = safeInt(advanced?.recallQueryMessages, 2, { min: 0, max: 64 });
-    const maxIter = safeInt(advanced?.recallMaxIterations, 3, { min: 2, max: 6 });
+    const retries = safeInt(advanced?.toolCallRetryMax, CONFIG_FIELDS['settings.toolCallRetryMax']?.defaultValue ?? 2, boundsOf('toolCallRetryMax'));
+    const rpm = safeInt(advanced?.rpmLimit, CONFIG_FIELDS['settings.rpmLimit']?.defaultValue ?? 0, boundsOf('rpmLimit'));
+    const queryMsgs = safeInt(advanced?.recallQueryMessages, CONFIG_FIELDS['settings.recallQueryMessages']?.defaultValue ?? 2, boundsOf('recallQueryMessages'));
+    const maxIter = safeInt(advanced?.recallMaxIterations, CONFIG_FIELDS['settings.recallMaxIterations']?.defaultValue ?? 3, boundsOf('recallMaxIterations'));
     const isRag = String(values?.recallMethod || 'llm').trim().toLowerCase() === 'rag';
 
     const executionRow = {
@@ -857,15 +866,30 @@ export function buildMgSchemaTypeModel({ draft = {}, globalSettings = {} } = {})
 }
 
 /**
- * Manual Compression modal: translates scope, mode, stop rule, and selected types
- * into plain natural language with 1:1 token-to-field highlighting.
+ * Shared normalization for Manual Compression modal inputs so the live summary
+ * and the submit handler resolve blank or out-of-range fields identically.
  */
-export function buildMgManualCompressionModalModel({ draft = {}, types = [] } = {}) {
+export function normalizeManualCompressionDraft(draft = {}) {
     const scope = draft?.scope === 'all' ? 'all' : 'older';
     const excludeRecent = safeInt(draft?.excludeRecent, 2, { min: 0 });
     const mode = ['schema', 'force', 'flat'].includes(draft?.mode) ? draft.mode : 'schema';
     const roundLimitMode = draft?.roundLimitMode === 'limited' ? 'limited' : 'unlimited';
     const maxRoundsPerType = safeInt(draft?.maxRoundsPerType, 3, { min: 1 });
+    return {
+        scope,
+        excludeRecent,
+        mode,
+        roundLimitMode,
+        maxRoundsPerType,
+    };
+}
+
+/**
+ * Manual Compression modal: translates scope, mode, stop rule, and selected types
+ * into plain natural language with 1:1 token-to-field highlighting.
+ */
+export function buildMgManualCompressionModalModel({ draft = {}, types = [] } = {}) {
+    const { scope, excludeRecent, mode, roundLimitMode, maxRoundsPerType } = normalizeManualCompressionDraft(draft);
 
     const typeList = Array.isArray(types) ? types : [];
     const typeById = new Map(typeList.map(item => [String(item?.id || ''), item]));
