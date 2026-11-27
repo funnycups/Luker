@@ -151,18 +151,15 @@ async function recordCardAppDiagnosticForStudio(content) {
         content: String(content || '').slice(0, 16000),
     };
 
+    let invalidFormat = false;
     const result = await updateCharacterState(avatar, STUDIO_SESSION_NAMESPACE, (current) => {
         let sessions = [];
-        if (current && Array.isArray(current.sessions)) {
+        if (current != null && Object.keys(current).length > 0) {
+            if (current.version !== 1 || !Array.isArray(current.sessions)) {
+                invalidFormat = true;
+                return null;
+            }
             sessions = current.sessions.map(s => ({ ...s, messages: Array.isArray(s.messages) ? s.messages.slice() : [] }));
-        } else if (current && Array.isArray(current.messages)) {
-            // Migrate legacy single-session format inline so we don't lose history.
-            sessions = [{
-                id: `migrated_${Date.now()}`,
-                messages: current.messages.slice(),
-                updatedAt: current.updatedAt || Date.now(),
-                summary: 'Migrated session',
-            }];
         }
 
         if (sessions.length === 0) {
@@ -181,9 +178,12 @@ async function recordCardAppDiagnosticForStudio(content) {
 
         return { version: 1, sessions };
     });
+    if (invalidFormat) {
+        console.error(`[${MODULE_NAME}] diagnostic record aborted: CardApp Studio session storage has an unrecognized format`);
+        return;
+    }
     if (!result?.ok) {
-        // Dev-only — diagnostic recording is best-effort and not user-visible.
-        console.warn(`[${MODULE_NAME}] diagnostic record failed: ${result?.reason || 'unknown'} ${result?.hint || ''}`.trim());
+        console.error(`[${MODULE_NAME}] diagnostic record failed: ${result?.reason || 'unknown'} ${result?.hint || ''}`.trim());
     }
 }
 
