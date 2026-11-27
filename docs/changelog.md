@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0-rc.6 (2026-11-27)
 
 ### Connections & Models
 
@@ -222,6 +222,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed failed settings saves still proceeding with page reloads, redirects, or `/forcesave` success notices.
 - Fixed Prompt Manager list flicker and stale drag handles during concurrent renders, and fixed a stuck swipe lock when Horde generation is disallowed.
 - Fixed failed serialized user-record writes for announcement and update-notice state causing unhandled promise rejections on the server.
+
+### New Contributors
+* @Cis-Evo made their first contribution in https://github.com/funnycups/Luker/pull/72
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.5...v2.9.0-rc.6
 
 ## v2.9.0-rc.5 (2026-11-25)
 
