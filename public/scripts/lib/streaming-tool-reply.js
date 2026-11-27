@@ -227,3 +227,158 @@ export function isStringSchemaNode(schemaNode) {
     }
     return false;
 }
+
+/**
+ * Resolve the active streaming tool-reply preview configuration for a chat
+ * completion request. Precedence:
+ *   1. Explicit `requestBody.luker_streaming_tool_reply` (set by a hook; `false`/`null` opts out)
+ *   2. Preset `requestSettings.extensions.luker.streaming_tool_reply`
+ *   3. Registered `ToolManager` tool declaring `streamingPreviewArgument` among active `requestBody.tools`
+ *
+ * @param {object} params
+ * @param {object} [params.requestBody]
+ * @param {object} [params.requestSettings]
+ * @param {Array<{ name: string, streamingPreviewArgument: unknown }>} [params.registeredTools]
+ * @param {boolean} [params.shouldRunChatCompletionHooks]
+ * @param {boolean} [params.stream]
+ * @returns {{ name: string, argument: string, path: Array<string|number> } | null}
+ */
+export function resolveStreamingToolReplyTarget({
+    requestBody = {},
+    requestSettings = {},
+    registeredTools = [],
+    shouldRunChatCompletionHooks = true,
+    stream = false,
+} = {}) {
+    if (!stream) return null;
+
+    if (requestBody && typeof requestBody === 'object' && Object.hasOwn(requestBody, 'luker_streaming_tool_reply')) {
+        const explicit = requestBody.luker_streaming_tool_reply;
+        if (explicit === false || explicit === null) return null;
+        return normalizeStreamingToolReplyConfig(explicit);
+    }
+
+    if (!shouldRunChatCompletionHooks) return null;
+
+    const fromPreset = normalizeStreamingToolReplyConfig(requestSettings?.extensions?.luker?.streaming_tool_reply);
+    if (fromPreset) return fromPreset;
+
+    const activeTools = Array.isArray(requestBody?.tools) ? requestBody.tools : [];
+    if (activeTools.length === 0 || !Array.isArray(registeredTools) || registeredTools.length === 0) {
+        return null;
+    }
+
+    const activeNames = new Set(
+        activeTools
+            .map(tool => String(tool?.function?.name || tool?.name || '').trim())
+            .filter(Boolean),
+    );
+    if (activeNames.size === 0) return null;
+
+    const forcedName = typeof requestBody?.tool_choice === 'object' && requestBody.tool_choice !== null
+        ? String(requestBody.tool_choice?.function?.name || requestBody.tool_choice?.name || '').trim()
+        : '';
+
+    let firstMatch = null;
+    for (const reg of registeredTools) {
+        if (!reg || typeof reg !== 'object') continue;
+        const name = String(reg.name || '').trim();
+        if (!name || !activeNames.has(name)) continue;
+        const normalized = normalizeStreamingToolReplyConfig({
+            name,
+            argument: reg.streamingPreviewArgument,
+        });
+        if (!normalized) continue;
+        if (forcedName && normalized.name === forcedName) {
+            return normalized;
+        }
+        if (!firstMatch) {
+            firstMatch = normalized;
+        }
+    }
+    return firstMatch;
+}
+
+/**
+ * Compute per-frame display text vs committed model output during streaming so
+ * a live tool-argument preview never pollutes `StreamingProcessor.result`.
+ *
+ * @param {object} params
+ * @param {string} [params.output]
+ * @param {string} [params.toolCallPreview]
+ * @param {string} [params.previousResult]
+ * @param {boolean} [params.previousShowingPreview]
+ */
+export function resolveStreamingFrameDisplay({
+    output = '',
+    toolCallPreview = '',
+    previousResult = '',
+    previousShowingPreview = false,
+} = {}) {
+    const safeOutput = typeof output === 'string' ? output : '';
+    const safePreview = typeof toolCallPreview === 'string' ? toolCallPreview : '';
+    const hasRealOutput = safeOutput.trim().length > 0;
+    const hasPreview = safePreview.length > 0;
+    const showingToolCallPreview = !hasRealOutput && hasPreview;
+    const displayText = showingToolCallPreview ? safePreview : safeOutput;
+    const firstToolPreview = showingToolCallPreview && !previousShowingPreview && !String(previousResult || '').trim();
+    const previewCleared = Boolean(previousShowingPreview && !showingToolCallPreview);
+
+    return {
+        displayText,
+        committedResult: safeOutput,
+        toolCallPreview: safePreview,
+        showingToolCallPreview,
+        firstToolPreview,
+        previewCleared,
+    };
+}
+
+/**
+ * Decide the final text returned by `StreamingProcessor.generate()`:
+ *   - Real assistant output (or a consuming formatter's EOF text) always wins.
+ *   - When completed tool calls are present with no real text, return `''` so
+ *     `ToolManager` executes without treating the preview as assistant prose.
+ *   - When interrupted or length-truncated with no completed tool calls,
+ *     preserve the readable partial preview.
+ *
+ * @param {object} params
+ * @param {string} [params.result]
+ * @param {string} [params.toolCallPreview]
+ * @param {boolean} [params.showingToolCallPreview]
+ * @param {boolean} [params.hasCompletedToolCalls]
+ * @returns {string}
+ */
+export function resolveStreamingFinalReturn({
+    result = '',
+    toolCallPreview = '',
+    showingToolCallPreview = false,
+    hasCompletedToolCalls = false,
+} = {}) {
+    const safeResult = typeof result === 'string' ? result : '';
+    if (safeResult.trim().length > 0) {
+        return safeResult;
+    }
+    if (hasCompletedToolCalls) {
+        return safeResult;
+    }
+    if (showingToolCallPreview && typeof toolCallPreview === 'string' && toolCallPreview.length > 0) {
+        return toolCallPreview;
+    }
+    return safeResult;
+}
+
+/**
+ * True when the streaming bubble only displayed a transient tool-argument
+ * preview with no committed assistant prose, so completed tool-call handoff
+ * must not finalize the raw preview as an assistant turn before tool execution.
+ *
+ * @param {{ showingToolCallPreview?: boolean, result?: string }} params
+ * @returns {boolean}
+ */
+export function shouldSkipIntermediaryFinalizeForToolPreview({
+    showingToolCallPreview = false,
+    result = '',
+} = {}) {
+    return Boolean(showingToolCallPreview && !String(result || '').trim());
+}

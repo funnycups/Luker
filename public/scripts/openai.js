@@ -83,6 +83,7 @@ import {
     parsedTurnToChatCompletion,
     resolveWireProtocol,
 } from './lib/protocol-parser/index.js';
+import { resolveStreamingToolReplyTarget } from './lib/streaming-tool-reply.js';
 import { readPresetDocument } from './named-resource-read.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import {
@@ -4632,6 +4633,21 @@ async function sendOpenAIRequest(type, messages, signal, {
     // configured format-correction retries) entirely to the backend runner via
     // the internal `luker_plain_text_tools` envelope (stripped before upstream).
     const plainTextActive = usePromptXmlFunctionCalls && Array.isArray(requestBody.tools) && requestBody.tools.length > 0;
+    const replyPreview = resolveStreamingToolReplyTarget({
+        requestBody,
+        requestSettings,
+        registeredTools: ToolManager.getStreamingPreviewTargets(),
+        shouldRunChatCompletionHooks,
+        stream,
+    });
+    if (replyPreview) {
+        requestBody.luker_streaming_tool_reply = {
+            name: replyPreview.name,
+            argument: replyPreview.argument,
+        };
+    } else {
+        delete requestBody.luker_streaming_tool_reply;
+    }
     if (plainTextActive) {
         const protocolStyle = modeOptions.protocolStyle === TOOL_PROTOCOL_STYLE.TABLE
             ? TOOL_PROTOCOL_STYLE.TABLE
@@ -4814,6 +4830,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
+            let previewSuperseded = false;
             const state = {
                 reasoning: '',
                 images: [],
@@ -4929,6 +4946,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 const hasReplacedTurn = Boolean(ptMeta.replacedTurn && typeof ptMeta.replacedTurn === 'object');
                 if (ptMeta.status === 'parsed') {
                     if (hasReplacedTurn) {
+                        previewSuperseded = true;
                         applyReplacedTurnIntoState(ptMeta.replacedTurn);
                     }
                     state.nativeParts = [];
@@ -4943,6 +4961,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 // Attempt 1 with prose, apply the retry turn completely without
                 // flushing Attempt 1's display mask buffer.
                 if (hasReplacedTurn) {
+                    previewSuperseded = true;
                     applyReplacedTurnIntoState(ptMeta.replacedTurn);
                     text = ptMeta.displayText ?? '';
                     toolCalls.length = 0;
@@ -5016,6 +5035,15 @@ async function sendOpenAIRequest(type, messages, signal, {
                 }
                 return changed;
             };
+            const getToolCallPreview = () => {
+                if (!replyPreview || previewSuperseded) {
+                    return undefined;
+                }
+                if (plainTextActive) {
+                    return streamDisplayMask?.getToolCallPreview?.(replyPreview.name, replyPreview.argument) || '';
+                }
+                return streamParser.getToolCallPreview?.(replyPreview.name, replyPreview.argument) || '';
+            };
             let sawDirectText = false;
             let sawAnyFrame = false;
             let finishedNormally = false;
@@ -5067,7 +5095,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                                 throw err;
                             }
                             if (stateUpdated || ptUpdated) {
-                                yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
+                                yield { text, toolCallPreview: getToolCallPreview(), swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
                             }
                         } else {
                             syncTurnIntoState(streamParser.getSnapshot());
@@ -5132,6 +5160,7 @@ async function sendOpenAIRequest(type, messages, signal, {
 
                     yield {
                         text,
+                        toolCallPreview: getToolCallPreview(),
                         swipes: swipes,
                         logprobs: frameDelta.logprobsPayload ? parseChatCompletionLogprobs(frameDelta.logprobsPayload) : null,
                         toolCalls: toolCalls,

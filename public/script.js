@@ -155,6 +155,11 @@ import {
     summarizeJsonPatchOperations,
     validateChatWriteAckPayload,
 } from './scripts/lib/chat-integrity-recovery.js';
+import {
+    resolveStreamingFinalReturn,
+    resolveStreamingFrameDisplay,
+    shouldSkipIntermediaryFinalizeForToolPreview,
+} from './scripts/lib/streaming-tool-reply.js';
 
 import {
     generateNovelWithStreaming,
@@ -6785,6 +6790,8 @@ class StreamingProcessor {
         /** @type {import('./scripts/logprobs.js').TokenLogprobs[]} */
         this.messageLogprobs = [];
         this.toolCalls = [];
+        this.toolCallPreview = '';
+        this.showingToolCallPreview = false;
         // Populated from the streamed `state.finishReason` on each frame; used
         // by the auto-continue-on-truncated check after the stream settles.
         // null until at least one frame reports a terminal finish_reason.
@@ -6837,7 +6844,7 @@ class StreamingProcessor {
 
     #updateMessageBlockVisibility() {
         if (this.messageDom instanceof HTMLElement && Array.isArray(this.toolCalls) && this.toolCalls.length > 0) {
-            const shouldHide = ['', '...'].includes(this.result) && !this.reasoningHandler.reasoning;
+            const shouldHide = ['', '...'].includes(this.result) && !this.showingToolCallPreview && !this.reasoningHandler.reasoning;
             this.messageDom.classList.toggle('displayNone', shouldHide);
         }
     }
@@ -7283,24 +7290,30 @@ class StreamingProcessor {
     }
 
     /**
-     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
+     * @returns {AsyncGenerator<{ text: string, toolCallPreview?: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
      */
     async* nullStreamingGeneration() {
         throw new Error('Generation function for streaming is not hooked up');
     }
 
     async generate() {
+        const getFinalReturn = () => resolveStreamingFinalReturn({
+            result: this.result,
+            toolCallPreview: this.toolCallPreview,
+            showingToolCallPreview: this.showingToolCallPreview,
+            hasCompletedToolCalls: Array.isArray(this.toolCalls) && this.toolCalls.length > 0,
+        });
         if (this.isStaleEpoch()) {
-            return this.result;
+            return getFinalReturn();
         }
         if (this.messageId == -1) {
             this.messageId = await this.onStartStreaming(this.firstMessageText);
             if (this.isStaleEpoch()) {
-                return this.result;
+                return getFinalReturn();
             }
             await delay(1); // delay for message to be rendered
             if (this.isStaleEpoch()) {
-                return this.result;
+                return getFinalReturn();
             }
             scrollLock = false;
         }
@@ -7314,18 +7327,26 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs, toolCalls, state } of this.generator()) {
+            for await (const { text: output, toolCallPreview, swipes, logprobs, toolCalls, state } of this.generator()) {
                 const now = Date.now();
                 timestamps.push(now);
                 if (!this.timeToFirstToken) {
                     this.timeToFirstToken = now - this.createdAt.getTime();
                 }
                 if (this.isStopped || this.abortController.signal.aborted || this.isStaleEpoch()) {
-                    return this.result;
+                    return getFinalReturn();
                 }
 
                 this.toolCalls = toolCalls;
-                this.result = text;
+                const displayStep = resolveStreamingFrameDisplay({
+                    output,
+                    toolCallPreview,
+                    previousResult: this.result,
+                    previousShowingPreview: this.showingToolCallPreview,
+                });
+                this.result = displayStep.committedResult;
+                this.toolCallPreview = displayStep.toolCallPreview;
+                this.showingToolCallPreview = displayStep.showingToolCallPreview;
                 this.swipes = Array.from(swipes ?? []);
                 if (logprobs) {
                     this.messageLogprobs.push(...(Array.isArray(logprobs) ? logprobs : [logprobs]));
@@ -7362,13 +7383,18 @@ class StreamingProcessor {
                     this.finishReason = String(state.finishReason);
                 }
                 if (this.isStaleEpoch()) {
-                    return this.result;
+                    return getFinalReturn();
                 }
-                await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
+                await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, displayStep.displayText);
                 if (this.isStaleEpoch()) {
-                    return this.result;
+                    return getFinalReturn();
                 }
-                await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                const renderProgress = async () => await this.onProgressStreaming(this.messageId, this.continueMessage + displayStep.displayText);
+                if (displayStep.firstToolPreview || displayStep.previewCleared) {
+                    await renderProgress();
+                } else {
+                    await sw.tick(renderProgress);
+                }
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
@@ -7378,11 +7404,11 @@ class StreamingProcessor {
                 console.error(err);
                 this.onErrorStreaming();
             }
-            return this.result;
+            return getFinalReturn();
         }
 
         this.isFinished = true;
-        return this.result;
+        return getFinalReturn();
     }
 }
 
@@ -9638,7 +9664,14 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
             if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
                 const lastMessage = chat[chat.length - 1];
                 const hasToolCalls = ToolManager.hasToolCalls(streamProcessor.toolCalls);
-                const shouldDeleteMessage = type !== 'swipe' && ['', '...'].includes(lastMessage?.mes) && !lastMessage?.extra?.reasoning && ['', '...'].includes(streamProcessor.result);
+                const onlyHadPreview = shouldSkipIntermediaryFinalizeForToolPreview({
+                    showingToolCallPreview: streamProcessor.showingToolCallPreview,
+                    result: streamProcessor.result,
+                });
+                const shouldDeleteMessage = type !== 'swipe'
+                    && (['', '...'].includes(lastMessage?.mes) || onlyHadPreview)
+                    && !lastMessage?.extra?.reasoning
+                    && (['', '...'].includes(streamProcessor.result) || onlyHadPreview);
                 hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
                 if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
                     clearStreamingProcessorIfOwned();
@@ -9647,7 +9680,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                         'fromStream': { value: true },
                     });
                 }
-                if (hasToolCalls && !shouldDeleteMessage) {
+                if (hasToolCalls && !shouldDeleteMessage && !onlyHadPreview) {
                     await streamProcessor.finalizeIntermediaryMessage(streamProcessor.messageId, getMessage, { unlockUI: false });
                     if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
                         clearStreamingProcessorIfOwned();
@@ -9698,7 +9731,7 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     && depth < ToolManager.RECURSE_LIMIT
                     && Array.isArray(streamProcessor.nativeContentBlocks)
                     && streamProcessor.nativeContentBlocks.length > 0;
-                const willAutoContinue = willContinuePausedTurn || shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate);
+                const willAutoContinue = willContinuePausedTurn || (!streamProcessor.showingToolCallPreview && shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate));
                 if (willAutoContinue) {
                     // Middle round of an auto-continue-on-truncated chain.
                     // Finalize DOM / chat[i].mes state locally but do NOT
@@ -9755,7 +9788,9 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                         'fromStream': { value: true },
                     });
                 }
-                triggerAutoContinue(messageChunk, isImpersonate);
+                if (!streamProcessor.showingToolCallPreview) {
+                    triggerAutoContinue(messageChunk, isImpersonate);
+                }
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },

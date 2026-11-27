@@ -42,6 +42,7 @@ import { resolveGeminiModelCapabilities, resolveOpenAIModelCapabilities } from '
  * @property {function} [formatMessage] - A function to format the tool call message.
  * @property {function} [shouldRegister] - A function to determine if the tool should be registered.
  * @property {boolean} [stealth] - A tool call result will not be shown in the chat. No follow-up generation will be performed.
+ * @property {string|Array<string|number>} [streamingPreviewArgument] - Optional string argument name or path to preview live in chat while the tool call streams.
  */
 
 /**
@@ -163,6 +164,12 @@ class ToolDefinition {
     #stealth;
 
     /**
+     * Optional string argument name or path to stream as a live chat preview.
+     * @type {string|Array<string|number>|null}
+     */
+    #streamingPreviewArgument;
+
+    /**
      * Creates a new ToolDefinition.
      * @param {string} name A unique name for the tool.
      * @param {string} displayName A user-friendly display name for the tool.
@@ -172,8 +179,9 @@ class ToolDefinition {
      * @param {function} formatMessage A function that will be called to format the tool call toast.
      * @param {function} shouldRegister A function that will be called to determine if the tool should be registered.
      * @param {boolean} stealth A tool call result will not be shown in the chat. No follow-up generation will be performed.
+     * @param {string|Array<string|number>|null} [streamingPreviewArgument] Optional string argument name or path for streaming preview.
      */
-    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth) {
+    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, streamingPreviewArgument = null) {
         this.#name = name;
         this.#displayName = displayName;
         this.#description = description;
@@ -182,6 +190,7 @@ class ToolDefinition {
         this.#formatMessage = formatMessage;
         this.#shouldRegister = shouldRegister;
         this.#stealth = stealth;
+        this.#streamingPreviewArgument = streamingPreviewArgument ?? null;
     }
 
     /**
@@ -225,12 +234,20 @@ class ToolDefinition {
             : true;
     }
 
+    get name() {
+        return this.#name;
+    }
+
     get displayName() {
         return this.#displayName;
     }
 
     get stealth() {
         return this.#stealth;
+    }
+
+    get streamingPreviewArgument() {
+        return this.#streamingPreviewArgument;
     }
 }
 
@@ -278,10 +295,27 @@ export class ToolManager {
     }
 
     /**
+     * Returns registered tools that declared a streaming preview argument.
+     * @returns {Array<{ name: string, streamingPreviewArgument: string|Array<string|number> }>}
+     */
+    static getStreamingPreviewTargets() {
+        const targets = [];
+        for (const tool of this.#tools.values()) {
+            if (tool.streamingPreviewArgument) {
+                targets.push({
+                    name: tool.name,
+                    streamingPreviewArgument: tool.streamingPreviewArgument,
+                });
+            }
+        }
+        return targets;
+    }
+
+    /**
      * Registers a new tool with the tool registry.
      * @param {ToolRegistration} tool The tool to register.
      */
-    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth }) {
+    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, streamingPreviewArgument }) {
         // Convert WIP arguments
         if (typeof arguments[0] !== 'object') {
             [name, description, parameters, action] = arguments;
@@ -300,6 +334,7 @@ export class ToolManager {
             formatMessage,
             shouldRegister,
             stealth,
+            streamingPreviewArgument,
         );
         this.#tools.set(name, definition);
         console.log('[ToolManager] Registered function tool:', definition);

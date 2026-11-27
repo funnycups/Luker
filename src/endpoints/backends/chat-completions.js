@@ -39,6 +39,7 @@ import {
     cancelGenerationJobForRequest,
     getActiveGenerationJobsForRequest,
     getGenerationJobForRequest,
+    getJobDisplayText,
     subscribeToJob,
 } from './luker-generation.js';
 import { runLukerDispatch } from '../../luker-dispatch/runner.js';
@@ -94,7 +95,7 @@ router.post('/jobs/status', async function (request, response) {
         return response.send({
             id: job.id,
             status: job.status,
-            text: job.text,
+            text: getJobDisplayText(job),
             last_seq: job.lastSeq,
             persisted: Boolean(job.persisted),
             error: job.error || '',
@@ -128,7 +129,7 @@ router.post('/jobs/events', async function (request, response) {
         return response.send({
             id: job.id,
             status: job.status,
-            text: job.text,
+            text: getJobDisplayText(job),
             last_seq: job.lastSeq,
             persisted: Boolean(job.persisted),
             events: events,
@@ -205,7 +206,7 @@ router.get('/jobs/events-stream', function (request, response) {
         // Initial status snapshot so the client immediately has full text + status.
         writeFrame('status', {
             status: job.status,
-            text: job.text,
+            text: getJobDisplayText(job),
             last_seq: job.lastSeq,
             error: job.error || '',
             finished_at: job.finishedAt || null,

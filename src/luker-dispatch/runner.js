@@ -171,6 +171,7 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
         job = createGenerationJob(request, {
             job_id: requestId,
             persist_target: persistTarget,
+            streaming_tool_reply: streamingToolReply,
         });
     } catch (error) {
         response.status(error.status || 500).json({ error: error.message, code: error.code });
@@ -330,6 +331,7 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
         let initialPlainTextMetaEmitted = false;
         const plainTextStreamDetector = plainTextSession.active ? plainTextSession.createDetector() : null;
         let lastDetectedJobTextLen = 0;
+        let plainTextVisibleText = '';
         let livePlainTextParsingNotified = false;
         const ctx = createDispatchContext({
             request, abortController,
@@ -428,12 +430,25 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                         const textDelta = job.text.slice(lastDetectedJobTextLen);
                         lastDetectedJobTextLen = job.text.length;
                         const processed = plainTextStreamDetector.processTextDelta(textDelta);
-                        if (processed.detected && !livePlainTextParsingNotified) {
-                            livePlainTextParsingNotified = true;
-                            updateInspectionPlainTextState(request, {
-                                status: 'parsing',
-                                triggerSignal: plainTextSession.config.triggerSignal,
-                            });
+                        if (processed.visibleText) {
+                            plainTextVisibleText += processed.visibleText;
+                        }
+                        if (processed.detected) {
+                            job._plainTextMaskActive = true;
+                            job._plainTextVisibleText = plainTextVisibleText;
+                            if (streamingToolReply) {
+                                job._toolCallPreview = plainTextStreamDetector.getToolCallPreview(
+                                    streamingToolReply.name,
+                                    streamingToolReply.argument,
+                                ) || '';
+                            }
+                            if (!livePlainTextParsingNotified) {
+                                livePlainTextParsingNotified = true;
+                                updateInspectionPlainTextState(request, {
+                                    status: 'parsing',
+                                    triggerSignal: plainTextSession.config.triggerSignal,
+                                });
+                            }
                         }
                     }
                     // Throttled status push so a reconnecting client's
@@ -698,6 +713,9 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
                             finalEntryId = retryOutcome.inspectorEntryId || finalEntryId;
                         }
 
+                        job._plainTextMaskActive = false;
+                        job._plainTextVisibleText = '';
+                        job._toolCallPreview = '';
                         if (finalResult.status === 'parsed') {
                             job.text = finalResult.displayText;
                             const baseTurn = finalAttempt > 1 ? finalTurn : (job.parsedTurn || finalTurn);

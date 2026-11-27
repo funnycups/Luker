@@ -17,6 +17,7 @@ import {
     parseProtocolResponse,
     resolveWireProtocol,
 } from '../../../public/scripts/lib/protocol-parser/index.js';
+import { normalizeStreamingToolReplyConfig } from '../../../public/scripts/lib/streaming-tool-reply.js';
 import {
     getRequestTransientSession,
     getTransientSessionForUser,
@@ -94,6 +95,38 @@ function isSseFramedText(text) {
     return /^(?:data:|event:|id:|retry:|:)/.test(trimmed);
 }
 
+export function getJobDisplayText(job) {
+    if (!job || typeof job !== 'object') {
+        return '';
+    }
+    if (job._plainTextMaskActive) {
+        const visible = String(job._plainTextVisibleText || '');
+        if (visible.trim().length > 0) {
+            return visible;
+        }
+        return typeof job._toolCallPreview === 'string' ? job._toolCallPreview : '';
+    }
+    const committed = String(job.text || '');
+    if (committed.trim().length > 0) {
+        return committed;
+    }
+    const hasCompletedToolCalls = Array.isArray(job.parsedTurn?.toolCalls) && job.parsedTurn.toolCalls.length > 0;
+    if (!hasCompletedToolCalls && typeof job._toolCallPreview === 'string' && job._toolCallPreview.length > 0) {
+        return job._toolCallPreview;
+    }
+    return committed;
+}
+
+function updateJobProtocolToolCallPreview(job) {
+    if (!job || !job._streamingToolReply || !job._protocolParser) {
+        return;
+    }
+    job._toolCallPreview = job._protocolParser.getToolCallPreview?.(
+        job._streamingToolReply.name,
+        job._streamingToolReply.argument,
+    ) || '';
+}
+
 function feedJobStreamFrame(job, protocol, rawData, eventName = '') {
     if (!rawData || job.parseError) return;
     if (!job._protocolParser) {
@@ -104,6 +137,7 @@ function feedJobStreamFrame(job, protocol, rawData, eventName = '') {
         if (delta.textDelta) {
             job.text = String(job.text || '') + delta.textDelta;
         }
+        updateJobProtocolToolCallPreview(job);
     } catch (err) {
         if (err instanceof ProtocolParseError) {
             job.parseError = err.toDiagnostic();
@@ -165,10 +199,12 @@ export function finalizeJobProtocolStream(job) {
         try {
             const turn = job._protocolParser.finish();
             applyParsedTurnToJob(job, turn);
+            updateJobProtocolToolCallPreview(job);
         } catch (err) {
             if (err instanceof ProtocolParseError) {
                 if (err.stage === 'eof') {
                     const partial = job._protocolParser.getSnapshot();
+                    updateJobProtocolToolCallPreview(job);
                     if (!isParsedTurnEmpty(partial) || Boolean(job.text)) {
                         console.warn('[LukerGeneration] Stream closed without terminal marker; preserving received content:', err.message);
                         applyParsedTurnToJob(job, partial);
@@ -421,8 +457,9 @@ export function notifyJobTextProgress(job) {
     if (!job || String(job.status || '') !== 'running') {
         return;
     }
-    const textLen = String(job.text || '').length;
-    if (!textLen || textLen === Number(job._lastNotifiedTextLen || 0)) {
+    const displayText = getJobDisplayText(job);
+    const textLen = displayText.length;
+    if (!textLen || displayText === String(job._lastNotifiedDisplayText || '')) {
         return;
     }
     const now = Date.now();
@@ -434,6 +471,7 @@ export function notifyJobTextProgress(job) {
         }
         job._lastTextNotifyAt = now;
         job._lastNotifiedTextLen = textLen;
+        job._lastNotifiedDisplayText = displayText;
         notifyJobStatus(job);
         return;
     }
@@ -445,12 +483,14 @@ export function notifyJobTextProgress(job) {
         if (String(job.status || '') !== 'running') {
             return;
         }
-        const lenNow = String(job.text || '').length;
-        if (!lenNow || lenNow === Number(job._lastNotifiedTextLen || 0)) {
+        const textNow = getJobDisplayText(job);
+        const lenNow = textNow.length;
+        if (!lenNow || textNow === String(job._lastNotifiedDisplayText || '')) {
             return;
         }
         job._lastTextNotifyAt = Date.now();
         job._lastNotifiedTextLen = lenNow;
+        job._lastNotifiedDisplayText = textNow;
         notifyJobStatus(job);
     }, LUKER_GENERATION_TEXT_PROGRESS_NOTIFY_MS - elapsed);
 }
@@ -545,6 +585,11 @@ export function createGenerationJob(request, options) {
         requestMeta: null,
         modelName: '',
         _parsedRawNonStreamPayload: null,
+        _streamingToolReply: null,
+        _toolCallPreview: '',
+        _plainTextMaskActive: false,
+        _plainTextVisibleText: '',
+        _lastNotifiedDisplayText: '',
         ...(session ? { transientSessionId: session.id } : {}),
     };
 
@@ -568,11 +613,16 @@ export function createGenerationJob(request, options) {
         job._streamMode = null;
         job._utf8Decoder = null;
         job._lastNotifiedTextLen = 0;
+        job._lastNotifiedDisplayText = '';
         job._lastTextNotifyAt = 0;
         job._parsedRawNonStreamPayload = null;
+        job._toolCallPreview = '';
+        job._plainTextMaskActive = false;
+        job._plainTextVisibleText = '';
     }
 
     clearGenerationJobPersistenceTimer(job);
+    job._streamingToolReply = normalizeStreamingToolReplyConfig(options.streaming_tool_reply);
     job.status = 'running';
     job.updatedAt = now;
     job.error = '';
@@ -701,7 +751,7 @@ function notifyJobStatus(job) {
     notifyJobSubscribers(job, {
         type: 'status',
         status: job.status,
-        text: job.text,
+        text: getJobDisplayText(job),
         last_seq: job.lastSeq,
         error: job.error || '',
         finished_at: job.finishedAt || null,
@@ -1136,7 +1186,7 @@ export function getActiveGenerationJobsForRequest(request, persistTarget) {
         .map(job => ({
             id: job.id,
             status: job.status,
-            text: job.text,
+            text: getJobDisplayText(job),
             last_seq: job.lastSeq,
             created_at: job.createdAt,
             updated_at: job.updatedAt,
