@@ -286,12 +286,6 @@ describe('createDispatchContext', () => {
             expect(() => ctx.inspection.attach('https://example.test/txt2img')).not.toThrow();
         });
 
-        test('dead generation facade and completeFromStream helper are removed', () => {
-            const { ctx } = baseFixture();
-            expect(ctx.generation).toBeUndefined();
-            expect(ctx.inspection.completeFromStream).toBeUndefined();
-        });
-
         test('setStreamMode and inspection.attach synchronize effective stream mode', async () => {
             const { findEntry } = await import('../../src/request-inspector.js');
             const modes = [];

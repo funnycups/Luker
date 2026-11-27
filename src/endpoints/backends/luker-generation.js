@@ -112,6 +112,13 @@ function feedJobStreamFrame(job, protocol, rawData, eventName = '') {
             }
         } else {
             console.error('[LukerGeneration] Unexpected error while parsing stream frame:', err);
+            job.parseError = new ProtocolParseError({
+                protocol,
+                stage: 'unexpected',
+                location: 'stream',
+                message: `Unexpected error while parsing stream frame: ${err?.message || err}`,
+                cause: err,
+            }).toDiagnostic();
         }
     }
 }
@@ -173,6 +180,13 @@ export function finalizeJobProtocolStream(job) {
                 }
             } else {
                 console.error('[LukerGeneration] Unexpected error while finalizing stream parser:', err);
+                job.parseError = new ProtocolParseError({
+                    protocol,
+                    stage: 'unexpected',
+                    location: 'eof',
+                    message: `Unexpected error while finalizing stream parser: ${err?.message || err}`,
+                    cause: err,
+                }).toDiagnostic();
             }
         }
     }
@@ -184,6 +198,7 @@ export function finalizeJobProtocolStream(job) {
                 const parsed = JSON.parse(remaining);
                 const turn = parseProtocolResponse(protocol, parsed);
                 applyParsedTurnToJob(job, turn);
+                job._parsedRawNonStreamPayload = parsed;
                 job._streamMode = 'json';
             } catch (err) {
                 if (err instanceof ProtocolParseError) {
@@ -220,17 +235,13 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
     if (typeof chunkBytes === 'string') {
         text = chunkBytes;
     } else if (chunkBytes instanceof Uint8Array || Buffer.isBuffer(chunkBytes)) {
-        try {
-            if (!job._utf8Decoder) {
-                job._utf8Decoder = new StringDecoder('utf8');
-            }
-            const buf = Buffer.isBuffer(chunkBytes)
-                ? chunkBytes
-                : Buffer.from(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength);
-            text = job._utf8Decoder.write(buf);
-        } catch {
-            return;
+        if (!job._utf8Decoder) {
+            job._utf8Decoder = new StringDecoder('utf8');
         }
+        const buf = Buffer.isBuffer(chunkBytes)
+            ? chunkBytes
+            : Buffer.from(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength);
+        text = job._utf8Decoder.write(buf);
     } else {
         return;
     }
@@ -291,11 +302,22 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
                 const parsed = JSON.parse(trimmed);
                 const turn = parseProtocolResponse(protocol, parsed);
                 applyParsedTurnToJob(job, turn);
+                job._parsedRawNonStreamPayload = parsed;
                 job._sseBuffer = '';
                 job._streamMode = 'json';
             } catch (err) {
                 if (err instanceof ProtocolParseError) {
                     job.parseError = err.toDiagnostic();
+                    job._sseBuffer = '';
+                } else if (!(err instanceof SyntaxError)) {
+                    console.error('[LukerGeneration] Unexpected error while parsing non-stream response:', err);
+                    job.parseError = new ProtocolParseError({
+                        protocol,
+                        stage: 'unexpected',
+                        location: 'body',
+                        message: `Unexpected error while parsing response: ${err?.message || err}`,
+                        cause: err,
+                    }).toDiagnostic();
                     job._sseBuffer = '';
                 }
                 // SyntaxError from partial JSON chunk keeps buffering.
@@ -319,10 +341,21 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
             const parsed = JSON.parse(trimmed);
             const turn = parseProtocolResponse(protocol, parsed);
             applyParsedTurnToJob(job, turn);
+            job._parsedRawNonStreamPayload = parsed;
             job._sseBuffer = '';
         } catch (err) {
             if (err instanceof ProtocolParseError) {
                 job.parseError = err.toDiagnostic();
+                job._sseBuffer = '';
+            } else if (!(err instanceof SyntaxError)) {
+                console.error('[LukerGeneration] Unexpected error while parsing buffered response:', err);
+                job.parseError = new ProtocolParseError({
+                    protocol,
+                    stage: 'unexpected',
+                    location: 'body',
+                    message: `Unexpected error while parsing response: ${err?.message || err}`,
+                    cause: err,
+                }).toDiagnostic();
                 job._sseBuffer = '';
             }
         }
@@ -511,6 +544,7 @@ export function createGenerationJob(request, options) {
         persistenceInFlight: false,
         requestMeta: null,
         modelName: '',
+        _parsedRawNonStreamPayload: null,
         ...(session ? { transientSessionId: session.id } : {}),
     };
 
@@ -535,6 +569,7 @@ export function createGenerationJob(request, options) {
         job._utf8Decoder = null;
         job._lastNotifiedTextLen = 0;
         job._lastTextNotifyAt = 0;
+        job._parsedRawNonStreamPayload = null;
     }
 
     clearGenerationJobPersistenceTimer(job);

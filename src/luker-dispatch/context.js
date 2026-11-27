@@ -89,7 +89,7 @@ export function createDispatchContext({ request, abortController, onEmit, onClos
     function setStreamMode(isStream) {
         const normalized = Boolean(isStream);
         if (typeof onStreamMode === 'function') {
-            try { onStreamMode(normalized); } catch (error) { console.warn('[Dispatch] onStreamMode threw', error); }
+            try { onStreamMode(normalized); } catch (error) { console.error('[Dispatch] onStreamMode threw', error); }
         }
         const entry = findEntry(request);
         if (entry && entry.type === 'chat') {
@@ -102,7 +102,7 @@ export function createDispatchContext({ request, abortController, onEmit, onClos
         if (event.kind === 'end' || event.kind === 'error') {
             terminal = true;
         }
-        try { onEmit(event); } catch (error) { console.warn('[Dispatch] onEmit threw', error); }
+        try { onEmit(event); } catch (error) { console.error('[Dispatch] onEmit threw', error); }
     }
     return {
         body: request.body,
@@ -252,7 +252,7 @@ export function createDispatchContext({ request, abortController, onEmit, onClos
             // channel instead of injecting synthetic frames into response.body.
             meta(metaObj) {
                 if (!metaObj || typeof metaObj !== 'object') return;
-                try { onEmit({ kind: 'meta', data: metaObj }); } catch (error) { console.warn('[Dispatch] onEmit threw (meta)', error); }
+                try { onEmit({ kind: 'meta', data: metaObj }); } catch (error) { console.error('[Dispatch] onEmit threw (meta)', error); }
             },
         },
     };

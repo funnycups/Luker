@@ -51,12 +51,3 @@ describe('passthroughReasoningEffort', () => {
         expect(passthroughReasoningEffort('auto')).toBeUndefined();
     });
 });
-
-describe('dead exports cleanup', () => {
-    test('removed reasoning helper exports are not exported', async () => {
-        const mod = await import('../../../src/luker-dispatch/providers/chat-completions/reasoning-params.js');
-        expect(mod.isReasoningOff).toBeUndefined();
-        expect(mod.isReasoningAuto).toBeUndefined();
-        expect(mod.clampReasoningToken).toBeUndefined();
-    });
-});

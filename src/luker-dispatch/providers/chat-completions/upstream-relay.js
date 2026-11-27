@@ -91,7 +91,11 @@ export async function relayUpstreamResponse(ctx, resp, {
 
     if (!resp.ok) {
         let errText = '';
-        try { errText = await resp.text(); } catch { /* body already consumed */ }
+        try {
+            errText = await resp.text();
+        } catch (readErr) {
+            console.error(`${label} failed to read HTTP ${resp.status} error response body:`, readErr);
+        }
         console.warn(`${label} returned error: ${resp.status} ${resp.statusText} ${errText}`);
         const msg = `${label} upstream ${resp.status}: ${errText}`;
         ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
@@ -109,32 +113,49 @@ export async function relayUpstreamResponse(ctx, resp, {
 
     if (completeInspection) {
         const rawText = await resp.text();
-        ctx.emit.chunk(new TextEncoder().encode(rawText));
-        ctx.emit.end();
+        let parsed = null;
+        let hasParsedJson = false;
         try {
-            const parsed = JSON.parse(rawText);
+            parsed = JSON.parse(rawText);
+            hasParsedJson = true;
+        } catch (parseErr) {
+            if (!(parseErr instanceof SyntaxError)) {
+                throw parseErr;
+            }
+            // Leave entry running so runner's strict JSON parse-error path
+            // records ProtocolParseError + rawDiagnostic.
+        }
+        if (hasParsedJson) {
             if (typeof logResponse === 'function') {
                 logResponse(parsed);
             } else {
                 console.debug(`${label} response:`, parsed);
             }
             ctx.inspection.complete(parsed, parsed);
-        } catch {
-            // Leave entry running so runner's strict JSON parse-error path
-            // records ProtocolParseError + rawDiagnostic.
         }
+        ctx.emit.chunk(new TextEncoder().encode(rawText));
+        ctx.emit.end();
         return;
     }
 
     const buf = await resp.arrayBuffer();
+    let parsed = null;
+    let hasParsedJson = false;
     try {
-        const parsed = JSON.parse(new TextDecoder().decode(buf));
+        parsed = JSON.parse(new TextDecoder().decode(buf));
+        hasParsedJson = true;
+    } catch (parseErr) {
+        if (!(parseErr instanceof SyntaxError)) {
+            throw parseErr;
+        }
+    }
+    if (hasParsedJson) {
         if (typeof logResponse === 'function') {
             logResponse(parsed);
         } else {
             console.debug(`${label} response:`, parsed);
         }
-    } catch { /* non-JSON body — skip debug log */ }
+    }
     ctx.emit.chunk(new Uint8Array(buf));
     ctx.emit.end();
 }
@@ -150,9 +171,17 @@ export async function relayUpstreamResponse(ctx, resp, {
 export function handleProviderDispatchError(ctx, err, label) {
     const isAbort = err?.name === 'AbortError' || Boolean(ctx.signal?.aborted);
     if (isAbort) {
-        try { ctx.inspection.abort?.(); } catch { /* inspection best-effort */ }
+        try {
+            ctx.inspection.abort?.();
+        } catch (inspectionErr) {
+            console.error(`[${label}] Failed to record aborted request inspection state:`, inspectionErr);
+        }
     } else {
-        try { ctx.inspection.fail(err, 500); } catch { /* inspection best-effort */ }
+        try {
+            ctx.inspection.fail(err, 500);
+        } catch (inspectionErr) {
+            console.error(`[${label}] Failed to record failed request inspection state:`, inspectionErr);
+        }
         console.error(`Error communicating with ${label}:`, err);
     }
     ctx.emit.error(err);

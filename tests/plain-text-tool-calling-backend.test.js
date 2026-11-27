@@ -506,11 +506,68 @@ describe('Plain-text backend orchestration end-to-end (HTTP passthrough + WS met
         expect(ptMeta.originalError).toContain('not valid JSON');
         expect(ptMeta.toolCalls).toEqual([]);
         expect(job.text).toBe('');
+        expect(job.parsedTurn).toBeNull();
+        expect(job.status).toBe('failed');
 
         const buf = getBufferForHandle(HANDLE);
         const retryEntry = buf.find(e => e.id === ptMeta.inspectorEntryId);
         expect(retryEntry).toBeDefined();
         expect(retryEntry.plainTextFunctionCall.status).toBe('network_error');
+    });
+
+    test('backend retry returning HTTP 200 provider_error classifies as network_error without completing inspection', async () => {
+        upstream.reset();
+        const trigger = '<Function_ProvErr_Start/>';
+        const attempt1Body = JSON.stringify({
+            id: 'cmpl_pe1',
+            object: 'chat.completion',
+            choices: [{
+                index: 0,
+                message: {
+                    role: 'assistant',
+                    content: `${trigger}\n<function_calls><function_call><tool>get_weather</tool><args_json>bad</args_json></function_call></function_calls>`,
+                },
+                finish_reason: 'stop',
+            }],
+        });
+
+        upstream.enqueue((_req, res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(attempt1Body);
+        });
+        upstream.enqueue((_req, res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'rate limit exceeded' } }));
+        });
+
+        const { meta, job } = await sendProxied('pt-e2e-retry-provider-err', {
+            chat_completion_source: 'openai',
+            model: 'gpt-4o',
+            stream: false,
+            messages: [{ role: 'user', content: 'Weather?' }],
+            max_tokens: 128,
+            luker_plain_text_tools: {
+                mode: 'prompt_xml',
+                tools: SAMPLE_TOOLS,
+                toolChoice: 'auto',
+                triggerSignal: trigger,
+                retry: { enabled: true, maxAttempts: 3 },
+            },
+        });
+
+        const ptMeta = meta.plain_text_function_call;
+        expect(ptMeta.status).toBe('network_error');
+        expect(ptMeta.failureReason).toBe('network');
+        expect(ptMeta.attempt).toBe(2);
+        expect(ptMeta.error).toContain('rate limit exceeded');
+        expect(job.status).toBe('failed');
+        expect(job.parsedTurn).toBeNull();
+        expect(job.text).toBe('');
+
+        const buf = getBufferForHandle(HANDLE);
+        const retryEntry = buf.find(e => e.id === ptMeta.inspectorEntryId);
+        expect(retryEntry).toBeDefined();
+        expect(retryEntry.status).toBe('error');
     });
 
     test('backend retry returning normal prose (status=none) replaces job.text and replacedTurn instead of leaking broken XML', async () => {
@@ -612,13 +669,13 @@ describe('Plain-text backend orchestration end-to-end (HTTP passthrough + WS met
         expect(toolTurn.responses_output_items).toBeUndefined();
     });
 
-    test('preparePlainTextToolRequest ignores removed prompt_json alias', () => {
+    test('preparePlainTextToolRequest ignores unsupported mode strings', () => {
         const prepared = preparePlainTextToolRequest({
             chat_completion_source: 'openai',
             model: 'gpt-4o',
             messages: [{ role: 'user', content: 'Hi' }],
             luker_plain_text_tools: {
-                mode: 'prompt_json',
+                mode: 'unknown_mode',
                 tools: SAMPLE_TOOLS,
                 toolChoice: 'auto',
             },

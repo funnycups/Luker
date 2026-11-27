@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { dispatchLog as console } from './logging.js';
+
 /**
  * Pipe an upstream fetch response body to ctx.emit.chunk / ctx.emit.end.
  *
@@ -18,7 +20,11 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
     const body = resp?.body;
     if (!body) {
         const err = new Error('upstream response has no body');
-        try { ctx.inspection?.fail?.(err, 502); } catch { /* inspection best-effort */ }
+        try {
+            ctx.inspection?.fail?.(err, 502);
+        } catch (inspectionErr) {
+            console.error('[ResponseStream] Failed to mark request inspection failed:', inspectionErr);
+        }
         ctx.emit.error(err);
         return;
     }
@@ -84,6 +90,10 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
     }
 
     const err = new Error('upstream response body is neither Web ReadableStream nor Node Readable');
-    try { ctx.inspection?.fail?.(err, 502); } catch { /* inspection best-effort */ }
+    try {
+        ctx.inspection?.fail?.(err, 502);
+    } catch (inspectionErr) {
+        console.error('[ResponseStream] Failed to mark request inspection failed:', inspectionErr);
+    }
     ctx.emit.error(err);
 }

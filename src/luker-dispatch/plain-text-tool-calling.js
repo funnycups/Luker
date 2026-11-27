@@ -691,22 +691,21 @@ async function executeSinglePlainTextRetry({
         });
     }
 
-    if (retryEntry && retryEntry.status === 'running') {
-        completeInspection(retryRequest, parsedJson, parsedJson);
-    }
-
     let retryTurn;
     try {
         retryTurn = parseProtocolResponse(protocol, parsedJson);
     } catch (err) {
-        const msg = `Plain-text format-correction retry #${attempt} failed protocol parsing: ${err?.message || err}`;
+        const isProviderError = err instanceof ProtocolParseError && err.stage === 'provider_error';
+        const msg = isProviderError
+            ? `Plain-text format-correction retry #${attempt} returned provider error: ${err.message}`
+            : `Plain-text format-correction retry #${attempt} failed protocol parsing: ${err?.message || err}`;
         return failRetryAttempt({
             retryRequest,
             retryEntry,
             handle,
             retryOfEntryId,
-            terminalStatus: 'parse_failed',
-            failureReason: 'syntax',
+            terminalStatus: isProviderError ? 'network_error' : 'parse_failed',
+            failureReason: isProviderError ? 'network' : 'syntax',
             error: msg,
             inspectionAction: () => {
                 if (retryEntry && retryEntry.status !== 'error') {
@@ -718,6 +717,10 @@ async function executeSinglePlainTextRetry({
                 }
             },
         });
+    }
+
+    if (retryEntry && retryEntry.status === 'running') {
+        completeInspection(retryRequest, parsedJson, parsedJson);
     }
 
     const retryPtResult = evaluatePlainTextToolCallTurn(retryTurn, config);

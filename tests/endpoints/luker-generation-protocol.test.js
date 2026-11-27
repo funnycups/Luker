@@ -123,4 +123,24 @@ describe('luker-generation SSE framing detection & terminal job guards', () => {
         const persisted = await persistGenerationJobIfUnacked(errJob);
         expect(persisted).toBe(false);
     });
+
+    test('updates _parsedRawNonStreamPayload on buffered JSON chunks and resets it when recycling a job_id', () => {
+        const req = makeReq({ chat_completion_source: 'openai', stream: false });
+        const jobId = `recycle-raw-${++seq}`;
+        const job = createGenerationJob(req, { job_id: jobId });
+        expect(job._parsedRawNonStreamPayload).toBeNull();
+
+        const firstPayload = { id: 'resp_1', choices: [{ message: { role: 'assistant', content: 'first' } }] };
+        const secondPayload = { id: 'resp_2', choices: [{ message: { role: 'assistant', content: 'second' } }] };
+        accumulateChunkTextIntoJob(job, Buffer.from(JSON.stringify(firstPayload)));
+        expect(job._streamMode).toBe('json');
+        expect(job._parsedRawNonStreamPayload).toEqual(firstPayload);
+
+        accumulateChunkTextIntoJob(job, Buffer.from(JSON.stringify(secondPayload)));
+        expect(job._parsedRawNonStreamPayload).toEqual(secondPayload);
+
+        const recycled = createGenerationJob(req, { job_id: jobId });
+        expect(recycled).toBe(job);
+        expect(recycled._parsedRawNonStreamPayload).toBeNull();
+    });
 });

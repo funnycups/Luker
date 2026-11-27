@@ -680,5 +680,22 @@ describe('dispatchClaude', () => {
             expect(ctx.inspection.abort).toHaveBeenCalledTimes(1);
             expect(ctx.inspection.fail).not.toHaveBeenCalled();
         });
+
+        test('inspection.complete error surfaces via ctx.emit.error before ctx.emit.end', async () => {
+            const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+            try {
+                const ctx = fakeCtx();
+                ctx.inspection.complete = jest.fn(() => {
+                    throw new Error('inspection store failed');
+                });
+                await dispatchClaude(ctx);
+                const kinds = ctx._emitted.map(e => e.kind);
+                expect(kinds).toContain('error');
+                expect(kinds).not.toContain('end');
+                expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+            } finally {
+                errorSpy.mockRestore();
+            }
+        });
     });
 });
