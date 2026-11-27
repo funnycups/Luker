@@ -559,10 +559,17 @@ export async function dispatchToSender({
         if (typeof s.generateHorde !== 'function' || typeof s.getKoboldGenerationData !== 'function' || typeof s.getKoboldRuntime !== 'function') {
             throw new GenerateTaskError('unknown', 'dispatchToSender koboldhorde path requires senders.generateHorde / getKoboldGenerationData / getKoboldRuntime');
         }
-        const rt = s.getKoboldRuntime();
-        const settings = rt?.koboldai_settings && rt?.koboldai_setting_names
+        let rt = s.getKoboldRuntime();
+        let settings = rt?.koboldai_settings && rt?.koboldai_setting_names
             ? rt.koboldai_settings[rt.koboldai_setting_names[rt.kai_settings?.preset_settings]]
             : null;
+        if (!settings && rt?.kai_settings?.preset_settings && rt.kai_settings.preset_settings !== 'gui' && typeof s.ensurePresetHydrated === 'function') {
+            await s.ensurePresetHydrated('kobold', rt.kai_settings.preset_settings, { signal: abortSignal });
+            rt = s.getKoboldRuntime();
+            settings = rt?.koboldai_settings && rt?.koboldai_setting_names
+                ? rt.koboldai_settings[rt.koboldai_setting_names[rt.kai_settings?.preset_settings]]
+                : null;
+        }
         const data = s.getKoboldGenerationData(String(payload), settings, rt?.amount_gen, rt?.max_context, true, 'quiet');
         const hordeOptions = {};
         if (transientSessionId !== undefined) hordeOptions.transientSessionId = transientSessionId;
@@ -577,7 +584,7 @@ export async function dispatchToSender({
         if (typeof s.getKoboldGenerationData !== 'function' || typeof s.getKoboldRuntime !== 'function') {
             throw new GenerateTaskError('unknown', 'dispatchToSender kobold path requires senders.getKoboldGenerationData / getKoboldRuntime');
         }
-        const rt = s.getKoboldRuntime();
+        let rt = s.getKoboldRuntime();
         if (rt?.kai_settings?.preset_settings === 'gui') {
             body = {
                 prompt: String(payload),
@@ -587,19 +594,33 @@ export async function dispatchToSender({
                 api_server: rt.kai_settings.api_server,
             };
         } else {
-            const settings = rt?.koboldai_settings && rt?.koboldai_setting_names
+            let settings = rt?.koboldai_settings && rt?.koboldai_setting_names
                 ? rt.koboldai_settings[rt.koboldai_setting_names[rt.kai_settings.preset_settings]]
                 : null;
+            if (!settings && rt?.kai_settings?.preset_settings && typeof s.ensurePresetHydrated === 'function') {
+                await s.ensurePresetHydrated('kobold', rt.kai_settings.preset_settings, { signal: abortSignal });
+                rt = s.getKoboldRuntime();
+                settings = rt?.koboldai_settings && rt?.koboldai_setting_names
+                    ? rt.koboldai_settings[rt.koboldai_setting_names[rt.kai_settings.preset_settings]]
+                    : null;
+            }
             body = s.getKoboldGenerationData(String(payload), settings, rt?.amount_gen, rt?.max_context, false, 'quiet');
         }
     } else if (requestApi === 'novel') {
         if (typeof s.getNovelGenerationData !== 'function' || typeof s.getNovelRuntime !== 'function') {
             throw new GenerateTaskError('unknown', 'dispatchToSender novel path requires senders.getNovelGenerationData / getNovelRuntime');
         }
-        const rt = s.getNovelRuntime();
-        const settings = rt?.novelai_settings && rt?.novelai_setting_names
+        let rt = s.getNovelRuntime();
+        let settings = rt?.novelai_settings && rt?.novelai_setting_names
             ? rt.novelai_settings[rt.novelai_setting_names[rt.nai_settings?.preset_settings_novel]]
             : null;
+        if (!settings && rt?.nai_settings?.preset_settings_novel && typeof s.ensurePresetHydrated === 'function') {
+            await s.ensurePresetHydrated('novel', rt.nai_settings.preset_settings_novel, { signal: abortSignal });
+            rt = s.getNovelRuntime();
+            settings = rt?.novelai_settings && rt?.novelai_setting_names
+                ? rt.novelai_settings[rt.novelai_setting_names[rt.nai_settings?.preset_settings_novel]]
+                : null;
+        }
         body = s.getNovelGenerationData(payload, settings, rt?.amount_gen, false, false, null, 'quiet');
     } else { // textgenerationwebui
         if (typeof s.getTextGenGenerationData !== 'function') {
@@ -1278,6 +1299,11 @@ export async function generateTask({
             ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
             : taskMessages;
 
+        // ── 4.9 Hydrate explicitly named preset on demand before message assembly ──
+        if (profile.requestApi === 'openai' && effectiveLlmPresetName && typeof senders?.ensurePresetHydrated === 'function') {
+            await senders.ensurePresetHydrated('openai', effectiveLlmPresetName, { signal: abortSignal });
+        }
+
         // ── 5. Assemble messages (envelope-aware, chat-completion shape) ──
         const messages = assembleMessages({
             taskMessages: effectiveTaskMessages,
@@ -1485,6 +1511,11 @@ export function generateTaskStream({
             const effectiveTaskMessages = substituteMacros
                 ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
                 : taskMessages;
+
+            // ── 4.9 Hydrate explicitly named preset on demand before message assembly ──
+            if (profile.requestApi === 'openai' && effectiveLlmPresetName && typeof senders?.ensurePresetHydrated === 'function') {
+                await senders.ensurePresetHydrated('openai', effectiveLlmPresetName, { signal: abortSignal });
+            }
 
             // ── 5. Assemble messages ──
             const messages = assembleMessages({

@@ -12,7 +12,6 @@ import {
     chat_metadata,
     characters,
     cloneAsJsonWire,
-    ensureFullSettingsLoaded,
     event_types,
     eventSource,
     extension_prompt_roles,
@@ -706,7 +705,7 @@ const settingsKeyToPresetKey = Object.entries(settingsToUpdate).reduce((acc, [pr
 }, {});
 
 function getOpenAIPresetByName(presetName) {
-    const targetName = findCanonicalNameInList(Object.keys(openai_setting_names || {}), presetName) || String(presetName || '').trim();
+    const targetName = resolveExistingOpenAIPresetName(presetName) || String(presetName || '').trim();
     if (!targetName) {
         return null;
     }
@@ -4603,6 +4602,18 @@ async function sendOpenAIRequest(type, messages, signal, {
         }
     }
 
+    const requestedLlmPresetName = String(llmPresetName || '').trim();
+    if (requestedLlmPresetName) {
+        const canonicalLlmPresetName = resolveExistingOpenAIPresetName(requestedLlmPresetName);
+        if (canonicalLlmPresetName) {
+            const presetIndex = openai_setting_names?.[canonicalLlmPresetName];
+            const presetBody = Number.isInteger(presetIndex) ? openai_settings?.[presetIndex] : null;
+            if (!presetBody || typeof presetBody !== 'object') {
+                await ensureOpenAIPresetHydrated(canonicalLlmPresetName, { signal });
+            }
+        }
+    }
+
     const requestSettings = getSettingsForRequest({ llmPresetName, apiPresetName, apiSettingsOverride });
     const resolvedFunctionCallMode = resolveFunctionCallMode({
         requestedMode: functionCallMode,
@@ -7853,8 +7864,12 @@ async function onExportPresetClick() {
     } else {
         preset = getOpenAIPresetByName(presetName);
         if (!preset) {
-            await ensureFullSettingsLoaded();
-            preset = getOpenAIPresetByName(presetName);
+            try {
+                preset = await ensureOpenAIPresetHydrated(presetName);
+            } catch (error) {
+                console.error(`Failed to hydrate preset "${presetName}" for export`, error);
+                preset = null;
+            }
         }
         if (!preset || typeof preset !== 'object') {
             toastr.error(t`Failed to resolve preset for export`);
@@ -7948,7 +7963,15 @@ async function onDeletePresetClick() {
     }
 
     const nameToDelete = oai_settings.preset_settings_openai;
-    const value = openai_setting_names[oai_settings.preset_settings_openai];
+    let value = openai_setting_names[nameToDelete];
+    if (Number.isInteger(value) && !openai_settings[value]) {
+        try {
+            await ensureOpenAIPresetHydrated(nameToDelete);
+        } catch (error) {
+            console.warn(`Could not hydrate preset "${nameToDelete}" before delete`, error);
+        }
+        value = openai_setting_names[nameToDelete];
+    }
     const presetBodyToDelete = structuredClone(openai_settings[value] || {});
     $(`#settings_preset_openai option[value="${value}"]`).remove();
     delete openai_setting_names[oai_settings.preset_settings_openai];
@@ -8250,34 +8273,52 @@ function getCachedOpenAIPresetClone(presetName) {
     return null;
 }
 
+export async function ensureOpenAIPresetHydrated(presetName, { signal } = {}) {
+    const requested = String(presetName ?? '').trim();
+    if (!requested) {
+        return null;
+    }
+
+    const canonicalBefore = resolveExistingOpenAIPresetName(requested) || requested;
+    const existingIdx = openai_setting_names?.[canonicalBefore];
+    const existingBody = Number.isInteger(existingIdx) ? openai_settings?.[existingIdx] : null;
+    if (existingBody && typeof existingBody === 'object' && !Array.isArray(existingBody)) {
+        return existingBody;
+    }
+
+    const fetched = await readPresetDocument('openai', canonicalBefore, { signal });
+    if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+        throw new Error(`Preset "${canonicalBefore}" payload is not a JSON object`);
+    }
+
+    const canonicalAfter = resolveExistingOpenAIPresetName(canonicalBefore) || canonicalBefore;
+    let idx = openai_setting_names?.[canonicalAfter];
+    if (!Number.isInteger(idx)) {
+        openai_settings.push(structuredClone(fetched));
+        idx = openai_settings.length - 1;
+        openai_setting_names[canonicalAfter] = idx;
+    } else {
+        const current = openai_settings?.[idx];
+        if (!current || typeof current !== 'object' || Array.isArray(current)) {
+            openai_settings[idx] = structuredClone(fetched);
+        }
+    }
+    syncOpenAIPresetSelectOptionValues();
+    return openai_settings[idx];
+}
+
 async function resolveHydratedOpenAIPresetByName(presetName) {
     const existing = getCachedOpenAIPresetClone(presetName);
     if (existing) {
         return { ok: true, preset: existing };
     }
 
-    await ensureFullSettingsLoaded();
-    const afterWarmLoad = getCachedOpenAIPresetClone(presetName);
-    if (afterWarmLoad) {
-        return { ok: true, preset: afterWarmLoad };
-    }
-
     try {
-        const fetched = await readPresetDocument('openai', presetName);
-        if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+        const hydrated = await ensureOpenAIPresetHydrated(presetName);
+        if (!hydrated || typeof hydrated !== 'object' || Array.isArray(hydrated)) {
             throw new Error(`Preset "${presetName}" payload is not a JSON object`);
         }
-        const canonical = resolveExistingOpenAIPresetName(presetName) || String(presetName ?? '').trim();
-        let idx = openai_setting_names?.[canonical];
-        if (!Number.isInteger(idx)) {
-            openai_settings.push(structuredClone(fetched));
-            idx = openai_settings.length - 1;
-            openai_setting_names[canonical] = idx;
-        } else {
-            openai_settings[idx] = structuredClone(fetched);
-        }
-        syncOpenAIPresetSelectOptionValues();
-        return { ok: true, preset: structuredClone(fetched) };
+        return { ok: true, preset: structuredClone(hydrated) };
     } catch (error) {
         return { ok: false, error };
     }

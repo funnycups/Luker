@@ -1,5 +1,4 @@
 import {
-    ensureFullSettingsLoaded,
     getRequestHeaders,
     saveSettingsDebounced,
     getStoppingStrings,
@@ -17,6 +16,7 @@ import {
 import { t } from './i18n.js';
 import { autoSelectInstructPreset } from './instruct-mode.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
+import { readPresetDocument } from './named-resource-read.js';
 
 import {
     power_user,
@@ -110,6 +110,32 @@ export function hydrateKoboldPresetData(data = {}, options = {}) {
     });
     koboldai_setting_names = hydrated.names;
     koboldai_settings = hydrated.bodies;
+}
+
+export async function ensureKoboldPresetHydrated(name, { signal } = {}) {
+    const presetName = String(name ?? '').trim();
+    if (!presetName || presetName === 'gui') {
+        return null;
+    }
+    const existingIdx = koboldai_setting_names?.[presetName];
+    const existing = Number.isInteger(existingIdx) ? koboldai_settings?.[existingIdx] : null;
+    if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        return existing;
+    }
+
+    const fetched = await readPresetDocument('kobold', presetName, { signal });
+    if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+        throw new Error(`Kobold preset "${presetName}" payload is not a JSON object`);
+    }
+    const idx = koboldai_setting_names?.[presetName];
+    if (Number.isInteger(idx)) {
+        const current = koboldai_settings?.[idx];
+        if (!current || typeof current !== 'object' || Array.isArray(current)) {
+            koboldai_settings[idx] = fetched;
+        }
+        return koboldai_settings[idx];
+    }
+    return fetched;
 }
 
 export function loadKoboldSettings(data, preset, settings) {
@@ -559,11 +585,20 @@ export function initKoboldSettings() {
 
     $('#settings_preset').on('change', async function () {
         if ($('#settings_preset').find(':selected').val() != 'gui') {
-            kai_settings.preset_settings = $('#settings_preset').find(':selected').text();
-            let preset = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
+            const selectedName = $('#settings_preset').find(':selected').text();
+            kai_settings.preset_settings = selectedName;
+            let preset = koboldai_settings[koboldai_setting_names[selectedName]];
             if (!preset) {
-                await ensureFullSettingsLoaded();
-                preset = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
+                try {
+                    preset = await ensureKoboldPresetHydrated(selectedName);
+                } catch (error) {
+                    console.error(`Failed to load Kobold preset "${selectedName}"`, error);
+                    toastr.error(t`Failed to load preset.`);
+                    return;
+                }
+                if ($('#settings_preset').find(':selected').text() !== selectedName) {
+                    return;
+                }
             }
             if (!preset) {
                 return;

@@ -20,6 +20,7 @@ import {
 } from './scripts/message-takeover.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
+    ensureKoboldPresetHydrated,
     generateKoboldWithStreaming,
     hydrateKoboldPresetData,
     kai_settings,
@@ -162,6 +163,7 @@ import {
 } from './scripts/lib/streaming-tool-reply.js';
 
 import {
+    ensureNovelPresetHydrated,
     generateNovelWithStreaming,
     getNovelGenerationData,
     getKayraMaxContextTokens,
@@ -7587,13 +7589,15 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
                         generateData = { prompt: prompt, gui_settings: true, max_length: amount_gen, max_context_length: max_context, api_server: kai_settings.api_server };
                     } else {
                         const isHorde = api === 'koboldhorde';
-                        const koboldSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
+                        const koboldSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]]
+                            || await ensureKoboldPresetHydrated(kai_settings.preset_settings, { signal: eventAbortController.signal });
                         generateData = getKoboldGenerationData(prompt.toString(), koboldSettings, amount_gen, max_context, isHorde, 'quiet');
                     }
                     TempResponseLength.restore(api);
                     break;
                 case 'novel': {
-                    const novelSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
+                    const novelSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]]
+                        || await ensureNovelPresetHydrated(nai_settings.preset_settings_novel, { signal: eventAbortController.signal });
                     generateData = getNovelGenerationData(prompt, novelSettings, amount_gen, false, false, null, 'quiet');
                     TempResponseLength.restore(api);
                     break;
@@ -9396,7 +9400,8 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
 
             if (kai_settings.preset_settings != 'gui') {
                 const isHorde = main_api == 'koboldhorde';
-                const presetSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
+                const presetSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]]
+                    || await ensureKoboldPresetHydrated(kai_settings.preset_settings);
                 const maxContext = (adjustedParams && horde_settings.auto_adjust_context_length) ? adjustedParams.maxContextLength : max_context;
                 generate_data = getKoboldGenerationData(finalPrompt, presetSettings, maxLength, maxContext, isHorde, type);
             }
@@ -9408,7 +9413,8 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
         }
         case 'novel': {
             const cfgValues = useCfgPrompt ? { guidanceScale: cfgGuidanceScale } : null;
-            const presetSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
+            const presetSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]]
+                || await ensureNovelPresetHydrated(nai_settings.preset_settings_novel);
             generate_data = getNovelGenerationData(finalPrompt, presetSettings, maxLength, isImpersonate, isContinue, cfgValues, type);
             break;
         }

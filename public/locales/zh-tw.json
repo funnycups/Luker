@@ -8512,5 +8512,6 @@
     "Failed to delete theme. Check the console for more information.": "刪除主題失敗。請查看主控台以了解更多資訊。",
     "Theme deleted.": "主題已刪除。",
     "Enter a theme preset name:": "請輸入主題預設名稱：",
-    "Theme imported": "主題已匯入"
+    "Theme imported": "主題已匯入",
+    "Failed to load preset.": "載入預設失敗。"
 }

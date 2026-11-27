@@ -1,6 +1,5 @@
 import {
     abortStatusCheck,
-    ensureFullSettingsLoaded,
     eventSource,
     event_types,
     getRequestHeaders,
@@ -15,6 +14,7 @@ import {
     startStatusLoading,
     substituteParams,
 } from '../script.js';
+import { readPresetDocument } from './named-resource-read.js';
 import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
@@ -387,12 +387,53 @@ export function getTextGenServer(type = null) {
     }
 }
 
+let textGenPresetSelectionToken = 0;
+
+export async function ensureTextGenPresetHydrated(name, { signal } = {}) {
+    const presetName = String(name ?? '').trim();
+    if (!presetName) {
+        return null;
+    }
+    const existingIdx = Array.isArray(textgenerationwebui_preset_names)
+        ? textgenerationwebui_preset_names.indexOf(presetName)
+        : -1;
+    const existing = existingIdx !== -1 ? textgenerationwebui_presets?.[existingIdx] : null;
+    if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        return existing;
+    }
+
+    const fetched = await readPresetDocument('textgenerationwebui', presetName, { signal });
+    if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+        throw new Error(`TextGen preset "${presetName}" payload is not a JSON object`);
+    }
+    const idx = Array.isArray(textgenerationwebui_preset_names)
+        ? textgenerationwebui_preset_names.indexOf(presetName)
+        : -1;
+    if (idx !== -1) {
+        const current = textgenerationwebui_presets?.[idx];
+        if (!current || typeof current !== 'object' || Array.isArray(current)) {
+            textgenerationwebui_presets[idx] = fetched;
+        }
+        return textgenerationwebui_presets[idx];
+    }
+    return fetched;
+}
+
 async function selectPreset(name) {
+    const selectionToken = ++textGenPresetSelectionToken;
     let preset = textgenerationwebui_presets[textgenerationwebui_preset_names.indexOf(name)];
 
     if (!preset) {
-        await ensureFullSettingsLoaded();
-        preset = textgenerationwebui_presets[textgenerationwebui_preset_names.indexOf(name)];
+        try {
+            preset = await ensureTextGenPresetHydrated(name);
+        } catch (error) {
+            console.error(`Failed to load TextGen preset "${name}"`, error);
+            toastr.error(t`Failed to load preset.`);
+            return;
+        }
+        if (selectionToken !== textGenPresetSelectionToken) {
+            return;
+        }
     }
 
     if (!preset) {

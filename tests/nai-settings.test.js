@@ -62,16 +62,20 @@ jest.unstable_mockModule('../public/scripts/extensions/connection-manager/profil
     withProfileRetry: async (fn) => await fn(),
 }));
 
+let naiModule;
+let ensureNovelPresetHydrated;
 let loadNovelPreset;
 let loadNovelSettings;
 let naiSettings;
 
 beforeAll(async () => {
+    naiModule = await import('../public/scripts/nai-settings.js');
     ({
+        ensureNovelPresetHydrated,
         loadNovelPreset,
         loadNovelSettings,
         nai_settings: naiSettings,
-    } = await import('../public/scripts/nai-settings.js'));
+    } = naiModule);
 });
 
 describe('NovelAI settings', () => {
@@ -85,5 +89,46 @@ describe('NovelAI settings', () => {
         naiSettings.math1_temp = 1;
         loadNovelPreset({ ...naiSettings, genamt: 150, math1_temp: 0 });
         expect(naiSettings.math1_temp).toBe(0);
+    });
+
+    test('hydrates a single unhydrated NovelAI preset on demand without fetching sibling presets', async () => {
+        const origFetch = globalThis.fetch;
+        const requestedUrls = [];
+        globalThis.fetch = jest.fn(async (url) => {
+            const urlText = String(url);
+            requestedUrls.push(urlText);
+            if (urlText.startsWith('/api/bootstrap/metadata')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: async () => ({ account: 'default-user' }),
+                };
+            }
+            if (urlText.includes('/api/presets/get?') && urlText.includes('apiId=novel') && urlText.includes('name=ColdNovel')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify({ temperature: 1.15, top_p: 0.9 }),
+                };
+            }
+            throw new Error(`Unexpected fetch: ${urlText}`);
+        });
+
+        try {
+            loadNovelSettings(
+                { novelai_setting_names: ['ColdNovel', 'SiblingNovel'], novelai_settings: [null, null] },
+                { ...naiSettings },
+            );
+            const hydrated = await ensureNovelPresetHydrated('ColdNovel');
+            expect(hydrated).toEqual({ temperature: 1.15, top_p: 0.9 });
+            expect(naiModule.novelai_settings[0]).toEqual({ temperature: 1.15, top_p: 0.9 });
+            expect(naiModule.novelai_settings[1]).toBeNull();
+            expect(requestedUrls.filter(url => url.includes('/api/presets/'))).toHaveLength(1);
+            expect(requestedUrls.some(url => url.includes('SiblingNovel'))).toBe(false);
+        } finally {
+            globalThis.fetch = origFetch;
+        }
     });
 });

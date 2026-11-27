@@ -2024,6 +2024,10 @@ function buildGenerateTaskSenders() {
             openai_settings,
             openai_setting_names,
         }),
+        ensurePresetHydrated: async (apiId, presetName, options) => {
+            const pm = getPresetManager(apiId);
+            return pm ? await pm.ensurePresetHydrated(presetName, options) : null;
+        },
     };
 }
 

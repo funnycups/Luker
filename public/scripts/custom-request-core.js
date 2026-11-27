@@ -226,6 +226,7 @@ export function createCompletionServices({
             if (Array.isArray(prompt)) {
                 if (instructName) {
                     const instructPresetManager = getPresetManager('instruct');
+                    await instructPresetManager?.ensurePresetHydrated?.(instructName, { signal });
                     instructPreset = instructPresetManager?.getCompletionPresetByName(instructName);
                     if (instructPreset) {
                         requestData.prompt = this.constructPrompt(prompt, instructPreset, instructSettings);
@@ -246,6 +247,7 @@ export function createCompletionServices({
             if (presetName) {
                 const presetManager = getPresetManager(this.TYPE);
                 if (presetManager) {
+                    await presetManager.ensurePresetHydrated?.(presetName, { signal });
                     const preset = presetManager.getCompletionPresetByName(presetName);
                     if (preset) {
                         requestData = this.presetToGeneratePayload(preset, {}, requestData);
@@ -551,6 +553,7 @@ export function createCompletionServices({
             if (presetName) {
                 const presetManager = getPresetManager(this.TYPE);
                 if (presetManager) {
+                    await presetManager.ensurePresetHydrated?.(presetName, { signal });
                     const preset = presetManager.getCompletionPresetByName(presetName);
                     if (preset) {
                         requestData = await this.presetToGeneratePayload(preset, {}, requestData);
