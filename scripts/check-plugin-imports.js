@@ -91,7 +91,12 @@ function maskComments(source) {
 function listJsFilesRecursive(dir) {
     const out = [];
     let names;
-    try { names = readdirSync(dir); } catch { return out; }
+    try {
+        names = readdirSync(dir);
+    } catch (err) {
+        if (err?.code === 'ENOENT') return out;
+        throw err;
+    }
     for (const name of names) {
         if (name === 'node_modules' || name.startsWith('.')) continue;
         const full = join(dir, name);
@@ -108,7 +113,12 @@ function listJsFilesRecursive(dir) {
 function listJsFilesShallow(dir) {
     const out = [];
     let names;
-    try { names = readdirSync(dir); } catch { return out; }
+    try {
+        names = readdirSync(dir);
+    } catch (err) {
+        if (err?.code === 'ENOENT') return out;
+        throw err;
+    }
     for (const name of names) {
         if (!name.endsWith('.js')) continue;
         const full = join(dir, name);
@@ -183,7 +193,12 @@ export function findPluginViolations(repoRoot = REPO_ROOT) {
     const pluginViolations = new Map();
     for (const pluginDir of LUKER_PLUGIN_DIRS) {
         const pluginRoot = join(extDir, pluginDir);
-        try { statSync(pluginRoot); } catch { continue; }
+        try {
+            statSync(pluginRoot);
+        } catch (err) {
+            if (err?.code === 'ENOENT') continue;
+            throw err;
+        }
         const files = listJsFilesRecursive(pluginRoot);
         const coreHits = [];
         const pluginHits = [];
@@ -220,7 +235,12 @@ export function findPlatformViolations(repoRoot = REPO_ROOT) {
         const banAllExtensions = strictDirs.has(platformDir);
         for (const file of listJsFilesRecursive(dirPath)) {
             let source;
-            try { source = readFileSync(file, 'utf8'); } catch { continue; }
+            try {
+                source = readFileSync(file, 'utf8');
+            } catch (err) {
+                if (err?.code === 'ENOENT') continue;
+                throw err;
+            }
             for (const { spec, offset } of extractSpecifiers(source)) {
                 const resolved = resolveSpecifier(spec, file, repoRoot);
                 if (!resolved) continue;
@@ -265,7 +285,12 @@ export function findReverseViolations(repoRoot = REPO_ROOT) {
     const hits = [];
     for (const { file, banAllExtensions } of sources) {
         let source;
-        try { source = readFileSync(file, 'utf8'); } catch { continue; }
+        try {
+            source = readFileSync(file, 'utf8');
+        } catch (err) {
+            if (err?.code === 'ENOENT') continue;
+            throw err;
+        }
         for (const { spec, offset } of extractSpecifiers(source)) {
             const resolved = resolveSpecifier(spec, file, repoRoot);
             if (!resolved) continue;

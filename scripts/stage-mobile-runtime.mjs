@@ -303,8 +303,9 @@ export function collectDuplicateOnnxWasmEntries(nodeModulesSrc) {
         try {
             onnxStat = fs.statSync(onnxFile);
             transformersStat = fs.statSync(transformersFile);
-        } catch {
-            continue;
+        } catch (err) {
+            if (err?.code === 'ENOENT') continue;
+            throw err;
         }
         if (!onnxStat.isFile() || !transformersStat.isFile() || onnxStat.size !== transformersStat.size) {
             continue;
@@ -613,8 +614,9 @@ export function stageMobileRuntime({
             let stat;
             try {
                 stat = fs.statSync(srcFile);
-            } catch {
-                continue;
+            } catch (err) {
+                if (err?.code === 'ENOENT') continue;
+                throw err;
             }
             if (!stat.isFile()) {
                 continue;
@@ -637,8 +639,9 @@ export function stageMobileRuntime({
         let stat;
         try {
             stat = fs.statSync(srcFile);
-        } catch {
-            continue;
+        } catch (err) {
+            if (err?.code === 'ENOENT') continue;
+            throw err;
         }
         if (!stat.isFile()) {
             continue;
@@ -706,10 +709,13 @@ export function stageMobileRuntime({
             try {
                 // Follow symlinks (`statSync`) so dereferenced files/dirs are staged cleanly
                 stat = fs.statSync(fullSrc);
-            } catch {
-                // Broken symlink inside node_modules: skip
-                prunedCount += 1;
-                continue;
+            } catch (err) {
+                if (err?.code === 'ENOENT' || err?.code === 'ELOOP') {
+                    // Broken or cyclic symlink inside node_modules: skip
+                    prunedCount += 1;
+                    continue;
+                }
+                throw err;
             }
 
             const isDir = stat.isDirectory();
