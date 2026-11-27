@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../../harness/playwright.js';
 import { startServer } from '../../harness/server.js';
@@ -107,4 +107,47 @@ test('defers non-selected preset preload past welcome screen without re-fetching
         url.includes('/api/presets/get?') && url.includes('apiId=openai') && url.includes('name=Secondary_A'));
     expect(welcomePanelIndex).toBeGreaterThanOrEqual(0);
     expect(secondaryPresetIndex).toBeGreaterThan(welcomePanelIndex);
+});
+
+test('recovers cleanly at cold bootstrap when the saved OpenAI preset was deleted externally', async ({ page }) => {
+    const presetDir = join(server.dataRoot, 'default-user', 'OpenAI Settings');
+    const settingsPath = join(server.dataRoot, 'default-user', 'settings.json');
+    mkdirSync(presetDir, { recursive: true });
+    writeFileSync(join(presetDir, 'Surviving_Preset.json'), JSON.stringify({
+        temperature: 0.66,
+        openai_max_context: 4096,
+        openai_max_tokens: 300,
+    }));
+
+    const currentSettings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    currentSettings.main_api = 'openai';
+    currentSettings.oai_settings = {
+        ...(currentSettings.oai_settings || {}),
+        preset_settings_openai: 'Deleted_External_Preset',
+        global_preset_settings_openai: 'Deleted_External_Preset',
+    };
+    writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 4));
+    rmSync(join(presetDir, 'Deleted_External_Preset.json'), { force: true });
+
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+
+    await awaitMainUI(page, server.baseURL);
+
+    const state = await page.evaluate(async () => {
+        const { getPresetManager } = await import('/scripts/preset-manager.js');
+        const pm = getPresetManager('openai');
+        const selectedName = pm.getSelectedPresetName();
+        const list = pm.getPresetList();
+        const idx = list.preset_names[selectedName];
+        return {
+            selectedName,
+            hasHydratedBody: Boolean(Number.isInteger(idx) && list.presets[idx] && typeof list.presets[idx] === 'object'),
+        };
+    });
+
+    expect(pageErrors).toEqual([]);
+    expect(state.selectedName).toBeTruthy();
+    expect(state.selectedName).not.toBe('Deleted_External_Preset');
+    expect(state.hasHydratedBody).toBe(true);
 });

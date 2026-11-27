@@ -6506,10 +6506,11 @@ function loadOpenAISettings(data, settings) {
     const rawSavedPresetName = String(settings?.preset_settings_openai ?? '').trim();
     const rawSavedGlobalName = String(settings?.global_preset_settings_openai || rawSavedPresetName || default_settings.preset_settings_openai).trim();
     const resolvedGlobalPresetName = resolveExistingOpenAIPresetName(rawSavedGlobalName)
+        || resolveExistingOpenAIPresetName(rawSavedPresetName)
         || getOrderedPresetNames(openai_setting_names || {})[0]
         || default_settings.preset_settings_openai;
     const wasCharacterBoundSession = Boolean(settings?.character_bound_preset_active)
-        || Boolean(rawSavedPresetName && !(rawSavedPresetName in (openai_setting_names || {})));
+        || Boolean(rawSavedPresetName && !resolveExistingOpenAIPresetName(rawSavedPresetName));
 
     migrateChatCompletionSettings(settings);
 
@@ -6847,7 +6848,7 @@ function getSelectedNonCharacterBoundPresetName() {
 
 function resolveExistingOpenAIPresetName(name = '') {
     const presetNames = getOrderedPresetNames(openai_setting_names || {});
-    return findCanonicalNameInList(presetNames, name) || '';
+    return findCanonicalNameInList(presetNames, name, { caseInsensitive: true }) || '';
 }
 
 function getStoredGlobalOpenAIPresetName() {

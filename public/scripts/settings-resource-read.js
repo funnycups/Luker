@@ -10,14 +10,64 @@ import {
     stampNamedDocuments,
 } from './named-resource-read.js';
 
-function selectedPresetNames(settings) {
+function uniqueNonEmptyStrings(values) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values) {
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        if (trimmed && !seen.has(trimmed)) {
+            seen.add(trimmed);
+            result.push(trimmed);
+        }
+    }
+    return result;
+}
+
+export function activePresetApiId(settings) {
+    switch (settings?.main_api) {
+        case 'openai':
+            return 'openai';
+        case 'novel':
+            return 'novel';
+        case 'textgenerationwebui':
+            return 'textgenerationwebui';
+        case 'kobold':
+        case 'koboldhorde':
+            return 'kobold';
+        default:
+            return 'openai';
+    }
+}
+
+export function selectedPresetNames(settings, { activeApiOnly = false } = {}) {
+    const openaiCandidates = uniqueNonEmptyStrings([
+        settings?.oai_settings?.global_preset_settings_openai,
+        settings?.oai_settings?.preset_settings_openai,
+        settings?.preset_settings_openai,
+    ]);
+    const koboldRaw = settings?.kai_settings?.preset_settings ?? settings?.preset_settings;
+    const koboldCandidates = uniqueNonEmptyStrings([koboldRaw]).filter(name => name !== 'gui');
+
+    const full = {
+        novel: uniqueNonEmptyStrings([settings?.preset_settings_novel]),
+        openai: openaiCandidates.length > 0 ? openaiCandidates : ['Default'],
+        textgenerationwebui: uniqueNonEmptyStrings([settings?.textgenerationwebui_settings?.preset]),
+        kobold: koboldCandidates,
+    };
+
+    if (!activeApiOnly) {
+        return full;
+    }
+
+    const activeApi = activePresetApiId(settings);
     return {
-        novel: settings?.preset_settings_novel,
-        openai: settings?.oai_settings?.global_preset_settings_openai
-            || settings?.oai_settings?.preset_settings_openai
-            || settings?.preset_settings_openai,
-        textgenerationwebui: settings?.textgenerationwebui_settings?.preset,
-        kobold: settings?.kai_settings?.preset_settings ?? settings?.preset_settings,
+        novel: activeApi === 'novel' ? full.novel : [],
+        // `loadOpenAISettings` inspects the active OpenAI preset body at
+        // startup (character-bound restore, alias backfill, reasoning effort),
+        // so keep OpenAI's selected preset hydrated regardless of main_api.
+        openai: full.openai,
+        textgenerationwebui: activeApi === 'textgenerationwebui' ? full.textgenerationwebui : [],
+        kobold: activeApi === 'kobold' ? full.kobold : [],
     };
 }
 
@@ -40,7 +90,7 @@ async function loadAdvancedPreset(apiId, { signal } = {}) {
 export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
     const metadata = await loadResourceBootstrap({ signal });
     const settingsDocument = await loadSettingsDocument({ signal });
-    const selected = selectedPresetNames(settingsDocument);
+    const selected = selectedPresetNames(settingsDocument, { activeApiOnly: bootstrap });
     const selectedThemeName = typeof settingsDocument?.power_user?.theme === 'string'
         ? settingsDocument.power_user.theme
         : '';

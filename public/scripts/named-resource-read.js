@@ -1,5 +1,6 @@
 import { invalidateResourceReadsByPrefix, readResourceJson, resourceQuery } from './resource-read.js';
 import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './util/concurrent-map.js';
+import { findCanonicalNameInList } from './util/lookup-name.js';
 import { t } from './i18n.js';
 
 const NAMED_DOC_ROUTES = Object.freeze({
@@ -8,12 +9,19 @@ const NAMED_DOC_ROUTES = Object.freeze({
     quickReplies: '/api/quick-replies',
 });
 
-const PRESET_API_IDS = Object.freeze([
+export const PRESET_API_IDS = Object.freeze([
     'novel',
     'openai',
     'textgenerationwebui',
     'kobold',
 ]);
+
+const PRESET_API_RESPONSE_KEYS = Object.freeze({
+    novel: { bodies: 'novelai_settings', names: 'novelai_setting_names' },
+    openai: { bodies: 'openai_settings', names: 'openai_setting_names' },
+    textgenerationwebui: { bodies: 'textgenerationwebui_presets', names: 'textgenerationwebui_preset_names' },
+    kobold: { bodies: 'koboldai_settings', names: 'koboldai_setting_names' },
+});
 
 function isInvalidResource(error) {
     return error?.status === 422;
@@ -180,26 +188,70 @@ export function stampNamedDocuments(entries) {
     });
 }
 
+/**
+ * Resolves which preset name(s) from `names` should be eagerly hydrated
+ * during bootstrap for one API.
+ *
+ * Accepts a single candidate string or an ordered candidate array. Returns the
+ * first canonical match using tolerant case-insensitive lookup normalization.
+ * When at least one candidate was provided but none exists on disk, falls back
+ * to `[names[0]]` so startup hydrates the fallback preset selected by runtime.
+ *
+ * @param {string[]} names
+ * @param {string|string[]|null|undefined} rawSelected
+ * @returns {string[]}
+ */
+export function resolveBootstrapSelectedNames(names, rawSelected) {
+    if (!Array.isArray(names) || names.length === 0) {
+        return [];
+    }
+    const rawList = Array.isArray(rawSelected) ? rawSelected : [rawSelected];
+    const candidates = rawList
+        .map(candidate => (typeof candidate === 'string' ? candidate.trim() : ''))
+        .filter(Boolean);
+    if (candidates.length === 0) {
+        return [];
+    }
+    for (const candidate of candidates) {
+        const matched = findCanonicalNameInList(names, candidate, { caseInsensitive: true });
+        if (matched) {
+            return [matched];
+        }
+    }
+    return [names[0]];
+}
+
 export async function loadPresetResources({
     selected = {},
     complete = false,
     skipNames = {},
+    apiIds = PRESET_API_IDS,
     signal,
     concurrency = BULK_RESOURCE_READ_CONCURRENCY,
 } = {}) {
+    const requestedApis = Array.from(new Set(
+        (Array.isArray(apiIds) ? apiIds : PRESET_API_IDS)
+            .filter(apiId => Object.prototype.hasOwnProperty.call(PRESET_API_RESPONSE_KEYS, apiId)),
+    ));
+    if (requestedApis.length === 0) {
+        return {};
+    }
+
     const skippedByApi = new Map(
-        PRESET_API_IDS.map((apiId) => [apiId, new Set(Array.isArray(skipNames?.[apiId]) ? skipNames[apiId] : [])]),
+        requestedApis.map((apiId) => [apiId, new Set(Array.isArray(skipNames?.[apiId]) ? skipNames[apiId] : [])]),
     );
 
-    const fetchEntriesForApis = async (apiIds, namesByApi) => {
+    const fetchEntriesForApis = async (targetApiIds, namesByApi) => {
         const entriesByApi = new Map();
         const tasks = [];
-        for (const apiId of apiIds) {
-            const selectedName = selected?.[apiId];
+        for (const apiId of targetApiIds) {
             const skipped = skippedByApi.get(apiId);
             const names = namesByApi.get(apiId) || [];
+            const selectedSet = complete
+                ? null
+                : new Set(resolveBootstrapSelectedNames(names, selected?.[apiId]));
             const entries = names.map((name, index) => {
-                if ((!complete && name !== selectedName) || skipped.has(name)) {
+                if ((!complete && !selectedSet.has(name)) || skipped.has(name)) {
                     return { name, body: null };
                 }
                 tasks.push({ apiId, index, name });
@@ -232,12 +284,12 @@ export async function loadPresetResources({
     };
 
     const namesByApi = new Map();
-    await mapWithConcurrency(PRESET_API_IDS, concurrency, async (apiId, _index, itemSignal) => {
+    await mapWithConcurrency(requestedApis, concurrency, async (apiId, _index, itemSignal) => {
         namesByApi.set(apiId, await listPresetDocuments(apiId, { signal: itemSignal }));
     }, { signal, abortOnError: true });
 
-    const entriesByApi = await fetchEntriesForApis(PRESET_API_IDS, namesByApi);
-    const missingApis = PRESET_API_IDS.filter(apiId => entriesByApi.get(apiId).some(entry => entry?.missing));
+    const entriesByApi = await fetchEntriesForApis(requestedApis, namesByApi);
+    const missingApis = requestedApis.filter(apiId => entriesByApi.get(apiId).some(entry => entry?.missing));
     if (missingApis.length > 0) {
         const retryNamesByApi = new Map();
         await mapWithConcurrency(missingApis, concurrency, async (apiId, _index, itemSignal) => {
@@ -251,23 +303,13 @@ export async function loadPresetResources({
         }
     }
 
-    const byApi = {};
-    for (const apiId of PRESET_API_IDS) {
+    const result = {};
+    for (const apiId of requestedApis) {
         const valid = withoutMissing(entriesByApi.get(apiId));
-        byApi[apiId] = {
-            names: valid.map(entry => entry.name),
-            bodies: valid.map(entry => entry.body),
-        };
+        const keys = PRESET_API_RESPONSE_KEYS[apiId];
+        result[keys.bodies] = valid.map(entry => entry.body);
+        result[keys.names] = valid.map(entry => entry.name);
     }
 
-    return {
-        novelai_settings: byApi.novel.bodies,
-        novelai_setting_names: byApi.novel.names,
-        openai_settings: byApi.openai.bodies,
-        openai_setting_names: byApi.openai.names,
-        textgenerationwebui_presets: byApi.textgenerationwebui.bodies,
-        textgenerationwebui_preset_names: byApi.textgenerationwebui.names,
-        koboldai_settings: byApi.kobold.bodies,
-        koboldai_setting_names: byApi.kobold.names,
-    };
+    return result;
 }
