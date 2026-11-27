@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
-
-const CHARACTER_API_PROXY_TARGET = Symbol.for('luker.characterApiProxyTarget');
+import { getCharacterArrayApiProxy } from '../../public/scripts/lib/character-api-proxy.js';
+import { createRegexEngine } from '../../public/scripts/extensions/regex/engine-core.js';
 
 const rawCharacters = [];
 let activeChid = 0;
@@ -13,41 +13,13 @@ const extensionSettings = {
     preset_allowed_regex: {},
 };
 
-const characterWrapperCache = new WeakMap();
-
-function wrapCharacterProxy(raw) {
-    if (!raw || typeof raw !== 'object') return raw;
-    if (!characterWrapperCache.has(raw)) {
-        characterWrapperCache.set(raw, Object.defineProperty(Object.create(raw), CHARACTER_API_PROXY_TARGET, {
-            value: raw,
-            enumerable: false,
-        }));
-    }
-    return characterWrapperCache.get(raw);
-}
-
-function wrapCharacterListProxy(list) {
-    const unwrap = (v) => (v && typeof v === 'object' && v[CHARACTER_API_PROXY_TARGET]) ? v[CHARACTER_API_PROXY_TARGET] : v;
-    const wrapped = list.map(wrapCharacterProxy);
-    Object.defineProperty(wrapped, CHARACTER_API_PROXY_TARGET, {
-        value: list,
-        enumerable: false,
-    });
-    wrapped.indexOf = (...args) => list.indexOf(unwrap(args[0]), ...args.slice(1));
-    wrapped.includes = (...args) => list.includes(unwrap(args[0]), ...args.slice(1));
-    return wrapped;
-}
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    characters: rawCharacters,
-    get this_chid() { return activeChid; },
+const regexEngine = createRegexEngine({
+    getCharacters: () => rawCharacters,
+    getThisChid: () => activeChid,
+    getExtensionSettings: () => extensionSettings,
     saveSettingsDebounced: jest.fn(),
     substituteParams: (s) => s,
     substituteParamsExtended: (s) => s,
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettings,
     writeExtensionField: async (characterId, key, value) => {
         const card = rawCharacters[characterId];
         if (!card) return false;
@@ -58,48 +30,13 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
             : structuredClone(value);
         return true;
     },
-}));
-
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    t: (strings, ...values) => strings.reduce((acc, s, i) => acc + s + (values[i] ?? ''), ''),
-    translate: (s) => String(s ?? ''),
-    createScopedI18n: () => ({ i18n: (s) => String(s ?? ''), i18nFormat: (s) => String(s ?? '') }),
-}));
-
-jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({
     getPresetManager: () => null,
-}));
-
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
     regexFromString: (input) => new RegExp(input),
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/regex/redos-reporter.js', () => ({
     isRegexScriptPaused: () => false,
     recordRegexExecution: () => {},
     resetRegexScriptState: () => {},
-}));
+});
 
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/file-api.js', () => ({
-    fetchFileList: async () => [],
-    fetchFileContent: async () => '',
-    saveFileContent: async () => {},
-    deleteFile: async () => {},
-    renameFile: async () => {},
-}));
-
-jest.unstable_mockModule('../../public/scripts/lib/edits/conflict-ui.js', () => ({
-    showConflictResolution: async () => null,
-}));
-
-jest.unstable_mockModule('../../public/scripts/iteration-library/tools/ctx-and-docs-discovery.js', () => ({
-    listCtxKeys: () => [],
-    describeCtxPath: () => '',
-    listLukerDocs: () => [],
-    readLukerDoc: () => '',
-}));
-
-let regexEngine;
 let executeTool;
 let TOOL_NAMES;
 let nextUuid = 1;
@@ -116,10 +53,15 @@ const importEmbeddedWorldInfoSpy = jest.fn(async (_skip, char) => ({
 
 function buildContext() {
     return {
-        characters: wrapCharacterListProxy(rawCharacters),
+        characters: getCharacterArrayApiProxy(rawCharacters),
         characterId: activeChid,
+        getRequestHeaders: () => ({}),
         uuidv4: () => `uuid-${nextUuid++}`,
         extensionSettings,
+        edits: {
+            applyEdits: () => ({ clean: [], conflicts: [], newLive: {} }),
+            showConflictResolution: async () => null,
+        },
         worldInfoEntry: { create: () => ({}), delete: () => {} },
         chatWorldInfo: { getNames: () => [] },
         getWorldInfoNames: () => [],
@@ -144,6 +86,7 @@ function buildContext() {
             return true;
         },
         getExtensionApi: () => null,
+        translate: (s) => String(s ?? ''),
         lib: {},
         regex: {
             SCRIPT_TYPES: regexEngine.SCRIPT_TYPES,
@@ -157,7 +100,6 @@ function buildContext() {
 }
 
 beforeAll(async () => {
-    regexEngine = await import('../../public/scripts/extensions/regex/engine.js');
     globalThis.Luker = { getContext: () => buildContext() };
     ({ executeTool, TOOL_NAMES } = await import('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js'));
 });

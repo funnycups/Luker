@@ -2,60 +2,8 @@
  * Scoped regex persistence, record isolation, target ownership, and serialized cleanup contracts.
  */
 
-import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
-
-const characters = [];
-const extension_settings = {
-    disabledExtensions: [],
-    regex: [],
-    character_allowed_regex: [],
-    preset_allowed_regex: {},
-};
-let presetManager = null;
-
-let writeExtensionFieldImpl = async () => true;
-const saveSettingsDebouncedMock = jest.fn();
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    characters,
-    this_chid: 0,
-    saveSettingsDebounced: (...args) => saveSettingsDebouncedMock(...args),
-    substituteParams: (s) => s,
-    substituteParamsExtended: (s) => s,
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings,
-    writeExtensionField: (...args) => writeExtensionFieldImpl(...args),
-}));
-
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    t: (strings, ...values) => strings.reduce((acc, str, idx) => acc + str + (values[idx] ?? ''), ''),
-}));
-
-jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({
-    getPresetManager: () => presetManager,
-}));
-
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-    regexFromString: (input) => {
-        if (typeof input !== 'string') return null;
-        const m = input.match(/\/(.+)\/([gimsuy]*)/s);
-        return m ? new RegExp(m[1], m[2]) : new RegExp(input);
-    },
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/regex/redos-reporter.js', () => ({
-    isRegexScriptPaused: () => false,
-    recordRegexExecution: () => {},
-    resetRegexScriptState: () => {},
-}));
-
-let engine;
-
-beforeAll(async () => {
-    engine = await import('../../public/scripts/extensions/regex/engine.js');
-});
+import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { createRegexEngine } from '../../public/scripts/extensions/regex/engine-core.js';
 
 function makeScript(id, name, extra = {}) {
     return {
@@ -81,51 +29,79 @@ function flushMicrotasks() {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-beforeEach(() => {
-    saveSettingsDebouncedMock.mockClear();
-    globalThis.toastr = {
-        error: jest.fn(),
-        warning: jest.fn(),
-        success: jest.fn(),
-        info: jest.fn(),
-    };
-    characters.splice(0, characters.length,
-        {
-            avatar: 'watchpost-a.png',
-            data: {
-                extensions: {
-                    regex_scripts: [makeScript('script-a', 'Beacon A')],
-                    retained: { sibling: 'keep-a' },
-                },
-            },
-        },
-        {
-            avatar: 'watchpost-b.png',
-            data: {
-                extensions: {
-                    regex_scripts: [makeScript('script-b', 'Beacon B')],
-                    retained: { sibling: 'keep-b' },
-                },
-            },
-        },
-    );
-    extension_settings.disabledExtensions = [];
-    extension_settings.regex = [makeScript('global-1', 'Global Rule')];
-    extension_settings.character_allowed_regex = ['watchpost-a.png'];
-    extension_settings.preset_allowed_regex = {};
-    presetManager = null;
-    writeExtensionFieldImpl = async (characterId, key, value) => {
-        const character = characters[characterId];
-        if (!character) return false;
-        const resolved = typeof value === 'function'
-            ? await value(structuredClone(character.data.extensions[key]))
-            : structuredClone(value);
-        character.data.extensions[key] = resolved;
-        return true;
-    };
-});
-
 describe('regex engine scoped save outcomes and isolation', () => {
+    let characters;
+    let extensionSettings;
+    let presetManager;
+    let writeExtensionFieldImpl;
+    let saveSettingsDebouncedMock;
+    let engine;
+
+    beforeEach(() => {
+        saveSettingsDebouncedMock = jest.fn();
+        globalThis.toastr = {
+            error: jest.fn(),
+            warning: jest.fn(),
+            success: jest.fn(),
+            info: jest.fn(),
+        };
+        characters = [
+            {
+                avatar: 'watchpost-a.png',
+                data: {
+                    extensions: {
+                        regex_scripts: [makeScript('script-a', 'Beacon A')],
+                        retained: { sibling: 'keep-a' },
+                    },
+                },
+            },
+            {
+                avatar: 'watchpost-b.png',
+                data: {
+                    extensions: {
+                        regex_scripts: [makeScript('script-b', 'Beacon B')],
+                        retained: { sibling: 'keep-b' },
+                    },
+                },
+            },
+        ];
+        extensionSettings = {
+            disabledExtensions: [],
+            regex: [makeScript('global-1', 'Global Rule')],
+            character_allowed_regex: ['watchpost-a.png'],
+            preset_allowed_regex: {},
+        };
+        presetManager = null;
+        writeExtensionFieldImpl = async (characterId, key, value) => {
+            const character = characters[characterId];
+            if (!character) return false;
+            const resolved = typeof value === 'function'
+                ? await value(structuredClone(character.data.extensions[key]))
+                : structuredClone(value);
+            character.data.extensions[key] = resolved;
+            return true;
+        };
+
+        engine = createRegexEngine({
+            getCharacters: () => characters,
+            getThisChid: () => 0,
+            getExtensionSettings: () => extensionSettings,
+            saveSettingsDebounced: (...args) => saveSettingsDebouncedMock(...args),
+            substituteParams: (s) => s,
+            substituteParamsExtended: (s) => s,
+            writeExtensionField: (...args) => writeExtensionFieldImpl(...args),
+            getPresetManager: () => presetManager,
+            regexFromString: (input) => {
+                if (typeof input !== 'string') return null;
+                const m = input.match(/\/(.+)\/([gimsuy]*)/s);
+                return m ? new RegExp(m[1], m[2]) : new RegExp(input);
+            },
+            isRegexScriptPaused: () => false,
+            recordRegexExecution: () => {},
+            resetRegexScriptState: () => {},
+        });
+    });
+
     test('getScriptsByType returns isolated clones so caller edits never mutate live character records', () => {
         const scripts = engine.getScriptsByType(engine.SCRIPT_TYPES.SCOPED);
         expect(scripts).toHaveLength(1);
@@ -191,7 +167,6 @@ describe('regex engine scoped save outcomes and isolation', () => {
 
         await flushMicrotasks();
 
-        // Reading never mutates live data or schedules unprompted background persistence.
         expect(writeSpy).not.toHaveBeenCalled();
         expect(characters[0].data.extensions.regex_scripts).toHaveLength(2);
         expect(characters[0].data.extensions.regex_scripts[1]).toBeNull();

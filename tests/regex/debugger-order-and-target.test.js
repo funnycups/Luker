@@ -7,6 +7,8 @@ import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globa
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { createRegexEngine } from '../../public/scripts/extensions/regex/engine-core.js';
+import { createRegexDebuggerController } from '../../public/scripts/extensions/regex/debugger-controller.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../..');
@@ -33,7 +35,6 @@ function makeScript(id, name) {
 function installJQuery(doc) {
     const dataStore = new WeakMap();
     const listeners = new WeakMap();
-    const readyCallbacks = [];
 
     const getDataMap = (el) => {
         if (!dataStore.has(el)) dataStore.set(el, new Map());
@@ -44,9 +45,6 @@ function installJQuery(doc) {
         let els = [];
         if (input == null) {
             els = [];
-        } else if (typeof input === 'function') {
-            readyCallbacks.push(input);
-            return {};
         } else if (input === doc || input === window) {
             els = [input];
         } else if (typeof input === 'string') {
@@ -193,22 +191,19 @@ function installJQuery(doc) {
 
     globalThis.$ = wrap;
     globalThis.jQuery = wrap;
-    return { readyCallbacks };
 }
 
 describe('regex debugger pinned async targets and serialized scoped order save', () => {
     let orig$;
     let origJQuery;
     let origToastr;
-    let jqControl;
 
     beforeEach(() => {
-        jest.resetModules();
         orig$ = globalThis.$;
         origJQuery = globalThis.jQuery;
         origToastr = globalThis.toastr;
-        document.body.innerHTML = '<button id="open_regex_debugger"></button><div id="saved_regex_scripts"></div><div id="saved_scoped_scripts"></div><div id="saved_preset_scripts"></div><div id="regex_container"></div>';
-        jqControl = installJQuery(document);
+        document.body.innerHTML = '';
+        installJQuery(document);
         globalThis.toastr = { info: jest.fn(), warning: jest.fn(), error: jest.fn(), success: jest.fn() };
     });
 
@@ -268,29 +263,13 @@ describe('regex debugger pinned async targets and serialized scoped order save',
             return 1;
         });
 
-        const updateScopedSpy = jest.fn();
-        const saveScriptsByTypeSpy = jest.fn();
-
-        jest.unstable_mockModule('../../public/script.js', () => ({
-            characters,
-            get this_chid() { return activeChid; },
-            chatElement: { find: () => ({ length: 0 }) },
-            eventSource: { on: jest.fn(), emit: jest.fn(async () => {}) },
-            event_types: { CHAT_CHANGED: 'chat_changed', PRESET_CHANGED: 'preset_changed', OAI_PRESET_IMPORT_READY: 'oai_import', OAI_PRESET_EXPORT_READY: 'oai_export' },
-            getCurrentChatId: () => 'chat-1',
-            messageFormatting: (s) => s,
-            redisplayChat: jest.fn(),
-            reloadCurrentChat: jest.fn(async () => {}),
-            saveSettings: jest.fn(async () => ({ ok: true, status: 'saved' })),
+        const realEngine = createRegexEngine({
+            getCharacters: () => characters,
+            getThisChid: () => activeChid,
+            getExtensionSettings: () => extensionSettings,
             saveSettingsDebounced: jest.fn(),
-            unshallowCharacter: jest.fn(async () => {}),
             substituteParams: (s) => s,
             substituteParamsExtended: (s) => s,
-        }));
-
-        jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-            extension_settings: extensionSettings,
-            renderExtensionTemplateAsync,
             writeExtensionField: async (characterId, key, value) => {
                 const card = characters[characterId];
                 if (!card) return false;
@@ -300,53 +279,6 @@ describe('regex debugger pinned async targets and serialized scoped order save',
                 card.data.extensions[key] = next;
                 return true;
             },
-        }));
-
-        jest.unstable_mockModule('../../public/scripts/group-chats.js', () => ({ selected_group: null }));
-        jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-            callGenericPopup,
-            POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null },
-            POPUP_TYPE: { TEXT: 1, CONFIRM: 2, INPUT: 3 },
-            Popup: { show: { confirm: jest.fn(), input: jest.fn() } },
-        }));
-        jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommand.js', () => ({ SlashCommand: { fromProps: (x) => x } }));
-        jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandArgument.js', () => ({
-            ARGUMENT_TYPE: { STRING: 'string', BOOLEAN: 'boolean' },
-            SlashCommandArgument: class { static fromProps(x) { return x; } },
-            SlashCommandNamedArgument: { fromProps: (x) => x },
-        }));
-        jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandCommonEnumsProvider.js', () => ({
-            commonEnumProviders: { boolean: () => () => [] },
-            enumIcons: { getStateIcon: () => '', preset: '' },
-        }));
-        jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandEnumValue.js', () => ({
-            SlashCommandEnumValue: class {},
-            enumTypes: { enum: 'enum', name: 'name', variable: 'variable' },
-        }));
-        jest.unstable_mockModule('../../public/scripts/slash-commands/SlashCommandParser.js', () => ({
-            SlashCommandParser: { addCommandObject: jest.fn() },
-        }));
-        jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-            download: jest.fn(),
-            equalsIgnoreCaseAndAccents: (a, b) => a === b,
-            escapeHtml: (s) => String(s ?? ''),
-            getFileText: jest.fn(),
-            getSortableDelay: () => 0,
-            isFalseBoolean: () => false,
-            isTrueBoolean: () => false,
-            regexFromString: (input) => new RegExp(input),
-            setInfoBlock: jest.fn(),
-            uuidv4: () => 'uuid-1',
-        }));
-        jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-            getCurrentLocale: () => 'en',
-            t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
-            translate: (s) => String(s ?? ''),
-        }));
-        jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
-            accountStorage: { getItem: () => null, setItem: jest.fn(), removeItem: jest.fn() },
-        }));
-        jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({
             getPresetManager: () => ({
                 apiId: 'openai',
                 getSelectedPresetName: () => currentPresetName,
@@ -355,41 +287,49 @@ describe('regex debugger pinned async targets and serialized scoped order save',
                     presetScriptsByName[name || currentPresetName] = structuredClone(value);
                 },
             }),
-        }));
+            regexFromString: (input) => new RegExp(input),
+            isRegexScriptPaused: () => false,
+            recordRegexExecution: () => {},
+            resetRegexScriptState: () => {},
+        });
 
-        jest.unstable_mockModule('fflate', () => ({
-            gzipSync: (data) => data,
-            gzip: (data, cb) => cb(null, data),
-        }));
+        const updateScopedSpy = jest.fn((...args) => realEngine.updateScopedRegexScripts(...args));
+        const saveScriptsByTypeSpy = jest.fn((...args) => realEngine.saveScriptsByType(...args));
 
-        const realEngine = await import('../../public/scripts/extensions/regex/engine.js');
-        jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-            ...realEngine,
-            saveScriptsByType: async (...args) => {
-                saveScriptsByTypeSpy(...args);
-                return realEngine.saveScriptsByType(...args);
-            },
-            updateScopedRegexScripts: async (...args) => {
-                updateScopedSpy(...args);
-                return realEngine.updateScopedRegexScripts(...args);
-            },
-        }));
-
-        const regexExt = await import('../../public/scripts/extensions/regex/index.js');
-        await regexExt.init();
-        for (const cb of jqControl.readyCallbacks) {
-            await cb();
-        }
+        const controller = createRegexDebuggerController({
+            getThisChid: () => activeChid,
+            captureRegexTarget: realEngine.captureRegexTarget,
+            renderExtensionTemplateAsync,
+            getScriptsByType: realEngine.getScriptsByType,
+            getRuntimeRegexScripts: realEngine.getRuntimeRegexScripts,
+            saveScriptsByType: saveScriptsByTypeSpy,
+            updateScopedRegexScripts: updateScopedSpy,
+            saveSettingsNow: async () => {},
+            saveSettingsDebounced: jest.fn(),
+            loadRegexScripts: async () => {},
+            executeRegexScriptForDebugging: (_script, text) => ({ output: text, highlightedOutput: text, charsCaptured: 0, charsAdded: 0, charsRemoved: 0 }),
+            onReadonlyRegexViewOpenClick: async () => {},
+            onRegexEditorOpenClick: async () => {},
+            getRegexSortableDelay: () => 0,
+            messageFormatting: (s) => s,
+            callGenericPopup,
+            POPUP_TYPE: { TEXT: 1 },
+            escapeHtml: (s) => String(s ?? ''),
+            uuidv4: () => 'uuid-1',
+            t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
+            SCRIPT_TYPES: realEngine.SCRIPT_TYPES,
+            SCRIPT_TYPE_UNKNOWN: realEngine.SCRIPT_TYPE_UNKNOWN,
+        });
 
         // Open debugger while Alice (chid 0) & PresetA are active
-        document.getElementById('open_regex_debugger').click();
+        const openPromise = controller.onRegexDebuggerOpenClick();
         await Promise.resolve();
 
         // While template fetch is still pending, switch active character to Bob (chid 1) and preset to PresetB!
         activeChid = 1;
         currentPresetName = 'PresetB';
         resolveTemplate();
-        await new Promise(r => setTimeout(r, 10));
+        await openPromise;
 
         // Debugger MUST render Alice's scoped rules and PresetA's rules (pinned before async await), NOT Bob / PresetB
         const scopedItems = [...mountedPopupHost.querySelectorAll('#regex_debugger_rules_scoped li')].map(li => li.getAttribute('data-id'));
