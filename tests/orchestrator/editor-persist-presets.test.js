@@ -26,6 +26,7 @@ globalThis.Luker = {
         },
         extensionSettings,
         saveSettings: async () => {},
+        saveSettingsDebounced: () => {},
     }),
 };
 
@@ -237,5 +238,76 @@ describe('editor-persist — character writes land in the card active slot', () 
         expect(recorded).toHaveLength(2);
         expect(recorded[1].value).toBe(unsetSentinel);
         expect(Object.prototype.hasOwnProperty.call(character.data.extensions, 'orchestrator')).toBe(false);
+    });
+
+    test('setCharacterActivePresetForSavedMode validates avatar, mode, preset ownership, clearing, and persistence failure', async () => {
+        const makeLibraries = () => ({
+            override: { mode: 'loop' },
+            presetLibraries: {
+                spec: {},
+                agenda: {},
+                director: {},
+                loop: {
+                    reef_watch: { name: 'Reef watch', system_prompt: 'Keep the reef watch.', tools: {} },
+                    tide_log: { name: 'Tide log', system_prompt: 'Keep the tide log.', tools: {} },
+                },
+            },
+            activePresetIds: { spec: '', agenda: '', director: '', loop: 'reef_watch' },
+        });
+        const cardA = { avatar: 'watch-a.png', name: 'Maren', data: { extensions: { orchestrator: makeLibraries() } } };
+        const cardB = { avatar: 'watch-b.png', name: 'Outer', data: { extensions: { orchestrator: makeLibraries() } } };
+        const cardEmpty = { avatar: 'no-watch.png', name: 'Empty', data: { extensions: { orchestrator: {} } } };
+        const settings = { executionMode: 'spec' };
+        let shouldPersistSucceed = true;
+        const writeCalls = [];
+        const ctx = {
+            characters: [cardA, cardB, cardEmpty],
+            characterId: 0,
+            extensionSettings: { orchestrator: settings },
+            writeExtensionField: async (id, key, updater) => {
+                writeCalls.push({ id, key });
+                if (!shouldPersistSucceed) return false;
+                const current = structuredClone(ctx.characters[id].data.extensions[key] || {});
+                ctx.characters[id].data.extensions[key] = typeof updater === 'function' ? await updater(current) : updater;
+                return true;
+            },
+        };
+
+        // Invalid avatar, missing saved mode, unknown preset, and Object.prototype property reject without writing
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'missing.png', 'tide_log'))
+            .toEqual({ ok: false, mode: '', reason: 'character_not_found' });
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'no-watch.png', 'tide_log'))
+            .toEqual({ ok: false, mode: '', reason: 'no_saved_mode' });
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-a.png', 'storm_drill'))
+            .toEqual({ ok: false, mode: 'loop', reason: 'preset_not_found' });
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-a.png', 'constructor'))
+            .toEqual({ ok: false, mode: 'loop', reason: 'preset_not_found' });
+        expect(writeCalls).toEqual([]);
+        expect(settings.executionMode).toBe('spec');
+
+        // Persist failure leaves stored activePresetIds and executionMode untouched
+        shouldPersistSucceed = false;
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-a.png', 'tide_log'))
+            .toEqual({ ok: false, mode: 'loop', reason: 'persist_failed' });
+        expect(cardA.data.extensions.orchestrator.activePresetIds.loop).toBe('reef_watch');
+        expect(settings.executionMode).toBe('spec');
+
+        // Valid switch on selected and unselected cards preserves presetLibraries; clearing resets activePresetId to ''
+        shouldPersistSucceed = true;
+        const preservedLibs = structuredClone(cardA.data.extensions.orchestrator.presetLibraries);
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-a.png', 'tide_log'))
+            .toEqual({ ok: true, mode: 'loop' });
+        expect(cardA.data.extensions.orchestrator.activePresetIds.loop).toBe('tide_log');
+        expect(cardA.data.extensions.orchestrator.presetLibraries).toEqual(preservedLibs);
+        expect(settings.executionMode).toBe('loop');
+
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-b.png', 'tide_log'))
+            .toEqual({ ok: true, mode: 'loop' });
+        expect(cardB.data.extensions.orchestrator.activePresetIds.loop).toBe('tide_log');
+
+        expect(await persist.setCharacterActivePresetForSavedMode(ctx, settings, 'watch-a.png', ''))
+            .toEqual({ ok: true, mode: 'loop' });
+        expect(cardA.data.extensions.orchestrator.activePresetIds.loop).toBe('');
+        expect(cardA.data.extensions.orchestrator.presetLibraries).toEqual(preservedLibs);
     });
 });

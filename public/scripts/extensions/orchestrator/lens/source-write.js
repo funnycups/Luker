@@ -10,7 +10,6 @@
 // otherwise a later save would overwrite ours.
 
 import { i18n, i18nFormat } from './i18n.js';
-import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
 import { getConnectionProfileNames, getOpenAIPresetNames } from '../../../lens-shared/preset-selectors.js';
 import {
     DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,
@@ -59,6 +58,16 @@ import {
     persistRuntimeLimitsKeepingDrafts,
 } from '../editor-persist.js';
 import {
+    captureCharacterOrchestratorMutation,
+    captureGlobalPresetMutation,
+    persistGlobalLibraryWithLifecycle,
+    restoreCharacterOrchestratorState,
+    restoreGlobalPresetState,
+    saveSettingsCheckedThroughContext,
+    snapshotCharacterOrchestratorState,
+    snapshotGlobalPresetState,
+} from '../preset-persistence.js';
+import {
     copyOrchPresetSkills,
     emitOrchPresetDeleted,
     emitOrchPresetExportReady,
@@ -97,16 +106,12 @@ export async function persistHostSettings(ctx) {
 }
 
 async function saveSettingsViaContext(ctx) {
-    if (typeof ctx?.workbench?.saveSettingsChecked === 'function') {
-        await ctx.workbench.saveSettingsChecked(ctx);
-        return;
-    }
-    if (typeof ctx?.saveSettings !== 'function') {
+    try {
+        await saveSettingsCheckedThroughContext(ctx);
+    } catch (err) {
+        if (err instanceof WriteError) throw err;
         throw new WriteError('write', i18n('Failed to save the settings'));
     }
-    let saved = false;
-    await ctx.saveSettings(0, { onSaved: () => { saved = true; } });
-    if (!saved) throw new WriteError('write', i18n('Failed to save the settings'));
 }
 
 /** The stored profile for a target, in the same shape the lens reads. */
@@ -134,14 +139,32 @@ function readTarget(ctx, settings, target) {
     return clone(entry);
 }
 
+const fieldWriteEpochs = new WeakMap();
+let nextFieldWriteEpoch = 0;
+
+function bumpFieldEpoch(holder, key) {
+    let map = fieldWriteEpochs.get(holder);
+    if (!map) {
+        map = new Map();
+        fieldWriteEpochs.set(holder, map);
+    }
+    const epoch = ++nextFieldWriteEpoch;
+    map.set(key, epoch);
+    return epoch;
+}
+
 async function saveFields(ctx, holder, fields) {
-    const previous = new Map(Object.keys(fields).map(key => [key, Object.getOwnPropertyDescriptor(holder, key)]));
+    const previous = new Map(Object.keys(fields).map(key => [key, {
+        descriptor: Object.getOwnPropertyDescriptor(holder, key),
+        epoch: bumpFieldEpoch(holder, key),
+    }]));
     Object.assign(holder, fields);
     try {
         await saveSettingsViaContext(ctx);
     } catch (error) {
-        for (const [key, descriptor] of previous) {
-            if (holder[key] !== fields[key]) continue;
+        const epochs = fieldWriteEpochs.get(holder);
+        for (const [key, { descriptor, epoch }] of previous) {
+            if (epochs?.get(key) !== epoch || holder[key] !== fields[key]) continue;
             if (descriptor) Object.defineProperty(holder, key, descriptor);
             else delete holder[key];
         }
@@ -231,7 +254,7 @@ export function createProfileAccess(host) {
         async options() {
             const { ctx } = host();
             return {
-                connections: getConnectionProfileNames(getChatCompletionConnectionProfiles()),
+                connections: getConnectionProfileNames(ctx.connectionProfiles.list()),
                 presets: getOpenAIPresetNames(ctx),
             };
         },
@@ -264,59 +287,6 @@ export function createProfileAccess(host) {
 }
 
 const scopeOf = (target) => (target?.scope === 'character' ? 'character' : 'global');
-
-const globalPresetLifecycle = new Map();
-
-// Persistent operations follow acknowledgement order, not UI selection. Keep
-// the last skill scope for each opaque preset id so A→B→C and rename→delete
-// compose even while earlier responses or secondary operations are pending.
-function enqueueGlobalPresetLifecycle(context, mode, operation, pending) {
-    if (!operation) return pending;
-    let queue = globalPresetLifecycle.get(mode);
-    if (!queue) {
-        queue = { tail: Promise.resolve(), names: new Map() };
-        globalPresetLifecycle.set(mode, queue);
-    }
-    if (!queue.names.has(operation.id)) {
-        queue.names.set(operation.id, operation.action === 'duplicate' ? operation.newName : operation.oldName);
-    }
-    const previous = queue.tail;
-    const next = (async () => {
-        await previous;
-        if (!await pending) return false;
-        const oldName = queue.names.get(operation.id);
-        if (operation.action === 'rename') {
-            const ok = await renameOrchPresetSkills(context, { mode, oldName, newName: operation.newName });
-            if (ok !== false) queue.names.set(operation.id, operation.newName);
-        } else if (operation.action === 'delete') {
-            await emitOrchPresetDeleted(context, { mode, name: oldName });
-            queue.names.delete(operation.id);
-        } else {
-            const sourceName = queue.names.get(operation.sourceId) ?? operation.oldName;
-            await copyOrchPresetSkills(context, { mode, oldName: sourceName, newName: operation.newName });
-            queue.names.set(operation.id, operation.newName);
-        }
-        return true;
-    })();
-    queue.tail = next.catch(() => {});
-    return next;
-}
-
-function persistGlobalLibraryState(ctx, settings, mode, { operation = null, directSave = false } = {}) {
-    const activeId = settings.activePresetIds?.[mode];
-    const libraryJson = JSON.stringify(settings.presetLibraries?.[mode]);
-    const pending = (typeof ctx?.saveSettings === 'function'
-        ? Promise.resolve().then(() => ctx.saveSettings(0, directSave ? { directSave: true } : undefined)).then((outcome) => {
-            if (!outcome || typeof outcome !== 'object') return false;
-            if (!outcome.ok) return false;
-            if (!outcome.payload) return true;
-            const saved = outcome.payload?.extension_settings?.orchestrator;
-            return saved?.activePresetIds?.[mode] === activeId
-                && JSON.stringify(saved?.presetLibraries?.[mode]) === libraryJson;
-        }).catch(() => false)
-        : saveSettingsViaContext(ctx).then(() => true, () => false));
-    return enqueueGlobalPresetLifecycle(ctx, mode, operation, pending);
-}
 
 async function persistCharacterLibraryInPlace(ctx, avatar) {
     const index = getCharacterIndexByAvatar(ctx, avatar);
@@ -360,94 +330,11 @@ export function createPresetAccess(host) {
         const library = scope === 'character' ? getCharacterPresetLibrary(ctx, avatar, mode) : (settings.presetLibraries?.[mode] || {});
         return String(library?.[id]?.name || '').trim();
     };
-    const snapshotCharacterExt = (ctx, avatar) => {
-        if (!avatar) return null;
-        const idx = getCharacterIndexByAvatar(ctx, avatar);
-        if (idx < 0) return null;
-        const extObj = ctx.characters?.[idx]?.data?.extensions;
-        if (!extObj) return null;
-        const hadKey = Object.prototype.hasOwnProperty.call(extObj, 'orchestrator');
-        return { avatar, hadKey, prev: hadKey ? clone(extObj.orchestrator) : undefined };
-    };
-    const restoreCharacterExt = (ctx, snap) => {
-        if (!snap?.avatar) return;
-        const idx = getCharacterIndexByAvatar(ctx, snap.avatar);
-        if (idx < 0) return;
-        const extObj = ctx.characters?.[idx]?.data?.extensions;
-        if (!extObj) return;
-        if (snap.hadKey) {
-            extObj.orchestrator = clone(snap.prev);
-        } else {
-            delete extObj.orchestrator;
-        }
-    };
-    const snapshotGlobalState = (settings, mode) => {
-        const hadLibraries = Object.prototype.hasOwnProperty.call(settings, 'presetLibraries');
-        const hadModeLibrary = Boolean(hadLibraries && settings.presetLibraries && Object.prototype.hasOwnProperty.call(settings.presetLibraries, mode));
-        const hadActiveIds = Object.prototype.hasOwnProperty.call(settings, 'activePresetIds');
-        const hadModeActive = Boolean(hadActiveIds && settings.activePresetIds && Object.prototype.hasOwnProperty.call(settings.activePresetIds, mode));
-        return {
-            mode,
-            hadLibraries,
-            hadModeLibrary,
-            prevLibrary: hadModeLibrary ? clone(settings.presetLibraries[mode]) : undefined,
-            hadActiveIds,
-            hadModeActive,
-            prevActive: hadModeActive ? settings.activePresetIds[mode] : undefined,
-        };
-    };
-    let nextGlobalWriteEpoch = 0;
-    const activeGlobalWriteEpochs = new Map();
-    const captureGlobalPostMutation = (snap, settings) => {
-        if (!snap) return;
-        snap.prevEpoch = activeGlobalWriteEpochs.get(snap.mode) || 0;
-        const nextEpoch = ++nextGlobalWriteEpoch;
-        activeGlobalWriteEpochs.set(snap.mode, nextEpoch);
-        snap.epoch = nextEpoch;
-        snap.expectedLibraryJson = JSON.stringify(settings.presetLibraries?.[snap.mode]);
-        snap.expectedActive = settings.activePresetIds?.[snap.mode];
-    };
-    const restoreGlobalState = (settings, snap) => {
-        if (!snap) return false;
-        const hasExpected = Object.prototype.hasOwnProperty.call(snap, 'expectedLibraryJson');
-        if (hasExpected) {
-            const epochMatches = activeGlobalWriteEpochs.get(snap.mode) === snap.epoch;
-            const libraryMatches = JSON.stringify(settings.presetLibraries?.[snap.mode]) === snap.expectedLibraryJson;
-            const activeMatches = settings.activePresetIds?.[snap.mode] === snap.expectedActive;
-            // Both fields persist together and epochs prevent ABA clobbering;
-            // if a newer operation touched this mode, skip rollback.
-            if (!epochMatches || !libraryMatches || !activeMatches) {
-                return false;
-            }
-        }
-        if (snap.hadLibraries && settings.presetLibraries) {
-            if (snap.hadModeLibrary) {
-                settings.presetLibraries[snap.mode] = clone(snap.prevLibrary);
-            } else {
-                delete settings.presetLibraries[snap.mode];
-            }
-        } else if (!snap.hadLibraries) {
-            delete settings.presetLibraries;
-        }
-        if (snap.hadActiveIds && settings.activePresetIds) {
-            if (snap.hadModeActive) {
-                settings.activePresetIds[snap.mode] = snap.prevActive;
-            } else {
-                delete settings.activePresetIds[snap.mode];
-            }
-        } else if (!snap.hadActiveIds) {
-            delete settings.activePresetIds;
-        }
-        if (hasExpected) {
-            activeGlobalWriteEpochs.set(snap.mode, snap.prevEpoch);
-        }
-        return true;
-    };
     const notifyDesiredChangeSafe = async () => {
         try {
             await notifyDesiredChange();
-        } catch {
-            // Best-effort UI resync during rollback.
+        } catch (err) {
+            console.error('[orchestrator] UI resync listener threw during rollback:', err);
         }
     };
     const persistCharacterWithRollback = async (ctx, avatar, snap, { notify = true } = {}) => {
@@ -455,7 +342,7 @@ export function createPresetAccess(host) {
         try {
             saved = await persistCharacterLibraryInPlace(ctx, avatar);
         } catch (err) {
-            restoreCharacterExt(ctx, snap);
+            restoreCharacterOrchestratorState(ctx, snap);
             if (notify) {
                 refreshed(ctx);
                 await notifyDesiredChangeSafe();
@@ -463,7 +350,7 @@ export function createPresetAccess(host) {
             throw err;
         }
         if (!saved) {
-            restoreCharacterExt(ctx, snap);
+            restoreCharacterOrchestratorState(ctx, snap);
             if (notify) {
                 refreshed(ctx);
                 await notifyDesiredChangeSafe();
@@ -472,19 +359,20 @@ export function createPresetAccess(host) {
         }
         return true;
     };
+    const lifecycleHooks = { copyOrchPresetSkills, emitOrchPresetDeleted, renameOrchPresetSkills };
     const persistGlobalWithRollback = async (ctx, settings, mode, snap, persistOpts = undefined, onRollback = null) => {
         let ok = false;
         try {
-            ok = await persistGlobalLibraryState(ctx, settings, mode, persistOpts);
+            ok = await persistGlobalLibraryWithLifecycle(ctx, settings, mode, { ...persistOpts, lifecycleHooks });
         } catch (err) {
-            restoreGlobalState(settings, snap);
+            restoreGlobalPresetState(settings, snap);
             onRollback?.();
             refreshed(ctx);
             await notifyDesiredChangeSafe();
             throw err;
         }
         if (!ok) {
-            restoreGlobalState(settings, snap);
+            restoreGlobalPresetState(settings, snap);
             onRollback?.();
             refreshed(ctx);
             await notifyDesiredChangeSafe();
@@ -496,8 +384,8 @@ export function createPresetAccess(host) {
         try {
             await notifyDesiredChange();
         } catch (err) {
-            restoreGlobalState(settings, globalSnap);
-            restoreCharacterExt(ctx, charSnap);
+            restoreGlobalPresetState(settings, globalSnap);
+            restoreCharacterOrchestratorState(ctx, charSnap);
             refreshed(ctx);
             throw err;
         }
@@ -530,17 +418,18 @@ export function createPresetAccess(host) {
                 throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
             }
             const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
-            const charSnap = (scope === 'character' || hadCardSlot) ? snapshotCharacterExt(ctx, avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, mode) : null;
+            const charSnap = (scope === 'character' || hadCardSlot) ? snapshotCharacterOrchestratorState(ctx, avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, mode) : null;
             if (scope === 'global' && hadCardSlot) {
                 setActivePresetId(settings, mode, 'character', '', opts(ctx, avatar));
             }
             if (!setActivePresetId(settings, mode, scope, presetId, opts(ctx, avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'global') {
@@ -550,7 +439,7 @@ export function createPresetAccess(host) {
                     mode,
                     globalSnap,
                     { directSave: hadCardSlot },
-                    charSnap ? () => restoreCharacterExt(ctx, charSnap) : null,
+                    charSnap ? () => restoreCharacterOrchestratorState(ctx, charSnap) : null,
                 );
                 if (!ok) {
                     throw new WriteError('write', i18n('Failed to save the settings'));
@@ -564,11 +453,24 @@ export function createPresetAccess(host) {
                         cardErr = err;
                     }
                     if (!cardSaved) {
-                        if (restoreGlobalState(settings, globalSnap)) {
-                            await persistGlobalLibraryState(ctx, settings, mode, { directSave: true }).catch(() => false);
+                        let rollbackFailed = false;
+                        let rollbackErr = null;
+                        if (restoreGlobalPresetState(settings, globalSnap)) {
+                            try {
+                                const reverted = await persistGlobalLibraryWithLifecycle(ctx, settings, mode, { directSave: true });
+                                if (!reverted) rollbackFailed = true;
+                            } catch (err) {
+                                rollbackFailed = true;
+                                rollbackErr = err;
+                                console.error('[orchestrator] Failed to revert global preset after character save failure:', err);
+                            }
                         }
                         refreshed(ctx);
                         await notifyDesiredChangeSafe();
+                        if (rollbackFailed) {
+                            const detail = rollbackErr?.message || cardErr?.message || i18n('Failed to save the settings');
+                            throw new WriteError('write', `${i18n('Failed to persist character override.')} (${detail})`);
+                        }
                         if (cardErr) throw cardErr;
                         throw new WriteError('write', i18n('Failed to save the settings'));
                     }
@@ -584,15 +486,16 @@ export function createPresetAccess(host) {
         async create(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
-            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
+            const charSnap = scope === 'character' ? snapshotCharacterOrchestratorState(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, target.mode) : null;
             const id = createPreset(settings, target.mode, scope, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
@@ -610,15 +513,16 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
+            const charSnap = scope === 'character' ? snapshotCharacterOrchestratorState(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, target.mode) : null;
             const id = duplicatePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
@@ -640,14 +544,15 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
+            const charSnap = scope === 'character' ? snapshotCharacterOrchestratorState(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, target.mode) : null;
             if (!renamePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
@@ -669,14 +574,15 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const name = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, target.mode) : null;
+            const charSnap = scope === 'character' ? snapshotCharacterOrchestratorState(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, target.mode) : null;
             if (!deletePreset(settings, target.mode, scope, target.presetId, opts(ctx, target.avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not save the preset.'));
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {
@@ -717,22 +623,23 @@ export function createPresetAccess(host) {
             const scope = scopeOf(target);
             const { mode } = target;
             const profile = extractImportedProfileForMode(imported);
-            const charSnap = scope === 'character' ? snapshotCharacterExt(ctx, target.avatar) : null;
-            const globalSnap = scope === 'global' ? snapshotGlobalState(settings, mode) : null;
+            const charSnap = scope === 'character' ? snapshotCharacterOrchestratorState(ctx, target.avatar) : null;
+            const globalSnap = scope === 'global' ? snapshotGlobalPresetState(settings, mode) : null;
             const id = createPreset(settings, mode, scope, { name }, opts(ctx, target.avatar));
             if (!id || !setActivePresetId(settings, mode, scope, id, opts(ctx, target.avatar))) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 throw new WriteError('write', i18n('Could not create the preset.'));
             }
             const writeResult = writeActivePreset(settings, mode, scope, profile, opts(ctx, target.avatar));
             if (!writeResult.ok) {
-                restoreCharacterExt(ctx, charSnap);
-                restoreGlobalState(settings, globalSnap);
+                restoreCharacterOrchestratorState(ctx, charSnap);
+                restoreGlobalPresetState(settings, globalSnap);
                 refreshed(ctx);
                 throw new WriteError('write', writeResult.hint || writeResult.reason);
             }
-            captureGlobalPostMutation(globalSnap, settings);
+            captureGlobalPresetMutation(globalSnap, settings);
+            captureCharacterOrchestratorMutation(charSnap, ctx);
             refreshed(ctx);
             await notifyOrRollback(ctx, settings, globalSnap, charSnap);
             if (scope === 'character') {

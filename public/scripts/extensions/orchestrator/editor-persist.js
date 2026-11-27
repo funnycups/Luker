@@ -61,6 +61,7 @@ import { makeModeMap } from './preset-modes.js';
 import { acknowledgeCharacterDraftSource, acknowledgeGlobalWriteDrafts, captureGlobalWriteDrafts, ensureDirectorEditorIntegrity, ensureEditorIntegrity, getCharacterDraftForMode, getCharacterDraftSourceFingerprint, refreshCharacterDraftIfSourceChanged, syncActivePresetIdsFromSettings, uiState } from './editor-state.js';
 import { canonicalStringify } from './canonical-stringify.js';
 import { getActivePresetId, getPreset, writeActivePreset } from './preset-library.js';
+import { bumpCharacterWriteEpoch, bumpGlobalWriteEpoch } from './preset-persistence.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -71,6 +72,7 @@ export async function persistGlobalPresetWrite(settings, mode, write, { context 
     const previous = priorActiveId ? priorLibrary?.[priorActiveId] : undefined;
     const result = write();
     if (!result.ok) return false;
+    bumpGlobalWriteEpoch(mode);
     const activeId = settings.activePresetIds?.[mode];
     const library = settings.presetLibraries?.[mode];
     const id = result.presetId || activeId;
@@ -85,6 +87,7 @@ export async function persistGlobalPresetWrite(settings, mode, write, { context 
             if (!saved && library && id === priorActiveId && library[id] === written) {
                 if (previous === undefined) delete library[id];
                 else library[id] = previous;
+                bumpGlobalWriteEpoch(mode);
             }
         }
         if (context) acknowledgeGlobalWriteDrafts(context, mode, captured, { replaceGlobal, sourceEditor });
@@ -311,6 +314,9 @@ export async function persistOrchestratorCharacterExtension(context, characterIn
             }
             : normalizePayload(modulePayload);
         const result = await context.writeExtensionField(id, MODULE_NAME, value);
+        if (result !== false && character?.avatar) {
+            bumpCharacterWriteEpoch(character.avatar);
+        }
         return result !== false;
     } catch (error) {
         console.error('Failed to persist orchestrator extension data to character card', error);
