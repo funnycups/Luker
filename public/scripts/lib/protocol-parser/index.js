@@ -155,6 +155,7 @@ export function createProtocolStreamParser(protocolOrSource) {
         feedSseChunk,
         finish,
         getSnapshot: inner.getSnapshot,
+        getToolCallPreview: (name, argument) => inner.getToolCallPreview?.(name, argument) ?? '',
     };
 }
 
