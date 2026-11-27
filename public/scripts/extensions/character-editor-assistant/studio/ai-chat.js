@@ -13,9 +13,7 @@ import {
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './file-api.js';
 import { i18n } from '../i18n.js';
-import { applyEdits } from '../../../lib/edits/index.js';
 import { requireStoredPrompt } from '../../../lib/prompt-values.js';
-import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
 import {
     hydrateMessagesForLlm,
     normalizeImageAttachments,
@@ -771,7 +769,11 @@ async function loadCardAppFilesLive(charId, edits) {
         }
     }
     for (const p of paths) {
-        try { live.files[p] = await fetchFileContent(charId, p); } catch { /* file absent — OK for create ops */ }
+        try {
+            live.files[p] = await fetchFileContent(charId, p);
+        } catch (err) {
+            if (err?.status !== 404) throw err;
+        }
     }
     return live;
 }
@@ -879,7 +881,11 @@ export async function executeTool(charId, toolName, args, options = {}) {
             case TOOL_NAMES.WRITE_FILE: {
                 if (deferWriteOps) {
                     let oldContent;
-                    try { oldContent = await fetchFileContent(charId, args.path); } catch { /* file doesn't exist yet — set will create it */ }
+                    try {
+                        oldContent = await fetchFileContent(charId, args.path);
+                    } catch (err) {
+                        if (err?.status !== 404) throw err;
+                    }
                     return {
                         ok: true,
                         pending_edit: true,
@@ -1084,6 +1090,9 @@ export async function executeTool(charId, toolName, args, options = {}) {
             }
             // ==================== World Info ====================
             case TOOL_NAMES.WORLDINFO_LIST_BOOKS: {
+                if (hasExplicitTarget && !resolvedTarget) {
+                    return { ok: false, error: missingTargetError };
+                }
                 const charData = resolvedTarget?.character || null;
                 const boundBook = String(charData?.data?.extensions?.world || '').trim();
                 const auxBooks = (() => {
@@ -1236,12 +1245,13 @@ export async function executeTool(charId, toolName, args, options = {}) {
             case TOOL_NAMES.REGEX_LIST_SCRIPTS: {
                 const { SCRIPT_TYPES, getScriptsByType } = getRegexApi();
                 const scope = String(args?.scope || 'all').toLowerCase();
+                if ((scope === 'all' || scope === 'character') && hasExplicitTarget && !resolvedTarget) {
+                    return { ok: false, error: missingTargetError };
+                }
                 const scopedOpts = resolvedTarget
                     ? { target: { scriptType: SCRIPT_TYPES.SCOPED, characterId: resolvedTarget.characterId, character: resolvedTarget.character, avatar: resolvedTarget.avatar } }
                     : undefined;
-                const readScoped = () => (hasExplicitTarget && !resolvedTarget
-                    ? []
-                    : normalizeRegexScriptsForTool(scopedOpts ? getScriptsByType(SCRIPT_TYPES.SCOPED, scopedOpts) : getScriptsByType(SCRIPT_TYPES.SCOPED)));
+                const readScoped = () => normalizeRegexScriptsForTool(scopedOpts ? getScriptsByType(SCRIPT_TYPES.SCOPED, scopedOpts) : getScriptsByType(SCRIPT_TYPES.SCOPED));
                 if (scope === 'all') {
                     return {
                         ok: true,
@@ -1250,9 +1260,6 @@ export async function executeTool(charId, toolName, args, options = {}) {
                     };
                 }
                 if (scope === 'character') {
-                    if (hasExplicitTarget && !resolvedTarget) {
-                        return { ok: false, error: missingTargetError };
-                    }
                     return { ok: true, scope, scripts: readScoped() };
                 }
                 if (scope === 'global') {
@@ -1851,9 +1858,10 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
                 let resolvedClean = [];
                 let resolvedNewLive = null;
 
+                const editsApi = getContext().edits;
                 let applyResult;
                 try {
-                    applyResult = applyEdits(batchEdits, live);
+                    applyResult = editsApi.applyEdits(batchEdits, live);
                     resolvedClean = applyResult.clean;
                     resolvedNewLive = applyResult.newLive;
                 } catch (e) {
@@ -1868,7 +1876,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
                         batchOutcome = 'conflict_cancelled';
                         batchError = 'Auto-apply detected drift between AI proposal and current files.';
                     } else {
-                        const resolutions = await showConflictResolution(applyResult.conflicts);
+                        const resolutions = await editsApi.showConflictResolution(applyResult.conflicts);
                         if (!resolutions) {
                             batchOutcome = 'conflict_cancelled';
                             batchError = 'User cancelled conflict resolution.';
@@ -1883,7 +1891,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
                                 // 'keep-theirs' = drop
                             }
                             try {
-                                applyResult = applyEdits(resolved, live);
+                                applyResult = editsApi.applyEdits(resolved, live);
                                 resolvedClean = applyResult.clean;
                                 resolvedNewLive = applyResult.newLive;
                             } catch (e) {

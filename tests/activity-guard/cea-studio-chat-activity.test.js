@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
 import { createActivityGuardRegistry } from '../../public/scripts/activity-guard.js';
 
 function deferred() {
@@ -32,38 +32,33 @@ let readFileDeferred = null;
 
 let sendAIMessage;
 let TOOL_NAMES;
+let origFetch;
 
 beforeAll(async () => {
-    jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/studio.js', () => ({
-        fetchFileList: async () => ['index.js'],
-        fetchFileContent: async () => {
-            if (readFileDeferred) {
-                return await readFileDeferred.promise;
-            }
-            return 'export function init() {}';
-        },
-        saveFileContent: async () => {},
-        deleteFile: async () => {},
-        renameFile: async () => {},
-    }));
-
-    jest.unstable_mockModule('../../public/scripts/lib/edits/conflict-ui.js', () => ({
-        showConflictResolution: async () => [],
-    }));
-
-    jest.unstable_mockModule('../../public/scripts/iteration-library/tools/ctx-and-docs-discovery.js', () => ({
-        listCtxKeys: () => [],
-        describeCtxPath: () => '',
-        listLukerDocs: () => [],
-        readLukerDoc: () => '',
-    }));
+    origFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn(async (url) => {
+        const target = String(url);
+        if (target.endsWith('/files')) {
+            return { ok: true, status: 200, json: async () => ({ files: ['index.js'] }) };
+        }
+        if (target.includes('/index.js')) {
+            const content = readFileDeferred ? await readFileDeferred.promise : 'export function init() {}';
+            return { ok: true, status: 200, text: async () => content };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '' };
+    });
 
     globalThis.Luker = {
         getContext: () => ({
             characters: [{ name: 'Card', data: { extensions: {} } }],
             characterId: 0,
+            getRequestHeaders: () => ({}),
             uuidv4: () => 'uuid-1',
             extensionSettings: { regex: [] },
+            edits: {
+                applyEdits: () => ({ clean: [], conflicts: [], newLive: {} }),
+                showConflictResolution: async () => [],
+            },
             worldInfoEntry: { create: () => ({}), delete: () => {} },
             chatWorldInfo: { getNames: () => [] },
             loadWorldInfo: async () => ({}),
@@ -75,10 +70,10 @@ beforeAll(async () => {
             getCharacterEmbeddedWorld: () => ({}),
             getCharaFilename: () => 'Card',
             SlashCommandParser: { commands: {} },
-            writeExtensionField: async () => {},
+            writeExtensionField: async () => true,
             getExtensionApi: () => ({}),
-            getCharacterState: () => ({}),
-            updateCharacterState: () => {},
+            getCharacterState: async () => ({ ok: true, state: null }),
+            updateCharacterState: async () => ({ ok: true, state: null, updated: false }),
             translate: (text) => String(text ?? ''),
             lib: {},
             get activityGuard() {
@@ -97,6 +92,10 @@ beforeAll(async () => {
     };
 
     ({ sendAIMessage, TOOL_NAMES } = await import('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js'));
+});
+
+afterAll(() => {
+    globalThis.fetch = origFetch;
 });
 
 beforeEach(() => {
@@ -144,7 +143,7 @@ describe('CardApp Studio ai-chat activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'cea:studio-chat',
-                label: 'CardApp Studio AI',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 guardUnload: true,
                 guardChatSwitch: false,

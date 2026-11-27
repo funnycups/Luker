@@ -15,18 +15,6 @@ const realEditsEngine = createEngine({
     cloneDeep: lodash.cloneDeep,
 });
 
-jest.unstable_mockModule('../../public/scripts/lib/edits/index.js', () => ({
-    applyEdits: (...args) => realEditsEngine.applyEdits(...args),
-    registerOp: (...args) => realEditsEngine.registerOp(...args),
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/function-call-runtime.js', () => ({
-    TOOL_PROTOCOL_STYLE: { JSON_SCHEMA: 'json_schema' },
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class {},
-    POPUP_TYPE: { DISPLAY: 'display', CONFIRM: 'confirm' },
-}));
-
 describe('CardApp Studio AI chat image attachments', () => {
     let origFetch;
     let origLuker;
@@ -66,6 +54,10 @@ describe('CardApp Studio AI chat image attachments', () => {
                 showdown: { Converter: class { makeHtml(s) { return s; } } },
             },
             extensionSettings: { character_editor_assistant: {} },
+            edits: {
+                applyEdits: (...args) => realEditsEngine.applyEdits(...args),
+                showConflictResolution: async () => [],
+            },
             getExtensionApi: () => null,
             getCharacterState: async () => ({ ok: true, state: null }),
             updateCharacterState: async () => ({ ok: true }),
@@ -81,7 +73,7 @@ describe('CardApp Studio AI chat image attachments', () => {
             getCharacterEmbeddedWorld: () => null,
             getCharaFilename: () => '',
             SlashCommandParser: {},
-            writeExtensionField: () => {},
+            writeExtensionField: async () => true,
             uuidv4: () => 'uuid-1',
             generateTask: jest.fn(async (opts) => {
                 sentTaskMessages.push(JSON.parse(JSON.stringify(opts.taskMessages)));

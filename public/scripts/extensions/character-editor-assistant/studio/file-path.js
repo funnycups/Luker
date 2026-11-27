@@ -6,11 +6,11 @@ export function cardAppFileEditPath(filePath) {
 export function parseCardAppFilePath(opPath) {
     const path = String(opPath || '');
     if (path.startsWith('files[') && path.endsWith(']')) {
-        try {
-            const decoded = JSON.parse(path.slice(6, -1));
-            if (typeof decoded === 'string') return decoded;
-        } catch { /* Accept old unquoted paths below. */ }
+        const decoded = JSON.parse(path.slice(6, -1));
+        if (typeof decoded !== 'string') {
+            throw new Error(`Invalid CardApp file edit path: ${path}`);
+        }
+        return decoded;
     }
-    const legacy = /^files\["?([^"\]]+)"?\]$/.exec(path);
-    return legacy ? legacy[1] : path;
+    return path;
 }

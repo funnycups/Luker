@@ -203,9 +203,12 @@ async function cleanupRemovedAttachments(paths) {
     if (!Array.isArray(paths) || paths.length === 0) return;
     if (typeof globalThis.fetch !== 'function') return;
     try {
-        await deleteChatAttachments(getContext(), paths);
+        const cleanup = await deleteChatAttachments(getContext(), paths);
+        if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+            console.error(`[${MODULE_NAME}] Partial failure cleaning up session attachments:`, cleanup.failed);
+        }
     } catch (err) {
-        console.warn(`[${MODULE_NAME}] Failed to clean up session attachments:`, err);
+        console.error(`[${MODULE_NAME}] Failed to clean up session attachments:`, err);
     }
 }
 

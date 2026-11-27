@@ -4,14 +4,22 @@
 // CardApp file API shared by the CardApp Studio shell (studio.js) and its
 // AI tool executor (ai-chat.js).
 
-const getRequestHeaders = Luker.getContext().getRequestHeaders;
+function getRequestHeaders() {
+    return Luker.getContext().getRequestHeaders();
+}
+
+function createHttpError(message, status) {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+}
 
 export async function fetchFileList(charId) {
     const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/files`, {
         headers: getRequestHeaders(),
         cache: 'no-cache',
     });
-    if (!response.ok) throw new Error(`Failed to list files: ${response.status}`);
+    if (!response.ok) throw createHttpError(`Failed to list files: ${response.status}`, response.status);
     const data = await response.json();
     return data.files || [];
 }
@@ -21,7 +29,7 @@ export async function fetchFileContent(charId, filePath) {
         headers: getRequestHeaders(),
         cache: 'no-cache',
     });
-    if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
+    if (!response.ok) throw createHttpError(`Failed to read file: ${response.status}`, response.status);
     return await response.text();
 }
 
@@ -31,7 +39,7 @@ export async function saveFileContent(charId, filePath, content) {
         headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
     });
-    if (!response.ok) throw new Error(`Failed to save file: ${response.status}`);
+    if (!response.ok) throw createHttpError(`Failed to save file: ${response.status}`, response.status);
     return await response.json();
 }
 
@@ -40,7 +48,7 @@ export async function deleteFile(charId, filePath) {
         method: 'DELETE',
         headers: getRequestHeaders(),
     });
-    if (!response.ok) throw new Error(`Failed to delete file: ${response.status}`);
+    if (!response.ok) throw createHttpError(`Failed to delete file: ${response.status}`, response.status);
     return await response.json();
 }
 
@@ -50,6 +58,6 @@ export async function renameFile(charId, fromPath, toPath) {
         headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: fromPath, to: toPath }),
     });
-    if (!response.ok) throw new Error(`Failed to rename file: ${response.status}`);
+    if (!response.ok) throw createHttpError(`Failed to rename file: ${response.status}`, response.status);
     return await response.json();
 }

@@ -18,6 +18,18 @@ const mockCtx = {
     getExtensionApi: () => null,
     getCharacterState: (...args) => getCharacterStateMock(...args),
     updateCharacterState: (...args) => updateCharacterStateMock(...args),
+    worldInfoEntry: { create: () => {}, delete: () => {} },
+    chatWorldInfo: { getNames: () => [] },
+    loadWorldInfo: async () => ({}),
+    saveWorldInfo: async () => {},
+    createWorldBook: async () => {},
+    charUpdatePrimaryWorld: async () => {},
+    getCharaAuxWorlds: () => [],
+    importEmbeddedWorldInfo: async () => {},
+    getCharacterEmbeddedWorld: () => null,
+    SlashCommandParser: {},
+    writeExtensionField: async () => true,
+    uuidv4: () => 'uuid-1',
     lib: {
         DOMPurify: { sanitize: (html) => html },
         DiffMatchPatch: class {},
@@ -31,22 +43,6 @@ const mockCtx = {
 
 globalThis.Luker = { getContext: () => mockCtx };
 
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
-    sendAIMessage: jest.fn(async () => ({ assistantText: 'ok', modifiedFiles: [] })),
-    TOOL_NAMES: {},
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/file-api.js', () => ({
-    fetchFileList: jest.fn(async () => []),
-    fetchFileContent: jest.fn(async () => ''),
-    saveFileContent: jest.fn(async () => {}),
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/i18n.js', () => ({
-    i18n: (s) => String(s),
-    i18nFormat: (s, ...args) => args.reduce((acc, v, i) => acc.replace(`\${${i}}`, String(v)), String(s)),
-}));
-
 let openCardAppStudio;
 
 beforeAll(async () => {
@@ -57,7 +53,12 @@ beforeAll(async () => {
         error: jest.fn(),
     };
     globalThis.confirm = jest.fn(() => true);
-    globalThis.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ commits: [] }) }));
+    globalThis.fetch = jest.fn(async (url) => {
+        if (String(url).endsWith('/files')) {
+            return { ok: true, json: async () => ({ files: [] }) };
+        }
+        return { ok: true, json: async () => ({ commits: [] }) };
+    });
     ({ openCardAppStudio } = await import('../../public/scripts/extensions/character-editor-assistant/studio/studio.js'));
 });
 
