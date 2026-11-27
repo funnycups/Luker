@@ -46,8 +46,7 @@ import {
     SYSTEM_VOICE_ALIASES,
     defaultSettings,
 } from './defaults.js';
-import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
-import { prefersReducedMotion } from '../../lens-shared/util.js';
+import { createExternalFieldFocuser, mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import {
     buildTtsNarrationSummary,
     buildTtsNpcAttributionSummary,
@@ -957,29 +956,15 @@ function loadSettings() {
     refreshTtsBehaviorSummaries();
 }
 
-const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
-
 let narrationSummaryHandle = null;
 let npcAttributionSummaryHandle = null;
 let ttsSummaryAbort = null;
-let externalPulseTarget = null;
-let externalPulseTimer = null;
-
-function clearExternalSummaryPulse() {
-    if (externalPulseTimer !== null) {
-        clearTimeout(externalPulseTimer);
-        externalPulseTimer = null;
-    }
-    if (externalPulseTarget) {
-        externalPulseTarget.classList.remove('luker-bsum-field-pulse');
-        externalPulseTarget = null;
-    }
-}
+const ttsExternalFieldFocuser = createExternalFieldFocuser();
 
 function destroyTtsBehaviorSummaries() {
     ttsSummaryAbort?.abort();
     ttsSummaryAbort = null;
-    clearExternalSummaryPulse();
+    ttsExternalFieldFocuser.clear();
     narrationSummaryHandle?.destroy();
     npcAttributionSummaryHandle?.destroy();
     narrationSummaryHandle = null;
@@ -1006,30 +991,8 @@ function focusTtsDrawerControl(selector) {
     if (!(target instanceof Element)) {
         return false;
     }
-    const drawer = target.closest('.inline-drawer');
-    const content = drawer?.querySelector(':scope > .inline-drawer-content');
-    if (content && (content.hidden || content.style?.display === 'none' || globalThis.getComputedStyle?.(content)?.display === 'none')) {
-        const toggle = drawer.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
-        toggle?.click();
-    }
     const wrapper = target.closest('.checkbox_label') || target;
-    if (typeof wrapper.scrollIntoView === 'function') {
-        wrapper.scrollIntoView({
-            behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-            block: 'nearest',
-        });
-    }
-    if (typeof target.focus === 'function') {
-        target.focus({ preventScroll: true });
-    }
-    clearExternalSummaryPulse();
-    void wrapper.offsetWidth;
-    wrapper.classList.add('luker-bsum-field-pulse');
-    externalPulseTarget = wrapper;
-    externalPulseTimer = setTimeout(() => {
-        clearExternalSummaryPulse();
-    }, PULSE_DURATION_MS);
-    return true;
+    return ttsExternalFieldFocuser.focus(target, { highlightEl: wrapper });
 }
 
 export function mountTtsBehaviorSummaries() {

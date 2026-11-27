@@ -36,53 +36,13 @@ import {
     mountInlineProfileEditor,
     renderProfileSelect,
 } from './embed-rerank.js';
-import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
-import { prefersReducedMotion } from '../../lens-shared/util.js';
+import { createExternalFieldFocuser, mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import {
     buildConnPlainTextFcSummary,
     buildConnReliabilitySummary,
     buildConnClaudeCacheSummary,
     buildConnGeminiCacheSummary,
 } from './behavior-summary-models.js';
-
-const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
-
-function isElementHidden(el) {
-    if (!el) return false;
-    if (el.hidden || el.style?.display === 'none') return true;
-    return globalThis.getComputedStyle?.(el)?.display === 'none';
-}
-
-function expandAncestorContainers(targetEl) {
-    const ancestors = [];
-    for (let node = targetEl?.parentElement || null; node; node = node.parentElement) {
-        ancestors.push(node);
-    }
-    ancestors.reverse();
-    for (const node of ancestors) {
-        if (node.tagName === 'DETAILS' && !node.open) {
-            node.open = true;
-        }
-        if (node.classList?.contains('inline-drawer')) {
-            const content = node.querySelector(':scope > .inline-drawer-content');
-            if (content && content.contains(targetEl) && isElementHidden(content)) {
-                const toggle = node.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
-                toggle?.click();
-            }
-        }
-        if (node.classList?.contains('drawer')) {
-            const content = node.querySelector(':scope > .drawer-content');
-            if (content && content.contains(targetEl) && content.classList.contains('closedDrawer')) {
-                const toggle = node.querySelector(':scope > .drawer-toggle');
-                toggle?.click();
-                if (content.classList.contains('closedDrawer')) {
-                    content.classList.remove('closedDrawer');
-                    content.classList.add('openDrawer');
-                }
-            }
-        }
-    }
-}
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -1620,42 +1580,8 @@ export async function init() {
     }
     toggleProfileSpecificButtons();
 
-    let externalPulseTarget = null;
-    let externalPulseTimer = null;
-    const clearExternalPulse = () => {
-        if (externalPulseTimer !== null) {
-            clearTimeout(externalPulseTimer);
-            externalPulseTimer = null;
-        }
-        if (externalPulseTarget) {
-            externalPulseTarget.classList.remove('luker-bsum-field-pulse');
-            externalPulseTarget = null;
-        }
-    };
-    const focusPostProcessingSelect = () => {
-        const target = document.getElementById('custom_prompt_post_processing');
-        if (!target) {
-            return false;
-        }
-        expandAncestorContainers(target);
-        if (typeof target.scrollIntoView === 'function') {
-            target.scrollIntoView({
-                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-                block: 'nearest',
-            });
-        }
-        if (typeof target.focus === 'function') {
-            target.focus({ preventScroll: true });
-        }
-        clearExternalPulse();
-        void target.offsetWidth;
-        target.classList.add('luker-bsum-field-pulse');
-        externalPulseTarget = target;
-        externalPulseTimer = setTimeout(() => {
-            clearExternalPulse();
-        }, PULSE_DURATION_MS);
-        return true;
-    };
+    const externalFieldFocuser = createExternalFieldFocuser();
+    const focusPostProcessingSelect = () => externalFieldFocuser.focus(document.getElementById('custom_prompt_post_processing'));
 
     const advancedDrawerContent = container.querySelector('.connection_profile_tab_panel[data-mode="chat"] .inline-drawer-content');
     const summaryHandles = [];

@@ -2,8 +2,7 @@ import { renderExtensionTemplateAsync } from '../../../extensions.js';
 import { t, translate } from '../../../i18n.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { clamp } from '../../../utils.js';
-import { mountBehaviorSummary } from '../../../lens-shared/behavior-summary.js';
-import { prefersReducedMotion } from '../../../lens-shared/util.js';
+import { createExternalFieldFocuser, mountBehaviorSummary } from '../../../lens-shared/behavior-summary.js';
 import { computeImageCapabilities } from '../capabilities.js';
 import {
     buildIllustrationMainSummary,
@@ -23,7 +22,6 @@ import { openLegacyCharacterDesignMigrationDialog } from './legacy-migration-dia
 import { DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';
 
 const CONTAINER_ID = 'sd_illustration_container';
-const PULSE_DURATION_MS = 1200; // Matches @keyframes luker-bsum-pulse in public/css/luker-studio.css
 
 const ILLUSTRATION_MAIN_SUMMARY_FIELDS = Object.freeze({
     enabled: { selector: '#sd_illustration_enabled', highlight: '.checkbox_label' },
@@ -42,32 +40,6 @@ const ILLUSTRATION_PROFILE_AGENT_SUMMARY_FIELDS = Object.freeze({
     explorationApiPreset: { selector: '#sd_illustration_exploration_api_preset', highlight: '.sd_illustration_row' },
     explorationLlmPreset: { selector: '#sd_illustration_exploration_llm_preset', highlight: '.sd_illustration_row' },
 });
-
-function isElementHidden(el) {
-    if (!el) return false;
-    if (el.hidden || el.style?.display === 'none') return true;
-    return globalThis.getComputedStyle?.(el)?.display === 'none';
-}
-
-function expandDrawerChain(targetEl) {
-    const ancestors = [];
-    for (let node = targetEl?.parentElement || null; node; node = node.parentElement) {
-        ancestors.push(node);
-    }
-    ancestors.reverse();
-    for (const node of ancestors) {
-        if (node.tagName === 'DETAILS' && !node.open) {
-            node.open = true;
-        }
-        if (node.classList?.contains('inline-drawer')) {
-            const content = node.querySelector(':scope > .inline-drawer-content');
-            if (content && content.contains(targetEl) && isElementHidden(content)) {
-                const toggle = node.querySelector(':scope > .inline-drawer-toggle, :scope > .inline-drawer-header .inline-drawer-toggle');
-                toggle?.click();
-            }
-        }
-    }
-}
 
 function currentPreset(settings) {
     return getPresetById(settings, settings.currentPresetId);
@@ -114,44 +86,15 @@ export async function initSettingsUi({
     let emptyPresetStyle = '';
     let mainSummary = null;
     let profileAgentSummary = null;
-    let externalPulseTarget = null;
-    let externalPulseTimer = null;
-
-    const clearExternalPulse = () => {
-        if (externalPulseTimer !== null) {
-            clearTimeout(externalPulseTimer);
-            externalPulseTimer = null;
-        }
-        if (externalPulseTarget) {
-            externalPulseTarget.classList.remove('luker-bsum-field-pulse');
-            externalPulseTarget = null;
-        }
-    };
+    const externalFieldFocuser = createExternalFieldFocuser();
 
     const focusSdCharacterReferenceCheckbox = () => {
         const target = document.getElementById('sd_character_reference_enabled');
         if (!target) {
             return false;
         }
-        expandDrawerChain(target);
         const wrapper = target.closest('.checkbox_label') || target;
-        if (typeof wrapper.scrollIntoView === 'function') {
-            wrapper.scrollIntoView({
-                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-                block: 'nearest',
-            });
-        }
-        if (typeof target.focus === 'function') {
-            target.focus({ preventScroll: true });
-        }
-        clearExternalPulse();
-        void wrapper.offsetWidth;
-        wrapper.classList.add('luker-bsum-field-pulse');
-        externalPulseTarget = wrapper;
-        externalPulseTimer = setTimeout(() => {
-            clearExternalPulse();
-        }, PULSE_DURATION_MS);
-        return true;
+        return externalFieldFocuser.focus(target, { highlightEl: wrapper });
     };
 
     const resolveCapabilities = () => {
@@ -639,7 +582,7 @@ export async function initSettingsUi({
 
     const destroy = () => {
         summaryAbort.abort();
-        clearExternalPulse();
+        externalFieldFocuser.clear();
         mainSummary?.destroy();
         profileAgentSummary?.destroy();
         mainSummary = null;

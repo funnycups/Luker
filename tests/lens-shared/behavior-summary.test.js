@@ -8,6 +8,7 @@ import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globa
 import {
     renderTemplateParts,
     createBehaviorSummary,
+    createExternalFieldFocuser,
     mountBehaviorSummary,
 } from '../../public/scripts/lens-shared/behavior-summary.js';
 
@@ -780,5 +781,41 @@ describe('createBehaviorSummary', () => {
         expect(warnings[1].classList.contains('is-warn')).toBe(true);
 
         summary.destroy();
+    });
+
+    test('createExternalFieldFocuser expands closed drawers, focuses target, pulses highlight, and clears timer', () => {
+        jest.useFakeTimers();
+
+        const drawer = document.createElement('div');
+        drawer.className = 'drawer';
+        const drawerToggle = document.createElement('div');
+        drawerToggle.className = 'drawer-toggle';
+        const drawerContent = document.createElement('div');
+        drawerContent.className = 'drawer-content closedDrawer';
+
+        const details = document.createElement('details');
+        details.open = false;
+
+        const wrapper = document.createElement('label');
+        wrapper.className = 'checkbox_label';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        wrapper.appendChild(checkbox);
+        details.appendChild(wrapper);
+        drawerContent.appendChild(details);
+        drawer.append(drawerToggle, drawerContent);
+        document.body.appendChild(drawer);
+
+        const focuser = createExternalFieldFocuser();
+        expect(focuser.focus(null)).toBe(false);
+        expect(focuser.focus(checkbox, { highlightEl: wrapper })).toBe(true);
+        expect(drawerContent.classList.contains('openDrawer')).toBe(true);
+        expect(drawerContent.classList.contains('closedDrawer')).toBe(false);
+        expect(details.open).toBe(true);
+        expect(document.activeElement).toBe(checkbox);
+        expect(wrapper.classList.contains('luker-bsum-field-pulse')).toBe(true);
+
+        focuser.clear();
+        expect(wrapper.classList.contains('luker-bsum-field-pulse')).toBe(false);
     });
 });

@@ -106,8 +106,8 @@ export function buildConnPlainTextFcSummary(state = {}) {
 
     const plainText = Boolean(state.plainText);
     const errorRetry = Boolean(state.errorRetry);
-    // Bounds [1, 10] mirror getPlainTextFunctionCallRetryConfig() in public/scripts/openai.js.
-    const maxAttempts = clampPosInt(state.maxAttempts, 3, { min: 1, max: 10 });
+    // Mirrors getPlainTextFunctionCallRetryConfig() in public/scripts/openai.js (minimum 1, no upper cap).
+    const maxAttempts = clampPosInt(state.maxAttempts, 3, { min: 1 });
 
     if (!plainText) {
         return {

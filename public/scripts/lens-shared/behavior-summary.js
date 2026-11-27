@@ -107,7 +107,78 @@ function expandCollapsedAncestors(targetEl) {
                 toggle?.click();
             }
         }
+        if (node.classList?.contains('drawer')) {
+            const content = node.querySelector(':scope > .drawer-content');
+            if (content && content.contains(targetEl) && content.classList.contains('closedDrawer')) {
+                const toggle = node.querySelector(':scope > .drawer-toggle');
+                toggle?.click();
+                if (content.classList.contains('closedDrawer')) {
+                    content.classList.remove('closedDrawer');
+                    content.classList.add('openDrawer');
+                }
+            }
+        }
     }
+}
+
+/**
+ * Creates a reusable controller for cross-drawer behavior-summary jumps:
+ * expands collapsed ancestor containers (`<details>`, `.inline-drawer`, `.drawer`),
+ * scrolls the target control into view, focuses it, and plays the shared
+ * `luker-bsum-field-pulse` highlight animation with automatic timer cleanup.
+ *
+ * @returns {{ focus: (targetEl: Element | null, options?: { highlightEl?: Element | null, select?: boolean }) => boolean, clear: () => void }}
+ */
+export function createExternalFieldFocuser() {
+    let pulseTarget = null;
+    let pulseTimer = null;
+
+    function clear() {
+        if (pulseTimer !== null) {
+            clearTimeout(pulseTimer);
+            pulseTimer = null;
+        }
+        if (pulseTarget) {
+            pulseTarget.classList.remove('luker-bsum-field-pulse');
+            pulseTarget = null;
+        }
+    }
+
+    function focus(targetEl, { highlightEl = null, select = false } = {}) {
+        if (!(targetEl instanceof Element)) return false;
+        expandCollapsedAncestors(targetEl);
+        const wrapper = highlightEl instanceof Element ? highlightEl : targetEl;
+        const boundary = wrapper.closest?.('.wbench, .mlens, .olens, .dw-layer, .drawer-content, .popup') || null;
+        const scroller = findLocalScrollContainer(wrapper, boundary);
+        if (scroller) {
+            scrollChildIntoView(scroller, wrapper, {
+                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+                block: 'nearest',
+            });
+        } else if (typeof wrapper.scrollIntoView === 'function') {
+            wrapper.scrollIntoView({
+                behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+                block: 'nearest',
+            });
+        }
+        const focusable = resolveFocusable(targetEl) || targetEl;
+        if (typeof focusable.focus === 'function') {
+            focusable.focus({ preventScroll: true });
+        }
+        if (select && typeof focusable.select === 'function') {
+            focusable.select();
+        }
+        clear();
+        void wrapper.offsetWidth;
+        wrapper.classList.add('luker-bsum-field-pulse');
+        pulseTarget = wrapper;
+        pulseTimer = setTimeout(() => {
+            clear();
+        }, PULSE_DURATION_MS);
+        return true;
+    }
+
+    return { focus, clear };
 }
 
 function resolveFocusable(targetEl) {
