@@ -80,6 +80,35 @@ export function createSkillRepository(dataRoot) {
         return out;
     }
 
+    async function statIfExists(targetPath) {
+        try {
+            return await fs.stat(targetPath);
+        } catch (err) {
+            if (err?.code === 'ENOENT') return null;
+            throw err;
+        }
+    }
+
+    async function readFileIfExists(targetPath, encoding) {
+        try {
+            return encoding === undefined
+                ? await fs.readFile(targetPath)
+                : await fs.readFile(targetPath, encoding);
+        } catch (err) {
+            if (err?.code === 'ENOENT') return null;
+            throw err;
+        }
+    }
+
+    async function readdirIfExists(targetPath) {
+        try {
+            return await fs.readdir(targetPath);
+        } catch (err) {
+            if (err?.code === 'ENOENT') return [];
+            throw err;
+        }
+    }
+
     /**
      * Returns file metadata without reading whole file bodies. The editor
      * needs sizes and binary flags for its tree, while the embed packer keeps
@@ -88,8 +117,8 @@ export function createSkillRepository(dataRoot) {
     async function listFileStats({ scope, name }) {
         assertSafeSkillName(name);
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
-        const isDir = await fs.stat(skillDir).then(s => s.isDirectory()).catch(() => false);
-        if (!isDir) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
+        const skillStat = await statIfExists(skillDir);
+        if (!skillStat?.isDirectory()) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
         const out = [];
         async function recurse(rel) {
             const abs = rel ? join(skillDir, rel) : skillDir;
@@ -121,7 +150,7 @@ export function createSkillRepository(dataRoot) {
 
     async function readSkillEntry(scope, name) {
         const dir = join(skillsRoot, encodeScopePath(scope), name);
-        const stat = await fs.stat(dir).catch(() => null);
+        const stat = await statIfExists(dir);
         if (!stat || !stat.isDirectory()) return null;
 
         const skillMdPath = join(dir, SKILL_MD);
@@ -149,13 +178,7 @@ export function createSkillRepository(dataRoot) {
 
     async function listScope(scope) {
         const dir = join(skillsRoot, encodeScopePath(scope));
-        let names;
-        try {
-            names = await fs.readdir(dir);
-        } catch (e) {
-            if (e.code === 'ENOENT') return [];
-            throw e;
-        }
+        const names = await readdirIfExists(dir);
         const entries = [];
         for (const name of names) {
             // Skip transient staging directories from in-flight installs.
@@ -180,22 +203,22 @@ export function createSkillRepository(dataRoot) {
             const all = [];
             all.push(...(await listScope({ kind: 'global' })));
             const presetRoot = join(skillsRoot, 'preset');
-            const presetNames = await fs.readdir(presetRoot).catch(() => []);
+            const presetNames = await readdirIfExists(presetRoot);
             for (const name of presetNames) {
                 if (name.startsWith('.')) continue;
                 all.push(...(await listScope({ kind: 'preset', name })));
             }
             const charRoot = join(skillsRoot, 'character');
-            const chars = await fs.readdir(charRoot).catch(() => []);
+            const chars = await readdirIfExists(charRoot);
             for (const characterFile of chars) {
                 all.push(...(await listScope({ kind: 'character', characterFile })));
             }
             const orchPresetRoot = join(skillsRoot, 'orch-preset');
-            const orchModes = await fs.readdir(orchPresetRoot).catch(() => []);
+            const orchModes = await readdirIfExists(orchPresetRoot);
             for (const mode of orchModes) {
                 if (mode.startsWith('.')) continue;
                 const modeRoot = join(orchPresetRoot, mode);
-                const orchNames = await fs.readdir(modeRoot).catch(() => []);
+                const orchNames = await readdirIfExists(modeRoot);
                 for (const name of orchNames) {
                     if (name.startsWith('.')) continue;
                     all.push(...(await listScope({ kind: 'orch-preset', mode, name })));
@@ -208,7 +231,7 @@ export function createSkillRepository(dataRoot) {
 
     async function get(name, scope) {
         assertSafeSkillName(name);
-        return await readSkillEntry(scope, name).catch(() => null);
+        return await readSkillEntry(scope, name);
     }
 
     // ──────────────────────────── install / preview ────────────────────────────
@@ -261,7 +284,7 @@ export function createSkillRepository(dataRoot) {
         const front = parseSkillFrontmatter(skillMd._buffer.toString('utf8'));
         const incomingHash = computePayloadHash(files);
 
-        const existing = await readSkillEntry(scope, front.name).catch(() => null);
+        const existing = await readSkillEntry(scope, front.name);
         let conflict;
         if (!existing) conflict = 'new';
         else if (existing.installedHash === incomingHash) conflict = 'same';
@@ -304,7 +327,13 @@ export function createSkillRepository(dataRoot) {
                 name: preview.name,
             };
         } catch (e) {
-            await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+            try {
+                await fs.rm(stagingDir, { recursive: true, force: true });
+            } catch (rmErr) {
+                if (rmErr?.code !== 'ENOENT') {
+                    console.error(`[skills] Failed to remove staging directory ${stagingDir}:`, rmErr);
+                }
+            }
             throw e;
         }
     }
@@ -315,8 +344,8 @@ export function createSkillRepository(dataRoot) {
         assertSafeSkillName(name);
         const dir = join(skillsRoot, encodeScopePath(scope), name);
         if (expectedInstalledHash) {
-            const isDir = await fs.stat(dir).then(s => s.isDirectory()).catch(() => false);
-            const currentHash = isDir ? hashFiles(await walkSkillFiles(dir)) : null;
+            const st = await statIfExists(dir);
+            const currentHash = st?.isDirectory() ? hashFiles(await walkSkillFiles(dir)) : null;
             if (currentHash && currentHash !== expectedInstalledHash) {
                 throw refusal(`installedHash mismatch (expected ${expectedInstalledHash}, got ${currentHash})`, SKILL_REFUSAL_CODES.INSTALLED_HASH_MISMATCH);
             }
@@ -332,10 +361,9 @@ export function createSkillRepository(dataRoot) {
         }
         const fromDir = join(skillsRoot, encodeScopePath(scope), fromName);
         const toDir = join(skillsRoot, encodeScopePath(scope), toName);
-        const fromExists = await fs.stat(fromDir).then(s => s.isDirectory()).catch(() => false);
-        if (!fromExists) throw new Error(`source skill not found: ${fromName}`);
-        const toExists = await fs.stat(toDir).then(() => true).catch(() => false);
-        if (toExists) throw new Error(`rename collision: target ${toName} exists`);
+        const fromStat = await statIfExists(fromDir);
+        if (!fromStat?.isDirectory()) throw new Error(`source skill not found: ${fromName}`);
+        if (await statIfExists(toDir)) throw new Error(`rename collision: target ${toName} exists`);
 
         await fs.rename(fromDir, toDir);
         const mdPath = join(toDir, SKILL_MD);
@@ -354,10 +382,9 @@ export function createSkillRepository(dataRoot) {
         assertSafeSkillName(name);
         const fromDir = join(skillsRoot, encodeScopePath(fromScope), name);
         const toDir = join(skillsRoot, encodeScopePath(toScope), name);
-        const fromExists = await fs.stat(fromDir).then(s => s.isDirectory()).catch(() => false);
-        if (!fromExists) throw new Error(`source not found: ${name}`);
-        const toExists = await fs.stat(toDir).then(() => true).catch(() => false);
-        if (toExists) throw new Error(`destination already has skill ${name}; resolve conflict first`);
+        const fromStat = await statIfExists(fromDir);
+        if (!fromStat?.isDirectory()) throw new Error(`source not found: ${name}`);
+        if (await statIfExists(toDir)) throw new Error(`destination already has skill ${name}; resolve conflict first`);
         await fs.mkdir(join(toDir, '..'), { recursive: true });
         await fs.rename(fromDir, toDir);
     }
@@ -368,15 +395,14 @@ export function createSkillRepository(dataRoot) {
         assertSafeSkillName(name);
         assertSafeFilePath(filePath);
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
-        const exists = await fs.stat(skillDir).then(() => true).catch(() => false);
-        if (!exists) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
+        if (!await statIfExists(skillDir)) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
         const absFile = join(skillDir, filePath);
 
-        if (expectAbsent && await fs.stat(absFile).then(() => true).catch(() => false)) {
+        if (expectAbsent && await statIfExists(absFile)) {
             throw refusal(`file already exists: ${filePath}`, SKILL_REFUSAL_CODES.FILE_EXISTS);
         }
         if (expectedSha256) {
-            const current = await fs.readFile(absFile).catch(() => null);
+            const current = await readFileIfExists(absFile);
             const currentHash = current ? sha256(current) : null;
             if (currentHash !== expectedSha256) {
                 throw refusal(`sha256 mismatch (expected ${expectedSha256}, got ${currentHash || 'missing'})`, SKILL_REFUSAL_CODES.SHA256_MISMATCH);
@@ -395,7 +421,7 @@ export function createSkillRepository(dataRoot) {
         assertSafeFilePath(filePath);
         if (!oldString) throw new Error('oldString must be non-empty');
         const absFile = join(skillsRoot, encodeScopePath(scope), name, filePath);
-        const current = await fs.readFile(absFile, 'utf8').catch(() => null);
+        const current = await readFileIfExists(absFile, 'utf8');
         if (current === null) throw new Error(`file not found: ${filePath}`);
 
         const occurrences = current.split(oldString).length - 1;
@@ -432,7 +458,7 @@ export function createSkillRepository(dataRoot) {
         }
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
         const absFile = join(skillDir, filePath);
-        const exists = await fs.stat(absFile).then(() => true).catch(() => false);
+        const exists = Boolean(await statIfExists(absFile));
         if (!exists) throw new Error(`file not found: ${filePath}`);
         await fs.unlink(absFile);
 
@@ -485,10 +511,9 @@ export function createSkillRepository(dataRoot) {
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
         const fromAbs = join(skillDir, fromPath);
         const toAbs = join(skillDir, toPath);
-        const fromExists = await fs.stat(fromAbs).then(s => s.isFile()).catch(() => false);
-        if (!fromExists) throw new Error(`source file not found: ${fromPath}`);
-        const toExists = await fs.stat(toAbs).then(() => true).catch(() => false);
-        if (toExists) throw new Error(`destination already exists: ${toPath}`);
+        const fromStat = await statIfExists(fromAbs);
+        if (!fromStat?.isFile()) throw new Error(`source file not found: ${fromPath}`);
+        if (await statIfExists(toAbs)) throw new Error(`destination already exists: ${toPath}`);
 
         const toParent = dirname(toAbs);
         if (toParent !== skillDir) await fs.mkdir(toParent, { recursive: true });
@@ -525,8 +550,8 @@ export function createSkillRepository(dataRoot) {
     async function listFiles({ scope, name }) {
         assertSafeSkillName(name);
         const skillDir = join(skillsRoot, encodeScopePath(scope), name);
-        const isDir = await fs.stat(skillDir).then(s => s.isDirectory()).catch(() => false);
-        if (!isDir) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
+        const skillStat = await statIfExists(skillDir);
+        if (!skillStat?.isDirectory()) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
         const files = await walkSkillFiles(skillDir);
         const out = [];
         for (const f of files) {
