@@ -292,6 +292,11 @@ import { setToastTranslator } from './scripts/luker-toast.js';
 import { hasUnloadGuard } from './scripts/activity-guard.js';
 import { createBeforeUnloadCoordinator } from './scripts/lib/before-unload-coordinator.js';
 import { createChatTransitionCoordinator } from './scripts/lib/chat-transition-coordinator.js';
+import {
+    characterDataPatchOperations,
+    planCharacterFormEdit,
+    resolveCharacterFormEditTarget,
+} from './scripts/lib/character-form-edit.js';
 import { normalizeGenerateRawArgs } from './scripts/lib/request-activity-lease.js';
 import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
 import { consumeLastUsage } from './scripts/last-usage.js';
@@ -2554,10 +2559,17 @@ export async function selectCharacterById(id, { switchMenu = true, skipSwitchGua
 
     if (selected_group || String(this_chid) !== String(id)) {
         //if clicked on a different character from what was currently selected
+        cancelDebounce(saveCharacterDebounced);
+        $('#avatar_url_pole').val('');
         setCharacterId(undefined);
         setCharacterName('');
         resetSelectedGroup();
-        await clearChat({ clearData: true });
+        const clearPromise = clearChat({ clearData: true });
+        const clearEpoch = getChatTransitionEpoch();
+        await clearPromise;
+        if (getChatTransitionEpoch() !== clearEpoch) {
+            return false;
+        }
         cancelTtsPlay();
         this_edit_mes_id = undefined;
         selected_button = 'character_edit';
@@ -2569,7 +2581,14 @@ export async function selectCharacterById(id, { switchMenu = true, skipSwitchGua
     } else {
         //if clicked on character that was already selected
         switchMenu && (selected_button = 'character_edit');
+        const targetAvatar = String(characters[id]?.avatar || '');
+        const clickEpoch = getChatTransitionEpoch();
         await unshallowCharacter(this_chid);
+        if (getChatTransitionEpoch() !== clickEpoch
+            || String(this_chid) !== String(id)
+            || String(characters[this_chid]?.avatar || '') !== targetAvatar) {
+            return false;
+        }
         select_selected_character(this_chid, { switchMenu });
         return true;
     }
@@ -15632,8 +15651,8 @@ function beginChatTransition() {
     chatTransitionCoordinator.beginChatTransition();
 }
 
-function endChatTransition() {
-    chatTransitionCoordinator.endChatTransition();
+function endChatTransition(expectedEpoch = undefined) {
+    return chatTransitionCoordinator.endChatTransition(expectedEpoch);
 }
 
 export function isChatTransitionInProgress() {
@@ -15641,29 +15660,63 @@ export function isChatTransitionInProgress() {
 }
 
 export async function getChat() {
+    const expectedChid = this_chid;
+    const initialCharacter = expectedChid !== undefined ? characters[expectedChid] : null;
+    if (!initialCharacter) {
+        endChatTransition();
+        return;
+    }
+    const expectedAvatar = String(initialCharacter.avatar || '');
+    let expectedChat = null;
+    const loadGuard = chatTransitionCoordinator.beginSoloChatLoad(() => {
+        if (selected_group || String(this_chid) !== String(expectedChid)) {
+            return false;
+        }
+        const current = characters[this_chid];
+        if (!current || String(current.avatar || '') !== expectedAvatar) {
+            return false;
+        }
+        if (expectedChat !== null && String(current.chat || '') !== expectedChat) {
+            return false;
+        }
+        return true;
+    });
+
     try {
-        await unshallowCharacter(this_chid);
+        await unshallowCharacter(expectedChid);
+        if (!loadGuard.isCurrent()) {
+            return;
+        }
+
+        const activeCharacter = characters[expectedChid];
+        expectedChat = String(activeCharacter.chat || '');
 
         const response = await fetch('/api/chats/get', {
             method: 'POST',
             headers: getRequestHeaders(),
             cache: 'no-cache',
             body: JSON.stringify({
-                ch_name: getCharacterName(characters[this_chid]),
-                file_name: characters[this_chid].chat,
-                avatar_url: characters[this_chid].avatar,
+                ch_name: getCharacterName(activeCharacter),
+                file_name: expectedChat,
+                avatar_url: expectedAvatar,
             }),
         });
+        if (!loadGuard.isCurrent()) {
+            return;
+        }
 
         if (!response.ok) {
             throw new Error('Chat could not be loaded');
         }
 
         const data = await response.json();
+        if (!loadGuard.isCurrent()) {
+            return;
+        }
 
         // Corrupted chat file — do NOT overwrite server data
         if (data?.corrupted) {
-            endChatTransition();
+            loadGuard.endTransition();
             toastr.error(t`Chat data is corrupted. Reload the page to retry.`, t`Chat load failed`);
             return;
         }
@@ -15689,28 +15742,38 @@ export async function getChat() {
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
         }
-        endChatTransition();
+        loadGuard.endTransition();
         consumePendingForceOverwrite(resolveChatStateTarget());
         rememberChatMetadataSnapshot();
         rememberChatMessageSnapshot();
-        await getChatResult();
+        await getChatResult(loadGuard.isCurrent);
+        if (!loadGuard.isCurrent()) {
+            return;
+        }
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
         // Focus on the textarea if not already focused on a visible text input
         delay(debounce_timeout.short).then(() => {
+            if (!loadGuard.isCurrent()) {
+                return;
+            }
             if ($(document.activeElement).is('input:visible, textarea:visible')) {
                 return;
             }
             $('#send_textarea').trigger('click').trigger('focus');
         });
     } catch (error) {
-        endChatTransition();
+        if (!loadGuard.isCurrent()) {
+            return;
+        }
+        loadGuard.endTransition();
         toastr.error(t`Chat could not be loaded. Reload the page to retry.`, t`Chat load failed`);
         console.log(error);
     }
 }
 
-async function getChatResult() {
+async function getChatResult(isCurrent = () => true) {
+    if (!isCurrent()) return;
     name2 = getCharacterName(characters[this_chid]);
     let freshChat = false;
     if (chat.length === 0) {
@@ -15721,6 +15784,7 @@ async function getChatResult() {
         }
         // Make sure the chat appears on the server
         await saveChatConditional();
+        if (!isCurrent()) return;
     }
 
     // Op-log scan first_mes BEFORE printMessages renders it. messageFormatting
@@ -15734,20 +15798,29 @@ async function getChatResult() {
     }
 
     await loadItemizedPrompts(getCurrentChatId());
+    if (!isCurrent()) return;
     // The display lane resolves preset-scoped regex rules while printing, so
     // the card-bound preset has to be in effect before this render. The
     // CHAT_CHANGED handler that applies it runs after printMessages.
     await maybeApplyCharacterBoundPreset();
+    if (!isCurrent()) return;
     await printMessages();
+    if (!isCurrent()) return;
     select_selected_character(this_chid);
 
     await settleChatChanged();
+    if (!isCurrent()) return;
     await eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId()));
-    if (freshChat) await eventSource.emit(event_types.CHAT_CREATED);
+    if (!isCurrent()) return;
+    if (freshChat) {
+        await eventSource.emit(event_types.CHAT_CREATED);
+        if (!isCurrent()) return;
+    }
 
     if (chat.length === 1) {
         const chat_id = (chat.length - 1);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, 'first_message');
+        if (!isCurrent()) return;
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, 'first_message');
     }
 }
@@ -15838,14 +15911,20 @@ export async function openCharacterChat(file_name, { skipSwitchGuard = false } =
     if (chidSnapshot === undefined || !characters[chidSnapshot]) {
         return false;
     }
-    await clearChat({ clearData: true });
-    if (this_chid !== chidSnapshot || !characters[chidSnapshot]) {
+    const clearPromise = clearChat({ clearData: true });
+    const clearEpoch = getChatTransitionEpoch();
+    await clearPromise;
+    if (getChatTransitionEpoch() !== clearEpoch || this_chid !== chidSnapshot || !characters[chidSnapshot]) {
         return false;
     }
     characters[chidSnapshot].chat = file_name;
     beginChatTransition();
+    const loadEpoch = getChatTransitionEpoch();
     chat_metadata = {};
     await getChat();
+    if (getChatTransitionEpoch() !== loadEpoch) {
+        return false;
+    }
     $('#selected_chat_pole').val(file_name);
     await updateRemoteChatName(chidSnapshot, file_name);
     return true;
@@ -17577,6 +17656,7 @@ function select_rm_create({ switchMenu = true } = {}) {
     $('#depth_prompt_depth').val(create_save.depth_prompt_depth);
     $('#depth_prompt_role').val(create_save.depth_prompt_role);
     $('#mes_example_textarea').val(create_save.mes_example);
+    $('#avatar_url_pole').val('');
     $('#character_json_data').val('');
     $('#avatar_div').css('display', 'flex');
     $('#avatar_load_preview').attr('src', default_avatar);
@@ -18667,104 +18747,13 @@ export async function updateCharacterData(charId, patch, { persist = true, immed
  * @param {number|string} charId
  * @returns {Promise<void>}
  */
-function escapeCharacterPointer(value) {
-    return String(value).replaceAll('~', '~0').replaceAll('/', '~1');
-}
-
-function characterSourceData(character) {
-    try {
-        const parsed = JSON.parse(character?.json_data || '{}');
-        return parsed?.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
-            ? parsed.data
-            : parsed;
-    } catch {
-        return {};
-    }
-}
-
-function characterDataPatchOperations(character, nextData = character?.data || {}) {
-    const sourceData = characterSourceData(character);
-    const currentExtensions = nextData.extensions ?? {};
-    const sourceExtensions = sourceData?.extensions ?? {};
-    if (!lodash.isEqual(currentExtensions, sourceExtensions)) {
-        return null;
-    }
-
-    const operations = [];
-    for (const [key, value] of Object.entries(nextData)) {
-        if (key === 'extensions') continue;
-        if (!lodash.isEqual(value, sourceData?.[key])) {
-            operations.push({
-                op: 'add',
-                path: `/data/${escapeCharacterPointer(key)}`,
-                value,
-            });
-        }
-    }
-    return operations;
-}
-
-function characterDataFromForm(character, formData) {
-    const current = character?.data && typeof character.data === 'object' ? character.data : {};
-    const sourceData = characterSourceData(character);
-    const next = { ...current };
-    const text = (name) => {
-        const value = formData.get(name);
-        return value === null ? undefined : String(value);
-    };
-    const setText = (field, name = field) => {
-        const value = text(name);
-        if (value !== undefined && !(value === '' && sourceData?.[field] === undefined)) {
-            next[field] = value;
-        }
-    };
-
-    setText('name', 'ch_name');
-    for (const field of ['description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version']) {
-        setText(field);
-    }
-    const tags = text('tags');
-    if (tags !== undefined) {
-        next.tags = tags.split(',').map(tag => tag.trim()).filter(Boolean);
-    }
-
-    const extensions = { ...(current.extensions || {}) };
-    const talkativeness = text('talkativeness');
-    if (talkativeness !== undefined && Number(talkativeness) !== Number(extensions.talkativeness ?? 0.5)) {
-        extensions.talkativeness = Number(talkativeness);
-    }
-    const fav = text('fav');
-    if (fav !== undefined && (fav === 'true') !== (extensions.fav === true)) {
-        extensions.fav = fav === 'true';
-    }
-    const world = text('world');
-    if (world !== undefined && world !== String(extensions.world ?? '')) {
-        extensions.world = world;
-    }
-    const depthPrompt = text('depth_prompt_prompt');
-    const depth = text('depth_prompt_depth');
-    const role = text('depth_prompt_role');
-    const currentDepth = extensions.depth_prompt || {};
-    const nextDepth = {
-        ...currentDepth,
-        ...(depthPrompt !== undefined && depthPrompt !== String(currentDepth.prompt ?? '') ? { prompt: depthPrompt } : {}),
-        ...(depth !== undefined && Number(depth) !== Number(currentDepth.depth ?? 4) ? { depth: Number(depth) } : {}),
-        ...(role !== undefined && role !== String(currentDepth.role ?? 'system') ? { role } : {}),
-    };
-    if (!lodash.isEqual(nextDepth, currentDepth)) {
-        extensions.depth_prompt = nextDepth;
-    }
-    next.extensions = extensions;
-    return next;
-}
-
 export async function persistCharacterData(charId, { data: requestedData } = {}) {
     const character = characters[charId];
     if (!character) {
         throw new Error(`persistCharacterData: no character at index ${charId}`);
     }
     const nextData = requestedData || character.data || {};
-    const operations = characterDataPatchOperations(character, nextData);
+    const operations = characterDataPatchOperations(character, nextData, { isEqual: lodash.isEqual });
     if (operations === null) {
         return persistCharacterDataLegacy(charId);
     }
@@ -19002,20 +18991,22 @@ export async function createOrEditCharacter(e) {
         }
     } else {
         try {
-            const chid = $('.open_alternate_greetings').data('chid');
-            if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
-                for (const value of characters[chid].data.alternate_greetings) {
-                    formData.append('alternate_greetings', value);
-                }
-            }
-
-            const nextData = characterDataFromForm(characters[this_chid], formData);
-            const canPatch = !(rawFile instanceof File && rawFile.size > 0)
-                && crop_data === undefined
-                && characterDataPatchOperations(characters[this_chid], nextData) !== null;
+            const {
+                target: editTarget,
+                nextData,
+                canPatch,
+                alternateGreetings,
+                editingExtensions,
+            } = planCharacterFormEdit({
+                characters,
+                formData,
+                rawFile,
+                cropData: crop_data,
+                isEqual: lodash.isEqual,
+            });
 
             if (canPatch) {
-                await persistCharacterData(this_chid, { data: nextData });
+                await persistCharacterData(editTarget.chid, { data: nextData });
             } else {
                 let url = '/api/characters/edit';
 
@@ -19024,14 +19015,11 @@ export async function createOrEditCharacter(e) {
                 }
 
                 formData.delete('alternate_greetings');
-                if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
-                    for (const value of characters[chid].data.alternate_greetings) {
-                        formData.append('alternate_greetings', value);
-                    }
+                for (const value of alternateGreetings) {
+                    formData.append('alternate_greetings', value);
                 }
 
-                const editingExtensions = characters[this_chid]?.data?.extensions;
-                if (editingExtensions && typeof editingExtensions === 'object') {
+                if (editingExtensions) {
                     formData.append('extensions', JSON.stringify(editingExtensions));
                 }
 
@@ -19052,7 +19040,7 @@ export async function createOrEditCharacter(e) {
             // already persists the chat it intends, so restoring the card's
             // persisted value here only matters when a concurrent chat
             // switch changed it mid-save — in that race the live value wins.
-            await getOneCharacter(formData.get('avatar_url'), { preserveChat: true });
+            await getOneCharacter(editTarget.avatar, { preserveChat: true });
             favsToHotswap(); // Update fav state
 
             $('#add_avatar_button').replaceWith(
@@ -19060,9 +19048,13 @@ export async function createOrEditCharacter(e) {
             );
             $('#create_button').attr('value', 'Save');
             crop_data = undefined;
-            await eventSource.emit(event_types.CHARACTER_EDITED, { detail: { id: this_chid, character: characters[this_chid] } });
+            const refreshedTarget = resolveCharacterFormEditTarget(characters, editTarget.avatar);
+            const editedChid = refreshedTarget ? refreshedTarget.chid : editTarget.chid;
+            await eventSource.emit(event_types.CHARACTER_EDITED, { detail: { id: editedChid, character: characters[editedChid] } });
 
-            await regenerateFirstCharacterMessageIfNeeded({ isNewChat });
+            if (!selected_group && String(this_chid) === String(editedChid)) {
+                await regenerateFirstCharacterMessageIfNeeded({ isNewChat });
+            }
         } catch (error) {
             console.error('Failed to save character', error);
             toastr.error(t`Failed to save character: ${error?.message || error}`, t`Save failed`);
@@ -20041,6 +20033,8 @@ export async function closeCurrentChat({ skipSwitchGuard = false } = {}) {
     if (!await waitForChatSwitchAvailability()) {
         return false;
     }
+    cancelDebounce(saveCharacterDebounced);
+    $('#avatar_url_pole').val('');
     await clearChat({ clearData: true });
     resetSelectedGroup();
     setCharacterId(undefined);

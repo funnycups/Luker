@@ -36,6 +36,7 @@ export function createChatTransitionCoordinator({
 }) {
     let chatTransitionInProgress = false;
     let chatTransitionEpoch = 0;
+    let soloChatLoadSequence = 0;
 
     function getChatTransitionEpoch() {
         return chatTransitionEpoch;
@@ -51,12 +52,30 @@ export function createChatTransitionCoordinator({
         bumpChatTransitionEpoch();
     }
 
-    function endChatTransition() {
+    function endChatTransition(expectedEpoch = undefined) {
+        if (expectedEpoch !== undefined && expectedEpoch !== chatTransitionEpoch) {
+            return false;
+        }
         chatTransitionInProgress = false;
+        return true;
     }
 
     function isChatTransitionInProgress() {
         return chatTransitionInProgress;
+    }
+
+    function beginSoloChatLoad(isTargetCurrent = () => true) {
+        const loadSequence = ++soloChatLoadSequence;
+        const loadEpoch = chatTransitionEpoch;
+        const isCurrent = () => loadSequence === soloChatLoadSequence
+            && chatTransitionEpoch === loadEpoch
+            && Boolean(isTargetCurrent());
+        return {
+            loadSequence,
+            loadEpoch,
+            isCurrent,
+            endTransition: () => (isCurrent() ? endChatTransition(loadEpoch) : false),
+        };
     }
 
     const runChatSwitchConfirm = createChatSwitchConfirmRunner({
@@ -142,6 +161,7 @@ export function createChatTransitionCoordinator({
         beginChatTransition,
         endChatTransition,
         isChatTransitionInProgress,
+        beginSoloChatLoad,
         confirmChatSwitchGuard,
         runWithGenerationLease,
         runWithGenerateRawLease,
