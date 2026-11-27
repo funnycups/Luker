@@ -752,7 +752,7 @@ describe('Strict protocol mismatch, malformed JSON, tool correlation, and premat
                 { type: 'text', text: 'Original reply' },
             ],
             stop_reason: 'end_turn',
-            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3 },
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3, server_tool_use: { web_search_requests: 2 } },
         };
         const claudeTurn = parseProtocolResponse('claude', rawClaude);
         const compatClaude = buildCompatChatCompletionPayload(claudeTurn, rawClaude);
@@ -760,12 +760,14 @@ describe('Strict protocol mismatch, malformed JSON, tool correlation, and premat
         expect(compatClaude.content).toEqual(rawClaude.content);
         expect(compatClaude.usage.input_tokens).toBe(10);
         expect(compatClaude.usage.prompt_tokens).toBe(13);
+        expect(compatClaude.usage.server_tool_use).toEqual({ web_search_requests: 2 });
 
         compatClaude.choices[0].message.content = 'Hook edited reply';
         const parsedCompat = parseCompatChatCompletionResponse('claude', compatClaude);
         expect(parsedCompat.text).toBe('Hook edited reply');
         expect(parsedCompat.reasoning).toBe('step');
         expect(parsedCompat.nativeContentBlocks).toEqual(rawClaude.content);
+        expect(parsedCompat.usage.server_tool_use).toEqual({ web_search_requests: 2 });
 
         const rawGemini = {
             candidates: [{
@@ -823,6 +825,170 @@ describe('Strict protocol mismatch, malformed JSON, tool correlation, and premat
         const turn = oai.finish();
         expect(turn.toolCalls).toEqual([
             { id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"a":1}' } },
+        ]);
+    });
+
+    test('OpenAI Chat stream parser validates tool_correlation before premature EOF', () => {
+        // Unnamed tool call on unterminated stream throws tool_correlation (never downgraded to eof)
+        const unnamed = createProtocolStreamParser('openai');
+        unnamed.feedFrame(JSON.stringify({
+            choices: [{ delta: { content: 'hi', tool_calls: [{ index: 0, id: 'call_x', function: { arguments: '{"a":1}' } }] } }],
+        }));
+        expect(unnamed.getSnapshot().toolCalls).toEqual([]);
+        expect(() => unnamed.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'tool_correlation',
+        }));
+
+        // Truncated JSON arguments on unterminated stream throws tool_correlation instead of eof
+        const truncated = createProtocolStreamParser('openai');
+        truncated.feedFrame(JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_t', function: { name: 'lookup', arguments: '{"q":"unclosed' } }] } }],
+        }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+        expect(() => truncated.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'tool_correlation',
+        }));
+
+        // Empty-arg unclosed tool call on premature EOF is excluded from snapshot
+        const emptyUnclosed = createProtocolStreamParser('openai');
+        emptyUnclosed.feedFrame(JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_empty', function: { name: 'delete_all', arguments: '' } }] } }],
+        }));
+        expect(emptyUnclosed.getSnapshot().toolCalls).toEqual([]);
+        expect(() => emptyUnclosed.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'eof',
+        }));
+        expect(emptyUnclosed.getSnapshot().toolCalls).toEqual([]);
+        expect(isParsedTurnEmpty(emptyUnclosed.getSnapshot())).toBe(true);
+    });
+
+    test('OpenAI Responses stream parser withholds unclosed tool calls on abort and validates tool_correlation before premature EOF', () => {
+        // 1) Truncated JSON mid-arguments stays hidden in snapshot and throws tool_correlation on finish()
+        const truncated = createProtocolStreamParser('openai_responses');
+        truncated.feedFrame(JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: { type: 'function_call', call_id: 'call_r1', name: 'lookup', arguments: '' },
+        }));
+        truncated.feedFrame(JSON.stringify({
+            type: 'response.function_call_arguments.delta',
+            output_index: 0,
+            delta: '{"q":"unclosed',
+        }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+        expect(() => truncated.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'tool_correlation',
+        }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+
+        // 2) Empty unclosed function_call on premature EOF throws eof and leaves snapshot empty
+        const emptyOpen = createProtocolStreamParser('openai_responses');
+        emptyOpen.feedFrame(JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: { type: 'function_call', call_id: 'call_r2', name: 'delete_all', arguments: '' },
+        }));
+        expect(emptyOpen.getSnapshot().toolCalls).toEqual([]);
+        expect(() => emptyOpen.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'eof',
+        }));
+        expect(emptyOpen.getSnapshot().toolCalls).toEqual([]);
+        expect(isParsedTurnEmpty(emptyOpen.getSnapshot())).toBe(true);
+
+        // 3) Unnamed function_call throws tool_correlation before eof
+        const unnamed = createProtocolStreamParser('openai_responses');
+        unnamed.feedFrame(JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: { type: 'function_call', call_id: 'call_r3', name: '', arguments: '{"ok":true}' },
+        }));
+        expect(unnamed.getSnapshot().toolCalls).toEqual([]);
+        expect(() => unnamed.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'tool_correlation',
+        }));
+
+        // 4) Closed function_call_arguments.done is visible on snapshot even before response.completed
+        const closedBeforeEof = createProtocolStreamParser('openai_responses');
+        closedBeforeEof.feedFrame(JSON.stringify({
+            type: 'response.output_item.added',
+            output_index: 0,
+            item: { type: 'function_call', call_id: 'call_r4', name: 'lookup', arguments: '' },
+        }));
+        closedBeforeEof.feedFrame(JSON.stringify({
+            type: 'response.function_call_arguments.delta',
+            output_index: 0,
+            delta: '{"q":"luker"}',
+        }));
+        closedBeforeEof.feedFrame(JSON.stringify({
+            type: 'response.function_call_arguments.done',
+            output_index: 0,
+            arguments: '{"q":"luker"}',
+        }));
+        expect(closedBeforeEof.getSnapshot().toolCalls).toEqual([
+            { id: 'call_r4', type: 'function', function: { name: 'lookup', arguments: '{"q":"luker"}' } },
+        ]);
+    });
+
+    test('Cohere stream parser withholds unclosed tool calls on abort and validates tool_correlation before premature EOF', () => {
+        // 1) Truncated JSON mid-arguments stays hidden in snapshot and throws tool_correlation
+        const truncated = createProtocolStreamParser('cohere');
+        truncated.feedFrame(JSON.stringify({
+            type: 'tool-call-start',
+            index: 0,
+            delta: { message: { tool_calls: { id: 'co_1', function: { name: 'lookup', arguments: '' } } } },
+        }));
+        truncated.feedFrame(JSON.stringify({
+            type: 'tool-call-delta',
+            index: 0,
+            delta: { message: { tool_calls: { function: { arguments: '{"q":"partial' } } } },
+        }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+        expect(() => truncated.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'tool_correlation',
+        }));
+        expect(truncated.getSnapshot().toolCalls).toEqual([]);
+
+        // 2) Empty unclosed tool-call-start throws eof and leaves snapshot empty
+        const emptyOpen = createProtocolStreamParser('cohere');
+        emptyOpen.feedFrame(JSON.stringify({
+            type: 'tool-call-start',
+            index: 0,
+            delta: { message: { tool_calls: { id: 'co_2', function: { name: 'delete_all', arguments: '' } } } },
+        }));
+        expect(emptyOpen.getSnapshot().toolCalls).toEqual([]);
+        expect(() => emptyOpen.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'eof',
+        }));
+        expect(emptyOpen.getSnapshot().toolCalls).toEqual([]);
+        expect(isParsedTurnEmpty(emptyOpen.getSnapshot())).toBe(true);
+
+        // 3) Closed via tool-call-end exposes valid tool call in snapshot
+        const closed = createProtocolStreamParser('cohere');
+        closed.feedFrame(JSON.stringify({
+            type: 'tool-call-start',
+            index: 0,
+            delta: { message: { tool_calls: { id: 'co_3', function: { name: 'lookup', arguments: '' } } } },
+        }));
+        closed.feedFrame(JSON.stringify({
+            type: 'tool-call-delta',
+            index: 0,
+            delta: { message: { tool_calls: { function: { arguments: '{"q":"ok"}' } } } },
+        }));
+        closed.feedFrame(JSON.stringify({ type: 'tool-call-end', index: 0 }));
+        expect(closed.getSnapshot().toolCalls).toEqual([
+            { id: 'co_3', type: 'function', function: { name: 'lookup', arguments: '{"q":"ok"}' } },
+        ]);
+        closed.feedFrame(JSON.stringify({ type: 'message-end', delta: { finish_reason: 'TOOL_CALL' } }));
+        expect(closed.finish().toolCalls).toEqual([
+            { id: 'co_3', type: 'function', function: { name: 'lookup', arguments: '{"q":"ok"}' } },
         ]);
     });
 });

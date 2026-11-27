@@ -280,7 +280,7 @@ export function createOpenAIResponsesStreamParser() {
         const toolCalls = [];
         for (const idx of toolOrder) {
             const tc = toolCallsByOutputIndex.get(idx);
-            if (!tc) continue;
+            if (!tc || !tc.closed || !tc.name) continue;
             toolCalls.push({
                 id: tc.id,
                 type: 'function',
@@ -404,6 +404,7 @@ export function createOpenAIResponsesStreamParser() {
                     id: String(item.call_id || item.id || ''),
                     name: String(item.name || ''),
                     argsStr: typeof item.arguments === 'string' ? item.arguments : '',
+                    closed: false,
                     emittedPart: false,
                 });
                 hasMetadataUpdate = true;
@@ -438,6 +439,27 @@ export function createOpenAIResponsesStreamParser() {
             if (typeof parsed.arguments === 'string' && !slot.argsStr) {
                 slot.argsStr = parsed.arguments;
             }
+            if (typeof parsed.name === 'string' && !slot.name) {
+                slot.name = parsed.name;
+            }
+            const rawArgs = slot.argsStr.trim();
+            if (rawArgs.length > 0) {
+                try {
+                    JSON.parse(rawArgs);
+                } catch (cause) {
+                    throw new ProtocolParseError({
+                        protocol: PROTOCOL,
+                        stage: 'tool_correlation',
+                        location,
+                        message: `Malformed tool arguments JSON on OpenAI Responses output_index ${idx} ("${slot.name}"): ${cause.message}`,
+                        cause,
+                        rawDiagnostic: parsed,
+                    });
+                }
+            }
+            if (slot.name) {
+                slot.closed = true;
+            }
             hasMetadataUpdate = true;
         } else if (type === 'response.output_item.done') {
             if (parsed.item && typeof parsed.item === 'object') {
@@ -460,12 +482,46 @@ export function createOpenAIResponsesStreamParser() {
                             id: String(parsed.item.call_id || parsed.item.id || ''),
                             name: String(parsed.item.name || ''),
                             argsStr: typeof parsed.item.arguments === 'string' ? parsed.item.arguments : '',
+                            closed: false,
                             emittedPart: false,
                         };
                         toolCallsByOutputIndex.set(idx, slot);
-                    } else if (typeof parsed.item.arguments === 'string' && !slot.argsStr) {
-                        slot.argsStr = parsed.item.arguments;
+                    } else {
+                        if (!slot.id) {
+                            slot.id = String(parsed.item.call_id || parsed.item.id || '');
+                        }
+                        if (!slot.name && typeof parsed.item.name === 'string') {
+                            slot.name = parsed.item.name;
+                        }
+                        if (typeof parsed.item.arguments === 'string' && !slot.argsStr) {
+                            slot.argsStr = parsed.item.arguments;
+                        }
                     }
+                    if (!slot.name) {
+                        throw new ProtocolParseError({
+                            protocol: PROTOCOL,
+                            stage: 'tool_correlation',
+                            location,
+                            message: `OpenAI Responses tool call at output_index ${idx} is missing function name.`,
+                            rawDiagnostic: parsed,
+                        });
+                    }
+                    const rawArgs = slot.argsStr.trim();
+                    if (rawArgs.length > 0) {
+                        try {
+                            JSON.parse(rawArgs);
+                        } catch (cause) {
+                            throw new ProtocolParseError({
+                                protocol: PROTOCOL,
+                                stage: 'tool_correlation',
+                                location,
+                                message: `Malformed tool arguments JSON on OpenAI Responses output_index ${idx} ("${slot.name}"): ${cause.message}`,
+                                cause,
+                                rawDiagnostic: parsed,
+                            });
+                        }
+                    }
+                    slot.closed = true;
                     if (!slot.emittedPart) {
                         slot.emittedPart = true;
                         orderedParts.push({
@@ -519,7 +575,40 @@ export function createOpenAIResponsesStreamParser() {
     }
 
     function finish() {
-        if (sawFrames && !sawTerminal) {
+        const isPrematureEof = sawFrames && !sawTerminal;
+        for (const idx of toolOrder) {
+            const slot = toolCallsByOutputIndex.get(idx);
+            if (!slot) continue;
+            if (!slot.name) {
+                throw new ProtocolParseError({
+                    protocol: PROTOCOL,
+                    stage: 'tool_correlation',
+                    location: `output[${idx}]`,
+                    message: `OpenAI Responses tool call at output_index ${idx} is missing function name.`,
+                    rawDiagnostic: slot,
+                });
+            }
+            if (slot.closed) continue;
+            const rawArgs = slot.argsStr.trim();
+            if (rawArgs.length > 0) {
+                try {
+                    JSON.parse(rawArgs);
+                    slot.closed = true;
+                } catch (cause) {
+                    throw new ProtocolParseError({
+                        protocol: PROTOCOL,
+                        stage: 'tool_correlation',
+                        location: `output[${idx}].arguments`,
+                        message: `OpenAI Responses tool call at output_index ${idx} has truncated JSON arguments at EOF.`,
+                        cause,
+                        rawDiagnostic: slot,
+                    });
+                }
+            } else if (!isPrematureEof) {
+                slot.closed = true;
+            }
+        }
+        if (isPrematureEof) {
             throw new ProtocolParseError({
                 protocol: PROTOCOL,
                 stage: 'eof',

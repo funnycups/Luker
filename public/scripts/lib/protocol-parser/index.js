@@ -314,6 +314,9 @@ export function parseCompatChatCompletionResponse(protocolOrSource, payload) {
             ...(payload.moderation !== undefined ? { moderation: payload.moderation } : {}),
         };
         const turn = parseOpenAIChatResponse(oaiView);
+        if (payload.usage?.server_tool_use && typeof payload.usage.server_tool_use === 'object') {
+            turn.usage = { ...(turn.usage || {}), server_tool_use: { ...payload.usage.server_tool_use } };
+        }
         const choice0 = payload.choices[0];
         const msg0 = choice0?.message || {};
         turn.protocol = protocol;

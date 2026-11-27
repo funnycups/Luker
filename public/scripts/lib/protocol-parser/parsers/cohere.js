@@ -202,7 +202,7 @@ export function parseCohereResponse(payload) {
 export function createCohereStreamParser() {
     let text = '';
     let reasoning = '';
-    /** @type {Map<number, { id: string, name: string, argsStr: string }>} */
+    /** @type {Map<number, { id: string, name: string, argsStr: string, closed: boolean }>} */
     const toolCallsByIndex = new Map();
     /** @type {number[]} */
     const toolOrder = [];
@@ -221,7 +221,7 @@ export function createCohereStreamParser() {
         const toolCalls = [];
         for (const idx of toolOrder) {
             const tc = toolCallsByIndex.get(idx);
-            if (!tc) continue;
+            if (!tc || !tc.closed || !tc.name) continue;
             toolCalls.push({
                 id: tc.id,
                 type: 'function',
@@ -327,6 +327,7 @@ export function createCohereStreamParser() {
                 id: String(tc?.id || ''),
                 name: String(tc?.function?.name || ''),
                 argsStr: typeof tc?.function?.arguments === 'string' ? tc.function.arguments : '',
+                closed: false,
             });
             hasMetadataUpdate = true;
         } else if (type === 'tool-call-delta') {
@@ -344,6 +345,42 @@ export function createCohereStreamParser() {
             const argDelta = parsed.delta?.message?.tool_calls?.function?.arguments;
             if (typeof argDelta === 'string') slot.argsStr += argDelta;
         } else if (type === 'tool-call-end') {
+            const idx = Number.isInteger(parsed.index) ? parsed.index : null;
+            const slot = idx !== null ? toolCallsByIndex.get(idx) : null;
+            if (!slot) {
+                throw new ProtocolParseError({
+                    protocol: PROTOCOL,
+                    stage: 'tool_correlation',
+                    location,
+                    message: `Cohere tool-call-end referenced unknown index ${String(parsed.index)} at ${location}.`,
+                    rawDiagnostic: parsed,
+                });
+            }
+            if (!slot.name) {
+                throw new ProtocolParseError({
+                    protocol: PROTOCOL,
+                    stage: 'tool_correlation',
+                    location,
+                    message: `Cohere tool call at index ${idx} is missing function name.`,
+                    rawDiagnostic: slot,
+                });
+            }
+            const rawArgs = slot.argsStr.trim();
+            if (rawArgs.length > 0) {
+                try {
+                    JSON.parse(rawArgs);
+                } catch (cause) {
+                    throw new ProtocolParseError({
+                        protocol: PROTOCOL,
+                        stage: 'tool_correlation',
+                        location,
+                        message: `Malformed tool arguments JSON on Cohere tool call ${idx} ("${slot.name}"): ${cause.message}`,
+                        cause,
+                        rawDiagnostic: slot,
+                    });
+                }
+            }
+            slot.closed = true;
             hasMetadataUpdate = true;
         } else if (type === 'citation-start') {
             const incoming = parsed.delta?.message?.citations;
@@ -379,7 +416,40 @@ export function createCohereStreamParser() {
     }
 
     function finish() {
-        if (sawFrames && !sawMessageEnd) {
+        const isPrematureEof = sawFrames && !sawMessageEnd;
+        for (const idx of toolOrder) {
+            const slot = toolCallsByIndex.get(idx);
+            if (!slot) continue;
+            if (!slot.name) {
+                throw new ProtocolParseError({
+                    protocol: PROTOCOL,
+                    stage: 'tool_correlation',
+                    location: `tool_calls[${idx}]`,
+                    message: `Cohere tool call at index ${idx} is missing function name.`,
+                    rawDiagnostic: slot,
+                });
+            }
+            if (slot.closed) continue;
+            const rawArgs = slot.argsStr.trim();
+            if (rawArgs.length > 0) {
+                try {
+                    JSON.parse(rawArgs);
+                    slot.closed = true;
+                } catch (cause) {
+                    throw new ProtocolParseError({
+                        protocol: PROTOCOL,
+                        stage: 'tool_correlation',
+                        location: `tool_calls[${idx}].function.arguments`,
+                        message: `Cohere tool call at index ${idx} has truncated JSON arguments at EOF.`,
+                        cause,
+                        rawDiagnostic: slot,
+                    });
+                }
+            } else if (!isPrematureEof) {
+                slot.closed = true;
+            }
+        }
+        if (isPrematureEof) {
             throw new ProtocolParseError({
                 protocol: PROTOCOL,
                 stage: 'eof',
