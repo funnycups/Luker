@@ -8,6 +8,7 @@ import {
     normalizeFinishReason,
 } from '../protocol.js';
 import { cloneValue, coerceToolArgs, parseSseJsonFrame } from './common.js';
+import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.COHERE;
 
@@ -202,10 +203,11 @@ export function parseCohereResponse(payload) {
 export function createCohereStreamParser() {
     let text = '';
     let reasoning = '';
-    /** @type {Map<number, { id: string, name: string, argsStr: string, closed: boolean }>} */
+    /** @type {Map<number, { id: string, name: string, argsStr: string, closed: boolean, jsonParseError: ProtocolParseError|null }>} */
     const toolCallsByIndex = new Map();
     /** @type {number[]} */
     const toolOrder = [];
+    const previewTracker = createJsonToolPreviewTracker();
     /** @type {Array<object>} */
     const citations = [];
     let usage = null;
@@ -328,6 +330,7 @@ export function createCohereStreamParser() {
                 name: String(tc?.function?.name || ''),
                 argsStr: typeof tc?.function?.arguments === 'string' ? tc.function.arguments : '',
                 closed: false,
+                jsonParseError: null,
             });
             hasMetadataUpdate = true;
         } else if (type === 'tool-call-delta') {
@@ -369,8 +372,9 @@ export function createCohereStreamParser() {
             if (rawArgs.length > 0) {
                 try {
                     JSON.parse(rawArgs);
+                    slot.closed = true;
                 } catch (cause) {
-                    throw new ProtocolParseError({
+                    slot.jsonParseError = new ProtocolParseError({
                         protocol: PROTOCOL,
                         stage: 'tool_correlation',
                         location,
@@ -379,8 +383,9 @@ export function createCohereStreamParser() {
                         rawDiagnostic: slot,
                     });
                 }
+            } else {
+                slot.closed = true;
             }
-            slot.closed = true;
             hasMetadataUpdate = true;
         } else if (type === 'citation-start') {
             const incoming = parsed.delta?.message?.citations;
@@ -417,6 +422,7 @@ export function createCohereStreamParser() {
 
     function finish() {
         const isPrematureEof = sawFrames && !sawMessageEnd;
+        const isLengthTruncated = !isPrematureEof && normalizeFinishReason(PROTOCOL, nativeFinishReason) === 'length';
         for (const idx of toolOrder) {
             const slot = toolCallsByIndex.get(idx);
             if (!slot) continue;
@@ -430,12 +436,17 @@ export function createCohereStreamParser() {
                 });
             }
             if (slot.closed) continue;
+            if (slot.jsonParseError) {
+                if (isLengthTruncated) continue;
+                throw slot.jsonParseError;
+            }
             const rawArgs = slot.argsStr.trim();
             if (rawArgs.length > 0) {
                 try {
                     JSON.parse(rawArgs);
                     slot.closed = true;
                 } catch (cause) {
+                    if (isLengthTruncated) continue;
                     throw new ProtocolParseError({
                         protocol: PROTOCOL,
                         stage: 'tool_correlation',
@@ -445,7 +456,7 @@ export function createCohereStreamParser() {
                         rawDiagnostic: slot,
                     });
                 }
-            } else if (!isPrematureEof) {
+            } else if (!isPrematureEof && !isLengthTruncated) {
                 slot.closed = true;
             }
         }
@@ -460,5 +471,15 @@ export function createCohereStreamParser() {
         return getSnapshot();
     }
 
-    return { feedFrame, finish, getSnapshot };
+    function getToolCallPreview(name, argument) {
+        for (let i = toolOrder.length - 1; i >= 0; i -= 1) {
+            const slot = toolCallsByIndex.get(toolOrder[i]);
+            if (slot && slot.name === name) {
+                return previewTracker.getPreview(slot, slot.argsStr, argument);
+            }
+        }
+        return '';
+    }
+
+    return { feedFrame, finish, getSnapshot, getToolCallPreview };
 }

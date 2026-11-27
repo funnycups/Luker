@@ -8,6 +8,8 @@ import {
     normalizeFinishReason,
 } from '../protocol.js';
 import { cloneValue, parseSseJsonFrame } from './common.js';
+import { createJsonToolPreviewTracker } from './json-argument-preview.js';
+import { getValueAtArgumentPath } from '../../streaming-tool-reply.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.CLAUDE;
 
@@ -212,10 +214,11 @@ export function parseClaudeResponse(payload) {
  * Create a strict incremental Anthropic Messages SSE parser.
  */
 export function createClaudeStreamParser() {
-    /** @type {Map<number, { block: object, inputJsonBuffer: string, hasInputJson: boolean, closed: boolean }>} */
+    /** @type {Map<number, { block: object, inputJsonBuffer: string, hasInputJson: boolean, closed: boolean, jsonParseError: ProtocolParseError|null }>} */
     const blockSlots = new Map();
     /** @type {number[]} */
     const blockOrder = [];
+    const previewTracker = createJsonToolPreviewTracker();
     let usage = null;
     let nativeFinishReason = null;
     let stopSequence = null;
@@ -341,6 +344,7 @@ export function createClaudeStreamParser() {
                 inputJsonBuffer: '',
                 hasInputJson: false,
                 closed: !CLAUDE_TOOL_BLOCK_TYPES.has(block.type),
+                jsonParseError: null,
             });
             hasMetadataUpdate = true;
         } else if (type === 'content_block_delta') {
@@ -457,8 +461,15 @@ export function createClaudeStreamParser() {
                 if (rawJson.length > 0) {
                     try {
                         slot.block.input = JSON.parse(rawJson);
+                        slot.inputJsonBuffer = '';
+                        slot.hasInputJson = false;
+                        slot.closed = true;
                     } catch (cause) {
-                        throw new ProtocolParseError({
+                        // Keep the slot unclosed and defer throwing until finish():
+                        // Anthropic sends content_block_stop before message_delta
+                        // (`stop_reason: 'max_tokens'`), so a length-truncated tool
+                        // block can stay excluded from toolCalls without raising.
+                        slot.jsonParseError = new ProtocolParseError({
                             protocol: PROTOCOL,
                             stage: 'tool_correlation',
                             location,
@@ -467,11 +478,14 @@ export function createClaudeStreamParser() {
                             rawDiagnostic: rawJson,
                         });
                     }
+                } else {
+                    slot.inputJsonBuffer = '';
+                    slot.hasInputJson = false;
+                    slot.closed = true;
                 }
-                slot.inputJsonBuffer = '';
-                slot.hasInputJson = false;
+            } else {
+                slot.closed = true;
             }
-            slot.closed = true;
             hasMetadataUpdate = true;
         } else if (type === 'message_delta') {
             const deltaUsage = normalizeClaudeUsage(parsed.usage);
@@ -503,11 +517,15 @@ export function createClaudeStreamParser() {
 
     function finish() {
         const isPrematureEof = sawFrames && !sawMessageStop;
+        const isLengthTruncated = !isPrematureEof
+            && (nativeFinishReason === 'max_tokens' || nativeFinishReason === 'model_context_window_exceeded');
         // Validate any unclosed tool block before throwing premature EOF:
         // - Complete valid buffered JSON is committed so proxies dropping only
         //   closing markers preserve full tool arguments.
-        // - Truncated/malformed buffered JSON ALWAYS throws `tool_correlation`
-        //   (never silently falling back to `{}`).
+        // - Truncated JSON on a legitimate max_tokens stop stays unclosed so
+        //   unfinished calls never enter execution/replay while preview survives.
+        // - Truncated/malformed buffered JSON otherwise ALWAYS throws
+        //   `tool_correlation` (never silently falling back to `{}`).
         // - Tool blocks without content_block_stop or complete JSON stay
         //   unclosed on premature EOF so snapshots never fabricate `{}` calls.
         for (const idx of blockOrder) {
@@ -515,13 +533,24 @@ export function createClaudeStreamParser() {
             if (!slot || !CLAUDE_TOOL_BLOCK_TYPES.has(slot.block.type) || slot.closed) {
                 continue;
             }
+            if (slot.jsonParseError) {
+                if (isLengthTruncated) {
+                    continue;
+                }
+                throw slot.jsonParseError;
+            }
             if (slot.hasInputJson) {
                 const rawJson = slot.inputJsonBuffer.trim();
                 if (rawJson.length > 0) {
                     try {
                         slot.block.input = JSON.parse(rawJson);
                         slot.closed = true;
+                        slot.inputJsonBuffer = '';
+                        slot.hasInputJson = false;
                     } catch (cause) {
+                        if (isLengthTruncated) {
+                            continue;
+                        }
                         throw new ProtocolParseError({
                             protocol: PROTOCOL,
                             stage: 'tool_correlation',
@@ -531,12 +560,12 @@ export function createClaudeStreamParser() {
                             rawDiagnostic: rawJson,
                         });
                     }
-                } else if (!isPrematureEof) {
+                } else if (!isPrematureEof && !isLengthTruncated) {
                     slot.closed = true;
+                    slot.inputJsonBuffer = '';
+                    slot.hasInputJson = false;
                 }
-                slot.inputJsonBuffer = '';
-                slot.hasInputJson = false;
-            } else if (!isPrematureEof) {
+            } else if (!isPrematureEof && !isLengthTruncated) {
                 slot.closed = true;
             }
         }
@@ -551,5 +580,20 @@ export function createClaudeStreamParser() {
         return getSnapshot();
     }
 
-    return { feedFrame, finish, getSnapshot };
+    function getToolCallPreview(name, argument) {
+        for (let i = blockOrder.length - 1; i >= 0; i -= 1) {
+            const slot = blockSlots.get(blockOrder[i]);
+            if (!slot || !CLAUDE_TOOL_BLOCK_TYPES.has(slot.block.type) || slot.block.name !== name) {
+                continue;
+            }
+            if (slot.hasInputJson) {
+                return previewTracker.getPreview(slot, slot.inputJsonBuffer, argument);
+            }
+            const value = getValueAtArgumentPath(slot.block.input, argument);
+            return typeof value === 'string' ? value : '';
+        }
+        return '';
+    }
+
+    return { feedFrame, finish, getSnapshot, getToolCallPreview };
 }

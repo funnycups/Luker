@@ -8,6 +8,7 @@ import {
     normalizeOpenAIChatUsage,
 } from '../protocol.js';
 import { cloneValue, coerceToolArgs, parseSseJsonFrame } from './common.js';
+import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.OPENAI_CHAT;
 
@@ -367,6 +368,7 @@ export function createOpenAIChatStreamParser() {
     const toolCallsByIndex = new Map();
     /** @type {number[]} */
     const toolOrder = [];
+    const previewTracker = createJsonToolPreviewTracker();
     let usage = null;
     let finishReason = null;
     let nativeFinishReason = null;
@@ -408,9 +410,16 @@ export function createOpenAIChatStreamParser() {
     }
 
     function materializeToolCalls() {
+        const isLengthTruncated = finishReason === 'length';
         return toolOrder
             .map(idx => toolCallsByIndex.get(idx))
-            .filter(slot => slot && Boolean(slot.name) && (sawTerminal || isCompleteToolArgsJson(slot.argsStr)))
+            .filter((slot) => {
+                if (!slot || !slot.name) return false;
+                if (isLengthTruncated) {
+                    return isCompleteToolArgsJson(slot.argsStr);
+                }
+                return sawTerminal || isCompleteToolArgsJson(slot.argsStr);
+            })
             .map((slot) => {
                 const sig = slot.signature || (slot.id && toolSignatures[slot.id]) || undefined;
                 return {
@@ -725,5 +734,15 @@ export function createOpenAIChatStreamParser() {
         return getSnapshot();
     }
 
-    return { feedFrame, finish, getSnapshot };
+    function getToolCallPreview(name, argument) {
+        for (let i = toolOrder.length - 1; i >= 0; i -= 1) {
+            const slot = toolCallsByIndex.get(toolOrder[i]);
+            if (slot && slot.name === name) {
+                return previewTracker.getPreview(slot, slot.argsStr, argument);
+            }
+        }
+        return '';
+    }
+
+    return { feedFrame, finish, getSnapshot, getToolCallPreview };
 }
