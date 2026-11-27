@@ -2,6 +2,9 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 // Implementation source: Toolify: Empower any LLM with function calling capabilities. (https://github.com/funnycups/Toolify)
 
+import { createIncrementalJsonStringExtractor } from '../lib/protocol-parser/parsers/json-argument-preview.js';
+import { formatArgumentPathKey, parseArgumentPath } from '../lib/streaming-tool-reply.js';
+
 const RANDOM_SIGNAL_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const DEFAULT_REASONING_TAGS = Object.freeze(['thought', 'think']);
 const FUNCTION_CALLS_TAG = 'function_calls';
@@ -462,6 +465,152 @@ function buildReasoningTagLiterals(tagNames = DEFAULT_REASONING_TAGS) {
     ]));
 }
 
+const STREAMING_XML_ENTITY_MAP = Object.freeze({
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: '\'',
+    amp: '&',
+});
+
+function findLiteralOutsideCdata(source, literal, startIndex = 0) {
+    let index = Math.max(0, startIndex);
+    while (index < source.length) {
+        if (source.startsWith('<![CDATA[', index)) {
+            const cdataEnd = source.indexOf(']]>', index + 9);
+            if (cdataEnd === -1) {
+                return -1;
+            }
+            index = cdataEnd + 3;
+            continue;
+        }
+        if (source.startsWith(literal, index)) {
+            return index;
+        }
+        index += 1;
+    }
+    return -1;
+}
+
+function decodeStreamingXmlEntity(entityBody) {
+    if (Object.hasOwn(STREAMING_XML_ENTITY_MAP, entityBody)) {
+        return STREAMING_XML_ENTITY_MAP[entityBody];
+    }
+    if (entityBody.startsWith('#x') || entityBody.startsWith('#X')) {
+        const code = parseInt(entityBody.slice(2), 16);
+        if (Number.isInteger(code) && code >= 0 && code <= 0x10ffff) {
+            return String.fromCodePoint(code);
+        }
+        return null;
+    }
+    if (entityBody.startsWith('#')) {
+        const code = parseInt(entityBody.slice(1), 10);
+        if (Number.isInteger(code) && code >= 0 && code <= 0x10ffff) {
+            return String.fromCodePoint(code);
+        }
+        return null;
+    }
+    return null;
+}
+
+/**
+ * Decode the complete or still-streaming inner payload of `<args_json>` into
+ * a JSON prefix, safely handling CDATA concatenation (`]]]]><![CDATA[>`),
+ * partial closing markers (`]`, `]]`, `</ar`), and cross-chunk XML entities
+ * (`&qu` + `ot;`).
+ *
+ * @param {string} rawAfterOpenTag
+ * @returns {string}
+ */
+function decodeStreamingArgsJsonPayload(rawAfterOpenTag) {
+    const closeTag = `</${ARGS_JSON_TAG}>`;
+    const cdataOpen = '<![CDATA[';
+    let cursor = 0;
+    let output = '';
+
+    while (cursor < rawAfterOpenTag.length) {
+        if (rawAfterOpenTag.startsWith(closeTag, cursor)) {
+            break;
+        }
+        if (rawAfterOpenTag.startsWith(cdataOpen, cursor)) {
+            cursor += cdataOpen.length;
+            const cdataEnd = rawAfterOpenTag.indexOf(']]>', cursor);
+            if (cdataEnd !== -1) {
+                output += rawAfterOpenTag.slice(cursor, cdataEnd);
+                cursor = cdataEnd + 3;
+                continue;
+            }
+            let safeEnd = rawAfterOpenTag.length;
+            if (rawAfterOpenTag.endsWith(']]') && safeEnd - cursor >= 2) {
+                safeEnd -= 2;
+            } else if (rawAfterOpenTag.endsWith(']') && safeEnd - cursor >= 1) {
+                safeEnd -= 1;
+            }
+            output += rawAfterOpenTag.slice(cursor, safeEnd);
+            break;
+        }
+
+        const ch = rawAfterOpenTag[cursor];
+        if (ch === '<') {
+            const rest = rawAfterOpenTag.slice(cursor);
+            if ((rest.length < cdataOpen.length && cdataOpen.startsWith(rest))
+                || (rest.length < closeTag.length && closeTag.startsWith(rest))) {
+                break;
+            }
+            output += ch;
+            cursor += 1;
+            continue;
+        }
+
+        if (ch === '&') {
+            let scan = cursor + 1;
+            let closedAt = -1;
+            let validEntityChars = true;
+            while (scan < rawAfterOpenTag.length) {
+                const c = rawAfterOpenTag[scan];
+                if (c === ';') {
+                    closedAt = scan;
+                    break;
+                }
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '#')) {
+                    validEntityChars = false;
+                    break;
+                }
+                scan += 1;
+            }
+            if (closedAt !== -1) {
+                const decoded = decodeStreamingXmlEntity(rawAfterOpenTag.slice(cursor + 1, closedAt));
+                if (decoded !== null) {
+                    output += decoded;
+                    cursor = closedAt + 1;
+                    continue;
+                }
+                output += ch;
+                cursor += 1;
+                continue;
+            }
+            if (validEntityChars && scan === rawAfterOpenTag.length) {
+                // Incomplete entity at end of chunk (e.g. `&qu` before `ot;`): wait.
+                break;
+            }
+            output += ch;
+            cursor += 1;
+            continue;
+        }
+
+        let nextSpecial = cursor + 1;
+        while (nextSpecial < rawAfterOpenTag.length
+            && rawAfterOpenTag[nextSpecial] !== '<'
+            && rawAfterOpenTag[nextSpecial] !== '&') {
+            nextSpecial += 1;
+        }
+        output += rawAfterOpenTag.slice(cursor, nextSpecial);
+        cursor = nextSpecial;
+    }
+
+    return output;
+}
+
 export class PlainTextFunctionCallStreamDetector {
     #triggerSignal;
     #reasoningTagLiterals;
@@ -470,6 +619,7 @@ export class PlainTextFunctionCallStreamDetector {
     #raw = '';
     #reasoningDepth = 0;
     #detected = false;
+    #previewCache = new Map();
 
     constructor({ triggerSignal = '', reasoningTagNames = DEFAULT_REASONING_TAGS } = {}) {
         this.#triggerSignal = String(triggerSignal || '').trim();
@@ -482,6 +632,121 @@ export class PlainTextFunctionCallStreamDetector {
 
     get rawText() {
         return this.#raw;
+    }
+
+    /**
+     * Incrementally preview a string argument of a target tool call inside the
+     * masked post-trigger XML call region. Read-only projection; backend
+     * validation and parsing remain authoritative at EOF.
+     *
+     * @param {string} toolName
+     * @param {unknown} argument
+     * @returns {string}
+     */
+    getToolCallPreview(toolName, argument) {
+        const expectedName = normalizeToolName(toolName);
+        if (!this.#detected || !expectedName) {
+            return '';
+        }
+        const segments = parseArgumentPath(argument);
+        if (!segments) {
+            return '';
+        }
+
+        // Align with backend `findLastTriggerSignalOutsideThought`: reset to the
+        // region following the latest trigger signal when re-emitted.
+        const lastTriggerPos = this.#triggerSignal
+            ? this.#hidden.lastIndexOf(this.#triggerSignal)
+            : 0;
+        if (lastTriggerPos < 0) {
+            return '';
+        }
+        const afterTrigger = this.#triggerSignal
+            ? this.#hidden.slice(lastTriggerPos + this.#triggerSignal.length)
+            : this.#hidden;
+        const callsOpenTag = `<${FUNCTION_CALLS_TAG}>`;
+        const callsCloseTag = `</${FUNCTION_CALLS_TAG}>`;
+        const trimmedStart = afterTrigger.trimStart();
+        if (!trimmedStart.startsWith(callsOpenTag)) {
+            return '';
+        }
+
+        const callsInnerStart = callsOpenTag.length;
+        const callsClosePos = findLiteralOutsideCdata(trimmedStart, callsCloseTag, callsInnerStart);
+        const callsScope = callsClosePos !== -1
+            ? trimmedStart.slice(callsInnerStart, callsClosePos)
+            : trimmedStart.slice(callsInnerStart);
+
+        const callOpenTag = `<${FUNCTION_CALL_TAG}>`;
+        const callCloseTag = `</${FUNCTION_CALL_TAG}>`;
+        const toolOpenTag = `<${TOOL_TAG}>`;
+        const toolCloseTag = `</${TOOL_TAG}>`;
+        const argsOpenTag = `<${ARGS_JSON_TAG}>`;
+
+        let matchedCallOffset = -1;
+        let matchedArgsRaw = '';
+        let cursor = 0;
+        while (cursor < callsScope.length) {
+            const callStart = findLiteralOutsideCdata(callsScope, callOpenTag, cursor);
+            if (callStart === -1) break;
+            const innerStart = callStart + callOpenTag.length;
+            const callClose = findLiteralOutsideCdata(callsScope, callCloseTag, innerStart);
+            const callInner = callClose !== -1
+                ? callsScope.slice(innerStart, callClose)
+                : callsScope.slice(innerStart);
+
+            const toolStart = findLiteralOutsideCdata(callInner, toolOpenTag, 0);
+            if (toolStart !== -1) {
+                const toolNameStart = toolStart + toolOpenTag.length;
+                const toolEnd = findLiteralOutsideCdata(callInner, toolCloseTag, toolNameStart);
+                if (toolEnd !== -1) {
+                    const parsedName = normalizeToolName(decodeXmlText(callInner.slice(toolNameStart, toolEnd)));
+                    if (parsedName === expectedName) {
+                        const argsStart = findLiteralOutsideCdata(callInner, argsOpenTag, 0);
+                        if (argsStart !== -1) {
+                            matchedCallOffset = callStart;
+                            matchedArgsRaw = callInner.slice(argsStart + argsOpenTag.length);
+                        }
+                    }
+                }
+            }
+
+            if (callClose === -1) break;
+            cursor = callClose + callCloseTag.length;
+        }
+
+        if (matchedCallOffset < 0 || !matchedArgsRaw) {
+            return '';
+        }
+
+        const jsonPrefix = decodeStreamingArgsJsonPayload(matchedArgsRaw);
+        if (!jsonPrefix) {
+            return '';
+        }
+
+        const cacheKey = `${expectedName}:${formatArgumentPathKey(segments)}`;
+        let entry = this.#previewCache.get(cacheKey);
+        if (!entry
+            || entry.triggerPos !== lastTriggerPos
+            || entry.callOffset !== matchedCallOffset
+            || jsonPrefix.length < entry.offset
+            || (entry.offset > 0 && !jsonPrefix.startsWith(entry.lastDecoded))) {
+            entry = {
+                triggerPos: lastTriggerPos,
+                callOffset: matchedCallOffset,
+                offset: 0,
+                lastDecoded: '',
+                extractor: createIncrementalJsonStringExtractor(segments),
+            };
+            this.#previewCache.set(cacheKey, entry);
+        }
+
+        if (jsonPrefix.length > entry.offset) {
+            entry.extractor.feed(jsonPrefix.slice(entry.offset));
+            entry.offset = jsonPrefix.length;
+            entry.lastDecoded = jsonPrefix;
+        }
+        return entry.extractor.getValue();
     }
 
     processTextDelta(text) {
