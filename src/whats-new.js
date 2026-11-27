@@ -35,9 +35,6 @@ const VPRE_OPEN_RE = /^<span\s+v-pre\s*>$/i;
 /** @type {Promise<RuntimeIdentity> | null} */
 let cachedIdentityPromise = null;
 
-/** @type {RuntimeIdentity | null} */
-let testIdentityOverride = null;
-
 /**
  * Resolves a client locale string to the matching local changelog file and docs URL.
  * @param {string} [locale]
@@ -238,9 +235,6 @@ export function loadChangelogForLocale(locale, { baseDir = serverDirectory } = {
  * @returns {Promise<RuntimeIdentity>}
  */
 export function getRuntimeIdentity() {
-    if (testIdentityOverride) {
-        return Promise.resolve({ ...testIdentityOverride });
-    }
     if (!cachedIdentityPromise) {
         cachedIdentityPromise = getVersion().then(info => ({
             version: String(info?.lukerVersion || '').trim(),
@@ -252,22 +246,12 @@ export function getRuntimeIdentity() {
 }
 
 /**
- * Overrides or resets the cached boot identity for tests.
- * @param {RuntimeIdentity | null} identity
- */
-export function setRuntimeIdentityForTests(identity) {
-    testIdentityOverride = identity ? { ...identity } : null;
-    if (!identity) {
-        cachedIdentityPromise = null;
-    }
-}
-
-/**
  * Returns the initial seen-version fields stamped onto brand-new user accounts.
+ * @param {RuntimeIdentity | null} [identity]
  * @returns {Promise<{ lastSeenVersion?: string, lastSeenRevision: string | null }>}
  */
-export async function getInitialSeenVersionFields() {
-    const current = await getRuntimeIdentity();
+export async function getInitialSeenVersionFields(identity = null) {
+    const current = identity ?? await getRuntimeIdentity();
     const fields = { lastSeenRevision: current.revision ?? null };
     if (parseSemverLikeVersion(current.version)) {
         fields.lastSeenVersion = current.version;

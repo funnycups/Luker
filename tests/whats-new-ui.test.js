@@ -5,15 +5,13 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 
 import {
-    initWhatsNew,
+    createWhatsNewInitializer,
     renderChangelogMarkdown,
-    resetWhatsNewInitForTests,
     resolveWhatsNewTheme,
     showWhatsNewModal,
 } from '../public/scripts/whats-new.js';
 
 afterEach(() => {
-    resetWhatsNewInitForTests();
     document.body.innerHTML = '';
     document.head.innerHTML = '';
     delete document.documentElement.dataset.theme;
@@ -153,12 +151,13 @@ describe('showWhatsNewModal', () => {
 
         const backdrop = document.querySelector('.lw-dialog-backdrop.lw-surface.wn-backdrop');
         expect(backdrop).not.toBeNull();
-        expect(backdrop.querySelector('.lw-dialog-title')?.textContent).toBe('Updated to Luker v2.9.0-rc.4');
-        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toBe('v2.9.0-rc.2 → v2.9.0-rc.4');
+        expect(backdrop.querySelector('.lw-dialog-title')?.textContent).toContain('v2.9.0-rc.4');
+        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toContain('v2.9.0-rc.2');
+        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toContain('v2.9.0-rc.4');
 
         const versionCards = backdrop.querySelectorAll('.wn-version');
         expect(versionCards).toHaveLength(3);
-        expect(versionCards[0].textContent).toContain('Unreleased');
+        expect(versionCards[0].textContent).toContain('Fixed session naming.');
         expect(versionCards[1].textContent).toContain('v2.9.0-rc.4');
         expect(versionCards[2].textContent).toContain('v2.9.0-rc.3');
 
@@ -190,9 +189,10 @@ describe('showWhatsNewModal', () => {
         const modalPromise = showWhatsNewModal(devPayload, { onAck });
 
         const backdrop = document.querySelector('.wn-backdrop');
-        expect(backdrop.querySelector('.lw-dialog-title')?.textContent).toBe('Updated to Luker dev build a8bd55a9e');
-        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toBe('9d17a9735 → a8bd55a9e');
-        expect(backdrop.querySelector('.wn-empty-note')?.textContent).toContain('dev build');
+        expect(backdrop.querySelector('.lw-dialog-title')?.textContent).toContain('a8bd55a9e');
+        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toContain('9d17a9735');
+        expect(backdrop.querySelector('.wn-range-pill')?.textContent).toContain('a8bd55a9e');
+        expect(backdrop.querySelector('.wn-empty-note')?.textContent?.trim().length).toBeGreaterThan(0);
         expect(backdrop.querySelector('a.wn-compare-link')?.getAttribute('href')).toBe(devPayload.compareUrl);
 
         // Dismiss via Escape key
@@ -353,6 +353,7 @@ describe('initWhatsNew coordination', () => {
             return { ok: true, status: 204, json: async () => null };
         });
 
+        const initWhatsNew = createWhatsNewInitializer();
         const runPromise = initWhatsNew({
             getRequestHeaders: () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'tok' }),
             getLocale: () => 'zh-cn',

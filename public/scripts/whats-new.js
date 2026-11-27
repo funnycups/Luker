@@ -13,15 +13,6 @@ const TOKENS_CSS_ID = 'luker-lens-shared-tokens-css';
 const WHATS_NEW_CSS_ID = 'lw-whats-new-css';
 const DOCS_ORIGIN = 'https://luker.cups.moe';
 
-let initialized = false;
-
-/**
- * Resets module initialization guard for unit tests.
- */
-export function resetWhatsNewInitForTests() {
-    initialized = false;
-}
-
 function makeTranslator(translateFn) {
     const fn = typeof translateFn === 'function'
         ? translateFn
@@ -465,56 +456,67 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
 }
 
 /**
+ * Creates a one-shot initializer for the post-update "What's New" modal.
+ * @returns {(options: { getRequestHeaders: () => Record<string, string>, getLocale: () => string, translate?: (key: string) => string, waitForAnnouncements?: () => Promise<void>, fetchImpl?: typeof fetch }) => Promise<void>}
+ */
+export function createWhatsNewInitializer() {
+    let initialized = false;
+    return function initWhatsNewInstance({
+        getRequestHeaders,
+        getLocale,
+        translate = null,
+        waitForAnnouncements = null,
+        fetchImpl = globalThis.fetch,
+    }) {
+        if (initialized) return Promise.resolve();
+        initialized = true;
+
+        return (async () => {
+            try {
+                if (typeof waitForAnnouncements === 'function') {
+                    try {
+                        await waitForAnnouncements();
+                    } catch (gateError) {
+                        console.error('[whats-new] announcements gate failed:', gateError);
+                    }
+                }
+                const response = await fetchImpl('/api/users/whats-new', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ locale: getLocale() }),
+                });
+                if (!response.ok) {
+                    throw new Error(`/api/users/whats-new -> ${response.status}`);
+                }
+                const payload = await response.json();
+                if (!payload?.show) {
+                    return;
+                }
+                await showWhatsNewModal(payload, {
+                    translate,
+                    onAck: async () => {
+                        const ackResponse = await fetchImpl('/api/users/whats-new/ack', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({
+                                version: payload.currentVersion,
+                                revision: payload.currentRevision ?? null,
+                            }),
+                        });
+                        if (!ackResponse.ok) {
+                            throw new Error(`/api/users/whats-new/ack -> ${ackResponse.status}`);
+                        }
+                    },
+                });
+            } catch (error) {
+                console.error('[whats-new] init failed:', error);
+            }
+        })();
+    };
+}
+
+/**
  * Checks whether the running Luker version/revision updated since the user's
  * last visit and displays the post-update modal after critical announcements settle.
- * @param {{ getRequestHeaders: () => Record<string, string>, getLocale: () => string, translate?: (key: string) => string, waitForAnnouncements?: () => Promise<void>, fetchImpl?: typeof fetch }} options
- * @returns {Promise<void>}
  */
-export function initWhatsNew({
-    getRequestHeaders,
-    getLocale,
-    translate = null,
-    waitForAnnouncements = null,
-    fetchImpl = globalThis.fetch,
-}) {
-    if (initialized) return Promise.resolve();
-    initialized = true;
-
-    return (async () => {
-        try {
-            if (typeof waitForAnnouncements === 'function') {
-                await Promise.resolve(waitForAnnouncements()).catch(() => undefined);
-            }
-            const response = await fetchImpl('/api/users/whats-new', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ locale: getLocale() }),
-            });
-            if (!response.ok) {
-                throw new Error(`/api/users/whats-new -> ${response.status}`);
-            }
-            const payload = await response.json();
-            if (!payload?.show) {
-                return;
-            }
-            await showWhatsNewModal(payload, {
-                translate,
-                onAck: async () => {
-                    const ackResponse = await fetchImpl('/api/users/whats-new/ack', {
-                        method: 'POST',
-                        headers: getRequestHeaders(),
-                        body: JSON.stringify({
-                            version: payload.currentVersion,
-                            revision: payload.currentRevision ?? null,
-                        }),
-                    });
-                    if (!ackResponse.ok) {
-                        throw new Error(`/api/users/whats-new/ack -> ${ackResponse.status}`);
-                    }
-                },
-            });
-        } catch (error) {
-            console.error('[whats-new] init failed:', error);
-        }
-    })();
-}
+export const initWhatsNew = createWhatsNewInitializer();

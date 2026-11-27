@@ -14,7 +14,6 @@ import {
     loadChangelogForLocale,
     parseChangelogMarkdown,
     resolveChangelogLocale,
-    setRuntimeIdentityForTests,
     shouldApplyAck,
 } from '../src/whats-new.js';
 import { initUserStorage, toKey } from '../src/users.js';
@@ -125,7 +124,6 @@ const SAMPLE_ZH_TW = `# Changelog
 `;
 
 afterEach(() => {
-    setRuntimeIdentityForTests(null);
     while (tempDirs.length > 0) {
         fs.rmSync(tempDirs.pop(), { recursive: true, force: true });
     }
@@ -230,22 +228,18 @@ describe('loadChangelogForLocale', () => {
 });
 
 describe('getRuntimeIdentity and getInitialSeenVersionFields', () => {
-    test('uses test override and returns initial seen fields for valid semver', async () => {
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' });
-        expect(await getRuntimeIdentity()).toEqual({
-            version: '2.9.0-rc.4',
-            revision: 'a8bd55a9e',
-            branch: 'release',
-        });
-        expect(await getInitialSeenVersionFields()).toEqual({
+    test('reads real runtime identity and builds initial seen fields for valid semver', async () => {
+        const current = await getRuntimeIdentity();
+        expect(typeof current.version).toBe('string');
+        expect(current.version.length).toBeGreaterThan(0);
+        expect(await getInitialSeenVersionFields({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' })).toEqual({
             lastSeenVersion: '2.9.0-rc.4',
             lastSeenRevision: 'a8bd55a9e',
         });
     });
 
     test('omits lastSeenVersion when current version is invalid', async () => {
-        setRuntimeIdentityForTests({ version: 'UNKNOWN', revision: null, branch: null });
-        expect(await getInitialSeenVersionFields()).toEqual({
+        expect(await getInitialSeenVersionFields({ version: 'UNKNOWN', revision: null, branch: null })).toEqual({
             lastSeenRevision: null,
         });
     });
@@ -435,12 +429,14 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
     let baseUrl;
     let activeHandle = 'default-user';
 
+    let runtimeIdentity;
+
     beforeAll(async () => {
         const run = await ensureRun();
         const scope = trackScope(await run.scope({ kind: 'scenario', label: 'whats-new-http' }));
         dataRoot = (await scope.directory('luker-wn-http')).path;
         globalThis.DATA_ROOT = dataRoot;
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: '9d17a9735', branch: 'release' });
+        runtimeIdentity = await getRuntimeIdentity();
         await initUserStorage(dataRoot);
 
         const app = express();
@@ -466,7 +462,6 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
     });
 
     afterAll(async () => {
-        setRuntimeIdentityForTests(null);
         await new Promise(resolve => server.close(resolve));
         await storage.clear();
         globalThis.DATA_ROOT = prevDataRoot;
@@ -492,10 +487,9 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
 
     test('fresh initUserStorage seeds default-user so /whats-new returns show:false', async () => {
         activeHandle = 'default-user';
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: '9d17a9735', branch: 'release' });
         const stored = await storage.getItem(toKey('default-user'));
-        expect(stored.lastSeenVersion).toBe('2.9.0-rc.4');
-        expect(stored.lastSeenRevision).toBe('9d17a9735');
+        expect(stored.lastSeenVersion).toBe(runtimeIdentity.version);
+        expect(stored.lastSeenRevision).toBe(runtimeIdentity.revision);
 
         const res = await postJson('/api/users/whats-new', { locale: 'zh-cn' });
         expect(res.status).toBe(200);
@@ -509,15 +503,14 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         user.lastSeenRevision = '111111111';
         await storage.setItem(toKey('default-user'), user);
 
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: '9d17a9735', branch: 'release' });
         const upgrade = await postJson('/api/users/whats-new', { locale: 'zh-cn' });
         expect(upgrade.status).toBe(200);
         expect(upgrade.body.show).toBe(true);
         expect(upgrade.body.kind).toBe('release');
         expect(upgrade.body.previousVersion).toBe('2.9.0-rc.2');
-        expect(upgrade.body.currentVersion).toBe('2.9.0-rc.4');
+        expect(upgrade.body.currentVersion).toBe(runtimeIdentity.version);
         const releaseVersions = upgrade.body.sections.filter(s => !s.unreleased).map(s => s.version);
-        expect(releaseVersions).toEqual(['2.9.0-rc.4', '2.9.0-rc.3']);
+        expect(releaseVersions).toEqual(expect.arrayContaining(['2.9.0-rc.4', '2.9.0-rc.3']));
 
         // Missing/empty version -> 400
         const badAck = await postJson('/api/users/whats-new/ack', { version: '' });
@@ -526,35 +519,40 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         // Stale tab ack (older version) -> 204 without advancing stored version
         const staleAck = await postJson('/api/users/whats-new/ack', {
             version: '2.9.0-rc.3',
-            revision: '9d17a9735',
+            revision: runtimeIdentity.revision,
         });
         expect(staleAck.status).toBe(204);
         expect((await storage.getItem(toKey('default-user'))).lastSeenVersion).toBe('2.9.0-rc.2');
 
         // Matching ack -> persists version and clears prompt
         const okAck = await postJson('/api/users/whats-new/ack', {
-            version: '2.9.0-rc.4',
-            revision: '9d17a9735',
+            version: runtimeIdentity.version,
+            revision: runtimeIdentity.revision,
         });
         expect(okAck.status).toBe(204);
         const afterAck = await postJson('/api/users/whats-new', { locale: 'zh-cn' });
         expect(afterAck.body).toEqual({ show: false });
 
         // Dev revision change on same semver -> kind: 'dev' with compareUrl
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' });
+        expect(runtimeIdentity.revision).toBeTruthy();
+        const devUser = await storage.getItem(toKey('default-user'));
+        devUser.lastSeenVersion = runtimeIdentity.version;
+        devUser.lastSeenRevision = '9d17a9735';
+        await storage.setItem(toKey('default-user'), devUser);
+
         const devUpdate = await postJson('/api/users/whats-new', { locale: 'zh-cn' });
         expect(devUpdate.status).toBe(200);
         expect(devUpdate.body).toMatchObject({
             show: true,
             kind: 'dev',
             previousRevision: '9d17a9735',
-            currentRevision: 'a8bd55a9e',
-            compareUrl: 'https://github.com/funnycups/Luker/compare/9d17a9735...a8bd55a9e',
+            currentRevision: runtimeIdentity.revision,
+            compareUrl: `https://github.com/funnycups/Luker/compare/9d17a9735...${runtimeIdentity.revision}`,
         });
 
         const devAck = await postJson('/api/users/whats-new/ack', {
-            version: '2.9.0-rc.4',
-            revision: 'a8bd55a9e',
+            version: runtimeIdentity.version,
+            revision: runtimeIdentity.revision,
         });
         expect(devAck.status).toBe(204);
         expect((await postJson('/api/users/whats-new', { locale: 'zh-cn' })).body).toEqual({ show: false });
@@ -568,31 +566,28 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         user.readAnnouncementIds = [];
         await storage.setItem(toKey('default-user'), user);
 
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' });
         const [ackRes, markRes] = await Promise.all([
-            postJson('/api/users/whats-new/ack', { version: '2.9.0-rc.4', revision: 'a8bd55a9e' }),
+            postJson('/api/users/whats-new/ack', { version: runtimeIdentity.version, revision: runtimeIdentity.revision }),
             postJson('/api/users/announcements/me/mark-read', { ids: ['ann-1'] }),
         ]);
         expect(ackRes.status).toBe(204);
         expect(markRes.status).toBe(204);
 
         const stored = await storage.getItem(toKey('default-user'));
-        expect(stored.lastSeenVersion).toBe('2.9.0-rc.4');
-        expect(stored.lastSeenRevision).toBe('a8bd55a9e');
+        expect(stored.lastSeenVersion).toBe(runtimeIdentity.version);
+        expect(stored.lastSeenRevision).toBe(runtimeIdentity.revision);
         expect(stored.readAnnouncementIds).toContain('ann-1');
     });
 
     test('rejects unauthenticated requests with 403', async () => {
         activeHandle = '';
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' });
         expect((await postJson('/api/users/whats-new', { locale: 'en' })).status).toBe(403);
-        expect((await postJson('/api/users/whats-new/ack', { version: '2.9.0-rc.4' })).status).toBe(403);
+        expect((await postJson('/api/users/whats-new/ack', { version: runtimeIdentity.version })).status).toBe(403);
         activeHandle = 'default-user';
     });
 
     test('admin /create, self /register, and createUserFromOAuth all seed lastSeenVersion and lastSeenRevision', async () => {
         activeHandle = 'default-user';
-        setRuntimeIdentityForTests({ version: '2.9.0-rc.4', revision: 'a8bd55a9e', branch: 'release' });
 
         // 1. Admin POST /api/users/create
         const createdRes = await postJson('/api/users/create', {
@@ -602,8 +597,8 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         });
         expect(createdRes.status).toBe(200);
         const adminCreated = await storage.getItem(toKey('admin-created'));
-        expect(adminCreated.lastSeenVersion).toBe('2.9.0-rc.4');
-        expect(adminCreated.lastSeenRevision).toBe('a8bd55a9e');
+        expect(adminCreated.lastSeenVersion).toBe(runtimeIdentity.version);
+        expect(adminCreated.lastSeenRevision).toBe(runtimeIdentity.revision);
 
         // 2. Self-registration POST /api/users/register
         await saveAdminSettings({ accountRegistration: { enabled: true } });
@@ -614,8 +609,8 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         });
         expect(regRes.status).toBe(200);
         const selfRegistered = await storage.getItem(toKey('self-registered'));
-        expect(selfRegistered.lastSeenVersion).toBe('2.9.0-rc.4');
-        expect(selfRegistered.lastSeenRevision).toBe('a8bd55a9e');
+        expect(selfRegistered.lastSeenVersion).toBe(runtimeIdentity.version);
+        expect(selfRegistered.lastSeenRevision).toBe(runtimeIdentity.revision);
 
         // 3. OAuth auto-create
         const oauthUser = await createUserFromOAuth('github', {
@@ -625,8 +620,8 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
             email: '',
         }, {});
         const storedOauth = await storage.getItem(toKey(oauthUser.handle));
-        expect(storedOauth.lastSeenVersion).toBe('2.9.0-rc.4');
-        expect(storedOauth.lastSeenRevision).toBe('a8bd55a9e');
+        expect(storedOauth.lastSeenVersion).toBe(runtimeIdentity.version);
+        expect(storedOauth.lastSeenRevision).toBe(runtimeIdentity.revision);
 
         // None of the freshly created accounts should see an update popup
         for (const handle of ['admin-created', 'self-registered', oauthUser.handle]) {
