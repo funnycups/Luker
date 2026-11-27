@@ -1689,10 +1689,12 @@ class PresetManager {
         let hasIndex = !target && (Array.isArray(preset_names) ? index !== -1 : index !== undefined);
         if (hasIndex && !currentPresets[index]) {
             let fetched = null;
+            let hydrationError = null;
             try {
                 fetched = await readPresetDocument(this.apiId, presetName);
             } catch (error) {
-                console.warn(`[PresetManager] Failed to hydrate preset "${presetName}" before extension write:`, error);
+                hydrationError = error;
+                console.error(`[PresetManager] Failed to hydrate preset "${presetName}" before extension write:`, error);
             }
             // Always re-read live preset arrays after yielding so a concurrent
             // background preload (warmPreloadFullSettings) is observed even if
@@ -1707,6 +1709,9 @@ class PresetManager {
             hasIndex = latestHasIndex;
             if (hasIndex && !currentPresets[index] && fetched && typeof fetched === 'object' && !Array.isArray(fetched)) {
                 currentPresets[index] = structuredClone(fetched);
+            }
+            if (hasIndex && !currentPresets[index] && hydrationError) {
+                throw hydrationError;
             }
         }
         const hasPreset = hasIndex && Boolean(currentPresets[index]);

@@ -648,17 +648,9 @@ function getEntryActivationTrace(scopeKey, worldName, uid) {
     return bucket.get(`${String(worldName || '')}.${String(uid || '')}`) || null;
 }
 
-function safeCloneTraceValue(value) {
+function cloneTraceValue(value) {
     if (value === null || value === undefined) return value;
-    try {
-        return structuredClone(value);
-    } catch {
-        try {
-            return JSON.parse(JSON.stringify(value));
-        } catch {
-            return null;
-        }
-    }
+    return structuredClone(value);
 }
 
 /**
@@ -682,14 +674,14 @@ export function getActivationTraceSnapshot(scopeKey = getActivationTraceScopeKey
             world: String(item.world || ''),
             uid: Number(item.uid),
             lastActivatedAt: item.lastActivatedAt || null,
-            lastActivation: item.lastActivation ? safeCloneTraceValue(item.lastActivation) : null,
+            lastActivation: item.lastActivation ? cloneTraceValue(item.lastActivation) : null,
             recentScans: Array.isArray(item.recentScans)
-                ? (safeCloneTraceValue(item.recentScans.slice(0, scanLimit)) ?? [])
+                ? cloneTraceValue(item.recentScans.slice(0, scanLimit))
                 : [],
             lastDryRunScanAt: item.lastDryRunScanAt || null,
-            lastDryRunActivation: item.lastDryRunActivation ? safeCloneTraceValue(item.lastDryRunActivation) : null,
+            lastDryRunActivation: item.lastDryRunActivation ? cloneTraceValue(item.lastDryRunActivation) : null,
             recentDryRunScans: Array.isArray(item.recentDryRunScans)
-                ? (safeCloneTraceValue(item.recentDryRunScans.slice(0, scanLimit)) ?? [])
+                ? cloneTraceValue(item.recentDryRunScans.slice(0, scanLimit))
                 : [],
         });
     }

@@ -203,7 +203,9 @@ export function createImageAttachmentTray({
                     img.src = url;
                 }
                 delete img.dataset.loading;
-            }).catch(() => {
+            }).catch(err => {
+                console.error(`[image-attachments] Failed to load managed preview for "${item.path}":`, err);
+                img.dataset.previewError = String(err?.message || err);
                 delete img.dataset.loading;
             });
             return img;
@@ -499,6 +501,7 @@ export function renderMessageAttachments(attachments, {
                 if (url) img.src = url;
                 delete img.dataset.loading;
             }).catch(err => {
+                console.error(`[image-attachments] Failed to load preview for "${att.path}":`, err);
                 img.dataset.previewError = String(err?.message || err);
                 delete img.dataset.loading;
             });

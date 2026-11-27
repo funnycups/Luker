@@ -199,7 +199,14 @@ export async function uploadChatAttachments(context, files, {
         return uploaded;
     } catch (err) {
         if (uploaded.length > 0) {
-            await deleteChatAttachments(context, uploaded.map(item => item.path), { fetchFn }).catch(() => {});
+            try {
+                const cleanup = await deleteChatAttachments(context, uploaded.map(item => item.path), { fetchFn });
+                if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                    console.error('[chat-attachments-store] Partial failure rolling back uploaded attachments:', cleanup.failed);
+                }
+            } catch (cleanupErr) {
+                console.error('[chat-attachments-store] Failed to roll back uploaded attachments:', cleanupErr);
+            }
         }
         throw err;
     }

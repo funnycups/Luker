@@ -2742,7 +2742,7 @@ export function getContext() {
         createFloorState,
         readFloorStateSnapshot: async (opts) => {
             const mod = await import('./floor-state.js');
-            return mod.readFloorStateSnapshot?.(opts) ?? { ok: false, state: null };
+            return mod.readFloorStateSnapshot(opts);
         },
         presets: {
             list: listPresetRefs,
@@ -3074,12 +3074,12 @@ export function getContext() {
             get globalSelection() { return selected_world_info; },
             getActivationTrace: async (scopeKey, opts) => {
                 const mod = await import('./world-info.js');
-                return mod.getActivationTraceSnapshot?.(scopeKey, opts) ?? null;
+                return mod.getActivationTraceSnapshot(scopeKey, opts);
             },
         },
         openRequestInspector: async (requestId = '') => {
             const mod = await import('./request-inspector.js');
-            return mod.openRequestInspector?.(requestId);
+            return mod.openRequestInspector(requestId);
         },
         openai: {
             get proxies() { return proxies; },

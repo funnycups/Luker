@@ -1814,15 +1814,18 @@ function getAndroidSupportedAbis() {
     if (!isRunningInLukerAndroidApp() || typeof window.LukerAndroid.getSupportedAbis !== 'function') {
         return [];
     }
+    const raw = window.LukerAndroid.getSupportedAbis();
+    let parsed;
     try {
-        const raw = window.LukerAndroid.getSupportedAbis();
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        return Array.isArray(parsed)
-            ? parsed.map(abi => String(abi || '').trim()).filter(Boolean)
-            : [];
-    } catch {
-        return [];
+        parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (err) {
+        console.error('[LukerUpdate] Failed to parse supported ABIs from Android bridge:', err);
+        throw new Error(`Invalid ABI list from Android bridge: ${err?.message || err}`);
     }
+    if (!Array.isArray(parsed)) {
+        throw new Error('Invalid ABI list from Android bridge: expected an array.');
+    }
+    return parsed.map(abi => String(abi || '').trim()).filter(Boolean);
 }
 
 async function runAndroidApkUpdateFlow() {
@@ -2482,7 +2485,7 @@ async function firstLoadInit() {
             // Hook the skills embed lifecycle (import dialogs, preset export
             // bundling, delete cascades) into the core boot sequence so it
             // works whether or not the orchestrator extension is enabled.
-            try { registerSkillEmbedLifecycle({ context: getContext(), t: translate }); } catch (_) { /* best-effort */ }
+            registerSkillEmbedLifecycle({ context: getContext(), t: translate });
         },
         () => {
             // Drop the batched preset-state read cache for a preset the

@@ -74,7 +74,7 @@ export function onLukerResponseMeta(response, listener) {
         try {
             listener({ ...slot.latest });
         } catch (err) {
-            console.warn('[ws-delivery] onLukerResponseMeta listener threw:', err?.message || err);
+            console.error('[ws-delivery] onLukerResponseMeta listener threw:', err);
         }
     }
     slot.listeners.add(listener);
@@ -211,7 +211,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         try {
             if (typeof entry.onTimeout === 'function') entry.onTimeout(requestId);
         } catch (cbErr) {
-            console.warn('[ws-delivery] onTimeout callback threw:', cbErr?.message || cbErr);
+            console.error('[ws-delivery] onTimeout callback threw:', cbErr);
         }
     }
 
@@ -327,7 +327,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 entry.meta = { ...(entry.meta || {}), ...incoming };
                 if (typeof entry.onMeta === 'function') {
                     try { entry.onMeta({ ...entry.meta }); } catch (cbErr) {
-                        console.warn('[ws-delivery] onMeta callback threw:', cbErr?.message || cbErr);
+                        console.error('[ws-delivery] onMeta callback threw:', cbErr);
                     }
                 }
             } else if (msg.type === 'end') {
@@ -361,7 +361,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                     entry.onSettle?.();
                     if (typeof entry.onServerAbort === 'function') {
                         try { entry.onServerAbort(msg.request_id, msg); } catch (cbErr) {
-                            console.warn('[ws-delivery] onServerAbort callback threw:', cbErr?.message || cbErr);
+                            console.error('[ws-delivery] onServerAbort callback threw:', cbErr);
                         }
                     }
                     return;
@@ -530,7 +530,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 unsubscribe(requestId, abortErr);
                 if (typeof options.onAbort === 'function') {
                     try { options.onAbort(requestId); } catch (cbErr) {
-                        console.warn('[ws-delivery] onAbort callback threw:', cbErr?.message || cbErr);
+                        console.error('[ws-delivery] onAbort callback threw:', cbErr);
                     }
                 }
             };
@@ -849,7 +849,7 @@ export function installFetchProxy(delivery, options = {}) {
                     try {
                         listener({ ...metaSlot.latest });
                     } catch (err) {
-                        console.warn('[ws-delivery] response meta listener threw:', err?.message || err);
+                        console.error('[ws-delivery] response meta listener threw:', err);
                     }
                 }
             },
@@ -948,7 +948,7 @@ export function installFetchProxyForAllIframes(delivery, options = {}) {
             // exotic iframe type) surface loudly — swallowing would hide the
             // exact "generate requests silently fail" class of bug this whole
             // module exists to prevent.
-            console.warn('[ws-delivery] iframe fetch patch failed:', err?.message || err);
+            console.error('[ws-delivery] iframe fetch patch failed:', err);
         }
     }
 
