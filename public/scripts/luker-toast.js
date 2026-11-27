@@ -236,19 +236,15 @@ export function createToastEngine() {
                 if (typeof localized === 'string' && localized.length > 0) {
                     return localized;
                 }
-            } catch {
-                // Fall back to English key if translator throws.
+            } catch (err) {
+                console.error('[luker-toast] Custom translator threw an error:', err);
             }
         }
         const ctxTranslate = globalThis.Luker?.getContext?.()?.translate;
         if (typeof ctxTranslate === 'function') {
-            try {
-                const localized = ctxTranslate(key);
-                if (typeof localized === 'string' && localized.length > 0) {
-                    return localized;
-                }
-            } catch {
-                // Ignore context translator errors before boot.
+            const localized = ctxTranslate(key);
+            if (typeof localized === 'string' && localized.length > 0) {
+                return localized;
             }
         }
         return String(key);
@@ -1746,7 +1742,6 @@ export const toastr = defaultEngine.toastr;
 export const setToastTranslator = defaultEngine.setTranslator;
 export const refreshToastLayout = defaultEngine.refreshLayout;
 export const syncToastContainerForDialogs = defaultEngine.syncContainerForDialogs;
-export const resetToastEngineForTests = defaultEngine.reset;
 
 globalThis.toastr = toastr;
 

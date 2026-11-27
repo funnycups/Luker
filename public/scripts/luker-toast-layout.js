@@ -165,8 +165,10 @@ export function computeParkedCapsulePositions({
         const maxY = Math.max(baseTop, viewportHeight - height - VIEWPORT_EDGE_MARGIN_PX);
 
         // Step downward past any occupied custom-dragged capsule rect without
-        // exceeding viewport bounds.
-        for (let guard = 0; guard < 64; guard++) {
+        // exceeding viewport bounds. Terminates unconditionally because
+        // candidateY advances by at least height + CAPSULE_STACK_GAP_PX (>= 9)
+        // on every step until clamped.y >= maxY.
+        while (true) {
             const clamped = clampToastPosition({
                 x: rawX,
                 y: candidateY,

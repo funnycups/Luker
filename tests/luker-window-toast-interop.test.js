@@ -9,15 +9,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, jest, test } from '
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-jest.unstable_mockModule('../public/scripts/i18n.js', () => ({
-    t: (strings, ...values) => strings.reduce((acc, str, idx) => acc + str + (values[idx] ?? ''), ''),
-    translate: (s) => String(s ?? ''),
-}));
-
 let mountLukerWindow;
 let showUndoToast;
 let toastr;
-let resetToastEngineForTests;
 
 beforeAll(async () => {
     const jqSource = fs.readFileSync(
@@ -42,7 +36,6 @@ beforeAll(async () => {
 
     const toastMod = await import('../public/scripts/luker-toast.js');
     toastr = toastMod.toastr;
-    resetToastEngineForTests = toastMod.resetToastEngineForTests;
 
     const winMod = await import('../public/scripts/luker-window.js');
     mountLukerWindow = winMod.mountLukerWindow;
@@ -52,8 +45,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-    resetToastEngineForTests();
-    document.body.innerHTML = '';
+    toastr.remove();
     toastr.options = {
         positionClass: 'toast-top-center',
         hideDuration: 0,
@@ -64,8 +56,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    resetToastEngineForTests();
-    document.body.innerHTML = '';
+    toastr.remove();
+    document.querySelectorAll('dialog.dw-layer').forEach(el => el.remove());
 });
 
 describe('luker-window.js top-layer toast reparenting', () => {
