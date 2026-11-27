@@ -285,6 +285,7 @@ The Layer 1 module `/scripts/iteration-library/proposal-bus/targets/lorebook-ent
 | `hasOutstanding()` | Whether any entry is `pending` |
 | `listPending()` | `[{ id, sourceCallId }]` of the pending entries |
 | `listEntries()` | Shallow copies of every entry in proposal order, with `id`, `kind`, `status`, `target`, `sourceCallId`, `meta`, `conflictError` and the timestamps `createdAt`, `decidedAt`, `committedAt`, `rolledBackAt` |
+| `discardEntries(ids)` | Marks matching `pending` or `conflict` entries as `rejected` without calling `onChange`, prunes matching queued outcomes, and returns `{ rejected, prunedOutcomes }` |
 | `getCurrentPendingState(kind, target)` | Current value of `target` with the pending proposals of `kind` applied; dispatches `bus:chain-broken` when they cannot be applied |
 | `drainOutcomes()` | Returns and clears the outcomes recorded since the last drain |
 | `serialize()`, `hydrate(data)` | Session persistence; the serialized form carries `version: 3`. Pending entries restored by `hydrate` can be approved. |

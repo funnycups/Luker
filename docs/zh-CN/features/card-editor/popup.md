@@ -27,7 +27,7 @@ AI 可通过工具调用完成以下操作：
 
 AI 生成修改提案后，**改动清单**会按角色卡字段与世界书条目分组列出前后差异：
 
-![按字段与条目分组的待审改动](/images/card-editor-popup/cea-popup-diff-approval.png)
+![AI 回复中的待审差异卡片](/images/card-editor-popup/cea-popup-diff-approval.png)
 
 展开任一条目即可查看完整的逐行差异对比，便于核对长段描述或世界书正文：
 

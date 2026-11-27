@@ -170,7 +170,7 @@ writeFile(opts: {
 }): Promise<{ sha256: string }>
 ```
 
-If `expectedSha256` is supplied and doesn't match the current file's hash, the write fails with a `400` error — useful for editor-style concurrent-edit detection.
+If `expectedSha256` is supplied and doesn't match the current file's hash, the write fails with a `409` error — useful for editor-style concurrent-edit detection.
 
 With `expectAbsent: true` the write fails with a `409` error when the file already exists.
 
@@ -263,7 +263,7 @@ delete(scope: SkillScope, name: string, opts?: {
 }): Promise<void>
 ```
 
-If `expectedInstalledHash` is supplied and doesn't match the hash of the skill's files on disk, the delete fails with a `400` error and `err.body.code` set to `installed_hash_mismatch`; the skill is kept.
+If `expectedInstalledHash` is supplied and doesn't match the hash of the skill's files on disk, the delete fails with a `409` error and `err.body.code` set to `installed_hash_mismatch`; the skill is kept.
 
 Removes the skill directory atomically. Orchestrator profiles that referenced the skill keep their (now-stale) name in `skills.visible` — references soft-fail at dispatch.
 

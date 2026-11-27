@@ -247,7 +247,7 @@ context.activityGuard: {
 |---|---|---|
 | `source` | 必填字符串 | 去除首尾空白后非空的标识符；缺失或为空时抛出 `TypeError`。 |
 | `label` | `''` | 经过本地化的任务描述；当 `guardChatSwitch` 为 `true` 且内容非空时显示在切换聊天确认弹窗中。 |
-| `scope` | `'global'` | 绑定当前会话的任务传 `'chat'`；跨聊天保留的工作区、文件或账户级任务传 `'global'`。 |
+| `scope` | `'global'` | 绑定当前会话的任务传入 `'chat'`；跨聊天保留的工作区、文件或账户级任务传入 `'global'`。 |
 | `guardUnload` | `true` | 计入 `hasUnloadGuard()`，并在活跃期间触发浏览器 `beforeunload` 离开提醒。 |
 | `guardChatSwitch` | `scope === 'chat'` | 计入 `hasChatSwitchGuard()`，并在打开、新建、关闭、创建分支或删除聊天时触发应用内切换确认。 |
 | `keepAlive` | `true` | 计入 `hasKeepAliveHold()`，在活跃期间维持移动端后台保活。 |
@@ -311,7 +311,7 @@ getCurrentLocale(): string
 addLocaleData(localeId: string, data: Record<string, string>): void
 ```
 
-把插件提供的翻译合并到已加载的语言数据中。请在 i18n 系统启动后调用（例如在 `APP_READY` 时）。当 `localeId` 是主 locale 时条目始终覆盖；当它是回退 locale 时条目只填充缺失的 key。合并的条目属于全局语言数据，会替换核心界面与其他插件中同一 key 的译文；只翻译插件自身文本时使用 [`createScopedI18n`](#createscopedi18n)。
+把插件提供的翻译合并到已加载的语言数据中。请在 i18n 系统启动后调用，例如在 `APP_READY` 时。当 `localeId` 是主 locale 时条目始终覆盖；当它是回退 locale 时条目只填充缺失的 key。合并的条目属于全局语言数据，会替换核心界面与其他插件中同一 key 的译文；只翻译插件自身文本时使用 [`createScopedI18n`](#createscopedi18n)。
 
 ```js
 const ctx = Luker.getContext();
@@ -391,14 +391,6 @@ debounce 形式的持久化触发。修改 `extensionSettings` 或任何设置�
 
 ### saveSettings
 
-条件修改会比较捕获的旧值、缺失键与排队时的当前来源，并将数组作为完整值比较。外部修改与目标重叠时拒绝角色卡修改，互不重叠的修改保留。嵌套扩展写入仅保留指定路径的所有权，同时同步已确认的其他扩展修改。替换扩展根对象时拥有整个扩展根的所有权。仅同一捕获来源中已确认的写入可以将相同目标值视为前序操作。来源标识不包含预设内容或历史内容链。
-
-`SETTINGS_UPDATED` 接收 `{ cardPresetSave }`，其中记录调用保存时选中的角色、预设条目、运行时缓存条目及预期预设内容。该记录只读。普通保存通过条件排队修改同步捕获的内容。预设管理器扩展写入保留其字段操作的所有权，并在依赖保存成功后，通过同一次角色卡写入同步已确认的非扩展修改。角色卡确认后，仅刷新捕获的缓存条目。等待保存时切换选择或修改调用方的选项不会改变同步目标。`cardPresetOwner` 由预设管理器保留使用，不是扩展停用角色卡同步的选项。
-
-`getPresetManager(...).writePresetExtensionField(...)` 在持久化期间发现捕获的全局名称、集合或来源被替换时拒绝 Promise。此时 HTTP 写入能够已经成功；此前确认的设置或预设文件仍然保留，但过时操作不会发布旧缓存或继续写入角色卡。排队字段修改仅与同一字段写入队列中已确认的前序操作组合。
-
-预设扩展写入使用设置的 JSON 传输表示，确认保存内容、继续角色卡写入并发布读取缓存。对象中的 `undefined` 字段省略，数组中的空缺或 `undefined` 元素转换为 `null`，非有限数字转换为 `null`。条件写入保留捕获来源的所有权与其他字段。
-
 ```ts
 context.saveSettings(loopCounter?: number, options?: object): Promise<SettingsSaveOutcome>
 ```
@@ -407,15 +399,23 @@ context.saveSettings(loopCounter?: number, options?: object): Promise<SettingsSa
 
 - `{ ok: true, status: 'saved', payload }` 确认捕获的 JSON 内容已保存。仅在完整存储基线已知且内容未变时省略请求。初始化默认值与调用方提供的未保存设置不代表存储确认。`directSave: true` 始终提交捕获的完整内容。更新已确认快照后触发 `SETTINGS_UPDATED`，等待监听器结束后返回。
 - `{ ok: false, status: 'failed', error }` 表示捕获、传输或 HTTP 失败。后续排队请求继续执行，并返回各自的结果。
+- `{ ok: false, status: 'deferred', reason }` 表示设置尚未就绪，或生成过程临时覆盖了响应长度，已安排防抖重试。这不表示持久化成功。重试执行时捕获实时设置。
 
 持久化尝试失败后，清除存储基线与设置读取缓存。重新读取完整存储内容之前，后续尝试通过完整替换确认保存内容，即使目标设置等于上次确认的设置。
 
 服务端返回 `world_deleted` 表示条件清理先于辅助引用写入完成，`world_deletion_unknown` 表示无法确认重叠删除的事务结果。引用拒绝均终止该次保存，不再提交完整内容，保留有效的已确认设置快照与读取缓存，不触发保存成功事件。即使存储设置未变，较早开始的完整读取也不能覆盖实时草稿。请重新加载世界书列表后重试引用修改。
-- `{ ok: false, status: 'deferred', reason }` 表示设置尚未就绪，或生成过程临时覆盖了响应长度，已安排防抖重试。这不表示持久化成功。重试执行时捕获实时设置。
 
 排队调用保留各自捕获的内容与选项。返回结果不确认后续编辑或后续请求。修改返回内容或导出的设置不会改变存储基线。事件分发不占用持久化锁，监听器可以等待另一次保存。忽略结果的调用无需处理新增的拒绝异常。`saveSettingsDebounced` 仅安排保存，不提供持久化确认。
 
 服务器设置读取开始或结束时存在尚未结束的保存，或读取期间发生保存完成或失败时，不应用该读取结果。此时 `getSettings()` 解析为 `undefined`，不改变快照依据与实时设置，也不触发 `SETTINGS_LOADED`。保存队列结束后可以再次读取最新内容。
+
+`SETTINGS_UPDATED` 接收 `{ cardPresetSave }`，其中记录调用保存时选中的角色、预设条目、运行时缓存条目及预期预设内容。该记录只读。普通保存通过条件排队修改同步捕获的内容。预设管理器扩展写入保留其字段操作的所有权，并在依赖保存成功后，通过同一次角色卡写入同步已确认的非扩展修改。角色卡确认后，仅刷新捕获的缓存条目。等待保存时切换选择或修改调用方的选项不会改变同步目标。`cardPresetOwner` 由预设管理器保留使用，不是扩展停用角色卡同步的选项。
+
+条件修改会比较捕获的旧值、缺失键与排队时的当前来源，并将数组作为完整值比较。外部修改与目标重叠时拒绝角色卡修改，互不重叠的修改保留。嵌套扩展写入仅保留指定路径的所有权，同时同步已确认的其他扩展修改。替换扩展根对象时拥有整个扩展根的所有权。仅同一捕获来源中已确认的写入可以将相同目标值视为前序操作。来源标识不包含预设内容或历史内容链。
+
+`getPresetManager(...).writePresetExtensionField(...)` 在持久化期间发现捕获的全局名称、集合或来源被替换时拒绝 Promise。该错误可发生在已确认的 HTTP 提交之后；此前确认的设置或预设文件保持不变，但过时操作不会发布旧缓存或继续写入角色卡。排队字段修改仅与同一字段写入队列中已确认的前序操作组合。
+
+预设扩展写入使用设置的 JSON 传输表示，确认保存内容、继续角色卡写入并发布读取缓存。对象中的 `undefined` 字段省略，数组中的空缺或 `undefined` 元素转换为 `null`，非有限数字转换为 `null`。条件写入保留捕获来源的所有权与其他字段。
 
 ### saveMetadataDebounced
 

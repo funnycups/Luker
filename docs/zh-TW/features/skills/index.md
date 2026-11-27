@@ -98,10 +98,10 @@ Director 的預設設定已經為不同 Agent 繫結好各自的 Skill。其他�
 
 面向使用者的寫入入口：
 
-- **編排器設定裡的 Skill 管理子面板** —— 安裝、編輯、改名、遷移作用域、刪除。
-- **內嵌 Skill 編輯器** —— 檔案樹 + Markdown 編輯器，編輯 SKILL.md 和子檔案。
-- **匯入 / 匯出** —— 匯出預設或角色卡時附帶其 Skill，匯入時安裝附帶的 Skill。詳見 [Skill 管理](/zh-TW/features/skills/management)。
-- **迭代工作台工具** —— 讓迭代工作台的 AI「把這條寫作規則抽成一個 Skill」時，它透過一組專門的工具完成抽取，並把 agent 的 `systemPrompt` 同步改寫。
+- **工作台 → 編排 → 準備階段中的 Skill 管理** —— 安裝、編輯、改名、遷移作用域與刪除。
+- **內嵌 Skill 編輯器** —— 瀏覽檔案樹並以 Markdown 編輯器修改 `SKILL.md` 與子檔案。
+- **匯入 / 匯出** —— 匯出預設或角色卡時附帶對應 Skill，匯入時安裝附帶的 Skill。詳見 [Skill 管理](/zh-TW/features/skills/management)。
+- **工作台 AI 迭代** —— 讓工作台 AI 將寫作規則抽取為 Skill 時，自動建立 Skill 並同步更新該 agent 的系統提示詞。
 
 ## 出廠 Skill
 

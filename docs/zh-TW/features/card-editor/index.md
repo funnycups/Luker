@@ -35,7 +35,7 @@
 
 ## 修改歷史
 
-在工作台套用的卡片與世界書改動可在**工作台 → 改動記錄**中依目標篩選並逐條復原，擴充功能面板內的**歷史**區域同樣保留操作記錄。CardApp Studio 下的程式碼版本歷史見 [CardApp Studio](/zh-TW/features/card-editor/studio#version-history-git)。
+在工作台套用的卡片與世界書改動可在**工作台 → 改動記錄**中依目標篩選並逐條復原。CardApp Studio 下的程式碼版本歷史見 [CardApp Studio](/zh-TW/features/card-editor/studio#version-history-git)。
 
 ## 相關頁面
 

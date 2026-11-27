@@ -42,7 +42,7 @@ npm run test:compatibility --prefix tests -- --input /absolute/path/to/data
 
 ```bash
 node tests/harness/run.js --profile unit --list
-node tests/harness/run.js --profile unit --file tests/browser-module-context.test.js
+node tests/harness/run.js --profile unit --file tests/announcements.test.js
 ```
 
 ## Profile 與外部依賴

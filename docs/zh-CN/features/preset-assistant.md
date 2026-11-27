@@ -51,7 +51,7 @@ AI 提出的修改会以差异卡片进入**改动清单**，逐条勾选应用�
 
 也可以点名抽取某段文字、复用已安装的 Skill，或者让助手查看、改名、移动、删除某个 Skill。把 Skill 挂到某个子代理的可见列表在[编排 AI 迭代](/zh-CN/features/orchestrator/iteration-studio#用工作台编写-skill)中完成。
 
-派生出 `-orchestrator` 预设后，点击**扩展 → 聊天补全预设助手 → 将 Skills 打包到此预设**，即可进入 [Skill 管理](/zh-CN/features/skills/management)的多选模式，把所选 Skill 打包进预设以便导出分享。
+派生出 `-orchestrator` 预设后，点击**扩展 → 聊天补全预设助手 → 将 Skills 打包到此预设**，即可打开已筛选至当前预设作用域的 [Skill 管理](/zh-CN/features/skills/management)，便于查看或补充导出时附带的 Skill。
 
 ## 相关功能
 

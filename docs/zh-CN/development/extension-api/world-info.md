@@ -380,7 +380,7 @@ context.chatWorldInfo.getActivationTrace(
 ): Promise<{ scopeKey: string, entries: Array<object> } | null>
 ```
 
-返回当前聊天（或指定 `scopeKey`，默认为 `chat:<currentChatId>`）的世界书激活链路追踪只读快照。每条记录包含 `world`、`uid`、`lastActivatedAt`、`lastActivation`、`recentScans`（条数受 `options.maxScans` 控制，默认 `1`）、`lastDryRunScanAt`、`lastDryRunActivation` 与 `recentDryRunScans`。
+返回当前聊天或指定 `scopeKey` 对应作用域的世界书激活链路追踪只读快照，未指定 `scopeKey` 时默认为 `chat:<currentChatId>`。每条记录包含 `world`、`uid`、`lastActivatedAt`、`lastActivation`、按 `options.maxScans` 保留且默认保留单次扫描的 `recentScans`、`lastDryRunScanAt`、`lastDryRunActivation` 与 `recentDryRunScans`。
 
 ```js
 const ctx = Luker.getContext();

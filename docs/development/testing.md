@@ -42,7 +42,7 @@ Use `tests/harness/run.js` directly to list a profile or run specific files:
 
 ```bash
 node tests/harness/run.js --profile unit --list
-node tests/harness/run.js --profile unit --file tests/browser-module-context.test.js
+node tests/harness/run.js --profile unit --file tests/announcements.test.js
 ```
 
 ## Profiles and External Dependencies

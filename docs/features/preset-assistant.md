@@ -51,24 +51,7 @@ Skill proposals appear alongside preset edits for approval. Focused tweaks, requ
 
 You can also name an extraction yourself, reuse an installed skill, or inspect, rename, move, and delete one. Attaching a skill to a sub-agent's visible list happens in [Orchestration AI iteration](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio).
 
-After deriving an `-orchestrator` preset, use **Extensions → Completion Preset Assistant → Bundle skills with this preset** to open the [skill manager](/features/skills/management) with multi-select enabled and pack selected skills into the preset for export.
-
-::: tip Why this lives in the preset assistant
-Style and output-format rules tend to live in preset entries because that's where the preset author originally wrote them. Pulling them into skills means (a) other agents in the orchestrator can read them, (b) you can edit the rule in one place and every agent that references it sees the update, and (c) the rule survives a preset rewrite that would otherwise lose its prose. The assistant only does this when you ask — small one-off entry tweaks remain just entry tweaks.
-:::
-
-### Integration with Connection Manager
-
-The Completion Preset Assistant uses the current connection configuration for AI calls. This means it provides assistance through your already-configured API backend, requiring no additional API configuration.
-
-## Architecture Overview
-
-| Component | Description |
-|-----------|-------------|
-| `main.js` | Core logic, including AI conversation engine, parameter parsing, preset modification suggestions |
-| `dialog-ui.js` | Dialog UI construction component |
-| `index.js` | Extension entry point |
-| `style.css` | Interface styles |
+After deriving an `-orchestrator` preset, use **Extensions → Completion Preset Assistant → Bundle skills with this preset** to open the [skill manager](/features/skills/management) filtered to the active preset's scope so you can inspect or add skills bundled on export.
 
 ## Related Features
 

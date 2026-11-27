@@ -31,8 +31,8 @@
 
 ![Studio 入口](/images/walkthrough/victorian/step-01-studio-entry.png)
 
-::: tip Studio 也能給沒啟用 CardApp 的卡用
-**「CardApp Studio」按鈕可以為任何角色卡開啟 Studio**，工具集是完整版，涵蓋記憶圖 schema、orchestrator override、正則指令碼、世界書與卡欄位，不像[普通彈窗](/zh-TW/features/card-editor/popup)只夠改欄位和世界書條目。
+::: tip Studio 也適用於未啟用 CardApp 的角色卡
+**「CardApp Studio」按鈕可以為任意角色卡開啟 Studio**，完整支援記憶圖節點類型、多 Agent 編排覆蓋、正則指令碼、世界書與角色卡欄位。
 :::
 
 ## 2. 描述題材，由 Studio 提出方案
@@ -127,7 +127,7 @@ Studio 會寫出面板，並接入案件狀態。
 
 開啟**執行面板**懸浮窗（或開啟**工作台 → 編排 → 執行**），其中列出這個 agent 每一輪的思考、呼叫的工具與回傳結果：
 
-![Orchestrator 執行面板](/images/walkthrough/victorian/step-07b-stage-output.png)
+![多 Agent 編排執行面板](/images/walkthrough/victorian/step-07b-stage-output.png)
 
 某一輪查錯世界書、遺漏記憶或資訊不足就提前結束時，可以在這裡定位。編排失敗時（API 設定錯誤等），面板標出失敗點，本輪改用普通生成。
 

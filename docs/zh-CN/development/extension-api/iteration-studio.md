@@ -285,6 +285,7 @@ Layer 1 模块 `/scripts/iteration-library/proposal-bus/targets/lorebook-entry.j
 | `hasOutstanding()` | 判断是否存在 `pending` 条目 |
 | `listPending()` | 返回待审条目 `[{ id, sourceCallId }]` |
 | `listEntries()` | 按提案顺序返回全部条目的浅拷贝，包含 `id`、`kind`、`status`、`target`、`sourceCallId`、`meta`、`conflictError` 与时间戳 `createdAt`、`decidedAt`、`committedAt`、`rolledBackAt` |
+| `discardEntries(ids)` | 将匹配的 `pending` 或 `conflict` 条目标记为 `rejected` 而不调用 `onChange`，移除匹配的待读取结果，并返回 `{ rejected, prunedOutcomes }` |
 | `getCurrentPendingState(kind, target)` | 返回叠加该 kind 待审提案后的 `target` 当前值；提案无法叠加时派发 `bus:chain-broken` |
 | `drainOutcomes()` | 返回并清空自上次读取以来的处理结果 |
 | `serialize()`、`hydrate(data)` | 会话持久化；序列化结果带 `version: 3`。经 `hydrate` 恢复的待审条目可直接批准。 |

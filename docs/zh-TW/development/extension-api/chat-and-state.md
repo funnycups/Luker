@@ -443,10 +443,10 @@ readFloorStateSnapshot(options: { namespace: string }): Promise<
 >
 ```
 
-取得目前聊天指定樓層狀態命名空間的純唯讀快照。該函式讀取 `<namespace>__floor_log` 並在記憶體中依目前聊天的作用 swipe 重播倖存提交，不會註冊樓層狀態實例、不會觸發歷史資料遷移、不會寫入孤兒備份，也不會修改任何持久化聊天狀態。
+取得目前聊天指定樓層狀態命名空間的純唯讀快照。該函式讀取 `<namespace>__floor_log` 並在記憶體中依目前聊天的作用 swipe 回放倖存提交。
 
 - 提交日誌為空時回傳 `{ ok: true, state: null }`。
-- 失敗時回傳 `{ ok: false, state: null, reason, hint? }`，`reason` 取值來自 `STATE_ERROR_REASONS`（包含 `VALIDATION_ARGS`、無作用聊天時的 `VALIDATION_TARGET`、`REPLAY_BROKEN`、`TRANSPORT_ERROR`、`HTTP_ERROR`）。
+- 失敗時回傳 `{ ok: false, state: null, reason, hint? }`，`reason` 取值來自 `STATE_ERROR_REASONS`，涵蓋 `VALIDATION_ARGS`、無作用聊天時的 `VALIDATION_TARGET`、`REPLAY_BROKEN`、`TRANSPORT_ERROR` 與 `HTTP_ERROR`。
 
 ```js
 const ctx = Luker.getContext();

@@ -126,7 +126,7 @@ if (mode) {
 | `getCharacterSavedExecutionModeByAvatar(ctx, avatar)` | 返回角色卡钉住的执行 mode：卡上存在该 mode 的预设库时取 `override.mode`，否则取第一个带预设库的 mode；卡上没有预设库时返回 `''`。 |
 | `getRuntimePresetScope(ctx, avatar, mode)` | 角色卡在 `mode` 下的激活槽指向卡内预设库中的预设时返回 `'character'`，否则返回 `'global'`。 |
 | `getCharacterActivePresetId(ctx, avatar, mode)` | 返回角色卡在 `mode` 下的激活预设 id；槽为空或指向不存在的预设时返回 `''`。 |
-| `setCharacterActivePresetForSavedMode(ctx, settings, avatar, presetId)` | 切换角色卡在已保存 mode 下的激活预设，保存角色卡，并重新对齐 `settings.executionMode`。`presetId` 取卡内该 mode 预设库中的 id；传 `''` 则运行全局激活预设并保留卡内预设库。返回 `{ ok: true, mode }` 或 `{ ok: false, mode, reason }`，`reason` 取值为 `character_not_found`、`no_saved_mode`、`preset_not_found`、`set_failed`、`persist_failed`。 |
+| `setCharacterActivePresetForSavedMode(ctx, settings, avatar, presetId)` | 切换角色卡在已保存 mode 下的激活预设，保存角色卡，并重新对齐 `settings.executionMode`。`presetId` 取卡内该 mode 预设库中的 id；传入 `''` 则运行全局激活预设并保留卡内预设库。返回 `{ ok: true, mode }` 或 `{ ok: false, mode, reason }`，`reason` 取值为 `character_not_found`、`no_saved_mode`、`preset_not_found`、`set_failed`、`persist_failed`。 |
 | `getCharacterIndexByAvatar(ctx, avatar)` | 解析 `persistOrchestratorCharacterExtension` 需要的角色索引；找不到返回 `-1`。 |
 | `getCharacterExtensionDataByAvatar(ctx, avatar)` | 读取完整的 `character.data.extensions.orchestrator` blob。写入前 spread 一下，避免误删兄弟子键。 |
 | `applyCharacterExecutionModeForAvatar(ctx, settings, avatar)` | 把 `settings.executionMode` 重新对齐到该角色已保存的 mode；变更时返回 `true`。 |

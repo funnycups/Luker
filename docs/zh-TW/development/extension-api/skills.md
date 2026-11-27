@@ -170,7 +170,7 @@ writeFile(opts: {
 }): Promise<{ sha256: string }>
 ```
 
-如果傳了 `expectedSha256` 且與當前檔案雜湊不匹配，寫入以 `400` 錯誤失敗 —— 適合編輯器式的並發編輯偵測。
+傳入 `expectedSha256` 且與當前檔案雜湊不匹配時，寫入以 `409` 錯誤失敗 —— 適合編輯器式的並發編輯偵測。
 
 傳入 `expectAbsent: true` 時，檔案已存在則寫入以 `409` 錯誤失敗。
 
@@ -263,9 +263,9 @@ delete(scope: SkillScope, name: string, opts?: {
 }): Promise<void>
 ```
 
-如果傳了 `expectedInstalledHash` 且與磁碟上 Skill 檔案的雜湊不匹配，刪除以 `400` 錯誤失敗，`err.body.code` 為 `installed_hash_mismatch`，Skill 保持不變。
+傳入 `expectedInstalledHash` 且與磁碟上 Skill 檔案的雜湊不匹配時，刪除以 `409` 錯誤失敗，`err.body.code` 為 `installed_hash_mismatch`，Skill 保持不變。
 
-原子移除 Skill 目錄。參照該 Skill 的編排器 profile 仍保留 `skills.visible` 裡的舊名 —— 派遣時參照軟失敗。
+原子移除 Skill 目錄。參照該 Skill 的編排設定保留 `skills.visible` 中的舊名，派遣時該參照不生效。
 
 ### `rename(scope, oldName, newName)`
 

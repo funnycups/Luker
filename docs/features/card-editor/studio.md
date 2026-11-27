@@ -46,7 +46,7 @@ The right panel combines three sections:
 
 - Top — **Code editor** with automatic syntax highlighting per file type (HTML / JS / CSS / JSON, etc.); save and reload buttons in the upper right
 - Middle — **File list** with all CardApp files and their sizes; click to switch the editing target
-- Bottom — **Commit history** — Git commit list, each row showing short commit hash, message, time, and a rollback button
+- Bottom — **Modification history** — Version list, each row showing version identifier, note, time, and a rollback button
 
 ## Supported Operations
 
@@ -98,8 +98,7 @@ Every AI change to a file requires approval. As in the popup, the interface show
 ## Session Management
 
 - Multiple development sessions; create / switch / delete
-- Each character retains up to **20** sessions
-- Session content is persisted in character state and survives closing Studio
+- Session content is persisted in character state
 
 ## Version History {#version-history-git}
 

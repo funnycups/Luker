@@ -170,7 +170,7 @@ writeFile(opts: {
 }): Promise<{ sha256: string }>
 ```
 
-如果传了 `expectedSha256` 且与当前文件哈希不匹配，写入以 `400` 错误失败 —— 适合编辑器式的并发编辑检测。
+传入 `expectedSha256` 且与当前文件哈希不匹配时，写入以 `409` 错误失败 —— 适合编辑器式的并发编辑检测。
 
 传入 `expectAbsent: true` 时，文件已存在则写入以 `409` 错误失败。
 
@@ -263,9 +263,9 @@ delete(scope: SkillScope, name: string, opts?: {
 }): Promise<void>
 ```
 
-如果传了 `expectedInstalledHash` 且与磁盘上 Skill 文件的哈希不匹配，删除以 `400` 错误失败，`err.body.code` 为 `installed_hash_mismatch`，Skill 保持不变。
+传入 `expectedInstalledHash` 且与磁盘上 Skill 文件的哈希不匹配时，删除以 `409` 错误失败，`err.body.code` 为 `installed_hash_mismatch`，Skill 保持不变。
 
-原子移除 Skill 目录。引用该 Skill 的编排器 profile 仍保留 `skills.visible` 里的旧名 —— 派遣时引用软失败。
+原子移除 Skill 目录。引用该 Skill 的编排配置保留 `skills.visible` 中的旧名，派遣时该引用不生效。
 
 ### `rename(scope, oldName, newName)`
 

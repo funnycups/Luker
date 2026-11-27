@@ -35,7 +35,7 @@ Configure shared defaults in **Workbench → Settings**, or set extension-level 
 
 ## Modification History
 
-Card and world book edits applied in Workbench appear in **Workbench → Change history** for individual undo, alongside the **History** list in the extension panel. In CardApp Studio, file changes are tracked as Git commits; see [CardApp Studio](/features/card-editor/studio#version-history-git).
+Card and world book edits applied in Workbench appear in **Workbench → Change history** for individual undo. In CardApp Studio, file changes are tracked in version history; see [CardApp Studio](/features/card-editor/studio#version-history-git).
 
 ## Related Pages
 

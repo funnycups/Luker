@@ -35,7 +35,7 @@
 
 ## 修改历史
 
-在工作台应用的卡片与世界书改动可在**工作台 → 改动记录**中按目标筛选并逐条撤销，扩展面板内的**历史**区域同样保留操作记录。CardApp Studio 下的代码版本历史见 [CardApp Studio](/zh-CN/features/card-editor/studio#version-history-git)。
+在工作台应用的卡片与世界书改动可在**工作台 → 改动记录**中按目标筛选并逐条撤销。CardApp Studio 下的代码版本历史见 [CardApp Studio](/zh-CN/features/card-editor/studio#version-history-git)。
 
 ## 相关页面
 

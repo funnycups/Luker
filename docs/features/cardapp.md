@@ -21,20 +21,6 @@ Studio provides a code editor, live preview and AI assistance. For custom logic,
 
 ## Related pages
 
-## Lifecycle
-
-1. **Mount** — When switching characters, the system extracts the app definition from the character card, mounts the app to the chat interface's UI container, and calls the app's `init(ctx)` function
-2. **Run** — The app interacts with Luker through the `ctx` context object, responding to chat events and updating its own state
-3. **Unmount** — When switching to another character or closing the chat, the system cleans up the app instance, automatically releasing all timers, event listeners, and dispose callbacks registered through `ctx`
-
-## Use Cases
-
-- **In-card interactive elements** — Status panels, mood indicators, custom buttons, etc.
-- **Mini games** — Text-adventure choice interfaces, dice rollers, card-game components, etc.
-- **State tracking** — Persist affection levels, quest progress, item inventories, etc. via chat variables (`ctx.getVariable` / `ctx.setVariable`); reach for chat state (`ctx.getChatState` / `ctx.updateChatState`) only for structured CardApp-owned namespaces that don't fit a flat variable.
-
-## Related Pages
-
 - [Character Card Editor Assistant](/features/card-editor/) — Entry point of CardApp Studio
 - [CardApp Studio](/features/card-editor/studio) — Full environment for developing and debugging CardApps
 - [Card Developer Guide](/development/card-developers) — Complete CardApp API reference and development docs

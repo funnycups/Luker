@@ -391,14 +391,6 @@ Debounced persistence trigger. Call after mutating `extensionSettings` or any se
 
 ### saveSettings
 
-`SETTINGS_UPDATED` receives `{ cardPresetSave }`. The record captures the selected card, slot, runtime-cache entry and intended preset body when the save is invoked. Treat it as read-only. Ordinary saves synchronize that captured body through conditional queued changes. Preset-manager extension writes reserve their captured field operation and synchronize acknowledged non-extension changes in the same card write after their prerequisites succeed. They refresh only the captured runtime-cache entry after card acknowledgement. Changing selection or mutating the caller's options while a save is pending does not retarget synchronization. `cardPresetOwner` is reserved for the preset manager, not an extension opt-out from card synchronization.
-
-Conditional changes compare captured old values and missing keys with the queued current source. Arrays are compared as complete values. Overlapping external changes refuse the card mutation, while disjoint changes remain intact. A nested extension write reserves only its requested path and also synchronizes unrelated acknowledged extension changes. A root extension replacement owns the extension root. Matching desired values are accepted as prior work only for acknowledged writes from the same captured ownership lineage. Lineage identities contain no preset bodies or historical payload chain.
-
-`getPresetManager(...).writePresetExtensionField(...)` rejects when its captured global name, collection or source is replaced during persistence. The error can follow an acknowledged HTTP commit. Earlier settings or preset-file commits remain stored, but the stale operation does not publish an obsolete cache entry or continue to its card stage. Queued field edits compose only with acknowledged predecessors from that field-write queue.
-
-Preset extension writes capture the settings JSON-wire representation for acknowledgement, card continuation and read-cache publication. Undefined object fields are omitted, sparse or undefined array entries become `null`, and non-finite numbers become `null`. Captured source ownership and unrelated fields remain part of the conditional write.
-
 ```ts
 context.saveSettings(loopCounter?: number, options?: object): Promise<SettingsSaveOutcome>
 ```
@@ -407,15 +399,23 @@ Captures the current settings at invocation and serializes persistence attempts.
 
 - `{ ok: true, status: 'saved', payload }` acknowledges that captured JSON payload. An unchanged payload needs no request only when a complete stored baseline is known. Initialization defaults and unsaved supplied settings are not storage acknowledgements. `directSave: true` always sends the full captured payload. The acknowledged snapshot is updated before `SETTINGS_UPDATED`, and the caller resolves after its listeners finish.
 - `{ ok: false, status: 'failed', error }` reports capture, transport or HTTP failure. Other queued attempts still execute and have their own outcomes.
+- `{ ok: false, status: 'deferred', reason }` schedules a debounced retry because settings are not ready or generation temporarily overrides response length. This does not acknowledge persistence. The retry captures the live state when it executes.
 
 After a failed persistence attempt, the stored baseline and cached settings read are invalidated. Without a fresh complete server read, the next attempt sends a full replacement before acknowledging its payload, including when the desired settings equal the last acknowledged settings.
 
 A server `world_deleted` ownership refusal means conditional world cleanup overtook an auxiliary-reference write. `world_deletion_unknown` means the overlapping deletion's transaction outcome is unconfirmed. Either refusal terminates the captured attempt without retrying a full payload, retains its valid acknowledged snapshot and cached read, and emits no save-success event. Earlier full reads lose permission to replace the live draft even though the stored settings remain unchanged. Reload the world-book list before retrying the reference change.
-- `{ ok: false, status: 'deferred', reason }` schedules a debounced retry because settings are not ready or generation temporarily overrides response length. This does not acknowledge persistence. The retry captures the live state when it executes.
 
 Queued calls retain their own captured payloads and options. A result does not acknowledge later edits or later queued attempts. Mutating a returned payload or exported settings does not change the stored baseline. Event listeners may await another save because event delivery does not hold the persistence lock. Ignoring the result remains safe for fire-and-forget callers. `saveSettingsDebounced` remains scheduling-only and provides no persistence acknowledgement.
 
 A server settings read is not applied when persistence is pending at its start or completion, or settles during the read. The discarded `getSettings()` resolves to `undefined` without changing snapshot authority or live settings and without emitting `SETTINGS_LOADED`. Read again after pending saves settle to load a fresh source.
+
+`SETTINGS_UPDATED` receives `{ cardPresetSave }`. The record captures the selected card, slot, runtime-cache entry and intended preset body when the save is invoked. Treat it as read-only. Ordinary saves synchronize that captured body through conditional queued changes. Preset-manager extension writes reserve their captured field operation and synchronize acknowledged non-extension changes in the same card write after their prerequisites succeed. They refresh only the captured runtime-cache entry after card acknowledgement. Changing selection or mutating the caller's options while a save is pending does not retarget synchronization. `cardPresetOwner` is reserved for the preset manager, not an extension opt-out from card synchronization.
+
+Conditional changes compare captured old values and missing keys with the queued current source. Arrays are compared as complete values. Overlapping external changes refuse the card mutation, while disjoint changes remain intact. A nested extension write reserves only its requested path and also synchronizes unrelated acknowledged extension changes. A root extension replacement owns the extension root. Matching desired values are accepted as prior work only for acknowledged writes from the same captured ownership lineage. Lineage identities contain no preset bodies or historical payload chain.
+
+`getPresetManager(...).writePresetExtensionField(...)` rejects when its captured global name, collection or source is replaced during persistence. The error can follow an acknowledged HTTP commit. Earlier settings or preset-file commits remain stored, but the stale operation does not publish an obsolete cache entry or continue to its card stage. Queued field edits compose only with acknowledged predecessors from that field-write queue.
+
+Preset extension writes capture the settings JSON-wire representation for acknowledgement, card continuation and read-cache publication. Undefined object fields are omitted, sparse or undefined array entries become `null`, and non-finite numbers become `null`. Captured source ownership and unrelated fields remain part of the conditional write.
 
 ### saveMetadataDebounced
 

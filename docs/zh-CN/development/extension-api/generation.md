@@ -49,8 +49,8 @@ context.generateTask({
     functionCallMode?: 'auto' | 'native' | 'prompt_xml' = 'auto',
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
-    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};编辑器类流程需关闭
-    activity?: boolean | object = true,           // 默认附带全局隐式活动租约;传 false 退出或传对象覆盖配置
+    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}}；编辑器类流程需关闭
+    activity?: boolean | object = true,           // 默认附带全局隐式活动租约；传入 false 退出或传入对象覆盖配置
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -144,7 +144,7 @@ functionCallOptions: { requiredFunctionName: 'my_fn' },
 
 | 模式 | 何时选用 |
 |------|----------|
-| `'auto'`（默认） | 遵循解析后连接配置的纯文本函数调用设置（提供 `apiPresetName` 时按对应配置，否则遵循当前连接；开启时使用 `'prompt_xml'`，否则使用 `'native'`）。 |
+| `'auto'` | 默认值。遵循解析后连接配置的纯文本函数调用设置：提供 `apiPresetName` 时按对应配置，否则遵循当前连接；开启时使用 `'prompt_xml'`，否则使用 `'native'`。 |
 | `'native'` | 强制使用原生工具调用（例如 OpenAI tools / Anthropic tool_use）。 |
 | `'prompt_xml'` | 强制使用纯文本 XML 工具调用，将工具定义嵌入 system prompt —— 适合不支持原生工具调用的模型。 |
 
@@ -202,7 +202,7 @@ try {
 | `rate_limit` | 触发限流（429）。 |
 | `invalid_input` | 选项不合法（例如同时传了 `tools` 和 `jsonSchema`，或 `worldInfoSource:'custom'` 但未传 `customWorldInfoMessages`）。 |
 | `unsupported_api` | 解析出的请求 API 在运行时不支持。 |
-| `capability_conflict` | 不可重试的服务商或模型能力冲突（例如所解析模型不支持当前参数或功能组合，或发送方返回了 `nonRetryable` 错误）；同时设置 `error.nonRetryable = true`，并在存在时保留 `error.status`。 |
+| `capability_conflict` | 不可重试的服务商或模型能力冲突，例如所解析模型不支持当前参数或功能组合，或发送方返回了 `nonRetryable` 错误；同时设置 `error.nonRetryable = true`，并在存在时保留 `error.status`。 |
 | `stream_unavailable` | 解析后的请求 API 不支持通过 `generateTaskStream` 流式输出（kobold / koboldhorde / novel / textgenerationwebui）。 |
 | `tool_call_parse` | 模型返回的 tool call `arguments` 无法 `JSON.parse`。 |
 | `json_schema_violation` | `jsonSchema` 模式校验失败。 |
@@ -255,7 +255,7 @@ return {
 
 ### 流式响应
 
-`generateTask` 不管走哪种传输均返回终态结果。如果交互式场景需要在模型生成过程中实时渲染 token，请使用 `context.generateTaskStream`——它返回一对 split-stream：一个用于消费 delta 增量的 `AsyncIterable`，以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。它始终走 OpenAI 族的流式 sender，不读取预设的 `stream_openai` 字段，因为「消费 chunk」本身就是调用方明确表达的诉求。
+`generateTask` 不管走哪种传输均返回终态结果。如果交互式场景需要在模型生成过程中实时渲染 token，请使用 `context.generateTaskStream`——它返回一对 split-stream：一个用于消费 delta 增量的 `AsyncIterable`，以及一个 `Promise` 用于获得与 `generateTask` 相同形态的终态结果。它始终走 OpenAI 族的流式 sender，不读取预设的 `stream_openai` 字段，因为「消费 chunk」本身就是调用方明确表达的诉求。
 
 ```js
 const { stream, result } = context.generateTaskStream({
@@ -314,7 +314,7 @@ type StreamChunk =
 
 `generateTask` 与 `generateTaskStream` 均接受 `activity` 选项，默认为 `true`：
 
-- **`true`（默认）** —— 自动申请一条全局隐式活动租约，字段为 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在请求进行期间维持浏览器离开页面提醒与移动端后台保活，但不触发应用内切换聊天确认。
+- **`true`** —— 默认值。自动申请一条全局隐式活动租约，字段为 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在请求进行期间维持浏览器离开页面提醒与移动端后台保活，但不触发应用内切换聊天确认。
 - **`false`** —— 本次调用不自动申请活动租约。
 - **纯对象** —— 覆盖默认租约选项中的任意字段：`source`、`label`、`scope`、`guardUnload`、`guardChatSwitch`、`keepAlive`、`ambient`、`onCancel`。若传入 `scope: 'chat'`，同时会纳入应用内切换聊天确认保护。
 
@@ -552,7 +552,7 @@ generateRaw(params: {
 }): Promise<string>
 ```
 
-把字面量 `prompt` 直接发给当前后端，不涉及聊天历史、世界书、角色卡或扩展 prompt。返回经过后处理的响应文本。适合工具类调用——拟标题、分类、改写——这种你想完全控制输入的场景。`activity` 默认为 `true`，即 `source: 'core:generate-raw'` 的全局隐式租约；传 `false` 可退出，或传入租约选项对象覆盖配置。
+把字面量 `prompt` 直接发给当前后端，不涉及聊天历史、世界书、角色卡或扩展 prompt。返回经过后处理的响应文本。适合工具类调用——拟标题、分类、改写——这种你想完全控制输入的场景。`activity` 默认为 `true`，即 `source: 'core:generate-raw'` 的全局隐式租约；传入 `false` 可退出，或传入租约选项对象覆盖配置。
 
 ### generateRawData
 
@@ -657,7 +657,7 @@ ChatCompletionService.processRequest(
 
 非流式返回 `{ content, reasoning }`（`extractData: false` 时返回原始 JSON）。流式返回一个产出 `{ text, swipes, state }` 的异步 generator 工厂。
 
-`sendRequest` 通过第 4 个参数 `requestOptions`、`processRequest` 通过 `options.activity` 均默认附带 `source: 'core:custom-request'` 的全局隐式租约，且该参数绝不会序列化进请求体；传入 `false` 可退出，传入对象可覆盖租约字段。流式请求采用两阶段租约：第一阶段在 `sendRequest` 建立 SSE 连接期间持有租约；第二阶段仅在调用并迭代返回的异步 generator 工厂时才申请租约并在 `finally` 中释放，未调用的流式工厂不会泄漏租约。
+`sendRequest` 通过 `requestOptions`、`processRequest` 通过 `options.activity` 均默认附带 `source: 'core:custom-request'` 的全局隐式租约，该参数不会序列化进请求体；传入 `false` 可退出，传入对象可覆盖租约字段。流式请求分阶段持有租约：建立 SSE 连接期间由 `sendRequest` 持有，随后仅在调用并迭代返回的异步 generator 工厂时才申请租约并在 `finally` 中释放。
 
 ### TextCompletionService
 
@@ -668,7 +668,7 @@ TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, ins
 TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
 ```
 
-`ChatCompletionService` 的 text-completion 后端版本，具备相同的第 4 参数 `requestOptions.activity`（不进入请求体）、`processRequest` 的 `options.activity` 以及两阶段流式租约行为。`constructPrompt` 把消息数组格式化成单一的 instruct 格式字符串。
+`ChatCompletionService` 的 text-completion 后端版本，具备相同的 `requestOptions.activity`、`processRequest` 的 `options.activity` 以及流式分段租约行为，`requestOptions` 不会进入请求体。`constructPrompt` 把消息数组格式化成单一的 instruct 格式字符串。
 
 ### ConnectionManagerRequestService
 

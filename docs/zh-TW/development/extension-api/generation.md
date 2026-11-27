@@ -49,8 +49,8 @@ context.generateTask({
     functionCallMode?: 'auto' | 'native' | 'prompt_xml' = 'auto',
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
-    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};編輯器類流程需關閉
-    activity?: boolean | object = true,           // 預設附帶全域隱式活動租約;傳 false 退出或傳物件覆寫設定
+    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}}；編輯器類流程需關閉
+    activity?: boolean | object = true,           // 預設附帶全域隱式活動租約；傳入 false 退出或傳入物件覆寫設定
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -144,7 +144,7 @@ functionCallOptions: { requiredFunctionName: 'my_fn' },
 
 | 模式 | 何時選用 |
 |------|----------|
-| `'auto'`（預設） | 遵循解析後連線設定的純文字函式呼叫設定（提供 `apiPresetName` 時依對應設定，否則遵循目前連線；啟用時使用 `'prompt_xml'`，否則使用 `'native'`）。 |
+| `'auto'` | 預設值。遵循解析後連線設定的純文字函式呼叫設定：提供 `apiPresetName` 時依對應設定，否則遵循目前連線；啟用時使用 `'prompt_xml'`，否則使用 `'native'`。 |
 | `'native'` | 強制使用原生工具呼叫（例如 OpenAI tools / Anthropic tool_use）。 |
 | `'prompt_xml'` | 強制使用純文字 XML 工具呼叫，將工具定義嵌入 system prompt —— 適合不支援原生工具呼叫的模型。 |
 
@@ -202,7 +202,7 @@ try {
 | `rate_limit` | 觸發限流（429）。 |
 | `invalid_input` | 選項不合法（例如同時傳了 `tools` 和 `jsonSchema`，或 `worldInfoSource:'custom'` 但未傳 `customWorldInfoMessages`）。 |
 | `unsupported_api` | 解析出的請求 API 在執行時不支援。 |
-| `capability_conflict` | 不可重試的服務商或模型能力衝突（例如解析後的模型不支援目前參數或功能組合，或發送方回傳了 `nonRetryable` 錯誤）；同時設定 `error.nonRetryable = true`，並在存在時保留 `error.status`。 |
+| `capability_conflict` | 不可重試的服務商或模型能力衝突，例如解析後的模型不支援目前參數或功能組合，或發送方回傳了 `nonRetryable` 錯誤；同時設定 `error.nonRetryable = true`，並在存在時保留 `error.status`。 |
 | `stream_unavailable` | 解析後的請求 API 不支援透過 `generateTaskStream` 進行串流（kobold / koboldhorde / novel / textgenerationwebui）。 |
 | `tool_call_parse` | 模型回傳的 tool call `arguments` 無法 `JSON.parse`。 |
 | `json_schema_violation` | `jsonSchema` 模式驗證失敗。 |
@@ -314,7 +314,7 @@ type StreamChunk =
 
 `generateTask` 與 `generateTaskStream` 均接受 `activity` 選項，預設為 `true`：
 
-- **`true`（預設）** —— 自動申請一條全域隱式活動租約，欄位為 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在請求執行期間維持瀏覽器離開頁面提醒與行動端後台保活，但不觸發應用內切換聊天確認。
+- **`true`** —— 預設值。自動申請一條全域隱式活動租約，欄位為 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在請求執行期間維持瀏覽器離開頁面提醒與行動端後台保活，但不觸發應用內切換聊天確認。
 - **`false`** —— 本次呼叫不自動申請活動租約。
 - **純物件** —— 覆寫預設租約選項中的任意欄位：`source`、`label`、`scope`、`guardUnload`、`guardChatSwitch`、`keepAlive`、`ambient`、`onCancel`。若傳入 `scope: 'chat'`，同時會納入應用內切換聊天確認保護。
 
@@ -552,11 +552,11 @@ generateRaw(params: {
 }): Promise<string>
 ```
 
-把字面量 `prompt` 發到當前後端，不涉及聊天歷史、世界書、角色卡或擴充提示詞。回傳後處理過的回應文字。用於工具型呼叫——標題化、分類、改寫——這時你想對輸入有完全控制。`activity` 預設為 `true`，即 `source: 'core:generate-raw'` 的全域隱式租約；傳 `false` 可退出，或傳入租約選項物件覆寫設定。
+把字面量 `prompt` 發到當前後端，不涉及聊天歷史、世界書、角色卡或擴充提示詞。回傳後處理過的回應文字。用於工具型呼叫——標題化、分類、改寫——這時你想對輸入有完全控制。`activity` 預設為 `true`，即 `source: 'core:generate-raw'` 的全域隱式租約；傳入 `false` 可退出，或傳入租約選項物件覆寫設定。
 
 ### generateRawData
 
-參數同 `generateRaw` 且同樣支援 `activity`，但回傳原始 API 回應物件而非後處理過的字串。當你需要 `generateRaw` 折疊掉的欄位（例如 `reasoning`）時使用。
+參數同 `generateRaw` 且同樣支援 `activity`，但回傳原始 API 回應物件而非後處理過的字串。當你需要 `generateRaw` 折疊掉的 `reasoning` 之類欄位時使用。
 
 ### generateQuietPrompt
 
@@ -657,7 +657,7 @@ ChatCompletionService.processRequest(
 
 非串流回傳 `{ content, reasoning }`（`extractData: false` 時回傳原始 JSON）。串流回傳一個 async-generator factory，產出 `{ text, swipes, state }`。
 
-`sendRequest` 透過第 4 個引數 `requestOptions`、`processRequest` 透過 `options.activity` 均預設附帶 `source: 'core:custom-request'` 的全域隱式租約，且該引數絕不會序列化進請求體；傳入 `false` 可退出，傳入物件可覆寫租約欄位。串流請求採用兩階段租約：第一階段在 `sendRequest` 建立 SSE 連線期間持有租約；第二階段僅在呼叫並疊代回傳的 async-generator factory 時才申請租約並在 `finally` 中釋放，未呼叫的串流 factory 不會洩漏租約。
+`sendRequest` 透過 `requestOptions`、`processRequest` 透過 `options.activity` 均預設附帶 `source: 'core:custom-request'` 的全域隱式租約，該引數不會序列化進請求體；傳入 `false` 可退出，傳入物件可覆寫租約欄位。串流請求分階段持有租約：建立 SSE 連線期間由 `sendRequest` 持有，隨後僅在呼叫並疊代回傳的 async-generator factory 時才申請租約並在 `finally` 中釋放。
 
 ### TextCompletionService
 
@@ -668,7 +668,7 @@ TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, ins
 TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
 ```
 
-`ChatCompletionService` 對 text-completion 後端的鏡像，具備相同的第 4 引數 `requestOptions.activity`（不進入請求體）、`processRequest` 的 `options.activity` 以及兩階段串流租約行為。`constructPrompt` 把聊天訊息陣列格式化為單一的 instruct 格式字串。
+`ChatCompletionService` 對 text-completion 後端的鏡像，具備相同的 `requestOptions.activity`、`processRequest` 的 `options.activity` 以及串流分段租約行為，`requestOptions` 不會進入請求體。`constructPrompt` 把聊天訊息陣列格式化為單一的 instruct 格式字串。
 
 ### ConnectionManagerRequestService
 

@@ -212,7 +212,7 @@ CardApp 的上下文对象提供以下 API：
 | `ctx.setInterval(fn, ms)` | `setInterval` 的封装，卸载时句柄自动清理。 |
 | `ctx.setTimeout(fn, ms)` | `setTimeout` 的封装，卸载时句柄自动清理。 |
 | `ctx.onDispose(fn)` | 注册清理回调，CardApp 卸载（切换聊天、热重载、切换角色）时执行。 |
-| `ctx.activityGuard` | 绑定生命周期的[后台活动保护](/zh-CN/development/extension-api/plugin-integration#后台活动保护)接口，提供 `acquire`、`run`、`hasUnloadGuard`、`hasChatSwitchGuard`、`hasKeepAliveHold`、`list` 与 `subscribe` 方法。`acquire` 与 `run` 默认将 `scope` 设为 `'chat'`，跨聊天任务需显式传 `scope: 'global'`；活跃租约与 `subscribe` 监听器均在 CardApp 卸载时自动释放。 |
+| `ctx.activityGuard` | 绑定生命周期的[后台活动保护](/zh-CN/development/extension-api/plugin-integration#后台活动保护)接口，提供 `acquire`、`run`、`hasUnloadGuard`、`hasChatSwitchGuard`、`hasKeepAliveHold`、`list` 与 `subscribe` 方法。`acquire` 与 `run` 默认将 `scope` 设为 `'chat'`，跨聊天任务需显式传入 `scope: 'global'`；活跃租约与 `subscribe` 监听器均在 CardApp 卸载时自动释放。 |
 
 示例 —— 为异步 CardApp 任务启用离开提醒、移动端后台保活与切换聊天确认：
 
