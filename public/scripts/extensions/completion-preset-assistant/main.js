@@ -46,16 +46,21 @@ function ensureSettings() {
         extension_settings[MODULE_NAME] = clone(defaultSettings);
     }
     const settings = extension_settings[MODULE_NAME];
-    if (settings.requestApiProfileName !== undefined) {
-        settings.requestApiPresetName ||= String(settings.requestApiProfileName || '');
-        delete settings.requestApiProfileName;
+    let mutated = false;
+    for (const legacyKey of [
+        'requestApiProfileName',
+        'requestApiPresetName',
+        'requestLlmPresetName',
+        'includeWorldInfo',
+        'toolCallRetryMax',
+        'iterSystemPrompt',
+    ]) {
+        if (Object.hasOwn(settings, legacyKey)) {
+            delete settings[legacyKey];
+            mutated = true;
+        }
     }
-    settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
-    settings.requestApiPresetName = String(settings.requestApiPresetName || '').trim();
-    delete settings.includeWorldInfo;
-    delete settings.toolCallRetryMax;
-    delete settings.iterSystemPrompt;
-    if (initializePromptDefaults(settings, PROMPT_DEFAULTS)) {
+    if (initializePromptDefaults(settings, PROMPT_DEFAULTS) || mutated) {
         saveSettingsDebounced();
     }
     return settings;
@@ -344,13 +349,4 @@ jQuery(async () => {
     context.eventSource.on(context.eventTypes.PRESET_DELETED, (event) => {
         if (getPresetEventCollection(event) === 'openai') refreshUiState();
     });
-    const connectionProfileEvents = [
-        context.eventTypes.CONNECTION_PROFILE_LOADED,
-        context.eventTypes.CONNECTION_PROFILE_CREATED,
-        context.eventTypes.CONNECTION_PROFILE_DELETED,
-        context.eventTypes.CONNECTION_PROFILE_UPDATED,
-    ].filter(Boolean);
-    for (const eventName of connectionProfileEvents) {
-        context.eventSource.on(eventName, () => refreshUiState());
-    }
 });

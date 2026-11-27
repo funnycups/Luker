@@ -30,7 +30,5 @@ export const PROMPT_FIELDS = Object.freeze([
 ]);
 
 export const defaultSettings = Object.freeze({
-    requestLlmPresetName: '',
-    requestApiPresetName: '',
     ...PROMPT_DEFAULTS,
 });

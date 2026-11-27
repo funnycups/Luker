@@ -272,15 +272,6 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             const c = resolveCtx(ctx);
             return { preset: Boolean(c?.presets?.getSelected?.('openai')?.name) };
         },
-        getNativeAi(ctx) {
-            const c = resolveCtx(ctx);
-            const s = c?.extensionSettings?.completion_preset_assistant;
-            if (!s) return null;
-            return {
-                connection: String(s.requestApiPresetName || '').trim(),
-                preset: String(s.requestLlmPresetName || '').trim(),
-            };
-        },
         async promptInfo(ctx) {
             const c = resolveCtx(ctx);
             const s = c?.extensionSettings?.completion_preset_assistant;
