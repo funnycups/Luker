@@ -12,11 +12,10 @@ import {
     buildReasoningEffortBySource,
 } from '../public/scripts/reasoning-effort.js';
 
-const indexHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+import { chat_completion_sources } from '../public/scripts/lib/openai-streaming-reply.js';
 
-const openaiSrc = readFileSync(new URL('../public/scripts/openai.js', import.meta.url), 'utf8');
-const block = openaiSrc.match(/export const chat_completion_sources = \{([\s\S]*?)\n\};/)[1];
-const sources = [...block.matchAll(/:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+const indexHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const sources = Object.values(chat_completion_sources);
 
 describe('descriptor completeness', () => {
     test('every chat completion source has a descriptor entry', () => {

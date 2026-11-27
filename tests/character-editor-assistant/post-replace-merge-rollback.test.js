@@ -21,15 +21,12 @@ const sharedCtx = {
     rebindPreviousPrimaryBook: rebindSpy,
     deleteWorldBook: deleteWorldBookSpy,
     importEmbeddedBookForCharacter: null,
+    addLocaleData: () => {},
+    translate: (s) => String(s ?? ''),
+    getCurrentLocale: () => 'en',
 };
 
 globalThis.Luker = { getContext: () => sharedCtx };
-
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    translate: (s) => String(s ?? ''),
-    createScopedI18n: () => ({ i18n: (s) => String(s ?? ''), i18nFormat: (s, ...args) => args.reduce((acc, v, i) => acc.replace(`\${${i}}`, String(v)), String(s ?? '')) }),
-}));
 
 const { buildPostReplaceMergeAction } = await import('../../public/scripts/extensions/character-editor-assistant/post-replace/merge-action.js');
 

@@ -80,12 +80,21 @@ describe('temporary image transport wiring', () => {
     });
 
     test.each([
-        ['createIllustrationBridge', 'generateImage'],
-        ['createImageGenerationService', 'generate'],
-    ])('%s keeps global tracking out of its untracked %s path', (factory, methodName) => {
+        ['createIllustrationBridge', 'generateImage', 'generateBridgeImage'],
+        ['createImageGenerationService', 'generate', 'generateServiceImage'],
+    ])('%s keeps global tracking out of its untracked %s path', (factory, methodName, delegateName) => {
         const method = nodes(imageFunctions.get(factory), node => node.type === 'Property'
             && node.key.name === methodName)[0].node.value;
-        const tracking = nodes(method, node => node.type === 'CallExpression'
+        const delegateCalls = nodes(method, node => node.type === 'CallExpression'
+            && node.callee.type === 'Identifier'
+            && node.callee.name === delegateName);
+        expect(delegateCalls).toHaveLength(1);
+
+        const trackingTree = moduleTree('../public/scripts/extensions/stable-diffusion/generation-tracking.js');
+        const trackingFunctions = functions(trackingTree);
+        const delegateFn = trackingFunctions.get(delegateName);
+        expect(delegateFn).toBeDefined();
+        const tracking = nodes(delegateFn, node => node.type === 'CallExpression'
             && ['registerAbortController', 'unregisterAbortController', 'startGenerationTracking', 'endGenerationTracking']
                 .includes(node.callee.name));
         expect(tracking).toHaveLength(4);

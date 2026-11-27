@@ -2,7 +2,7 @@
 // Wiring of public/scripts/i18n.js createScopedI18n: the module-level locale
 // (read from localStorage 'language') drives the load order, and the core
 // translator is the fallback. Synthetic tables only.
-import { describe, test, expect, jest, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 
 let createScopedI18n;
 let translate;
@@ -20,12 +20,6 @@ beforeAll(async () => {
         writable: true,
         value: { getItem: key => (key === 'language' ? 'zh-cn' : null), setItem: () => {}, removeItem: () => {} },
     });
-    globalThis.MutationObserver = class {
-        observe() {}
-        disconnect() {}
-    };
-    jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({ registerDebugFunction: () => {} }));
-    jest.unstable_mockModule('../../public/scripts/secrets.js', () => ({ updateSecretDisplay: () => {} }));
     ({ createScopedI18n, translate } = await import('../../public/scripts/i18n.js'));
 });
 

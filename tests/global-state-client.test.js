@@ -341,6 +341,7 @@ jest.unstable_mockModule('../public/scripts/utils.js', () => ({
     findCanonicalNameInList: () => '',
     timestampToMoment: () => null,
     uuidv4: () => 'test-uuid',
+    getUniqueName: (name) => name,
     importFromExternalUrl: () => Promise.resolve(),
     getCharaFilename: () => '',
     escapeHtml: (s) => String(s ?? ''),

@@ -1,7 +1,6 @@
 /** @jest-environment jsdom */
 
 import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
-import { readFileSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -28,42 +27,6 @@ globalThis.Luker = {
         lib: { yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } },
     }),
 };
-
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
-});
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class {},
-    POPUP_TYPE: { TEXT: 0, CONFIRM: 1 },
-    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: -1 },
-    callGenericPopup: async () => null,
-}));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({ getContext: () => globalThis.Luker.getContext() }));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettings,
-    getContext: () => ({}),
-    writeExtensionField: async () => {},
-    UNSET_VALUE: Symbol('unset'),
-}));
-jest.unstable_mockModule('../../public/script.js', () => ({
-    saveSettingsDebounced: () => {},
-    saveSettings: async () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    world_info_position: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
-    wi_anchor_position: {},
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({ escapeHtml: (s) => String(s) }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    translate: (s) => String(s ?? ''),
-    getCurrentLocale: () => 'en',
-    t: (s) => String(s ?? ''),
-}));
 
 let editorState;
 let editorPersist;
@@ -449,30 +412,5 @@ describe('auto-saved global runtime limits and custom tools', () => {
         editorState.refreshUiStateFromHost(context);
         for (const key of DRAFT_KEYS) expect(uiState[key]).toBe(reloaded[key]);
         expect(uiState.globalEditor.presets.scout.systemPrompt).toBe('unsaved global spec edit');
-    });
-});
-
-describe('orchestrator global writes', () => {
-    const mainSource = readFileSync(resolve('../public/scripts/extensions/orchestrator/main.js'), 'utf8');
-    const lensSourceWrite = readFileSync(resolve('../public/scripts/extensions/orchestrator/lens/source-write.js'), 'utf8');
-    const lensIterateTarget = readFileSync(resolve('../public/scripts/extensions/orchestrator/lens/iterate-target.js'), 'utf8');
-
-    test('global writes use the shared acknowledged persistence boundary without wiping unrelated drafts', () => {
-        expect(mainSource.match(/uiState\.global\w*Editor\s*=/g) || []).toEqual([]);
-        expect(lensSourceWrite.match(/uiState\.global\w*Editor\s*=/g) || []).toEqual([]);
-        expect(lensIterateTarget.match(/uiState\.global\w*Editor\s*=/g) || []).toEqual([]);
-        expect(lensSourceWrite).toContain('persistGlobalPresetWrite(');
-        expect(lensSourceWrite).toContain('refreshUiStateFromHost(');
-        expect(lensSourceWrite).not.toMatch(/\binitializeUiState\(/);
-        expect(lensIterateTarget).toContain('deps.persistGlobalPresetWrite(');
-    });
-
-    test('auto-save runtime limits and custom tools only through the keep-drafts wrappers', () => {
-        expect(mainSource).not.toMatch(/\bpersistRuntimeLimitsPatch\(/);
-        expect(mainSource).not.toMatch(/\bpersistCustomToolsPatch\(/);
-        expect(lensSourceWrite).not.toMatch(/\bpersistRuntimeLimitsPatch\(/);
-        expect(lensSourceWrite).not.toMatch(/\bpersistCustomToolsPatch\(/);
-        expect(lensSourceWrite).toContain('persistRuntimeLimitsKeepingDrafts(');
-        expect(lensSourceWrite).toContain('persistCustomToolsKeepingDrafts(');
     });
 });

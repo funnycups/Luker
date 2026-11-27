@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import fs from 'node:fs';
+import { settingsToUpdate } from '../public/scripts/lib/openai-preset-fields.js';
 
 const indexHtml = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const openaiJs = fs.readFileSync(new URL('../public/scripts/openai.js', import.meta.url), 'utf8');
@@ -20,7 +21,7 @@ describe('secret inputs', () => {
         expect(input).not.toMatch(/\sform=/i);
         expect(indexHtml).not.toContain('id="openai_proxy_password"');
         expect(openaiJs).not.toContain('#openai_proxy_password');
-        expect(openaiJs).toMatch(/proxy_password:\s*\['#openai_proxy_access_key', 'proxy_password'/);
+        expect(settingsToUpdate.proxy_password.slice(0, 2)).toEqual(['#openai_proxy_access_key', 'proxy_password']);
         expect(openaiJs).toMatch(/\$\('#openai_proxy_access_key'\)\.toggleClass\('masked-secret'\)/);
         expect(openaiJs).toMatch(/\$\('#openai_proxy_access_key'\)\.on\('copy cut', function \(event\) \{\s*if \(\$\(this\)\.hasClass\('masked-secret'\)\) \{\s*event\.preventDefault\(\);/s);
         expect(styleCss).toMatch(/\.masked-secret\s*{[^}]*-webkit-text-security:\s*disc;/s);

@@ -2,17 +2,9 @@
 // Copyright (C) 2026 FunnyCups
 
 import { jest } from '@jest/globals';
+import { createCharacterPresetsApi } from '../../public/scripts/character/presets-core.js';
 
-const mockStrip = jest.fn(x => (x && typeof x === 'object') ? { ...x, __stripped: true } : x);
-const mockGetContext = jest.fn();
-
-jest.unstable_mockModule('/scripts/openai.js', () => ({
-    stripOpenAIConnectionFieldsFromPreset: mockStrip,
-}));
-jest.unstable_mockModule('/scripts/st-context.js', () => ({
-    getContext: mockGetContext,
-}));
-
+let ctx;
 const {
     listCharacterBoundPresets, getCharacterBoundPreset,
     addCharacterBoundPreset, updateCharacterBoundPreset,
@@ -20,19 +12,18 @@ const {
     resolveCharacterBoundPresetByName, readCharacterBoundState,
     clearAllCharacterBoundPresets, readCharacterBoundStateRaw,
     writeCharacterBoundStateById,
-} = await import('/scripts/character/presets.js');
+} = createCharacterPresetsApi({
+    getContext: () => ctx,
+});
 
 const mockCharacter = (avatar = 'Aqua.png') => ({ avatar, data: { extensions: {} } });
 
-let ctx;
 beforeEach(() => {
     const chars = [mockCharacter()];
     ctx = {
         characters: chars,
         writeExtensionField: jest.fn(async (id, ns, value) => {
-            // Replace semantics — matches production writeExtensionField (see
-            // public/scripts/extensions.js:2104-2114). The whole `data.extensions[ns]`
-            // is overwritten; callers must pre-spread siblings.
+            // Replace semantics — matches production writeExtensionField.
             const c = chars[id];
             if (typeof value === 'function') value = await value(structuredClone(c.data.extensions[ns]));
             c.data.extensions[ns] = value;
@@ -42,8 +33,6 @@ beforeEach(() => {
             getCompletionPresetByName: (name) => name === 'GlobalOnly' ? { temperature: 0.9 } : null,
         }),
     };
-    mockGetContext.mockReturnValue(ctx);
-    mockStrip.mockClear();
 });
 
 test('empty state', () => {
@@ -53,14 +42,14 @@ test('empty state', () => {
     expect(readCharacterBoundState(c)).toEqual({ presets: [], defaultPresetName: null });
 });
 
-test('add first preset becomes default', async () => {
+test('add first preset becomes default and strips connection fields', async () => {
     const c = ctx.characters[0];
-    await addCharacterBoundPreset(c, 'Foo', { temperature: 0.5 });
-    expect(mockStrip).toHaveBeenCalledWith({ temperature: 0.5 });
+    await addCharacterBoundPreset(c, 'Foo', { temperature: 0.5, custom_url: 'http://evil.invalid' });
     const list = listCharacterBoundPresets(c);
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe('Foo');
     expect(list[0].isDefault).toBe(true);
+    expect(list[0].preset).toEqual({ temperature: 0.5 });
 });
 
 test('add second preset does not touch default', async () => {
@@ -94,8 +83,8 @@ test('update replaces body and strips', async () => {
     await addCharacterBoundPreset(c, 'Foo', { temperature: 0.5 });
     await updateCharacterBoundPreset(c, 'Foo', { temperature: 0.8, custom_url: 'evil' });
     const got = getCharacterBoundPreset(c, 'Foo');
-    // strip runs both on write and on read (defense in depth)
-    expect(got.preset.__stripped).toBe(true);
+    expect(got.preset).toEqual({ temperature: 0.8 });
+    expect(got.preset).not.toHaveProperty('custom_url');
 });
 
 test('remove throws when name not found', async () => {
@@ -171,22 +160,14 @@ test('sibling luker.* fields survive add/update/remove/setDefault writes', async
 
 test('migration: legacy single-binding {name, preset}', async () => {
     const c = mockCharacter();
-    c.data.extensions.luker = { chat_completion_preset: { name: 'Legacy', preset: { temperature: 0.6 } } };
-    // Register c in the mock ctx so the migration-flush microtask can find
-    // it via `context.characters.indexOf` — readCharacterBoundState now
-    // schedules a flush on legacy detection (mirrors listCharacterBoundPresets
-    // / getCharacterBoundPreset) so the raw entry point also migrates
-    // read-only cards. Without this, the flush's `persistCharacterBoundState`
-    // throws `character not found in context.characters`, which surfaces as
-    // an unhandled microtask rejection.
+    c.data.extensions.luker = { chat_completion_preset: { name: 'Legacy', preset: { temperature: 0.6, custom_url: 'http://strip.me' } } };
     ctx.characters = [c];
     const state = readCharacterBoundState(c);
     expect(state.presets).toHaveLength(1);
     expect(state.presets[0].name).toBe('Legacy');
-    expect(state.presets[0].preset.__stripped).toBe(true);
+    expect(state.presets[0].preset).toEqual({ temperature: 0.6 });
     expect(state.defaultPresetName).toBe('Legacy');
     expect(state._migrated).toBe(true);
-    // Drain the scheduled flush microtask so it does not leak into the next test.
     await Promise.resolve();
     await Promise.resolve();
 });
@@ -199,7 +180,6 @@ test('migration: legacy bare string form', async () => {
     expect(state.presets).toEqual([]);
     expect(state.defaultPresetName).toBe('BareName');
     expect(state._migrated).toBe(true);
-    // Drain the scheduled flush microtask.
     await Promise.resolve();
     await Promise.resolve();
 });
@@ -207,11 +187,9 @@ test('migration: legacy bare string form', async () => {
 test('migration flush is coalesced per microtask', async () => {
     ctx.characters = [mockCharacter('X.png')];
     ctx.characters[0].data.extensions.luker = { chat_completion_preset: { name: 'L', preset: { t: 1 } } };
-    mockGetContext.mockReturnValue(ctx);
     listCharacterBoundPresets(ctx.characters[0]);
     listCharacterBoundPresets(ctx.characters[0]);
     listCharacterBoundPresets(ctx.characters[0]);
-    // Wait for the microtask queue to drain.
     await Promise.resolve();
     await Promise.resolve();
     const writes = ctx.writeExtensionField.mock.calls;
@@ -223,20 +201,10 @@ test('migration flush is coalesced per microtask', async () => {
 });
 
 test('readCharacterBoundState on a legacy read-only card triggers persisted new-shape', async () => {
-    // Regression: readCharacterBoundState is consumed by openai.js /
-    // maybeApplyCharacterBoundPreset without a subsequent bind/save. If
-    // this read did not schedule the migration flush, a legacy-shape card
-    // that is only ever read (never written through the higher-level
-    // add/update/remove/setDefault APIs) would never migrate. Verify a
-    // single raw read schedules a write, and the persisted shape is the
-    // new BoundState form.
     ctx.characters = [mockCharacter('ReadOnly.png')];
     ctx.characters[0].data.extensions.luker = { chat_completion_preset: { name: 'RO', preset: { t: 2 } } };
-    mockGetContext.mockReturnValue(ctx);
-    // Single raw read — no follow-on list/get/add/update/remove.
     const state = readCharacterBoundState(ctx.characters[0]);
     expect(state._migrated).toBe(true);
-    // Drain scheduled microtask.
     await Promise.resolve();
     await Promise.resolve();
     const writes = ctx.writeExtensionField.mock.calls;

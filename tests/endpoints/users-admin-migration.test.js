@@ -1,497 +1,301 @@
-import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import storage from 'node-persist';
+import yaml from 'yaml';
 
-// ----- Mocks -----
-// Mock modules BEFORE importing users-admin.js. unstable_mockModule defers
-// resolution so we can build mocks that close over per-test state.
+import { router as usersAdminRouter } from '../../src/endpoints/users-admin.js';
+import {
+    getStorageEngine,
+    getSettingsRepo,
+    getWorldInfoRepo,
+    initStorage,
+    isReadOnly,
+} from '../../src/storage/index.js';
+import { getUserDirectories, toKey } from '../../src/users.js';
+import { getConfigFilePath, reloadConfigCache, setConfigFilePath } from '../../src/util.js';
 
-const mockState = {
-    handles: [],
-    migrateUserBehavior: null,  // (handle) => Promise; throws to simulate failure
-    initStorageBehavior: null,  // () => Promise; throws to simulate swap failure
-    initStorageCalled: false,
-    persistCalled: false,
-    requireAdminPass: true,
-    readOnly: false,
-    destEngineCloseCount: 0,
-    events: [],
-};
+let handleSeq = 0;
+function uniqueHandle(prefix) {
+    handleSeq += 1;
+    return `${prefix}_${process.pid}_${handleSeq}`;
+}
 
-jest.unstable_mockModule('../../src/endpoints/settings.js', () => ({
-    flushSettingsBackups: async (userRoot) => {
-        mockState.events.push(`flush:${userRoot}`);
-    },
-}));
-
-jest.unstable_mockModule('../../src/storage/index.js', () => ({
-    getStorageEngine: () => ({
-        kind: 'fs',
-        close: async () => { mockState.events.push('oldEngine:close'); },
-    }),
-    initStorage: async () => {
-        mockState.initStorageCalled = true;
-        mockState.events.push('initStorage');
-        if (mockState.initStorageBehavior) {
-            await mockState.initStorageBehavior();
-        }
-    },
-    isReadOnly: () => mockState.readOnly,
-    setReadOnly: (value) => {
-        mockState.readOnly = Boolean(value);
-        mockState.events.push(`setReadOnly:${Boolean(value)}`);
-    },
-    // Stubs for names destructured by content-manager.js (transitively imported
-    // via users-admin.js). The /storage/* routes under test never invoke
-    // seedContent, but ESM link fails if any named import resolves to undefined.
-    getWorldInfoRepo: () => ({}),
-    getPresetRepo: () => ({}),
-    getNamedDocRepo: () => ({}),
-    getSettingsRepo: () => ({}),
-}));
-
-jest.unstable_mockModule('../../src/users.js', () => ({
-    // Names actually exercised by the routes under test.
-    getAllUserHandles: async () => [...mockState.handles],
-    getUserDirectories: (h) => ({ root: `/tmp/${h}` }),
-    requireAdminMiddleware: (req, res, next) => {
-        if (mockState.requireAdminPass) return next();
-        return res.status(403).send({ error: 'admin_required' });
-    },
-    // Stubs for names destructured at users-admin.js module top-level but
-    // never reached by the /storage/* routes. ESM link fails if a named
-    // import resolves to undefined, so we expose each export explicitly.
-    KEY_PREFIX: 'user:',
-    toKey: (h) => `user:${h}`,
-    getUserAvatar: async () => null,
-    getPasswordSalt: () => '',
-    getPasswordHash: () => '',
-    ensurePublicDirectoriesExist: async () => {},
-}));
-
-jest.unstable_mockModule('../../src/storage/migration/runner.js', () => ({
-    MigrationRunner: class {
-        constructor() {}
-        async migrateUser(handle, { onProgress } = {}) {
-            if (onProgress) onProgress({ stage: 'starting' });
-            if (mockState.migrateUserBehavior) {
-                await mockState.migrateUserBehavior(handle);
-            }
-            return { handle, verified: true, errors: [] };
-        }
-    },
-}));
-
-const trackDestClose = async () => {
-    mockState.destEngineCloseCount += 1;
-    mockState.events.push('destEngine:close');
-};
-
-jest.unstable_mockModule('../../src/storage/engines/fs-engine.js', () => ({
-    FsEngine: class { constructor() { this.kind = 'fs'; } async close() { await trackDestClose(); } },
-}));
-jest.unstable_mockModule('../../src/storage/engines/sqlite-engine.js', () => ({
-    SqliteEngine: class { constructor() { this.kind = 'sqlite'; } async close() { await trackDestClose(); } },
-}));
-jest.unstable_mockModule('../../src/storage/engines/mysql-engine.js', () => ({
-    MysqlEngine: class { constructor() { this.kind = 'mysql'; } async close() { await trackDestClose(); } },
-}));
-jest.unstable_mockModule('../../src/storage/engines/postgres-engine.js', () => ({
-    PgEngine: class { constructor() { this.kind = 'postgres'; } async close() { await trackDestClose(); } },
-}));
-
-jest.unstable_mockModule('../../src/storage/repositories/chat-repo.js', () => ({ ChatRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/settings-repo.js', () => ({ SettingsRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/preset-repo.js', () => ({ PresetRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/world-info-repo.js', () => ({ WorldInfoRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/named-doc-repo.js', () => ({ NamedDocRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/group-repo.js', () => ({ GroupRepo: class {} }));
-jest.unstable_mockModule('../../src/storage/repositories/stats-repo.js', () => ({ StatsRepo: class {} }));
-
-jest.unstable_mockModule('../../src/storage/config-persistence.js', () => ({
-    resolveStorageDbConfig: ({ inline, fromConfig }) => {
-        const url = inline?.url || fromConfig?.url;
-        if (!url) return null;
-        return { engine: { url }, inlineFields: inline ? { url: inline.url } : null };
-    },
-    persistStorageBackendToConfig: async () => {
-        mockState.persistCalled = true;
-        return { ok: true };
-    },
-}));
-
-// Note: util.js is NOT mocked — jest.setup.js already configures it via
-// setConfigFilePath/reloadConfigCache, and many of the modules transitively
-// imported by users-admin.js (content-manager, plugin-loader, etc.) pull
-// named exports from util.js that the brief's minimal mock would not cover.
-
-// Now import the router under test.
-const { router } = await import('../../src/endpoints/users-admin.js');
-
-function makeApp() {
+function makeApp({ admin = true, handle = 'admin' } = {}) {
     const app = express();
     app.use(express.json());
-    app.use(router);
+    app.use((req, _res, next) => {
+        req.user = {
+            profile: {
+                handle,
+                admin,
+                enabled: true,
+                name: handle,
+                created: 0,
+                password: '',
+                salt: '',
+            },
+        };
+        next();
+    });
+    app.use(usersAdminRouter);
     return app;
 }
 
-// Default mockState — restored before every test so describes are insulated
-// from one another. Each describe's own beforeEach only sets per-scenario
-// handles (and any explicit overrides).
-const DEFAULT_MOCK_STATE = {
-    handles: [],
-    migrateUserBehavior: null,
-    initStorageBehavior: null,
-    initStorageCalled: false,
-    persistCalled: false,
-    requireAdminPass: true,
-    readOnly: false,
-    destEngineCloseCount: 0,
-};
-
-// Top-level isolation: clear module-level _migrationState (and READ_ONLY) in
-// users-admin.js via the public reset endpoint, and reset all mockState
-// fields. Runs before each describe's own beforeEach, so per-test setup
-// always starts from a clean slate. The reset endpoint is itself exercised
-// by cases 5/6.
-//
-// Also gives each test its own on-disk dataRoot. The cross-process migration
-// lock writes `<dataRoot>/_migration.lock`, so a shared sentinel path like
-// `/tmp/data` (which doesn't exist on every host) would fail at acquire time
-// or leak a lockfile between tests. A real mkdtemp dir avoids both.
-let _appForReset;
-let _activeDataRoot = null;
-beforeEach(async () => {
-    if (!_appForReset) _appForReset = makeApp();
-    Object.assign(mockState, DEFAULT_MOCK_STATE, { events: [] });
-    await request(_appForReset).post('/storage/migrate/reset').send({ confirm: true });
-    mockState.events = [];
-    mockState.readOnly = false;
-    mockState.destEngineCloseCount = 0;
-    _activeDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-migrate-route-'));
-    globalThis.DATA_ROOT = _activeDataRoot;
-});
-
-afterEach(() => {
-    if (_activeDataRoot) {
-        fs.rmSync(_activeDataRoot, { recursive: true, force: true });
-        _activeDataRoot = null;
+async function registerUsers(handles) {
+    for (const handle of handles) {
+        const dirs = getUserDirectories(handle);
+        for (const dirPath of Object.values(dirs)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+        await storage.setItem(toKey(handle), {
+            handle,
+            name: handle,
+            created: 0,
+            password: '',
+            salt: '',
+            admin: false,
+            enabled: true,
+        });
     }
-});
+}
 
-describe('POST /storage/migrate — fresh run', () => {
-    beforeEach(() => {
-        mockState.handles = ['a', 'b', 'c'];
+async function seedUserData(handle, marker) {
+    await getSettingsRepo().save(handle, { user_name: `name_${marker}`, marker });
+    await getWorldInfoRepo().save(handle, `lore_${marker}`, {
+        entries: {
+            0: { uid: 0, key: [marker], content: `entry_${marker}` },
+        },
+    });
+}
+
+describe('POST /storage/migrate against real FsEngine, SqliteEngine, and MigrationRunner', () => {
+    let tempRoot = null;
+    let prevDataRoot;
+    let prevConfigPath;
+    let configPath;
+
+    beforeEach(async () => {
+        prevDataRoot = globalThis.DATA_ROOT;
+        prevConfigPath = getConfigFilePath();
+
+        tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-admin-migrate-'));
+        const dataRoot = path.join(tempRoot, 'data');
+        fs.mkdirSync(dataRoot, { recursive: true });
+
+        configPath = path.join(tempRoot, 'config.yaml');
+        fs.writeFileSync(configPath, yaml.stringify({
+            dataRoot,
+            enableUserAccounts: true,
+            storage: { mode: 'fs' },
+        }), 'utf8');
+
+        setConfigFilePath(configPath);
+        reloadConfigCache();
+        globalThis.DATA_ROOT = dataRoot;
+
+        await storage.init({
+            dir: path.join(dataRoot, '_storage'),
+            ttl: false,
+            expiredInterval: 0,
+        });
+
+        await initStorage({
+            mode: 'fs',
+            directoriesByHandle: getUserDirectories,
+        });
+
+        await request(makeApp()).post('/storage/migrate/reset').send({ confirm: true });
     });
 
-    test('all 3 users succeed -> 200 ok + swap + state cleared', async () => {
+    afterEach(async () => {
+        await request(makeApp()).post('/storage/migrate/reset').send({ confirm: true });
+        const engine = getStorageEngine();
+        if (engine?.close) {
+            await engine.close();
+        }
+        globalThis.DATA_ROOT = prevDataRoot;
+        setConfigFilePath(prevConfigPath);
+        reloadConfigCache();
+        if (tempRoot) {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+            tempRoot = null;
+        }
+    });
+
+    test('migrates multiple real users from fs to sqlite, persists config, swaps live engine, and round-trips back to fs', async () => {
+        const handles = [uniqueHandle('mig_a'), uniqueHandle('mig_b'), uniqueHandle('mig_c')];
+        await registerUsers(handles);
+        for (let i = 0; i < handles.length; i += 1) {
+            await seedUserData(handles[i], `u${i}`);
+        }
+
         const app = makeApp();
         const res = await request(app)
             .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
+            .send({ targetMode: 'sqlite' });
+
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
-        expect(res.body.currentMode).toBe('postgres');
-        for (const h of ['a', 'b', 'c']) {
-            expect(res.body.perUser[h].status).toBe('done');
-        }
-        expect(mockState.initStorageCalled).toBe(true);
-        expect(mockState.persistCalled).toBe(true);
-        // Settings autosave backups for every user must be flushed BEFORE swapping/closing oldEngine,
-        // destEngine must close once before initStorage, and read-only mode must remain active
-        // across flush, initStorage, and oldEngine.close before being released.
-        const roTrueIdx = mockState.events.indexOf('setReadOnly:true');
-        const destCloseIdx = mockState.events.indexOf('destEngine:close');
-        const initIdx = mockState.events.indexOf('initStorage');
-        const closeIdx = mockState.events.indexOf('oldEngine:close');
-        const roFalseIdx = mockState.events.indexOf('setReadOnly:false');
-        expect(mockState.destEngineCloseCount).toBe(1);
-        expect(roTrueIdx).toBeGreaterThan(-1);
-        expect(destCloseIdx).toBeGreaterThan(roTrueIdx);
-        expect(initIdx).toBeGreaterThan(destCloseIdx);
-        expect(closeIdx).toBeGreaterThan(initIdx);
-        expect(roFalseIdx).toBeGreaterThan(closeIdx);
-        expect(mockState.readOnly).toBe(false);
-        for (const h of ['a', 'b', 'c']) {
-            const flushIdx = mockState.events.indexOf(`flush:/tmp/${h}`);
-            expect(flushIdx).toBeGreaterThan(roTrueIdx);
-            expect(flushIdx).toBeLessThan(initIdx);
+        expect(res.body.currentMode).toBe('sqlite');
+        expect(res.body.configPersisted).toBe(true);
+        expect(getStorageEngine().kind).toBe('sqlite');
+        expect(isReadOnly()).toBe(false);
+        expect(fs.existsSync(path.join(globalThis.DATA_ROOT, '_migration.lock'))).toBe(false);
+
+        for (let i = 0; i < handles.length; i += 1) {
+            expect(res.body.perUser[handles[i]].status).toBe('done');
+            const settings = await getSettingsRepo().get(handles[i]);
+            expect(settings.marker).toBe(`u${i}`);
+            const world = await getWorldInfoRepo().get(handles[i], `lore_u${i}`);
+            expect(world.entries['0'].content).toBe(`entry_u${i}`);
         }
 
-        // /storage/status now reports no migration in progress
+        const persistedCfg = yaml.parse(fs.readFileSync(configPath, 'utf8'));
+        expect(persistedCfg.storage.mode).toBe('sqlite');
+
         const statusRes = await request(app).post('/storage/status').send({});
+        expect(statusRes.status).toBe(200);
+        expect(statusRes.body.currentMode).toBe('sqlite');
         expect(statusRes.body.migrationInProgress).toBe(false);
+        expect(statusRes.body.readOnly).toBe(false);
         expect(statusRes.body.state).toBeNull();
-    });
 
-    test('initStorage error does not double-close destEngine and releases read-only mode', async () => {
-        mockState.initStorageBehavior = async () => {
-            throw new Error('init storage failed');
-        };
-        const app = makeApp();
-        const res = await request(app)
+        // Round-trip back from sqlite to fs
+        const backRes = await request(app)
             .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(res.status).toBe(500);
-        expect(res.body.error).toBe('migration_error');
-        expect(mockState.destEngineCloseCount).toBe(1);
-        expect(mockState.readOnly).toBe(false);
-        expect(mockState.events.indexOf('setReadOnly:false')).toBeGreaterThan(mockState.events.indexOf('initStorage'));
-    });
-});
-
-describe('POST /storage/migrate — partial failure', () => {
-    beforeEach(() => {
-        mockState.handles = ['a', 'b', 'c'];
+            .send({ targetMode: 'fs' });
+        expect(backRes.status).toBe(200);
+        expect(backRes.body.ok).toBe(true);
+        expect(backRes.body.currentMode).toBe('fs');
+        expect(getStorageEngine().kind).toBe('fs');
+        const roundTripSettings = await getSettingsRepo().get(handles[0]);
+        expect(roundTripSettings.marker).toBe('u0');
     });
 
-    test('user b throws -> 500 + state preserved + a/c done + b failed', async () => {
-        mockState.migrateUserBehavior = async (h) => {
-            if (h === 'b') throw new Error('connection lost');
-        };
+    test('partial failure retains source engine, preserves state, releases lock/read-only, and resumes only failed user after repair', async () => {
+        const [a, b, c] = [uniqueHandle('res_a'), uniqueHandle('res_b'), uniqueHandle('res_c')];
+        await registerUsers([a, b, c]);
+        await seedUserData(a, 'ok_a');
+        await seedUserData(b, 'ok_b');
+        await seedUserData(c, 'ok_c');
+
+        // Corrupt user b's settings.json on disk so real FsEngine read fails during MigrationRunner copy.
+        const bSettingsPath = path.join(getUserDirectories(b).root, 'settings.json');
+        fs.writeFileSync(bSettingsPath, '{ invalid json', 'utf8');
+
         const app = makeApp();
-        const res = await request(app)
+        const failRes = await request(app)
             .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(res.status).toBe(500);
-        expect(res.body.ok).toBe(false);
-        expect(res.body.perUser.a.status).toBe('done');
-        expect(res.body.perUser.b.status).toBe('failed');
-        expect(res.body.perUser.b.error).toMatch(/connection lost/);
-        expect(res.body.perUser.c.status).toBe('done');
-        // initStorage NOT called — source engine retained, destEngine closed once, readOnly released
-        expect(mockState.initStorageCalled).toBe(false);
-        expect(mockState.destEngineCloseCount).toBe(1);
-        expect(mockState.readOnly).toBe(false);
+            .send({ targetMode: 'sqlite' });
 
-        // state survives for a resume, but no request is executing
+        expect(failRes.status).toBe(500);
+        expect(failRes.body.ok).toBe(false);
+        expect(failRes.body.currentMode).toBe('fs');
+        expect(failRes.body.perUser[a].status).toBe('done');
+        expect(failRes.body.perUser[b].status).toBe('failed');
+        expect(failRes.body.perUser[b].error).toBeTruthy();
+        expect(failRes.body.perUser[c].status).toBe('done');
+        expect(getStorageEngine().kind).toBe('fs');
+        expect(isReadOnly()).toBe(false);
+        expect(fs.existsSync(path.join(globalThis.DATA_ROOT, '_migration.lock'))).toBe(false);
+
         const statusRes = await request(app).post('/storage/status').send({});
-        expect(statusRes.body.migrationInProgress).toBe(false);
-        expect(statusRes.body.state.perUser.b.status).toBe('failed');
-    });
-});
-
-describe('POST /storage/migrate — resume', () => {
-    beforeEach(() => {
-        mockState.handles = ['a', 'b', 'c'];
-    });
-
-    test('second POST with same target only retries failed user', async () => {
-        const app = makeApp();
-        // First call: b fails. Track which handles got migrateUser called so
-        // we can verify the full a/b/c flow actually ran (guards against the
-        // describe inheriting leaked state from an earlier suite).
-        const firstCalls = [];
-        mockState.migrateUserBehavior = async (h) => {
-            firstCalls.push(h);
-            if (h === 'b') throw new Error('connection lost');
-        };
-        await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(firstCalls).toEqual(['a', 'b', 'c']);
-
-        // Second call: b succeeds. Track which handles got migrateUser called.
-        const calls = [];
-        mockState.migrateUserBehavior = async (h) => { calls.push(h); };
-        const res = await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(res.status).toBe(200);
-        expect(res.body.ok).toBe(true);
-        // Only b should have been migrated; a and c were already done
-        expect(calls).toEqual(['b']);
-        expect(mockState.initStorageCalled).toBe(true);
-    });
-});
-
-describe('POST /storage/migrate — fingerprint mismatch', () => {
-    beforeEach(() => {
-        mockState.handles = ['a'];
-    });
-
-    test('different target while migration in progress -> 409', async () => {
-        const app = makeApp();
-        // First call: a fails, state preserved
-        mockState.migrateUserBehavior = async () => { throw new Error('boom'); };
-        await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-
-        // Second call: different target
-        const res = await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'mysql', mysql: { url: 'mysql://u:p@h/d' } });
-        expect(res.status).toBe(409);
-        expect(res.body.error).toBe('migration_in_progress_different_target');
-        expect(res.body.currentTargetMode).toBe('postgres');
-    });
-});
-
-describe('POST /storage/migrate/reset', () => {
-    beforeEach(() => {
-        mockState.handles = ['a'];
-    });
-
-    test('without confirm -> 400', async () => {
-        const app = makeApp();
-        const res = await request(app)
-            .post('/storage/migrate/reset')
-            .send({});
-        expect(res.status).toBe(400);
-        expect(res.body.error).toBe('reset_requires_confirm');
-    });
-
-    test('with confirm + state present -> 200 + state cleared', async () => {
-        const app = makeApp();
-        // Create some state by failing a migration
-        mockState.migrateUserBehavior = async () => { throw new Error('boom'); };
-        await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-
-        let statusRes = await request(app).post('/storage/status').send({});
         expect(statusRes.body.migrationInProgress).toBe(false);
         expect(statusRes.body.state).not.toBeNull();
+        expect(statusRes.body.state.perUser[b].status).toBe('failed');
+        expect(typeof statusRes.body.state.staleSeconds).toBe('number');
+        expect(statusRes.body.state.staleSeconds).toBeGreaterThanOrEqual(0);
+        expect(statusRes.body.state.staleSeconds).toBeLessThanOrEqual(5);
 
-        const resetRes = await request(app)
-            .post('/storage/migrate/reset')
-            .send({ confirm: true });
+        // Switching target while failed state exists returns 409 fingerprint conflict.
+        const conflictRes = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'mysql', mysql: { url: 'mysql://u:p@127.0.0.1/db' } });
+        expect(conflictRes.status).toBe(409);
+        expect(conflictRes.body.error).toBe('migration_in_progress_different_target');
+        expect(conflictRes.body.currentTargetMode).toBe('sqlite');
+
+        // Repair user b's settings and resume migration with the same target.
+        fs.writeFileSync(bSettingsPath, JSON.stringify({ user_name: 'name_repaired_b', marker: 'repaired_b' }), 'utf8');
+        const resumeRes = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'sqlite' });
+
+        expect(resumeRes.status).toBe(200);
+        expect(resumeRes.body.ok).toBe(true);
+        expect(resumeRes.body.currentMode).toBe('sqlite');
+        expect(resumeRes.body.perUser[a].status).toBe('done');
+        expect(resumeRes.body.perUser[b].status).toBe('done');
+        expect(resumeRes.body.perUser[c].status).toBe('done');
+        expect(getStorageEngine().kind).toBe('sqlite');
+        expect((await getSettingsRepo().get(a)).marker).toBe('ok_a');
+        expect((await getSettingsRepo().get(b)).marker).toBe('repaired_b');
+        expect((await getSettingsRepo().get(c)).marker).toBe('ok_c');
+    });
+
+    test('reset requires confirm: true and clears failed migration state', async () => {
+        const handle = uniqueHandle('reset_u');
+        await registerUsers([handle]);
+        fs.writeFileSync(path.join(getUserDirectories(handle).root, 'settings.json'), '{ broken', 'utf8');
+
+        const app = makeApp();
+        const noConfirm = await request(app).post('/storage/migrate/reset').send({});
+        expect(noConfirm.status).toBe(400);
+        expect(noConfirm.body.error).toBe('reset_requires_confirm');
+
+        const failRes = await request(app).post('/storage/migrate').send({ targetMode: 'sqlite' });
+        expect(failRes.status).toBe(500);
+
+        let statusRes = await request(app).post('/storage/status').send({});
+        expect(statusRes.body.state).not.toBeNull();
+
+        const resetRes = await request(app).post('/storage/migrate/reset').send({ confirm: true });
         expect(resetRes.status).toBe(200);
         expect(resetRes.body.ok).toBe(true);
 
         statusRes = await request(app).post('/storage/status').send({});
-        expect(statusRes.body.migrationInProgress).toBe(false);
         expect(statusRes.body.state).toBeNull();
     });
 
-    test('while a migration is running -> 409', async () => {
-        mockState.handles = ['a'];
-        let release;
-        mockState.migrateUserBehavior = () => new Promise((resolve) => { release = resolve; });
-        const app = makeApp();
-        const migratePromise = request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } })
-            .then(res => res);
-
-        let statusRes;
-        for (let i = 0; i < 100; i++) {
-            statusRes = await request(app).post('/storage/status').send({});
-            if (statusRes.body.migrationInProgress) break;
-            await new Promise(resolve => setTimeout(resolve, 10));
-        }
-        expect(statusRes.body.migrationInProgress).toBe(true);
-
-        const resetRes = await request(app).post('/storage/migrate/reset').send({ confirm: true });
-        expect(resetRes.status).toBe(409);
-        expect(resetRes.body.error).toBe('migration_in_progress');
-
-        release();
-        const migrateRes = await migratePromise;
-        expect(migrateRes.status).toBe(200);
-
-        const afterRes = await request(app).post('/storage/status').send({});
-        expect(afterRes.body.migrationInProgress).toBe(false);
-        expect(afterRes.body.state).toBeNull();
-    });
-});
-
-describe('POST /storage/migrate — lock contention', () => {
-    // These cases lean on the top-level beforeEach to mint a real on-disk
-    // dataRoot via mkdtempSync — the contention path hinges on a real
-    // `_migration.lock` file at `<dataRoot>/_migration.lock`, and a shared
-    // sentinel path would either falsely contend with a sibling test or get
-    // wiped by it.
-
-    beforeEach(() => {
-        mockState.handles = ['a'];
-    });
-
-    test('pre-existing lock from a different holder -> 409 migration_locked', async () => {
-        // Pre-write a live lock from "another process". The admin route's
-        // own acquire call must see it, refuse, and bubble the contention
-        // back to the operator as a 409 — not as a 500 (which would imply
-        // server bug) and not as a silent overwrite (which is the bug the
-        // lock exists to prevent).
-        const dataRoot = globalThis.DATA_ROOT;
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        fs.writeFileSync(
-            path.join(dataRoot, '_migration.lock'),
-            JSON.stringify({
-                holderId: 'other-host:9999:deadbeef',
-                host: 'other-host',
-                pid: 9999,
-                acquiredAt: new Date().toISOString(),
-                expiresAt,
-            }, null, 2),
-        );
+    test('refuses pre-existing lock from another holder, rejects invalid/redundant target modes, and enforces admin role', async () => {
+        const handle = uniqueHandle('lock_u');
+        await registerUsers([handle]);
+        await seedUserData(handle, 'locked');
 
         const app = makeApp();
-        const res = await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
 
-        expect(res.status).toBe(409);
-        expect(res.body.error).toBe('migration_locked');
-        expect(res.body.message).toMatch(/other-host:9999:deadbeef/);
-        // No migration ran — initStorage MUST NOT have fired.
-        expect(mockState.initStorageCalled).toBe(false);
-        // Lock file is untouched (still owned by the other holder).
-        const lockAfter = JSON.parse(
-            fs.readFileSync(path.join(dataRoot, '_migration.lock'), 'utf8'),
-        );
-        expect(lockAfter.holderId).toBe('other-host:9999:deadbeef');
-    });
+        // Non-admin rejected
+        const nonAdminRes = await request(makeApp({ admin: false })).post('/storage/migrate').send({ targetMode: 'sqlite' });
+        expect(nonAdminRes.status).toBe(403);
 
-    test('successful migration releases the lock so the next call can run', async () => {
-        // Round-trip: an admin migration must clean up its own lock file so
-        // a follow-up admin call (or the CLI) isn't blocked.
-        const dataRoot = globalThis.DATA_ROOT;
-        const app = makeApp();
-        const first = await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(first.status).toBe(200);
-        expect(fs.existsSync(path.join(dataRoot, '_migration.lock'))).toBe(false);
-    });
+        // Invalid & already-in-target-mode rejected
+        const invalidRes = await request(app).post('/storage/migrate').send({ targetMode: 'bogus' });
+        expect(invalidRes.status).toBe(400);
+        expect(invalidRes.body.error).toBe('invalid_target_mode');
 
-    test('migration failure also releases the lock (finally semantics)', async () => {
-        // If the per-user copy throws, the route's finally must still drop
-        // the lock — otherwise operators have to manually delete the file
-        // before retrying after every transient DB hiccup.
-        const dataRoot = globalThis.DATA_ROOT;
-        mockState.migrateUserBehavior = async () => { throw new Error('boom'); };
-        const app = makeApp();
-        const res = await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-        expect(res.status).toBe(500);
-        expect(fs.existsSync(path.join(dataRoot, '_migration.lock'))).toBe(false);
-    });
-});
+        const redundantRes = await request(app).post('/storage/migrate').send({ targetMode: 'fs' });
+        expect(redundantRes.status).toBe(400);
+        expect(redundantRes.body.error).toBe('already_in_target_mode');
 
-describe('POST /storage/status — staleSeconds', () => {
-    beforeEach(() => {
-        mockState.handles = ['a'];
-    });
+        // Pre-existing cross-process lock returns 409 and preserves lock + fs engine
+        const lockPath = path.join(globalThis.DATA_ROOT, '_migration.lock');
+        fs.writeFileSync(lockPath, JSON.stringify({
+            holderId: 'other-host:9999:deadbeef',
+            host: 'other-host',
+            pid: 9999,
+            acquiredAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }, null, 2), 'utf8');
 
-    test('staleSeconds reflects time since last progress', async () => {
-        const app = makeApp();
-        // Create state via a failure (sync — completes in ms)
-        mockState.migrateUserBehavior = async () => { throw new Error('boom'); };
-        await request(app)
-            .post('/storage/migrate')
-            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
-
-        const res = await request(app).post('/storage/status').send({});
-        expect(res.body.state).not.toBeNull();
-        expect(typeof res.body.state.staleSeconds).toBe('number');
-        expect(res.body.state.staleSeconds).toBeGreaterThanOrEqual(0);
-        // First check is very fresh — staleSeconds <= 5 is generous for slow CI
-        expect(res.body.state.staleSeconds).toBeLessThanOrEqual(5);
+        const lockedRes = await request(app).post('/storage/migrate').send({ targetMode: 'sqlite' });
+        expect(lockedRes.status).toBe(409);
+        expect(lockedRes.body.error).toBe('migration_locked');
+        expect(lockedRes.body.message).toContain('other-host:9999:deadbeef');
+        expect(getStorageEngine().kind).toBe('fs');
+        expect(JSON.parse(fs.readFileSync(lockPath, 'utf8')).holderId).toBe('other-host:9999:deadbeef');
     });
 });

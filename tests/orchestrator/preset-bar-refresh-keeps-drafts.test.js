@@ -24,43 +24,6 @@ globalThis.Luker = {
     }),
 };
 
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
-});
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class {},
-    POPUP_TYPE: { TEXT: 0, CONFIRM: 1 },
-    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: -1 },
-    callGenericPopup: async () => null,
-}));
-jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({ getContext: () => globalThis.Luker.getContext() }));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettings,
-    getContext: () => ({}),
-    writeExtensionField: async () => true,
-    UNSET_VALUE: Symbol('unset'),
-}));
-jest.unstable_mockModule('../../public/script.js', () => ({
-    saveSettingsDebounced: () => {},
-    saveSettings: async () => ({ ok: true, status: 'saved' }),
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    world_info_position: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
-    wi_anchor_position: {},
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({ escapeHtml: (s) => String(s) }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    translate: (s) => String(s ?? ''),
-    getCurrentLocale: () => 'en',
-    t: (s) => String(s ?? ''),
-    createScopedI18n: () => ({ i18n: (s) => String(s ?? ''), i18nFormat: (s) => String(s ?? '') }),
-}));
-
 let editorState;
 let createDrafts;
 let createSetupView;

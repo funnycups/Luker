@@ -15,7 +15,7 @@
 // The AI could not distinguish origins, and could bake a card-bound name
 // into a profile intended for the global library.
 
-import { describe, test, expect, jest, beforeAll, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterEach } from '@jest/globals';
 
 // defaults.js (transitively imported by agent-resolution's siblings)
 // reads `Luker.getContext().constants.{promptRoles,wiPosition}` at
@@ -23,10 +23,15 @@ import { describe, test, expect, jest, beforeAll, afterEach } from '@jest/global
 // `Luker.getContext().extensionSettings` at import time. Provide a
 // mutable ctx so the test can install card presets by swapping the
 // characters array.
+let connectionProfiles = [];
+
 const ctxState = {
     characters: [],
     characterId: 0,
     extensionSettings: { orchestrator: {} },
+    connectionProfiles: {
+        list: () => connectionProfiles.map(p => ({ ...p })),
+    },
     character: {
         presets: {
             list: (character) => {
@@ -62,20 +67,6 @@ const ctxState = {
 globalThis.Luker = {
     getContext: () => ctxState,
 };
-
-jest.unstable_mockModule('../../public/lib.js', () => ({
-    Popper: {},
-    lodash: {},
-    yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
-    default: {},
-}));
-
-// Sever the connection-manager gate — profile-resolver.js pulls textgen-models.js
-// → document.addEventListener under Node, which fails without JSDOM.
-let connectionProfiles = [];
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => connectionProfiles.map(p => ({ ...p })),
-}));
 
 let buildAgentApiRoutingPromptData;
 let buildAgentPromptPresetRoutingPromptData;

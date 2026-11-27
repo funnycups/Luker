@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test, jest } from '@jest/globals';
 
-jest.unstable_mockModule('../public/scripts/extensions.js', () => ({
-    extension_settings: {},
-}));
-
 import {
     WIRE_PROTOCOLS,
     normalizeFinishReason,

@@ -1,11 +1,5 @@
-import { jest } from '@jest/globals';
-import lodash from 'lodash';
-
 // Pure normalization contract. Application approve/rollback is exercised by
 // iterstudio/98 against the real mounted target and persisted card/settings.
-jest.unstable_mockModule('../../public/lib.js', () => ({ lodash }));
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({ getChatCompletionConnectionProfiles: () => [] }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({ addLocaleData: () => {}, translate: s => s, t: s => s }));
 globalThis.Luker = { getContext: () => ({ constants: { promptRoles: {}, wiPosition: {} } }) };
 const { sanitizePresetMap } = await import('../../public/scripts/extensions/orchestrator/editable-spec.js');
 
