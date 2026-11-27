@@ -37,14 +37,20 @@ function normalizeClientRelativePath(rawPath) {
     } catch {
         return '';
     }
+    if (!decoded || decoded.includes('\0') || decoded.includes('\\') || decoded.startsWith('//')) {
+        return '';
+    }
     return decoded.replace(/^\/+/, '');
 }
 
 async function resolveRealDir(dirPath) {
     try {
         return await fs.promises.realpath(dirPath);
-    } catch {
-        return path.resolve(dirPath);
+    } catch (err) {
+        if (err?.code === 'ENOENT') {
+            return path.resolve(dirPath);
+        }
+        throw err;
     }
 }
 
@@ -241,7 +247,12 @@ router.post('/copy', async (request, response) => {
         const createdDestPaths = [];
         const cleanupCreated = async () => {
             if (createdDestPaths.length === 0) return;
-            await Promise.allSettled(createdDestPaths.splice(0).map(p => fs.promises.unlink(p)));
+            const results = await Promise.allSettled(createdDestPaths.splice(0).map(p => fs.promises.unlink(p)));
+            for (const r of results) {
+                if (r.status === 'rejected' && r.reason?.code !== 'ENOENT') {
+                    console.error('[images/copy] Failed to remove rolled-back attachment:', r.reason);
+                }
+            }
         };
         try {
             for (const rawPath of uniquePaths) {
@@ -276,6 +287,8 @@ router.post('/copy', async (request, response) => {
                     await cleanupCreated();
                     return response.status(400).json({ error: `Symlink target escapes user images directory: ${rawPath}` });
                 }
+                const resolvedInUserImages = path.resolve(userImagesDir, path.relative(realUserImagesDir, realSource));
+                assertTransientMediaRead(request, clientRelativePath(userRoot, resolvedInUserImages));
 
                 const ext = path.extname(realSource).toLowerCase().replace(/^\./, '');
                 const safeExt = MEDIA_EXTENSIONS.includes(ext) ? ext : 'png';
@@ -314,6 +327,9 @@ router.post('/delete-batch', async (request, response) => {
         const deleted = [];
         const missing = [];
         const failed = [];
+        const validatedTargets = [];
+        // Validate every path in the batch before unlinking anything so an HTTP 400
+        // rejection never leaves partial deletions behind.
         for (const rawPath of uniquePaths) {
             const rel = normalizeClientRelativePath(rawPath);
             if (!rel) {
@@ -342,6 +358,10 @@ router.post('/delete-batch', async (request, response) => {
             if (!isPathUnderParent(realAttachmentsDir, realTarget)) {
                 return response.status(400).json({ error: `Path escapes ${AI_ATTACHMENTS_DIRECTORY}: ${rawPath}` });
             }
+            validatedTargets.push({ rawPath, realTarget });
+        }
+
+        for (const { rawPath, realTarget } of validatedTargets) {
             try {
                 await fs.promises.unlink(realTarget);
                 deleted.push(rawPath);

@@ -148,6 +148,61 @@ describe('POST /api/images internal AI attachments endpoints', () => {
                 body: JSON.stringify({ paths: ['/user/images/../../etc/passwd'] }),
             });
             expect(copyEscape.status).toBe(400);
+
+            // delete-batch validates every path before unlinking anything
+            const validAttachment = path.join(userImages, '_ai_attachments', 'keep-me.png');
+            fs.mkdirSync(path.dirname(validAttachment), { recursive: true });
+            fs.writeFileSync(validAttachment, 'png');
+            const mixedDel = await fetch(`${srv.baseUrl}/api/images/delete-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    paths: [
+                        '/user/images/_ai_attachments/keep-me.png',
+                        '/user/images/_references/keep.png',
+                    ],
+                }),
+            });
+            expect(mixedDel.status).toBe(400);
+            expect(fs.existsSync(validAttachment)).toBe(true);
+        } finally {
+            await srv.close();
+        }
+    });
+
+    testWithResources('copy refuses symlinks inside user images pointing into transient _sandbox_tmp storage', async (scope) => {
+        const dir = await scope.directory('ai-att-symlink-transient');
+        const { app, userImages } = createTestApp(dir.path);
+        const srv = await startServer(app);
+        try {
+            const transientSessionDir = path.join(userImages, '_sandbox_tmp', 'other-session');
+            fs.mkdirSync(transientSessionDir, { recursive: true });
+            const sessionSecret = path.join(transientSessionDir, 'session.json');
+            const sessionImage = path.join(transientSessionDir, 'secret.png');
+            fs.writeFileSync(sessionSecret, '{"token":"secret"}');
+            fs.writeFileSync(sessionImage, 'transient-png-bytes');
+
+            const linkDir = path.join(userImages, 'links');
+            fs.mkdirSync(linkDir, { recursive: true });
+            fs.symlinkSync(sessionSecret, path.join(linkDir, 'meta-link.png'));
+            fs.symlinkSync(sessionImage, path.join(linkDir, 'img-link.png'));
+
+            const metaRes = await fetch(`${srv.baseUrl}/api/images/copy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths: ['/user/images/links/meta-link.png'] }),
+            });
+            expect(metaRes.status).toBe(403);
+
+            const imgRes = await fetch(`${srv.baseUrl}/api/images/copy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths: ['/user/images/links/img-link.png'] }),
+            });
+            expect(imgRes.status).toBe(403);
+
+            const attachmentsDir = path.join(userImages, AI_ATTACHMENTS_DIRECTORY);
+            expect(fs.existsSync(attachmentsDir) ? fs.readdirSync(attachmentsDir) : []).toEqual([]);
         } finally {
             await srv.close();
         }
