@@ -26,23 +26,20 @@ function activeChatId(ctx) {
     return id ? String(id) : '';
 }
 
-function truncateFieldMap(record, maxLen = 300) {
+function serializeFieldMap(record) {
     if (!record || typeof record !== 'object') return {};
     const out = {};
     for (const [k, v] of Object.entries(record)) {
         if (v === null || v === undefined) continue;
-        let text;
         if (typeof v === 'string') {
-            text = v;
+            out[k] = v;
         } else {
             try {
-                text = JSON.stringify(v);
+                out[k] = JSON.stringify(v);
             } catch {
-                text = String(v);
+                out[k] = String(v);
             }
         }
-        if (typeof text !== 'string') continue;
-        out[k] = text.length > maxLen ? text.slice(0, maxLen) : text; // cap-ok: per-field value preview cap
     }
     return out;
 }
@@ -211,16 +208,16 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                             description: 'Default summary. Use search/nodes to find specific memory entries or schema to inspect memory types and compression rules.',
                         },
                         query: { type: 'string', description: 'Keyword to match against node id, type, title, or fields (used with search/nodes).' },
-                        type: { type: 'string', description: 'Optional node type id filter (used with search, nodes, or schema; with schema returns full untruncated instructions).' },
+                        type: { type: 'string', description: 'Optional node type id filter (used with search, nodes, or schema).' },
                         include_archived: { type: 'boolean', description: 'Include archived nodes when searching/listing (default true).' },
-                        limit: { type: 'integer', description: 'Max nodes to return (1-50, default 20).' },
+                        limit: { type: 'integer', description: 'Optional max number of nodes to return.' },
                     },
                     additionalProperties: false,
                 },
             },
         }],
         readers: {
-            wb_read_memory: async ({ part = 'summary', query = '', type = '', include_archived = true, limit = 20 } = {}, ctx) => {
+            wb_read_memory: async ({ part = 'summary', query = '', type = '', include_archived = true, limit = null } = {}, ctx) => {
                 const c = ctx || getCtx();
                 const mg = c?.getExtensionApi?.('memory-graph');
                 if (!mg) return { error: i18n('No memory graph') };
@@ -241,34 +238,18 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                     const filtered = typeNeedle
                         ? schemaList.filter(t => String(t?.id || '').toLowerCase() === typeNeedle)
                         : schemaList;
-                    const full = Boolean(typeNeedle);
                     return {
                         scope: schemaInfo?.scope || 'global',
                         types: filtered.map(t => ({
                             id: t?.id,
                             label: t?.label || t?.name || t?.id,
-                            extractHint: full
-                                ? String(t?.extractHint || '')
-                                : String(t?.extractHint || '').slice(0, 300), // cap-ok: per-type extract hint preview cap when listing all types
-                            extractionInstructions: full
-                                ? String(t?.extractionInstructions || '')
-                                : String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: per-type extraction instructions preview cap when listing all types
+                            extractHint: String(t?.extractHint || ''),
+                            extractionInstructions: String(t?.extractionInstructions || ''),
                             alwaysInject: Boolean(t?.alwaysInject ?? t?.persistent),
                             tableColumns: Array.isArray(t?.tableColumns) ? t.tableColumns.filter(Boolean).map(String) : [],
-                            columnHints: full
-                                ? (t?.columnHints && typeof t.columnHints === 'object' ? { ...t.columnHints } : {})
-                                : truncateFieldMap(t?.columnHints, 200),
+                            columnHints: t?.columnHints && typeof t.columnHints === 'object' ? { ...t.columnHints } : {},
                             compression: t?.compression && typeof t.compression === 'object'
-                                ? {
-                                    ...t.compression,
-                                    ...(typeof t.compression.summarizeInstruction === 'string'
-                                        ? {
-                                            summarizeInstruction: full
-                                                ? t.compression.summarizeInstruction
-                                                : t.compression.summarizeInstruction.slice(0, 240), // cap-ok: summarize instruction preview cap when listing all types
-                                        }
-                                        : {}),
-                                }
+                                ? { ...t.compression }
                                 : null,
                         })),
                     };
@@ -282,7 +263,9 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                     const allNodes = read?.listNodes?.({ activeOnly: !include_archived }) || [];
                     const needle = String(query || '').trim().toLowerCase();
                     const typeNeedle = String(type || '').trim().toLowerCase();
-                    const maxItems = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20))); // cap-ok: cap memory nodes returned per call
+                    const maxItems = (limit !== null && limit !== undefined && limit !== '' && typeof limit !== 'boolean' && Number.isFinite(Number(limit)) && Number(limit) > 0)
+                        ? Math.floor(Number(limit))
+                        : Infinity;
                     const matched = allNodes.filter(node => {
                         if (!node || typeof node !== 'object') return false;
                         if (typeNeedle && String(node.type || '').toLowerCase() !== typeNeedle) return false;
@@ -301,20 +284,21 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                     });
                     // Sort descending by floor range end / node seq watermark so newest nodes appear first.
                     matched.sort((a, b) => nodeRecencyKey(b) - nodeRecencyKey(a));
+                    const picked = Number.isFinite(maxItems) ? matched.slice(0, maxItems) : matched;
                     return {
                         totalInGraph: allNodes.length,
                         matched: matched.length,
-                        nodes: matched.slice(0, maxItems).map(n => {
-                            const fields = truncateFieldMap(n.fields, 300);
-                            const rawPreview = n?.fields?.summary ?? n?.fields?.note ?? '';
-                            const summaryPreview = (typeof rawPreview === 'string' ? rawPreview : String(rawPreview)).slice(0, 300); // cap-ok: node summary preview cap
+                        nodes: picked.map(n => {
+                            const fields = serializeFieldMap(n.fields);
+                            const rawSummary = n?.fields?.summary ?? n?.fields?.note ?? '';
+                            const summary = typeof rawSummary === 'string' ? rawSummary : String(rawSummary);
                             return {
                                 id: n.id,
                                 type: n.type,
                                 level: n.level || 'episodic',
                                 title: n.title || '',
                                 fields,
-                                summaryPreview,
+                                summary,
                                 seqTo: (Number.isFinite(n.seq_to) && n.seq_to >= 0) ? n.seq_to : null,
                                 floorRange: n.floor_range || null,
                                 archived: Boolean(n.archived),

@@ -11,9 +11,6 @@ import {
     normalizeImageAttachments,
 } from '../../lib/multimodal-messages.js';
 
-export const MAX_ROUNDS = 10; // cap-ok: 只读问答工具循环轮数上限，最后一轮引导调用 wb_answer 收尾
-const MAX_TOOL_CHARS = 16000; // cap-ok: 单次工具返回字符上限，防止单条大读取挤爆模型上下文窗口
-
 const fn = (name, description, properties = {}, required = []) => ({
     type: 'function',
     function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } },
@@ -44,29 +41,29 @@ export function askTools(sources = {}, extraPluginTools = []) {
     const list = [];
     if (on('inspector')) {
         list.push(fn('wb_list_requests', 'List recent model/image/embedding requests (newest first) from Luker\'s request inspector: id, time, guessed source, model, status, duration, tokens. Call before wb_read_request.', {
-            limit: { type: 'integer', description: 'How many (1-60, default 20).' },
+            limit: { type: 'integer', description: 'Optional max number of newest requests to return.' },
             only_errors: { type: 'boolean', description: 'Only return failed requests.' },
         }));
-        list.push(fn('wb_read_request', 'Read one request in detail: status, error, usage, messages, reply, optional reasoning and tools. For large main-chat prompts, pass tail_messages (e.g. 6) or message_index to inspect specific messages without truncation.', {
+        list.push(fn('wb_read_request', 'Read one request in detail: status, error, usage, messages, reply, optional reasoning and tools. For large main-chat prompts, pass tail_messages or message_index to narrow the response.', {
             id: { type: 'string', description: 'Request id from overview or wb_list_requests.' },
             part: { type: 'string', enum: ['messages', 'reply', 'both'], description: 'Default both.' },
-            tail_messages: { type: 'integer', description: 'Only return the last N messages so recent context is not clipped.' },
-            message_index: { type: 'integer', description: 'Read one specific 0-based message index in detail (ignores tail_messages).' },
-            include_reasoning: { type: 'boolean', description: 'Include model reasoning/thinking excerpt if recorded.' },
-            include_tools: { type: 'boolean', description: 'Include summary of tool definitions sent with this request.' },
+            tail_messages: { type: 'integer', description: 'Only return the last N messages.' },
+            message_index: { type: 'integer', description: 'Read one specific 0-based message index (ignores tail_messages).' },
+            include_reasoning: { type: 'boolean', description: 'Include model reasoning/thinking if recorded.' },
+            include_tools: { type: 'boolean', description: 'Include tool definitions sent with this request.' },
         }, ['id']));
     }
     if (on('frontLogs')) {
         list.push(fn('wb_read_frontend_logs', 'Read recent browser console logs captured by Luker.', {
             level: { type: 'string', enum: ['all', 'warn', 'error'] },
             search: { type: 'string', description: 'Only lines containing this text.' },
-            limit: { type: 'integer', description: '1-200, default 60.' },
+            limit: { type: 'integer', description: 'Optional max number of newest matching log lines to return.' },
         }));
     }
     if (on('serverLogs')) {
         list.push(fn('wb_read_server_logs', 'Read recent server console logs (may be unavailable without admin rights in multi-user mode).', {
             search: { type: 'string' },
-            limit: { type: 'integer', description: '1-200, default 60.' },
+            limit: { type: 'integer', description: 'Optional max number of newest matching log lines to return.' },
         }));
     }
     if (on('content')) {
@@ -83,23 +80,24 @@ export function askTools(sources = {}, extraPluginTools = []) {
             book: { type: 'string', description: 'Optional world book name filter.' },
             only_enabled: { type: 'boolean', description: 'Only include enabled entries.' },
             offset: { type: 'integer', description: 'Skip the first N matched entries for pagination.' },
+            limit: { type: 'integer', description: 'Optional max number of matched entries to return.' },
         }));
         list.push(fn('wb_read_world_info_trace', 'Read Luker\'s World Info activation trace for the current chat: which entries activated or stayed inactive in the latest scan, matched keywords, scan depth, and activation reason.', {
             search: { type: 'string', description: 'Filter by world book name, entry title, keyword, or uid.' },
             only_activated: { type: 'boolean', description: 'Only return entries activated in the latest scan.' },
-            limit: { type: 'integer', description: 'Max entries to return (1-80, default 40).' },
+            limit: { type: 'integer', description: 'Optional max number of entries to return.' },
         }));
         list.push(fn('wb_read_preset', 'Read the current chat-completion preset: prompt entries in order, full generation/reasoning/function-calling settings, and preset-bound world books.', {
-            entry: { type: 'string', description: 'Name or identifier (supports fuzzy match) of one entry to read in full. Empty = list all entries with previews and settings.' },
+            entry: { type: 'string', description: 'Name or identifier (supports fuzzy match) of one entry to read in full. Empty = list all entries metadata and settings.' },
         }));
         list.push(fn('wb_read_last_prompt', 'Token breakdown of the last prompt Luker built (preset / character / world info / memory graph / other injections / chat).'));
         list.push(fn('wb_read_variables', 'Read current chat local variables, optional global variables, and recent per-floor variable operations (extra.var_ops from Luker\'s Variable Op Log).', {
             search: { type: 'string', description: 'Filter variable names or op keys containing this text.' },
             include_global: { type: 'boolean', description: 'Also include global variables (default false).' },
-            op_floors: { type: 'integer', description: 'How many recent floors with variable ops to inspect (1-30, default 10).' },
+            op_floors: { type: 'integer', description: 'Optional max number of recent floors with variable ops to inspect.' },
         }));
-        list.push(fn('wb_read_regex', 'Read regex scripts active in Luker (global, character-scoped, preset-scoped, and plugin-registered regex providers) to diagnose swallowed text, broken formatting, or status bar issues. Pass id to read one script\'s full untruncated findRegex and replaceString.', {
-            id: { type: 'string', description: 'Optional script id to read full untruncated findRegex and replaceString (ignores only_enabled).' },
+        list.push(fn('wb_read_regex', 'Read regex scripts active in Luker (global, character-scoped, preset-scoped, and plugin-registered regex providers) to diagnose swallowed text, broken formatting, or status bar issues.', {
+            id: { type: 'string', description: 'Optional script id to read one specific script (ignores only_enabled).' },
             scope: { type: 'string', enum: ['all', 'global', 'character', 'preset', 'plugin'], description: 'Default all.' },
             search: { type: 'string', description: 'Filter by script name or regex pattern.' },
             only_enabled: { type: 'boolean', description: 'Default true (ignored when id is set).' },
@@ -162,18 +160,16 @@ export function askUserMessage(question, overview) {
     return [`问题：${question}`, '', '<概况>', JSON.stringify(overview, null, 1), '</概况>'].join('\n');
 }
 
-export function clip(value, max = MAX_TOOL_CHARS) {
-    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 1);
-    return text.length > max ? `${text.slice(0, max)}\n…（已截断，共 ${text.length} 字）` : text;
+function serializeToolResult(value) {
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 1);
 }
 
 /**
  * 从已保存的问答记录构造多轮对话历史，跳过失败或空回答回合，
  * 避免向模型重放空白 assistant 消息；若历史回答关联了请求 ID 则附简短索引便于追问。
  * @param {Array<{ role: string, text?: string, answer?: string, error?: string, requestIds?: string[] }>} turns
- * @param {number} [maxTurns]
  */
-export function buildAskHistory(turns, maxTurns = 10) {
+export function buildAskHistory(turns) {
     const out = [];
     const list = Array.isArray(turns) ? turns : [];
     for (let i = 0; i < list.length; i++) {
@@ -203,17 +199,11 @@ export function buildAskHistory(turns, maxTurns = 10) {
             out.push({ role: 'assistant', content });
         }
     }
-    return out.slice(-maxTurns);
-}
-
-function isNoToolCallsError(err) {
-    if (!err) return false;
-    if (err.code === 'no_tool_calls') return true;
-    return /did not contain any matching tool calls/i.test(String(err.message || err));
+    return out;
 }
 
 /**
- * 执行一次完整的「问问」多轮工具调用直到产出最终答案或到达轮数上限。
+ * 执行一次完整的「问问」多轮工具调用，直到模型调用 wb_answer、直接输出文本或用户中止。
  * @param {{ question, overview, readers: Record<string, (args) => Promise<any>>, request(messages, tools) => Promise<{text, calls, reasoning?, reasoningBlocks?, reasoningDetails?}>,
  *           sources?, extraTools?: any[], history?: object[], onStep?(step), signal? }} opts
  * @returns {Promise<{ answer: string, suggest: string, fixPrompt: string, requestIds: string[], reads: { name, args, chars }[], sent: number }>}
@@ -249,42 +239,23 @@ export async function runAsk({
     const imageCache = new Map();
     const reads = [];
     let sent = messages.reduce((n, m) => n + extractTextContent(m.content).length, 0);
-    let lastAssistantText = '';
-    for (let round = 0; round < MAX_ROUNDS; round++) {
+    while (true) {
         if (signal?.aborted) throw new Error(i18n('Stopped'));
-        const lastRound = round === MAX_ROUNDS - 1;
-        const offered = lastRound ? tools.filter(t => t.function.name === 'wb_answer') : tools;
-        let resp;
-        try {
-            const outbound = hasAttachments
-                ? await hydrateMessagesForLlm(messages, {
-                    context,
-                    loadDataUrl,
-                    cache: imageCache,
-                    signal,
-                })
-                : messages;
-            resp = await request(outbound, offered);
-        } catch (err) {
-            if (lastRound && !signal?.aborted && isNoToolCallsError(err)) {
-                return {
-                    answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
-                    suggest: '',
-                    fixPrompt: '',
-                    requestIds: [],
-                    reads,
-                    sent,
-                };
-            }
-            throw err;
-        }
+        const outbound = hasAttachments
+            ? await hydrateMessagesForLlm(messages, {
+                context,
+                loadDataUrl,
+                cache: imageCache,
+                signal,
+            })
+            : messages;
+        const resp = await request(outbound, tools);
         if (signal?.aborted) throw new Error(i18n('Stopped'));
         const text = String(resp?.text || '');
-        if (text.trim()) lastAssistantText = text.trim();
         const calls = Array.isArray(resp?.calls) ? resp.calls : [];
         const answer = calls.find(c => c.name === 'wb_answer');
         const hasOtherCalls = calls.some(c => c.name !== 'wb_answer');
-        if (answer && (lastRound || !hasOtherCalls)) {
+        if (answer && !hasOtherCalls) {
             return {
                 answer: String(answer.args?.text || text || '').trim(),
                 suggest: String(answer.args?.suggest || ''),
@@ -298,19 +269,7 @@ export async function runAsk({
             // 模型直接以纯文本作答。
             return { answer: text || i18n('(The AI gave no answer)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
         }
-        if (lastRound) {
-            // 末轮仍未调用 wb_answer，不再执行新读取，优雅降级返回已有文本或超轮数提示。
-            return {
-                answer: text.trim() || lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
-                suggest: '',
-                fixPrompt: '',
-                requestIds: [],
-                reads,
-                sent,
-            };
-        }
-        // 非末轮若同轮混调 wb_answer 与其他调用，保留原序全部写入 tool_calls（防止删掉首位调用破坏 Gemini 签名位置）；
-        // 非混调场景同样按原序保留，不对读取与禁用调用重新排序。
+        // 同轮混调 wb_answer 与其他调用时保留原序全部写入 tool_calls（防止删掉首位调用破坏签名位置）。
         const executedCalls = answer ? calls : calls.filter(c => c.name !== 'wb_answer');
         if (!executedCalls.length) {
             return { answer: text || i18n('(The AI gave no answer)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
@@ -354,14 +313,13 @@ export async function runAsk({
             let result;
             try { result = await readers[call.name](call.args || {}); } catch (err) { result = { error: String(err?.message || err) }; }
             if (signal?.aborted) throw new Error(i18n('Stopped'));
-            const content = clip(result);
+            const content = serializeToolResult(result);
             sent += content.length;
             reads.push({ name: call.name, args: call.args || {}, chars: content.length });
             onStep?.({ name: call.name, args: call.args || {} });
             messages.push({ role: 'tool', tool_call_id: call.id, content });
         }
     }
-    return { answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
 }
 
 const READ_LABEL_KEYS = {

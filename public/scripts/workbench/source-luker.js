@@ -470,29 +470,34 @@ export async function inspectorDetail(id) {
 }
 
 /** Request list, newest first, with a guessed source. */
-export async function listRequests({ limit = 60 } = {}) {
-    const list = (await inspectorList()).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit); // cap-ok: default page limit matching wb_list_requests schema when caller omits limit
+export async function listRequests({ limit = null } = {}) {
+    const sorted = (await inspectorList()).sort((a, b) => b.timestamp - a.timestamp);
+    const list = isExplicitFiniteNumber(limit) && Number(limit) > 0
+        ? sorted.slice(0, Math.floor(Number(limit)))
+        : sorted;
     return list.map(e => ({ ...e, attr: attribute(e) }));
 }
 
-export function frontendLogs({ limit = 60, level = 'all', search = '' } = {}) {
+export function frontendLogs({ limit = null, level = 'all', search = '' } = {}) {
     const levels = level === 'error' ? ['error'] : level === 'warn' ? ['warn', 'error'] : null;
     const needle = String(search || '').toLowerCase();
-    const all = getFrontendLogsSnapshot({ limit: 3000 }).entries || []; // cap-ok: snapshot read upper bound before filtering; output rows are bounded to 200 below
-    return all
+    const all = getFrontendLogsSnapshot({ limit: Infinity }).entries || [];
+    const filtered = all
         .filter(e => !levels || levels.includes(String(e.level)))
-        .filter(e => !needle || String(e.message || '').toLowerCase().includes(needle))
-        .slice(-Math.max(1, Math.min(200, limit))) // cap-ok: matches Ask tool schema limit to keep response within LLM context window
-        .map(e => ({
-            time: new Date(e.timestamp).toLocaleTimeString('zh-CN', { hour12: false }),
-            level: e.level,
-            source: e.source,
-            message: String(e.message || '').slice(0, 800), // cap-ok: per-log-line bound so one verbose stack dump does not consume the MAX_TOOL_CHARS budget
-        }));
+        .filter(e => !needle || String(e.message || '').toLowerCase().includes(needle));
+    const picked = isExplicitFiniteNumber(limit) && Number(limit) > 0
+        ? filtered.slice(-Math.floor(Number(limit)))
+        : filtered;
+    return picked.map(e => ({
+        time: new Date(e.timestamp).toLocaleTimeString('zh-CN', { hour12: false }),
+        level: e.level,
+        source: e.source,
+        message: String(e.message || ''),
+    }));
 }
 
 export function frontendLogCount() {
-    return getFrontendLogsSnapshot({ limit: 3000 }).entries?.length ?? null; // cap-ok: matches frontendLogs snapshot read upper bound
+    return getFrontendLogsSnapshot({ limit: Infinity }).entries?.length ?? null;
 }
 
 /** Whether Luker's frontend debug logging switch is on. */
@@ -515,12 +520,16 @@ export function enableDebugLogging() {
     return true;
 }
 
-export async function serverLogs({ limit = 60, search = '' } = {}) {
+export async function serverLogs({ limit = null, search = '' } = {}) {
     const ctx = getContext();
+    const payload = { searchTerm: String(search || '') };
+    if (isExplicitFiniteNumber(limit) && Number(limit) > 0) {
+        payload.limit = Math.floor(Number(limit));
+    }
     const res = await fetch('/api/users/logs/get', {
         method: 'POST',
         headers: ctx?.getRequestHeaders?.() || {},
-        body: JSON.stringify({ limit: Math.max(1, Math.min(200, limit)), searchTerm: String(search || '') }), // cap-ok: matches Ask tool schema limit to keep response within LLM context window
+        body: JSON.stringify(payload),
     });
     if (res.status === 403 || res.status === 401) throw new SourceError('logs', i18n('Server logs need admin rights'));
     if (!res.ok) throw new SourceError('logs', i18nFormat('Server logs unreadable (HTTP ${0})', res.status));
@@ -529,7 +538,7 @@ export async function serverLogs({ limit = 60, search = '' } = {}) {
     return entries.map(e => ({
         time: new Date(Number(e.timestamp) || Date.now()).toLocaleTimeString('zh-CN', { hour12: false }),
         level: e.level,
-        message: String(e.message || '').slice(0, 800), // cap-ok: per-log-line bound so one verbose server log does not consume the MAX_TOOL_CHARS budget
+        message: String(e.message || ''),
     }));
 }
 
@@ -560,7 +569,7 @@ function chatMessages({ from, to, floors, search = '' } = {}) {
         return {
             floor: i,
             who: m.is_user ? '用户' : m.is_system ? '系统' : (m.name || i18n('Character')),
-            text: String(m.mes || '').slice(0, 4000), // cap-ok: 单楼层文本上限，避免单条超长回复占满单次工具预算
+            text: String(m.mes || ''),
             model: m.extra?.model || '',
             ...(swipesCount > 1 ? { swipes: swipesCount, swipeId: Number(m.swipe_id || 0) } : {}),
             ...(varOpsCount > 0 ? { varOpsCount } : {}),
@@ -583,7 +592,7 @@ function chatMessages({ from, to, floors, search = '' } = {}) {
             total: chat.length,
             search: String(search).trim(),
             totalMatches: hits.length,
-            matchedFloors: hits.slice(-30), // cap-ok: 最多返回最近 30 个命中楼层号索引，方便模型分段翻阅
+            matchedFloors: hits,
             maxSpan,
             cappedBySetting,
             ...(cappedBySetting ? { hint: `当前设置限制每次最多读取 ${maxSpan} 楼；可不带 search 指定 from/to 分段读取其余命中楼层，或在设置中调大「聊天原文最多带几楼」。` } : {}),
@@ -670,24 +679,23 @@ export async function boundBooks(ctx = getContext()) {
     return [...names].filter(Boolean);
 }
 
-async function worldInfo({ search = '', book = '', only_enabled = false, offset = 0 } = {}) {
+async function worldInfo({ search = '', book = '', only_enabled = false, offset = 0, limit = null } = {}) {
     const ctx = getContext();
     const books = await boundBooks(ctx);
     const bookNeedle = String(book || '').trim().toLowerCase();
     const targetBooks = bookNeedle ? books.filter(b => b.toLowerCase().includes(bookNeedle)) : books;
     const needle = String(search || '').trim().toLowerCase();
     const skip = Math.max(0, Math.floor(Number(offset) || 0));
-    const maxEntries = 60; // cap-ok: 单次最多返回 60 条世界书条目元数据/正文，配合 offset 支持分页
+    const maxEntries = isExplicitFiniteNumber(limit) && Number(limit) > 0 ? Math.floor(Number(limit)) : Infinity;
     const out = [];
     const errors = [];
     let totalMatched = 0;
-    let truncated = false;
     for (const name of targetBooks) {
         let data = null;
         try {
             data = await ctx.loadWorldInfo?.(name);
         } catch (err) {
-            console.warn(`[workbench] failed to load world book "${name}":`, err);
+            console.error(`[workbench] failed to load world book "${name}":`, err);
             errors.push({ book: name, error: String(err?.message || err) });
             continue;
         }
@@ -700,10 +708,7 @@ async function worldInfo({ search = '', book = '', only_enabled = false, offset 
             if (needle && !hay.includes(needle)) continue;
             totalMatched++;
             if (totalMatched <= skip) continue;
-            if (out.length >= maxEntries) {
-                truncated = true;
-                continue;
-            }
+            if (out.length >= maxEntries) continue;
             out.push({
                 book: name,
                 uid: e.uid,
@@ -723,14 +728,13 @@ async function worldInfo({ search = '', book = '', only_enabled = false, offset 
         books,
         totalMatched,
         ...(skip ? { offset: skip } : {}),
-        ...(truncated ? { truncated: true } : {}),
         entries: out,
         ...(errors.length ? { errors } : {}),
     };
 }
 
 /** 读取当前聊天的世界书激活链路追踪快照，用于诊断为何某条目触发或未触发。 */
-async function worldInfoTrace({ search = '', only_activated = false, limit = 40 } = {}) {
+async function worldInfoTrace({ search = '', only_activated = false, limit = null } = {}) {
     const ctx = getContext();
     const snap = await ctx?.chatWorldInfo?.getActivationTrace?.();
     if (!snap || !Array.isArray(snap.entries)) {
@@ -740,7 +744,7 @@ async function worldInfoTrace({ search = '', only_activated = false, limit = 40 
         return { scopeKey: snap.scopeKey, total: 0, entries: [], message: '当前聊天尚未产生世界书扫描追踪记录（至少生成一次回复后才会记录）' };
     }
 
-    const maxItems = Math.max(1, Math.min(80, Math.floor(Number(limit) || 40))); // cap-ok: 限制单次返回追踪条目数在上下文安全范围内
+    const maxItems = isExplicitFiniteNumber(limit) && Number(limit) > 0 ? Math.floor(Number(limit)) : Infinity;
     const needle = String(search || '').trim().toLowerCase();
 
     // 尝试批量关联书内条目标题与关键词，便于模型直呼条目名而非仅看 uid。
@@ -771,7 +775,7 @@ async function worldInfoTrace({ search = '', only_activated = false, limit = 40 
         const meta = titleIndex.get(`${item.world}.${item.uid}`) || {};
         const activation = activated ? (latest?.lastActivation || null) : null;
         const lastActivation = item.lastActivation || item.lastDryRunActivation || null;
-        const attempts = Array.isArray(latest?.attempts) ? latest.attempts.slice(0, 6) : []; // cap-ok: 保留最近 6 条尝试原因摘要
+        const attempts = Array.isArray(latest?.attempts) ? latest.attempts : [];
         const hay = `${item.world} ${item.uid} ${meta.title || ''} ${(meta.keys || []).join(' ')} ${JSON.stringify(activation || '')} ${JSON.stringify(lastActivation || '')} ${JSON.stringify(attempts)}`.toLowerCase();
         if (needle && !hay.includes(needle)) continue;
 
@@ -796,21 +800,23 @@ async function worldInfoTrace({ search = '', only_activated = false, limit = 40 
         totalTracked: snap.entries.length,
         matched: rows.length,
         activatedCount: rows.filter(r => r.activated).length,
-        entries: rows.slice(0, maxItems),
+        entries: Number.isFinite(maxItems) ? rows.slice(0, maxItems) : rows,
     };
 }
 
 /** 读取当前聊天变量、可选全局变量与最近带变量操作的楼层日志（Variable Op Log）。 */
-function readVariables({ search = '', include_global = false, op_floors = 10 } = {}) {
+function readVariables({ search = '', include_global = false, op_floors = null } = {}) {
     const ctx = getContext();
     if (!ctx) return { error: 'Luker 上下文不可用' };
     const needle = String(search || '').trim().toLowerCase();
-    const maxOpFloors = Math.max(1, Math.min(30, Math.floor(Number(op_floors) || 10))); // cap-ok: 限制单次返回含变量操作的楼层数
+    const maxOpFloors = isExplicitFiniteNumber(op_floors) && Number(op_floors) > 0
+        ? Math.floor(Number(op_floors))
+        : Infinity;
 
     const filterObject = (obj) => {
         if (!obj || typeof obj !== 'object') return {};
         const entries = Object.entries(obj);
-        if (!needle) return Object.fromEntries(entries.slice(0, 80)); // cap-ok: 避免超多变量一次撑爆上下文
+        if (!needle) return Object.fromEntries(entries);
         return Object.fromEntries(entries.filter(([k, v]) => {
             const text = `${k} ${typeof v === 'string' ? v : JSON.stringify(v ?? '')}`.toLowerCase();
             return text.includes(needle);
@@ -849,14 +855,12 @@ function readVariables({ search = '', include_global = false, op_floors = 10 } =
         floorOps.push({
             floor: i,
             who: m.is_user ? '用户' : (m.name || i18n('Character')),
-            ops: filteredOps.slice(0, 30), // cap-ok: 单楼层最多展示 30 条变量操作
+            ops: filteredOps,
         });
     }
     out.recentFloorOps = floorOps;
     return out;
 }
-
-const REGEX_PREVIEW_CHARS = 300; // cap-ok: 列表模式下的单条正则预览上限，传 id 可读取完整 findRegex 与 replaceString
 
 /** 读取 Luker 生效的正则脚本（全局/角色/预设/插件通道），排查吞字、乱码或状态栏异常。 */
 function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id = '' } = {}) {
@@ -883,9 +887,6 @@ function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id 
             const lanes = typeof ctx.regex.getPluginLanes === 'function'
                 ? ctx.regex.getPluginLanes(s)
                 : (Array.isArray(s.pluginLanes) ? s.pluginLanes : (s.pluginOnly ? ['request', 'reply'] : []));
-            const findRaw = String(s.findRegex || '');
-            const replaceRaw = String(s.replaceString || '');
-            const previewTruncated = !targetId && (findRaw.length > REGEX_PREVIEW_CHARS || replaceRaw.length > REGEX_PREVIEW_CHARS);
             buckets.push({
                 scope: bucketScope,
                 id: String(s.id || ''),
@@ -893,13 +894,8 @@ function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id 
                 enabled: !s.disabled,
                 ...(bucketScope === 'character' || bucketScope === 'preset' ? { allowed: Boolean(allowedKeys?.has(scriptKey(s))) } : {}),
                 ...(bucketScope === 'plugin' ? { owner: String(s.__runtime_owner || '') } : {}),
-                ...(targetId
-                    ? { findRegex: findRaw, replaceString: replaceRaw }
-                    : {
-                        findRegex: findRaw.slice(0, REGEX_PREVIEW_CHARS),
-                        replacePreview: replaceRaw.slice(0, REGEX_PREVIEW_CHARS),
-                        ...(previewTruncated ? { truncated: true } : {}),
-                    }),
+                findRegex: String(s.findRegex || ''),
+                replaceString: String(s.replaceString || ''),
                 placement: Array.isArray(s.placement) ? s.placement : [],
                 markdownOnly: Boolean(s.markdownOnly),
                 promptOnly: Boolean(s.promptOnly),
@@ -934,7 +930,7 @@ function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id 
     return {
         regexExtensionEnabled: !regexDisabled,
         totalMatched: buckets.length,
-        scripts: buckets.slice(0, 80), // cap-ok: 限制单次返回正则脚本条数
+        scripts: buckets,
     };
 }
 
@@ -980,10 +976,10 @@ async function readSkills() {
         return {
             available: true,
             total: list.length,
-            skills: list.slice(0, 60).map(s => ({ // cap-ok: 限制技能清单返回条数
+            skills: list.map(s => ({
                 name: String(s?.name || ''),
                 scope: s?.scope || null,
-                description: String(s?.description || '').slice(0, 160), // cap-ok: 技能简述上限
+                description: String(s?.description || ''),
             })),
         };
     } catch (err) {
@@ -1100,13 +1096,13 @@ function presetDetail({ entry = '' } = {}) {
             } else if (fuzzy.length > 1) {
                 return {
                     error: `「${entry}」匹配到多个条目，请指定更精确的名称`,
-                    candidates: fuzzy.slice(0, 15).map(p => ({ name: p.name || p.identifier, identifier: p.identifier, enabled: p.enabled })),
+                    candidates: fuzzy.map(p => ({ name: p.name || p.identifier, identifier: p.identifier, enabled: p.enabled })),
                 };
             }
         }
         return hit
             ? { name: hit.name, identifier: hit.identifier, enabled: hit.enabled, role: hit.role, injection_position: hit.injection_position ?? null, injection_depth: hit.injection_depth ?? null, content: String(hit.content || '') }
-            : { error: `没有叫「${entry}」的条目`, available: items.slice(0, 30).map(p => p.name || p.identifier) };
+            : { error: `没有叫「${entry}」的条目`, available: items.map(p => p.name || p.identifier) };
     }
     const pl = body.extensions?.preset_lorebook;
     let presetLorebook = null;
@@ -1147,7 +1143,7 @@ function presetDetail({ entry = '' } = {}) {
             identifier: p.identifier,
             enabled: p.enabled,
             marker: Boolean(p.marker),
-            preview: p.marker ? '（系统占位：角色卡 / 世界书 / 聊天等）' : String(p.content || '').slice(0, 120), // cap-ok: 列表模式下的短预览，完整内容通过 entry 参数读取
+            chars: p.marker ? 0 : String(p.content || '').length,
         })),
     };
 }
@@ -1197,20 +1193,16 @@ function formatInspectorContent(content) {
     return JSON.stringify(content);
 }
 
-const INSPECTOR_MSG_PREVIEW_CHARS = 3000; // cap-ok: 列表或末尾模式单条消息预览上限，传 message_index 可读取全文
-
-/** 将单条请求消息格式化为适合模型诊断的文本片段。 */
-function formatInspectorMessage(m, index, maxChars = INSPECTOR_MSG_PREVIEW_CHARS) {
+/** 将单条请求消息格式化为适合模型诊断的文本。 */
+function formatInspectorMessage(m, index) {
     const raw = formatInspectorContent(m?.content);
-    const truncated = Number.isFinite(maxChars) && raw.length > maxChars;
     return {
         index,
         role: m?.role || '',
         ...(m?.name ? { name: String(m.name) } : {}),
         ...(m?.tool_call_id ? { toolCallId: String(m.tool_call_id) } : {}),
         chars: raw.length,
-        content: truncated ? `${raw.slice(0, maxChars)}…` : raw,
-        ...(truncated ? { truncated: true } : {}),
+        content: raw,
         ...(Array.isArray(m?.tool_calls) && m.tool_calls.length
             ? { toolCalls: m.tool_calls.map(tc => tc?.function?.name || tc?.name || '') }
             : {}),
@@ -1233,7 +1225,7 @@ function extractInspectorReasoningText(detail) {
     return chunks.join('\n').trim();
 }
 
-/** 从请求检查器记录的 responseParts 中提取模型发出的工具调用摘要。 */
+/** 从请求检查器记录的 responseParts 中提取模型发出的工具调用。 */
 function extractInspectorReplyToolCalls(detail) {
     const parts = Array.isArray(detail?.responseParts) ? detail.responseParts : [];
     const calls = [];
@@ -1243,10 +1235,10 @@ function extractInspectorReplyToolCalls(detail) {
         calls.push({
             ...(p.id ? { id: String(p.id) } : {}),
             name: String(p.name || ''),
-            argsPreview: rawArgs.slice(0, 600), // cap-ok: 单条回复工具调用参数预览上限
+            args: rawArgs,
         });
     }
-    return calls.slice(0, 30); // cap-ok: 单次回复最多展示 30 条工具调用摘要
+    return calls;
 }
 
 /** Reader functions keyed by tool name (see model/ask.js), gated by `sources`. */
@@ -1255,9 +1247,12 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
     const readers = {};
 
     if (on('inspector')) {
-        readers.wb_list_requests = async ({ limit = 20, only_errors = false } = {}) => {
-            const list = await listRequests({ limit: 200 });
-            const pick = list.filter(e => !only_errors || e.status === 'error' || e.error).slice(0, Math.max(1, Math.min(60, limit))); // cap-ok: matches Ask tool schema limit to keep response within LLM context window
+        readers.wb_list_requests = async ({ limit = null, only_errors = false } = {}) => {
+            const list = await listRequests();
+            const filtered = list.filter(e => !only_errors || e.status === 'error' || e.error);
+            const pick = isExplicitFiniteNumber(limit) && Number(limit) > 0
+                ? filtered.slice(0, Math.floor(Number(limit)))
+                : filtered;
             return pick.map(e => describeRequest(e, e.attr));
         };
         readers.wb_read_request = async ({
@@ -1282,8 +1277,8 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 durationMs: d.durationMs,
             };
             if (reqType === 'image') {
-                if (d.prompt) out.prompt = String(d.prompt).slice(0, 4000); // cap-ok: 生图提示词预览上限
-                if (d.negativePrompt) out.negativePrompt = String(d.negativePrompt).slice(0, 2000); // cap-ok: 负向提示词预览上限
+                if (d.prompt) out.prompt = String(d.prompt);
+                if (d.negativePrompt) out.negativePrompt = String(d.negativePrompt);
                 if (d.width != null) out.width = d.width;
                 if (d.height != null) out.height = d.height;
                 if (d.steps != null) out.steps = d.steps;
@@ -1295,13 +1290,13 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 if (d.routeKind) out.routeKind = d.routeKind;
                 if (d.collectionId != null) out.collectionId = d.collectionId;
                 if (Array.isArray(d.collectionIds) && d.collectionIds.length) out.collectionIds = d.collectionIds;
-                if (d.query) out.query = String(d.query).slice(0, 1000); // cap-ok: 重排查询词上限
+                if (d.query) out.query = String(d.query);
                 if (d.inputCount != null) out.inputCount = d.inputCount;
                 if (d.inputCharTotal != null) out.inputCharTotal = d.inputCharTotal;
                 if (Array.isArray(d.inputTexts) && d.inputTexts.length) {
-                    out.inputTexts = d.inputTexts.slice(0, 12).map((item, idx) => ({ // cap-ok: 最多展示前 12 条向量输入文本预览
+                    out.inputTexts = d.inputTexts.map((item, idx) => ({
                         index: item?.index ?? idx,
-                        text: String(typeof item === 'string' ? item : (item?.text ?? '')).slice(0, 400), // cap-ok: 单条输入文本预览上限
+                        text: String(typeof item === 'string' ? item : (item?.text ?? '')),
                     }));
                 }
                 if (d.topK != null) out.topK = d.topK;
@@ -1309,12 +1304,12 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 if (d.resultCount != null) out.resultCount = d.resultCount;
                 if (d.vectorDim != null) out.vectorDim = d.vectorDim;
                 if (Array.isArray(d.hits) && d.hits.length) {
-                    out.hits = d.hits.slice(0, 20).map(hit => ({ // cap-ok: 最多展示前 20 条向量命中摘要
+                    out.hits = d.hits.map(hit => ({
                         ...(hit?.collectionId != null ? { collectionId: hit.collectionId } : {}),
                         ...(hit?.index != null ? { index: hit.index } : {}),
                         ...(hit?.hash != null ? { hash: hit.hash } : {}),
                         ...(hit?.score != null ? { score: hit.score } : {}),
-                        text: String(hit?.text ?? '').slice(0, 400), // cap-ok: 单条命中文本预览上限
+                        text: String(hit?.text ?? ''),
                     }));
                 }
                 return out;
@@ -1328,22 +1323,22 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 if (isExplicitFiniteNumber(message_index)) {
                     const idx = Math.floor(Number(message_index));
                     if (idx >= 0 && idx < allMsgs.length) {
-                        out.messages = [formatInspectorMessage(allMsgs[idx], idx, Infinity)];
+                        out.messages = [formatInspectorMessage(allMsgs[idx], idx)];
                     } else {
                         out.messages = [];
                         out.messageError = `消息索引 ${idx} 越界（共 ${allMsgs.length} 条，范围 0–${Math.max(0, allMsgs.length - 1)}）`;
                     }
                 } else if (Number(tail_messages) > 0) {
-                    const tailCount = Math.max(1, Math.min(20, Math.floor(Number(tail_messages)))); // cap-ok: 末尾消息窗口上限 20 条
+                    const tailCount = Math.max(1, Math.floor(Number(tail_messages)));
                     const startIdx = Math.max(0, allMsgs.length - tailCount);
                     out.omittedHeadMessages = startIdx;
-                    out.messages = allMsgs.slice(startIdx).map((m, i) => formatInspectorMessage(m, startIdx + i, INSPECTOR_MSG_PREVIEW_CHARS));
+                    out.messages = allMsgs.slice(startIdx).map((m, i) => formatInspectorMessage(m, startIdx + i));
                 } else {
-                    out.messages = allMsgs.map((m, idx) => formatInspectorMessage(m, idx, INSPECTOR_MSG_PREVIEW_CHARS));
+                    out.messages = allMsgs.map((m, idx) => formatInspectorMessage(m, idx));
                 }
             }
             if (part !== 'messages') {
-                out.reply = String(d.responseText || '').slice(0, 6000); // cap-ok: 回复正文与消息共存时的上限
+                out.reply = String(d.responseText || '');
                 const replyToolCalls = extractInspectorReplyToolCalls(d);
                 if (replyToolCalls.length) {
                     out.replyToolCalls = replyToolCalls;
@@ -1352,15 +1347,15 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
             if (include_reasoning) {
                 const reasoning = extractInspectorReasoningText(d);
                 if (reasoning) {
-                    out.reasoning = reasoning.slice(0, 4000); // cap-ok: 思考过程摘要上限
+                    out.reasoning = reasoning;
                 }
             }
             if (include_tools) {
                 const { tools: wireTools, toolChoice } = normalizeWireTools(d.wireRequest);
                 if (wireTools.length) {
-                    out.tools = wireTools.slice(0, 40).map(t => ({ // cap-ok: 最多展示 40 个工具摘要
+                    out.tools = wireTools.map(t => ({
                         name: t.name,
-                        description: String(t.description || '').slice(0, 120), // cap-ok: 单条工具描述预览上限
+                        description: String(t.description || ''),
                     }));
                 }
                 const choiceLabel = describeToolChoice(toolChoice);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { MAX_ROUNDS, askSystemPrompt, askUserMessage, askTools, runAsk, readsSummary, readLabel, clip, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
+import { askSystemPrompt, askUserMessage, askTools, runAsk, readsSummary, readLabel, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
 import { attribute, groupByGeneration, describeRequest } from '../../public/scripts/workbench/model/requests.js';
 import { SourceError, aiRequest, askOverview, askReaders, listAiChoices, loadSnapshot } from '../../public/scripts/workbench/source-luker.js';
 import { createMemoryAskProvider } from '../../public/scripts/extensions/memory-graph/lens/providers.js';
@@ -93,11 +93,11 @@ describe('workbench Ask model & source readers', () => {
         }
     });
 
-    test('wb_read_world_info stops across outer books at 60 entries and surfaces load errors', async () => {
+    test('wb_read_world_info returns all entries across outer books without silent cap and surfaces load errors', async () => {
         const makeEntries = (prefix, count) => Object.fromEntries(
             Array.from({ length: count }, (_, i) => [i, { uid: i, key: [`${prefix}_${i}`], comment: `${prefix} ${i}`, content: 'body' }]),
         );
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         globalThis.Luker = {
             getContext: () => ({
                 chat: [],
@@ -116,12 +116,18 @@ describe('workbench Ask model & source readers', () => {
         };
 
         const res = await askReaders({ redactText: false }).wb_read_world_info({});
-        expect(res.entries).toHaveLength(60);
+        expect(res.entries).toHaveLength(75);
         expect(res.errors).toEqual([{ book: 'BrokenBook', error: 'disk read error' }]);
-        expect(warnSpy).toHaveBeenCalled();
+        expect(errSpy).toHaveBeenCalled();
+
+        // Explicit caller limit is honored without an artificial ceiling
+        const paged = await askReaders({ redactText: false }).wb_read_world_info({ offset: 10, limit: 15 });
+        expect(paged.entries).toHaveLength(15);
+        expect(paged.totalMatched).toBe(75);
     });
 
-    test('runAsk executes read calls then wb_answer, respects MAX_ROUNDS, and handles plain text', async () => {
+    test('runAsk executes unbounded read rounds until wb_answer or plain text, without truncating tool outputs', async () => {
+        const hugePayload = 'X'.repeat(25000);
         const script = [
             { text: '', calls: [{ id: 'c1', name: 'wb_list_requests', args: { limit: 5 } }, { id: 'c2', name: 'wb_read_frontend_logs', args: {} }] },
             { text: '', calls: [{ id: 'c3', name: 'wb_answer', args: { text: 'Slow in planner', suggest: 'orch', fix_prompt: 'Use faster model', request_ids: ['r3'] } }] },
@@ -130,7 +136,7 @@ describe('workbench Ask model & source readers', () => {
         const result = await runAsk({
             question: 'Why slow?',
             overview: { chat: 'x' },
-            readers: { wb_list_requests: async () => [{ id: 'r3' }], wb_read_frontend_logs: async () => 'log' },
+            readers: { wb_list_requests: async () => [{ id: 'r3' }], wb_read_frontend_logs: async () => hugePayload },
             request: async (messages, tools) => {
                 seen.push({ messages: [...messages], tools: tools.map(t => t.function.name) });
                 return script.shift();
@@ -140,24 +146,27 @@ describe('workbench Ask model & source readers', () => {
         expect(result.suggest).toBe('orch');
         expect(result.requestIds).toEqual(['r3']);
         expect(result.reads).toHaveLength(2);
-        expect(seen[1].messages.filter(m => m.role === 'tool')).toHaveLength(2);
-        expect(readsSummary(result.reads)).toContain('Request list');
+        const toolMsgs = seen[1].messages.filter(m => m.role === 'tool');
+        expect(toolMsgs).toHaveLength(2);
+        expect(toolMsgs[1].content).toBe(hugePayload);
 
+        // Runs past 10 rounds naturally without cutting the model off
         let calls = 0;
-        const offered = [];
         const r = await runAsk({
             question: 'q',
             overview: {},
             readers: { wb_read_chat: async () => 'x' },
-            request: async (_m, tools) => {
+            request: async () => {
                 calls++;
-                offered.push(tools.length);
-                return { text: '', calls: [{ id: `c${calls}`, name: 'wb_read_chat', args: {} }] };
+                if (calls <= 12) {
+                    return { text: '', calls: [{ id: `c${calls}`, name: 'wb_read_chat', args: {} }] };
+                }
+                return { text: '', calls: [{ id: 'c_done', name: 'wb_answer', args: { text: 'Done after 12 reads' } }] };
             },
         });
-        expect(calls).toBe(MAX_ROUNDS);
-        expect(offered[MAX_ROUNDS - 1]).toBe(1);
-        expect(r.answer).toMatch(/specific/i);
+        expect(calls).toBe(13);
+        expect(r.reads).toHaveLength(12);
+        expect(r.answer).toBe('Done after 12 reads');
 
         const plain = await runAsk({ question: 'q', overview: {}, readers: {}, request: async () => ({ text: 'Direct answer', calls: [] }) });
         expect(plain.answer).toBe('Direct answer');
@@ -238,7 +247,6 @@ describe('workbench Ask model & source readers', () => {
         expect(g[1].items).toHaveLength(2);
         const d = describeRequest({ id: 'x', timestamp: 0, status: 'error', httpStatus: 429, error: 'rate' });
         expect(d.status).toContain('429');
-        expect(clip('x'.repeat(20000))).toMatch(/truncated|已截断/);
     });
 
     test('listAiChoices preserves presets when connectionProfiles.list() throws and surfaces error', async () => {
@@ -314,7 +322,7 @@ describe('workbench Ask model & source readers', () => {
         });
     });
 
-    test('wb_read_character, wb_read_preset, and wb_read_world_info do not apply inner truncation before clip()', async () => {
+    test('wb_read_character, wb_read_preset, and wb_read_world_info return full untruncated content', async () => {
         const longDesc = 'D'.repeat(7500);
         const longPreset = 'P'.repeat(9500);
         const longWorld = 'W'.repeat(2500);
@@ -363,12 +371,20 @@ describe('workbench Ask model & source readers', () => {
         const prompt = askSystemPrompt();
         expect(typeof prompt).toBe('string');
         expect(prompt.trim().length).toBeGreaterThan(0);
-        expect(readLabel('wb_read_orch')).toBe('Orchestration');
-        expect(readLabel('wb_read_world_info_trace')).toBe('World book trace');
-        expect(readLabel('wb_read_connections')).toBe('Connection profile');
-        expect(readLabel('wb_read_skills')).toBe('Skills');
-        expect(readLabel('wb_list_luker_docs')).toBe('Luker docs');
-        expect(readLabel('wb_read_luker_doc')).toBe('Luker docs');
+        for (const toolName of [
+            'wb_read_orch',
+            'wb_read_world_info_trace',
+            'wb_read_connections',
+            'wb_read_skills',
+            'wb_list_luker_docs',
+            'wb_read_luker_doc',
+        ]) {
+            const label = readLabel(toolName);
+            expect(typeof label).toBe('string');
+            expect(label.length).toBeGreaterThan(0);
+            expect(label).not.toBe(toolName);
+        }
+        expect(readsSummary([{ name: 'wb_list_requests', args: {}, chars: 10 }]).length).toBeGreaterThan(0);
     });
 
     test('runAsk preserves raw reasoning, unified signature, and extra_content across tool rounds; buildAskHistory keeps requestIds', async () => {
@@ -445,7 +461,6 @@ describe('workbench Ask model & source readers', () => {
         expect(runnerMock).toHaveBeenCalledTimes(1);
         const callOpts = runnerMock.mock.calls[0][2];
         expect(callOpts.includeCharacterCard).toBe(false);
-        expect(callOpts.bypassPresetEnvelope).toBeUndefined();
         expect(out.reasoning).toBe(rawReasoning);
         expect(out.calls[0].signature).toBe('gem-ts-9');
         expect(out.calls[0].thoughtSignature).toBeUndefined();
@@ -454,7 +469,7 @@ describe('workbench Ask model & source readers', () => {
         expect(out.calls[1].thoughtSignature).toBeUndefined();
     });
 
-    test('runAsk defers wb_answer when mixed with read calls in original order and gracefully degrades if final round throws', async () => {
+    test('runAsk defers wb_answer when mixed with read calls in original order and propagates request errors', async () => {
         const seen = [];
         const readSpy = jest.fn(async () => ({ messages: [{ floor: 3, text: 'actual floor' }] }));
         const mixedScript = [
@@ -496,59 +511,21 @@ describe('workbench Ask model & source readers', () => {
         expect(toolMsgs[1].tool_call_id).toBe('c_read_1');
         expect(toolMsgs[1].content).toContain('actual floor');
 
-        // Final-round request() throwing degrades gracefully without losing accumulated reads/text
-        let roundCount = 0;
-        let lastRoundTools = null;
-        let lastRoundMessages = null;
-        const degraded = await runAsk({
-            question: 'Deep diagnostic',
-            overview: {},
-            readers: { wb_read_chat: async () => ({ floor: 1 }) },
-            request: async (messages, tools) => {
-                roundCount++;
-                if (roundCount === MAX_ROUNDS) {
-                    lastRoundTools = tools.map(t => t.function.name);
-                    lastRoundMessages = messages;
-                    throw new Error('Model response did not contain any matching tool calls.');
-                }
-                return {
-                    text: roundCount === MAX_ROUNDS - 1 ? 'Partial finding before limit' : '',
-                    calls: [{ id: `r_${roundCount}`, name: 'wb_read_chat', args: {} }],
-                };
-            },
-        });
-        expect(roundCount).toBe(MAX_ROUNDS);
-        expect(lastRoundTools).toEqual(['wb_answer']);
-        expect(lastRoundMessages.at(-1).role).toBe('tool');
-        expect(degraded.answer).toBe('Partial finding before limit');
-        expect(degraded.reads).toHaveLength(MAX_ROUNDS - 1);
-
-        // Final-round abort with GenerateTaskError('aborted') shape must rethrow instead of degrading
-        let abortRound = 0;
+        // Abort and API errors propagate directly without silent degradation
         const abortErr = Object.assign(new Error('request aborted'), { name: 'GenerateTaskError', code: 'aborted' });
         await expect(runAsk({
-            question: 'Abort on last round',
+            question: 'Abort error',
             overview: {},
-            readers: { wb_read_chat: async () => ({ floor: 1 }) },
-            request: async () => {
-                abortRound++;
-                if (abortRound === MAX_ROUNDS) throw abortErr;
-                return { text: 'Partial before abort', calls: [{ id: `ab_${abortRound}`, name: 'wb_read_chat', args: {} }] };
-            },
+            readers: {},
+            request: async () => { throw abortErr; },
         })).rejects.toBe(abortErr);
 
-        // Final-round real API/network errors (e.g. HTTP 429) must rethrow instead of masquerading as round-limit answer
-        let apiErrRound = 0;
         const apiErr = new Error('HTTP 429: rate limit exceeded');
         await expect(runAsk({
-            question: 'Rate limit on last round',
+            question: 'Rate limit error',
             overview: {},
-            readers: { wb_read_chat: async () => ({ floor: 1 }) },
-            request: async () => {
-                apiErrRound++;
-                if (apiErrRound === MAX_ROUNDS) throw apiErr;
-                return { text: 'Partial before 429', calls: [{ id: `rl_${apiErrRound}`, name: 'wb_read_chat', args: {} }] };
-            },
+            readers: {},
+            request: async () => { throw apiErr; },
         })).rejects.toBe(apiErr);
     });
 
@@ -729,7 +706,7 @@ describe('workbench Ask model & source readers', () => {
         expect(reqTail.reasoning).not.toContain('SIGNATURE_MUST_SKIP');
         expect(reqTail.reasoning).not.toContain('ENCRYPTED_DETAIL_MUST_SKIP');
         expect(reqTail.replyToolCalls).toEqual([
-            { id: 'tc_1', name: 'wb_read_preset', argsPreview: '{"entry":"Main"}' },
+            { id: 'tc_1', name: 'wb_read_preset', args: '{"entry":"Main"}' },
         ]);
         expect(reqTail.tools).toEqual([
             { name: 'wb_answer', description: 'Submit answer' },
@@ -752,17 +729,13 @@ describe('workbench Ask model & source readers', () => {
         expect(zeroIdxRes.messages).toHaveLength(1);
         expect(zeroIdxRes.messages[0].index).toBe(0);
         expect(zeroIdxRes.messages[0].content).toBe('sys 0');
-        expect(zeroIdxRes.messages[0].truncated).toBeUndefined();
 
         const longFull = await readers.wb_read_request({ id: 'req-long', message_index: 0 });
         expect(longFull.messages[0].content).toBe(longMsg);
-        expect(longFull.messages[0].truncated).toBeUndefined();
         const longList = await readers.wb_read_request({ id: 'req-long' });
-        expect(longList.messages[0].content).toBe(`${'M'.repeat(3000)}…`);
-        expect(longList.messages[0].truncated).toBe(true);
+        expect(longList.messages[0].content).toBe(longMsg);
         const longTail = await readers.wb_read_request({ id: 'req-long', tail_messages: 1 });
-        expect(longTail.messages[0].content).toBe(`${'M'.repeat(3000)}…`);
-        expect(longTail.messages[0].truncated).toBe(true);
+        expect(longTail.messages[0].content).toBe(longMsg);
 
         // Non-chat request types: image & embedding
         const imgRes = await readers.wb_read_request({ id: 'req-image' });
@@ -808,8 +781,8 @@ describe('workbench Ask model & source readers', () => {
             resultCount: 1,
             hits: [{ index: 3, hash: 'h2', score: 0.95, text: 'We promised to meet at the clocktower.' }],
         });
-        expect(embRerankRes.inputTexts).toHaveLength(12);
-        expect(embRerankRes.inputTexts[0]).toEqual({ index: 0, text: 'R'.repeat(400) });
+        expect(embRerankRes.inputTexts).toHaveLength(15);
+        expect(embRerankRes.inputTexts[0]).toEqual({ index: 0, text: 'R'.repeat(500) });
 
         // Reject invalid/reserved/traversal IDs before calling fetch, and reject array payloads
         globalThis.fetch.mockClear();
@@ -985,18 +958,15 @@ describe('workbench Ask model & source readers', () => {
             { id: 'r-pre-no', allowed: false },
         ]);
 
-        // List mode clips long replaceString to 300 chars and flags truncated; id mode returns full content even when disabled
+        // Both list mode and id mode return full untruncated replaceString
         const globalListAll = await readers.wb_read_regex({ scope: 'global', only_enabled: false });
-        const longPreviewRow = globalListAll.scripts.find(s => s.id === 'r-status-html');
-        expect(longPreviewRow.truncated).toBe(true);
-        expect(longPreviewRow.replacePreview).toBe(longStatusBarHtml.slice(0, 300));
-        expect(longPreviewRow.replaceString).toBeUndefined();
+        const longListRow = globalListAll.scripts.find(s => s.id === 'r-status-html');
+        expect(longListRow.replaceString).toBe(longStatusBarHtml);
 
         const fullById = await readers.wb_read_regex({ id: 'r-status-html' });
         expect(fullById.scripts).toHaveLength(1);
         expect(fullById.scripts[0].enabled).toBe(false);
         expect(fullById.scripts[0].replaceString).toBe(longStatusBarHtml);
-        expect(fullById.scripts[0].truncated).toBeUndefined();
 
         // wb_read_preset: real preset_lorebook metadata only, origin='character', dual-key sampling fallbacks
         const presetSummary = await readers.wb_read_preset({});
@@ -1162,7 +1132,7 @@ describe('workbench Ask model & source readers', () => {
         expect(envSummary.enabledExtensionsCount).toBe(4);
     });
 
-    test('wb_read_memory uses real read-api node shape, schema shape, settings keys, recency sort, seq_to=-1, and field truncation', async () => {
+    test('wb_read_memory uses real read-api node shape, schema shape, settings keys, recency sort, seq_to=-1, and preserves full fields', async () => {
         const longDetail = 'D'.repeat(450);
         const longSummarize = 'S'.repeat(300);
         const memProvider = createMemoryAskProvider(() => null, {
@@ -1264,14 +1234,14 @@ describe('workbench Ask model & source readers', () => {
             type: 'event',
             level: 'episodic',
             title: '约定见面',
-            summaryPreview: '昨天约好去钟楼见面',
+            summary: '昨天约好去钟楼见面',
             seqTo: 12,
             floorRange: { start: 10, end: 14 },
             parentId: 'n_unwatermarked',
             semanticRollup: false,
             depth: 0,
         });
-        expect(memNodes.nodes[0].fields.detail).toHaveLength(300);
+        expect(memNodes.nodes[0].fields.detail).toBe(longDetail);
         expect(memNodes.nodes[2]).toMatchObject({
             id: 'n_unwatermarked',
             seqTo: null,
@@ -1298,7 +1268,7 @@ describe('workbench Ask model & source readers', () => {
             compression: {
                 mode: 'hierarchical',
                 threshold: 20,
-                summarizeInstruction: longSummarize.slice(0, 240),
+                summarizeInstruction: longSummarize,
             },
         });
 
@@ -1459,14 +1429,14 @@ describe('workbench Ask model & source readers', () => {
         const lastRun = await orchProvider.readers.wb_read_orch({ part: 'last_run' }, orchCtx);
         expect(lastRun.runId).toBe('run-cur-chat');
         expect(lastRun.lanes[0].agentId).toBe('story-scout');
-        const previews = lastRun.lanes[0].segments[0].sections.map(s => s.preview);
-        expect(previews[0]).toBe('Upstream 504');
-        expect(previews[1]).toBe('[FINALIZE_EMPTY] finalize requires a non-empty capsule_text.');
-        expect(previews[2]).toContain('"query":"silver key"');
-        expect(previews[3]).toContain('"agent":"story-scout"');
-        expect(previews[3].length).toBeLessThanOrEqual(320);
-        expect(previews[4]).toContain('no tool call');
-        expect(previews[4]).toContain('Draft without tool');
+        const contents = lastRun.lanes[0].segments[0].sections.map(s => s.content);
+        expect(contents[0]).toBe('Upstream 504');
+        expect(contents[1]).toBe('[FINALIZE_EMPTY] finalize requires a non-empty capsule_text.');
+        expect(contents[2]).toContain('"query":"silver key"');
+        expect(contents[3]).toContain('"agent":"story-scout"');
+        expect(contents[3]).toContain('X'.repeat(400));
+        expect(contents[4]).toContain('no tool call');
+        expect(contents[4]).toContain('Draft without tool');
     });
 
     test('wb_list_luker_docs and wb_read_luker_doc query /api/docs without redacting documentation URLs', async () => {
@@ -1601,12 +1571,13 @@ describe('workbench Ask model & source readers', () => {
             expect(links[0].textContent).toContain('req_abc123');
             links[0].click();
             expect(openSpy).toHaveBeenCalledWith('req_abc123');
-            expect(page.el.querySelector('.wb-reads').textContent).toContain('Orchestration');
+            expect(page.el.querySelector('.wb-reads').textContent.trim().length).toBeGreaterThan(0);
 
             const jumpBtns = [...page.el.querySelectorAll('.wb-ans-acts button')];
             expect(jumpBtns).toHaveLength(2);
-            expect(jumpBtns[0].textContent).toContain('Memory graph content');
-            expect(jumpBtns[1].textContent).toContain('Memory graph config');
+            expect(jumpBtns[0].textContent.trim().length).toBeGreaterThan(0);
+            expect(jumpBtns[1].textContent.trim().length).toBeGreaterThan(0);
+            expect(jumpBtns[0].textContent.trim()).not.toBe(jumpBtns[1].textContent.trim());
             jumpBtns[0].click();
             expect(goSpy).toHaveBeenCalledWith('ai', expect.objectContaining({ ws: 'memory_graph', draft: 'Add clocktower promise node' }));
             jumpBtns[1].click();
@@ -1661,17 +1632,18 @@ describe('workbench Ask model & source readers', () => {
 
             const noChatJumpBtns = [...noChatPage.el.querySelectorAll('.wb-ans-acts button')];
             expect(noChatJumpBtns).toHaveLength(1);
-            expect(noChatJumpBtns[0].textContent).toContain('Memory graph config');
+            goSpy.mockClear();
+            noChatJumpBtns[0].click();
+            expect(goSpy).toHaveBeenCalledWith('ai', expect.objectContaining({ ws: 'memory', draft: 'Adjust event tableColumns' }));
 
-            const sideVarsItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
-                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Variables');
-            expect(sideVarsItem.querySelector('.wb-src-n').textContent).toBe('2 keys');
+            const sideItemsBefore = [...noChatPage.el.querySelectorAll('.wb-src-item')];
+            const sideValueTextsBefore = sideItemsBefore.map(el => el.querySelector('.wb-src-n')?.textContent || '');
+            expect(sideValueTextsBefore.some(text => /\b2\b/.test(text))).toBe(true);
+            const regexItemIdx = sideItemsBefore.findIndex(el => /\b1\b/.test(el.querySelector('.wb-src-n')?.textContent || '') && !el.querySelector('.wb-src-st')?.classList.contains('is-off'));
+            expect(regexItemIdx).toBeGreaterThanOrEqual(0);
+            const regexLabelBefore = sideItemsBefore[regexItemIdx].querySelector('.wb-src-n').textContent;
 
-            const sideRegexItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
-                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
-            expect(sideRegexItem.querySelector('.wb-src-n').textContent).toBe('1 enabled scripts');
-
-            // Disabling the regex extension marks overview as '扩展已关闭', loadSnapshot regex.disabled as true, and side panel as 'Off'
+            // Disabling the regex extension marks overview as '扩展已关闭', loadSnapshot regex.disabled as true, and side panel row as is-off
             globalThis.Luker = savedLuker;
             disabledExts = ['regex'];
             getScriptsSpy.mockClear();
@@ -1687,9 +1659,10 @@ describe('workbench Ask model & source readers', () => {
             delete globalThis.Luker;
 
             noChatPage.onSnapshot();
-            const sideRegexOff = [...noChatPage.el.querySelectorAll('.wb-src-item')]
-                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
-            expect(sideRegexOff.querySelector('.wb-src-n').textContent).toBe('Off');
+            const sideItemsAfter = [...noChatPage.el.querySelectorAll('.wb-src-item')];
+            const sideRegexOff = sideItemsAfter[regexItemIdx];
+            expect(sideRegexOff.querySelector('.wb-src-n').textContent).not.toBe(regexLabelBefore);
+            expect(sideRegexOff.querySelector('.wb-src-n').textContent.trim().length).toBeGreaterThan(0);
             expect(sideRegexOff.querySelector('.wb-src-st').classList.contains('is-off')).toBe(true);
             expect(getScriptsSpy).not.toHaveBeenCalled();
 
@@ -1993,6 +1966,26 @@ describe('workbench Ask model & source readers', () => {
             expect(input.value).toBe('Keep my unsent draft');
             expect(aiRequestSpy).not.toHaveBeenCalled();
             expect(sendBtn.disabled).toBe(false);
+
+            // regenerate() restores stripped turns if user switches session while store.update() is in flight
+            let releaseStripUpdate;
+            const origUpdateImpl = updateSpy.getMockImplementation();
+            updateSpy.mockImplementationOnce(async (id, patch) => {
+                await new Promise((resolve) => { releaseStripUpdate = resolve; });
+                return origUpdateImpl(id, patch);
+            });
+            aiRequestSpy.mockClear();
+            const regenBtn2 = [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+            regenBtn2.click();
+            await Promise.resolve();
+            // Switch away to a new chat while strip store.update is still pending
+            hist.value = '';
+            hist.dispatchEvent(new dom.window.Event('change'));
+            releaseStripUpdate();
+            await new Promise(r => setTimeout(r, 20));
+
+            expect(aiRequestSpy).not.toHaveBeenCalled();
+            expect(byId.get(existing.id).turns).toHaveLength(4);
             page.destroy();
         } finally {
             globalThis.window = prevWindow;

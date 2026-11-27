@@ -6,7 +6,8 @@ import { i18n, i18nFormat, modeInfo } from './i18n.js';
 import { buildFlow } from './model/profile.js';
 import { buildRunView, displayStatus, formatDuration } from './model/run.js';
 
-const SLOW_RUN_MS = 25000; // cap-ok: UX threshold flagging slow multi-agent turns for optional user review
+// Suggestion rule threshold matching the "took more than 25 seconds" rule.
+const SLOW_RUN_MS = 25000;
 const NOTES_NAMESPACE = 'luker_orch_loop_notes';
 
 function activeChatId(ctx) {
@@ -15,7 +16,7 @@ function activeChatId(ctx) {
     return id ? String(id).trim() : '';
 }
 
-function serializePreviewValue(value) {
+function serializeSectionValue(value) {
     if (value == null) return '';
     if (typeof value === 'string') return value.trim();
     try {
@@ -25,7 +26,7 @@ function serializePreviewValue(value) {
     }
 }
 
-function sectionPreview(sec) {
+function sectionContent(sec) {
     if (!sec || typeof sec !== 'object') return '';
     const body = typeof sec.body === 'string' ? sec.body.trim() : '';
     const meta = sec.meta && typeof sec.meta === 'object' ? sec.meta : null;
@@ -34,16 +35,16 @@ function sectionPreview(sec) {
     const formattedErr = err ? (code ? `[${code}] ${err}` : err) : '';
     if (body) {
         if (formattedErr && !body.includes(err)) {
-            return `${formattedErr}: ${body}`.slice(0, 320); // cap-ok: section body preview cap
+            return `${formattedErr}: ${body}`;
         }
-        return body.slice(0, 320); // cap-ok: section body preview cap
+        return body;
     }
-    if (formattedErr) return formattedErr.slice(0, 320); // cap-ok: section error preview cap
+    if (formattedErr) return formattedErr;
     if (meta?.output !== undefined && meta?.output !== null) {
-        return serializePreviewValue(meta.output).slice(0, 320); // cap-ok: section output preview cap
+        return serializeSectionValue(meta.output);
     }
     if (meta?.args !== undefined && meta?.args !== null) {
-        return serializePreviewValue(meta.args).slice(0, 320); // cap-ok: section args preview cap
+        return serializeSectionValue(meta.args);
     }
     return '';
 }
@@ -243,11 +244,11 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                         return {
                             total: list.length,
                             openCount: list.filter(n => n.status !== 'closed').length,
-                            notes: list.slice(-40).map(n => ({ // cap-ok: return at most the latest 40 orchestration notes
+                            notes: list.map(n => ({
                                 id: n.id,
                                 status: n.status,
-                                text: n.text.slice(0, 400), // cap-ok: per-note preview cap
-                                ...(n.closure_reason ? { closureReason: n.closure_reason.slice(0, 200) } : {}), // cap-ok: closure reason preview cap
+                                text: n.text,
+                                ...(n.closure_reason ? { closureReason: n.closure_reason } : {}),
                             })),
                         };
                     } catch (err) {
@@ -275,11 +276,11 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                                 key: s.key,
                                 status: s.status,
                                 duration: s.duration,
-                                sections: (s.sections || []).slice(0, 6).map(sec => ({ // cap-ok: at most 6 section summaries per segment
+                                sections: (s.sections || []).map(sec => ({
                                     kind: sec?.kind || '',
                                     title: sec?.title || '',
                                     status: sec?.status || '',
-                                    preview: sectionPreview(sec),
+                                    content: sectionContent(sec),
                                 })),
                             })),
                         })),

@@ -600,16 +600,19 @@ export function isFrontendConsoleDebugLoggingEnabled() {
 }
 
 export function getFrontendLogsSnapshot(options = {}) {
-    const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : 300;
+    const unlimited = options.limit === Infinity || options.limit === null;
+    const limit = unlimited
+        ? Infinity
+        : (Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : 300);
     const sinceId = Number.isFinite(Number(options.sinceId)) ? Math.max(0, Math.floor(Number(options.sinceId))) : 0;
     const startTime = normalizeOptionalTimestamp(options.startTime);
     const endTime = normalizeOptionalTimestamp(options.endTime);
 
-    const entries = frontendLogBuffer
+    const filtered = frontendLogBuffer
         .filter((entry) => Number(entry.id) > sinceId)
         .filter((entry) => startTime === null || Number(entry.timestamp) >= startTime)
-        .filter((entry) => endTime === null || Number(entry.timestamp) <= endTime)
-        .slice(-limit);
+        .filter((entry) => endTime === null || Number(entry.timestamp) <= endTime);
+    const entries = Number.isFinite(limit) ? filtered.slice(-limit) : filtered;
     const latestId = frontendLogBuffer.length ? Number(frontendLogBuffer[frontendLogBuffer.length - 1].id) : 0;
 
     return { entries, latestId };
