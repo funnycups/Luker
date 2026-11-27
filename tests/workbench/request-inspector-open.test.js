@@ -4,21 +4,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { createRequestInspector } from '../../public/scripts/request-inspector-core.js';
 
 const callGenericPopupMock = jest.fn();
-
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    callGenericPopup: callGenericPopupMock,
-    POPUP_TYPE: { TEXT: 1 },
-}));
-
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    t: (parts, ...values) => parts.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ''), ''),
-}));
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    getRequestHeaders: () => ({ 'X-CSRF-Token': 'test' }),
-}));
 
 /** Minimal DOM-backed jQuery stand-in covering openInspectorPanel() interactions. */
 function makeMiniJQuery() {
@@ -117,7 +105,11 @@ const $stub = makeMiniJQuery();
 globalThis.$ = $stub;
 globalThis.jQuery = $stub;
 
-const { openRequestInspector } = await import('../../public/scripts/request-inspector.js');
+const { openRequestInspector } = createRequestInspector({
+    callGenericPopup: callGenericPopupMock,
+    POPUP_TYPE: { TEXT: 1 },
+    getRequestHeaders: () => ({ 'X-CSRF-Token': 'test' }),
+});
 
 describe('request-inspector openRequestInspector security & 404 fallback', () => {
     let origFetch;
@@ -193,10 +185,37 @@ describe('request-inspector openRequestInspector security & 404 fallback', () =>
             '/api/request-inspector/list',
         ]);
         expect(globalThis.toastr.info).toHaveBeenCalledTimes(1);
+        expect(globalThis.toastr.error).not.toHaveBeenCalled();
         const content = callGenericPopupMock.mock.calls[0][0];
         expect(content[0].querySelector('.ri-filter-bar')).not.toBeNull();
         expect(content[0].innerHTML).toContain('req_recent_1');
-        expect(content[0].innerHTML).not.toContain('Failed to load request details.');
+        expect(content[0].querySelector('.ri-empty')).toBeNull();
+        errorSpy.mockRestore();
+    });
+
+    test('surfaces non-404 detail load failure with error toast instead of not-found notice', async () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        globalThis.fetch = jest.fn(async (url) => {
+            if (String(url) === '/api/request-inspector/req_server_err') {
+                return { ok: false, status: 500 };
+            }
+            if (String(url) === '/api/request-inspector/list') {
+                return {
+                    ok: true,
+                    json: async () => [{ id: 'req_recent_2', type: 'chat', source: 'openai', model: 'claude-3', status: 'success', timestamp: Date.now() }],
+                };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        });
+
+        await openRequestInspector('req_server_err');
+
+        expect(globalThis.toastr.info).not.toHaveBeenCalled();
+        expect(globalThis.toastr.error).toHaveBeenCalledTimes(1);
+        expect(globalThis.toastr.error.mock.calls[0][0]).toContain('HTTP 500');
+        const content = callGenericPopupMock.mock.calls[0][0];
+        expect(content[0].querySelector('.ri-filter-bar')).not.toBeNull();
+        expect(content[0].innerHTML).toContain('req_recent_2');
         errorSpy.mockRestore();
     });
 
@@ -317,5 +336,76 @@ describe('request-inspector openRequestInspector security & 404 fallback', () =>
             'GET /api/request-inspector/list',
         ]);
         expect(fetchedUrls.some(u => u.includes('req_prev_1'))).toBe(false);
+    });
+
+    test('surfaces list load errors explicitly and preserves cached list and detail views on refresh/click failures', async () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            // 1) Initial list fetch fails -> error toast + explicit error UI (never empty-list placeholder)
+            globalThis.fetch = jest.fn(async () => ({ ok: false, status: 503 }));
+            await openRequestInspector();
+            expect(globalThis.toastr.error).toHaveBeenCalledTimes(1);
+            expect(globalThis.toastr.error.mock.calls[0][0]).toContain('HTTP 503');
+            const errContent = callGenericPopupMock.mock.calls[0][0];
+            expect(errContent[0].querySelector('.ri-list-error')).not.toBeNull();
+            expect(errContent[0].querySelector('.ri-list-error').textContent).toContain('HTTP 503');
+
+            // 2) List loads cleanly, then clicking a row whose detail fetch fails preserves list view without dead-end
+            globalThis.toastr.error.mockClear();
+            callGenericPopupMock.mockClear();
+            let listCalls = 0;
+            globalThis.fetch = jest.fn(async (url) => {
+                const target = String(url);
+                if (target === '/api/request-inspector/list') {
+                    listCalls += 1;
+                    if (listCalls === 1) {
+                        return {
+                            ok: true,
+                            json: async () => [{
+                                id: 'req_keep_1',
+                                type: 'chat',
+                                source: 'openai',
+                                model: 'gpt-4o',
+                                status: 'running',
+                                abortKind: 'request',
+                                timestamp: Date.now(),
+                            }],
+                        };
+                    }
+                    return { ok: false, status: 500 };
+                }
+                if (target === '/api/request-inspector/req_keep_1') {
+                    return { ok: false, status: 502 };
+                }
+                if (target === '/api/request-inspector/req_keep_1/abort') {
+                    return { ok: true, json: async () => ({ ok: true }) };
+                }
+                throw new Error(`Unexpected fetch: ${target}`);
+            });
+
+            await openRequestInspector();
+            const listContent = callGenericPopupMock.mock.calls[0][0];
+            const row = listContent[0].querySelector('.ri-row');
+            expect(row).not.toBeNull();
+            row.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 10));
+
+            expect(globalThis.toastr.error).toHaveBeenCalledTimes(1);
+            expect(globalThis.toastr.error.mock.calls[0][0]).toContain('HTTP 502');
+            // List view is restored intact instead of stranding user in an empty detail pane
+            expect(listContent[0].querySelector('.ri-row')?.getAttribute('data-id')).toBe('req_keep_1');
+
+            // 3) Refresh after abort fails -> preserves existing list DOM and cachedList instead of clobbering to []
+            globalThis.toastr.error.mockClear();
+            const abortBtn = listContent[0].querySelector('.ri-abort-btn');
+            abortBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 10));
+
+            expect(globalThis.toastr.error).toHaveBeenCalledTimes(1);
+            expect(globalThis.toastr.error.mock.calls[0][0]).toContain('HTTP 500');
+            expect(listContent[0].querySelector('.ri-row')?.getAttribute('data-id')).toBe('req_keep_1');
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 });

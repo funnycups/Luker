@@ -1524,10 +1524,6 @@ export function failEmbeddingInspection(request, errorMessage, httpStatus) {
 
 export const router = express.Router();
 
-// Transport bound for `/list` summary search snippets (up to 200 entries sent
-// in one JSON response); full request/response bodies are served on `/:id`.
-const INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS = 8192;
-
 function buildSearchSnippet(entry) {
     if (entry.type === 'image') {
         return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
@@ -1539,7 +1535,7 @@ function buildSearchSnippet(entry) {
         const hitsText = Array.isArray(entry.hits)
             ? entry.hits.map(h => String(h?.text ?? '')).join(' ')
             : '';
-        const combined = [
+        return [
             entry.source,
             entry.model,
             entry.operation,
@@ -1550,9 +1546,6 @@ function buildSearchSnippet(entry) {
             hitsText,
             entry.error,
         ].filter(Boolean).join(' ');
-        return combined.length > INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS
-            ? combined.slice(0, INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS)
-            : combined;
     }
     const messageText = Array.isArray(entry.fullMessages)
         ? entry.fullMessages.map(m => {
@@ -1562,10 +1555,7 @@ function buildSearchSnippet(entry) {
             return '';
         }).join(' ')
         : '';
-    const combined = [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
-    return combined.length > INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS
-        ? combined.slice(0, INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS)
-        : combined;
+    return [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
 }
 
 router.get('/list', (req, res) => {
