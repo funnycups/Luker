@@ -183,7 +183,7 @@ export function createAskPage(app) {
     // ----- Left: sources ---------------------------------------------------
     async function loadCounts() {
         const s = app.source;
-        const settled = await Promise.allSettled([s.listRequests?.({ limit: 200 }), s.frontendLogCount?.()]);
+        const settled = await Promise.allSettled([s.listRequests?.(), s.frontendLogCount?.()]);
         counts = {
             requests: settled[0].status === 'fulfilled' ? settled[0].value?.length ?? null : null,
             requestsError: settled[0].status === 'rejected',
@@ -435,7 +435,14 @@ export function createAskPage(app) {
             return created;
         } catch (err) {
             if (copyMap.size > 0) {
-                await deleteChatAttachments(ctx, [...copyMap.values()]).catch(() => {});
+                try {
+                    const cleanup = await deleteChatAttachments(ctx, [...copyMap.values()]);
+                    if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                        console.error('[workbench/ask] Partial failure rolling back forked attachments:', cleanup.failed);
+                    }
+                } catch (cleanupErr) {
+                    console.error('[workbench/ask] Failed to roll back forked attachments:', cleanupErr);
+                }
             }
             app.toast(String(err?.message || err), { error: true });
             return null;
@@ -465,26 +472,51 @@ export function createAskPage(app) {
         const targetId = session.id;
         const turns = session.turns;
         const q = turns[turns.length - 2];
+        const removedPair = turns.slice(-2);
         if (currentBusy() || !q || q.role !== 'user') return;
         const scope = scopeOf(session);
         const reuseAttachments = normalizeImageAttachments(q.attachments);
         pendingSessions.add(targetId);
         paintOpts();
         let readyToSend = false;
+        let strippedPersisted = false;
         try {
             const updated = await store.update(targetId, { turns: turns.slice(0, -2) }, scope);
-            if (!updated || version !== selectionVersion || session?.id !== targetId) return;
-            session = updated;
-            readyToSend = true;
+            if (!updated) return;
+            strippedPersisted = true;
+            if (version === selectionVersion && session?.id === targetId) {
+                session = updated;
+                readyToSend = true;
+            }
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
             pendingSessions.delete(targetId);
             paintOpts();
         }
+        let sentResult = null;
         if (readyToSend) {
             input.value = q.text || '';
-            await send({ reuseAttachments });
+            sentResult = await send({ reuseAttachments });
+        }
+        if (strippedPersisted && !sentResult?.persisted) {
+            try {
+                const current = await store.get(targetId, scope);
+                if (current) {
+                    const restored = await store.update(targetId, { turns: [...(current.turns || []), ...removedPair] }, scope);
+                    if (restored && session?.id === targetId) {
+                        session = restored;
+                        if (input.value === (q.text || '')) {
+                            input.value = '';
+                            grow();
+                        }
+                        paintBody();
+                    }
+                }
+            } catch (restoreErr) {
+                console.error('[workbench/ask] Failed to restore turns after cancelled regenerate:', restoreErr);
+                app.toast(String(restoreErr?.message || restoreErr), { error: true });
+            }
         }
     }
 
@@ -508,7 +540,11 @@ export function createAskPage(app) {
                 try {
                     await app.source.openRequestInspector(reqId);
                     return;
-                } catch { /* 回退到复制 ID */ }
+                } catch (err) {
+                    console.error(`[workbench/ask] Failed to open request inspector for "${reqId}":`, err);
+                    app.toast(String(err?.message || err), { error: true });
+                    return;
+                }
             }
             copyText(reqId);
             app.toast(i18n('Request ID copied'));
@@ -595,8 +631,8 @@ export function createAskPage(app) {
             const questionPreview = pendingCount > 0
                 ? `${question || i18n('[Image]')} (${i18n('[Image]')} ×${pendingCount})`
                 : question;
-            if (askCfg.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', questionPreview, JSON.stringify(overview, null, 1).slice(0, 1500)))) {
-                return;
+            if (askCfg.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', questionPreview, JSON.stringify(overview, null, 1)))) {
+                return { persisted: false };
             }
 
             let attachments = [];
@@ -675,7 +711,7 @@ export function createAskPage(app) {
                 paintBody();
             }
 
-            const history = buildAskHistory(priorTurns, 10);
+            const history = buildAskHistory(priorTurns);
             let turn;
             try {
                 const result = await withActivityLease({
@@ -712,11 +748,20 @@ export function createAskPage(app) {
 
             const finished = await store.get(ownerId, ownerScope);
             if (finished) await saveTo({ turns: [...finished.turns, turn] });
+            return { persisted: turnPersisted };
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
+            return { persisted: turnPersisted };
         } finally {
             if (!turnPersisted && newlyCreatedAttachmentPaths.length > 0) {
-                await deleteChatAttachments(ctx, newlyCreatedAttachmentPaths).catch(() => {});
+                try {
+                    const cleanup = await deleteChatAttachments(ctx, newlyCreatedAttachmentPaths);
+                    if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                        console.error('[workbench/ask] Partial failure cleaning up temporary attachments:', cleanup.failed);
+                    }
+                } catch (delErr) {
+                    console.error('[workbench/ask] Failed to clean up temporary attachments:', delErr);
+                }
             }
             if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (ownerId) pendingSessions.delete(ownerId);

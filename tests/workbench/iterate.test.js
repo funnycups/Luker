@@ -2410,4 +2410,190 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
             if (savedLuker !== undefined) globalThis.Luker = savedLuker;
         }
     });
+
+    test('regenerate restores removed turns, draft, and bus entries when send fails before persisting', async () => {
+        const savedLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ({}) };
+        try {
+            let loadShouldFail = false;
+            const disk = { a: 'v0' };
+            const target = {
+                id: 'preset',
+                label: 'Preset',
+                tone: 'preset',
+                scopes: async () => ({ global: true }),
+                load: async () => {
+                    if (loadShouldFail) throw new Error('target load offline');
+                    return { live: { ...disk }, target: { scope: 'global', id: 'p_restore' }, title: 'Preset Restore' };
+                },
+                targetKey: (t) => t?.id || 'p_restore',
+                prompt: async () => 'sys',
+                tools: async () => [{ type: 'function', function: { name: 'edit_a' } }],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (call, live) => ({ ...live, a: call.args.v }),
+                units: (live) => new Map([['a', { key: 'a', label: 'A', group: 'Fields', text: String(live.a), raw: live.a }]]),
+                rebuild: (base, ai, keys) => ({ ...base, ...(keys.includes('a') ? { a: ai.a } : {}) }),
+                commit: async (_t, _b, next, keys) => {
+                    disk.a = next.a;
+                    return { applied: keys, skipped: [], failure: '', undo: async () => { disk.a = 'v0'; } };
+                },
+            };
+
+            const sessions = createMemorySessionStore();
+            let round = 0;
+            const aiRequest = jest.fn(async () => {
+                round += 1;
+                if (round === 1) return { text: '', calls: [{ id: 'c1', name: 'edit_a', args: { v: 'v1' } }] };
+                return { text: 'Proposed v1', calls: [] };
+            });
+            const toast = jest.fn();
+            const page = createIteratePage({
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [target],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: () => 'h_1', canUndo: () => false, undo: async () => {} },
+                toast,
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest },
+            });
+            document.body.appendChild(page.el);
+            await page.show({ ws: 'preset', scope: 'global' });
+            await flushMicrotasks();
+
+            const textarea = page.el.querySelector('textarea.wb-input');
+            const sendBtn = page.el.querySelector('button.wb-send');
+            textarea.value = 'Refine field a';
+            sendBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            const listedBefore = await sessions.list('iterate', { scope: 'global' });
+            const sessionId = listedBefore[0].id;
+            const before = await sessions.get(sessionId, { scope: 'global' });
+            expect(before.turns).toHaveLength(2);
+
+            // Fail runTargetObj.load inside regenerate -> send() before persistence.
+            loadShouldFail = true;
+            const regenBtn = [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+            regenBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            const after = await sessions.get(sessionId, { scope: 'global' });
+            expect(after.turns).toHaveLength(2);
+            expect(after.turns[0].text).toBe('Refine field a');
+            expect(after.turns[1].text).toBe('Proposed v1');
+            expect(textarea.value).toBe('');
+
+            // Restored draft must still be applicable once load succeeds again.
+            loadShouldFail = false;
+            const applyBtn = [...page.el.querySelectorAll('.wb-chg-foot button')].find(b => b.textContent.includes('Apply selected'));
+            expect(applyBtn).toBeTruthy();
+            applyBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk.a).toBe('v1');
+
+            page.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
+    });
+
+    test('regenerate restores stripped turns if selection changes while store.update is in flight', async () => {
+        const savedLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ({}) };
+        try {
+            const disk = { a: 'v0' };
+            const target = {
+                id: 'preset',
+                label: 'Preset',
+                tone: 'preset',
+                scopes: async () => ({ global: true }),
+                load: async () => ({ live: { ...disk }, target: { scope: 'global', id: 'p_switch' }, title: 'Preset Switch' }),
+                targetKey: (t) => t?.id || 'p_switch',
+                prompt: async () => 'sys',
+                tools: async () => [{ type: 'function', function: { name: 'edit_a' } }],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (call, live) => ({ ...live, a: call.args.v }),
+                units: (live) => new Map([['a', { key: 'a', label: 'A', group: 'Fields', text: String(live.a), raw: live.a }]]),
+                rebuild: (base, ai, keys) => ({ ...base, ...(keys.includes('a') ? { a: ai.a } : {}) }),
+                commit: async (_t, _b, next, keys) => {
+                    disk.a = next.a;
+                    return { applied: keys, skipped: [], failure: '', undo: async () => { disk.a = 'v0'; } };
+                },
+            };
+
+            const baseStore = createMemorySessionStore();
+            let holdNextUpdate = false;
+            let releaseUpdate = null;
+            const sessions = {
+                ...baseStore,
+                async update(id, patch, opts) {
+                    if (holdNextUpdate) {
+                        holdNextUpdate = false;
+                        await new Promise((resolve) => { releaseUpdate = resolve; });
+                    }
+                    return baseStore.update(id, patch, opts);
+                },
+            };
+            let round = 0;
+            const aiRequest = jest.fn(async () => {
+                round += 1;
+                if (round === 1) return { text: '', calls: [{ id: 'c1', name: 'edit_a', args: { v: 'v1' } }] };
+                return { text: 'Proposed v1', calls: [] };
+            });
+            const page = createIteratePage({
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [target],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: () => 'h_1', canUndo: () => false, undo: async () => {} },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest },
+            });
+            document.body.appendChild(page.el);
+            await page.show({ ws: 'preset', scope: 'global' });
+            await flushMicrotasks();
+
+            const textarea = page.el.querySelector('textarea.wb-input');
+            textarea.value = 'Refine field a';
+            page.el.querySelector('button.wb-send').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            const sessionId = (await baseStore.list('iterate', { scope: 'global' }))[0].id;
+            expect((await baseStore.get(sessionId, { scope: 'global' })).turns).toHaveLength(2);
+
+            holdNextUpdate = true;
+            aiRequest.mockClear();
+            const regenBtn = [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+            regenBtn.click();
+            await flushMicrotasks();
+            // Switch to a brand new chat while store.update is pending
+            await page.show({ ws: 'preset', scope: 'global' });
+            releaseUpdate?.();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            expect(aiRequest).not.toHaveBeenCalled();
+            const restored = await baseStore.get(sessionId, { scope: 'global' });
+            expect(restored.turns).toHaveLength(2);
+            expect(restored.turns[0].text).toBe('Refine field a');
+            expect(restored.turns[1].text).toBe('Proposed v1');
+            page.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
+    });
 });

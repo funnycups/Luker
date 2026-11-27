@@ -5,8 +5,8 @@
 //
 // Layout (v2):
 //   - Index (`workbench_sessions`): lightweight metadata only (id, kind, ws,
-//     scope, scopeName, title, createdAt, updatedAt, pendingCount, etc.) plus
-//     `legacyImported`. Listing sessions reads only this compact index.
+//     scope, scopeName, title, createdAt, updatedAt, pendingCount, etc.).
+//     Listing sessions reads only this compact index.
 //   - Body (`workbench_session_<id>`): full conversation record preserving
 //     complete turns, messages, reasoning, tool arguments, and results with
 //     zero truncation or eviction caps. Loaded lazily on `get(id)`.
@@ -41,9 +41,12 @@ async function cleanupSessionAttachments(ctx, paths) {
     if (!Array.isArray(paths) || paths.length === 0) return;
     if (typeof globalThis.fetch !== 'function') return;
     try {
-        await deleteChatAttachments(ctx, paths);
+        const cleanup = await deleteChatAttachments(ctx, paths);
+        if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+            console.error('[workbench/sessions] Partial failure cleaning up session attachments:', cleanup.failed);
+        }
     } catch (err) {
-        console.warn('[workbench/sessions] Failed to clean up session attachments:', err);
+        console.error('[workbench/sessions] Failed to clean up session attachments:', err);
     }
 }
 
@@ -130,8 +133,6 @@ export function toSessionSummary(session) {
     if (session?.scopeName !== undefined && session.scopeName !== '') entry.scopeName = session.scopeName;
     if (session?.targetId !== undefined && session.targetId !== '') entry.targetId = session.targetId;
     if (session?.forkedFrom !== undefined && session.forkedFrom !== '') entry.forkedFrom = session.forkedFrom;
-    if (session?.legacyId !== undefined && session.legacyId !== '') entry.legacyId = session.legacyId;
-    if (session?.importedFromLegacy) entry.importedFromLegacy = true;
     return entry;
 }
 
@@ -149,9 +150,12 @@ function resolveAdapter(ctx, scopeOpts = {}) {
             key: 'global',
             read: (ns = SESSIONS_NAMESPACE) => ctx.getGlobalState(ns),
             update: (ns, updater) => ctx.updateGlobalState(ns, updater),
-            del: (ns) => (typeof ctx.deleteGlobalState === 'function'
-                ? ctx.deleteGlobalState(ns)
-                : Promise.resolve({ ok: true })),
+            del: (ns) => {
+                if (typeof ctx.deleteGlobalState !== 'function') {
+                    throw new SourceError('unsupported', 'Global state delete API is unavailable');
+                }
+                return ctx.deleteGlobalState(ns);
+            },
         };
     }
 
@@ -167,9 +171,12 @@ function resolveAdapter(ctx, scopeOpts = {}) {
             key: `character:${avatar}`,
             read: (ns = SESSIONS_NAMESPACE) => ctx.getCharacterState(avatar, ns),
             update: (ns, updater) => ctx.updateCharacterState(avatar, ns, updater),
-            del: (ns) => (typeof ctx.deleteCharacterState === 'function'
-                ? ctx.deleteCharacterState(avatar, ns)
-                : Promise.resolve({ ok: true })),
+            del: (ns) => {
+                if (typeof ctx.deleteCharacterState !== 'function') {
+                    throw new SourceError('unsupported', 'Character state delete API is unavailable');
+                }
+                return ctx.deleteCharacterState(avatar, ns);
+            },
         };
     }
 
@@ -184,9 +191,12 @@ function resolveAdapter(ctx, scopeOpts = {}) {
             key: `preset:${JSON.stringify(target || collection)}`,
             read: (ns = SESSIONS_NAMESPACE) => ctx.presets.state.get(ns, stateOpts),
             update: (ns, updater) => ctx.presets.state.update(ns, updater, stateOpts),
-            del: (ns) => (typeof ctx.presets?.state?.delete === 'function'
-                ? ctx.presets.state.delete(ns, stateOpts)
-                : Promise.resolve({ ok: true })),
+            del: (ns) => {
+                if (typeof ctx.presets?.state?.delete !== 'function') {
+                    throw new SourceError('unsupported', 'Preset state delete API is unavailable');
+                }
+                return ctx.presets.state.delete(ns, stateOpts);
+            },
         };
     }
 
@@ -200,9 +210,12 @@ function resolveAdapter(ctx, scopeOpts = {}) {
             key: `chat:${target ? JSON.stringify(target) : String(ctx.getCurrentChatId?.() || 'active')}`,
             read: (ns = SESSIONS_NAMESPACE) => ctx.getChatState(ns, stateOpts),
             update: (ns, updater) => ctx.updateChatState(ns, updater, stateOpts),
-            del: (ns) => (typeof ctx.deleteChatState === 'function'
-                ? ctx.deleteChatState(ns, stateOpts)
-                : Promise.resolve({ ok: true })),
+            del: (ns) => {
+                if (typeof ctx.deleteChatState !== 'function') {
+                    throw new SourceError('unsupported', 'Chat state delete API is unavailable');
+                }
+                return ctx.deleteChatState(ns, stateOpts);
+            },
         };
     }
 
@@ -288,29 +301,16 @@ export function createSessionStore(ctxOrProvider = null) {
         return state;
     }
 
-    async function listWithMeta(kind = null, scopeOpts = {}) {
-        const adapter = resolveAdapter(getCtx(), scopeOpts);
-        const state = await readIndexState(adapter);
-        const all = normalizeSessions(state);
-        rememberScopes(scopeOpts, all);
-        const sessions = all
-            .filter(s => !kind || s.kind === kind)
-            .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
-            .map(s => (isInlineSession(s) ? toSessionSummary(s) : clone(s)));
-        return {
-            sessions,
-            legacyImported: isPlainObject(state.legacyImported) ? clone(state.legacyImported) : {},
-            ...(isPlainObject(state.legacyImportedSettings) ? { legacyImportedSettings: clone(state.legacyImportedSettings) } : {}),
-            state: clone(state),
-        };
-    }
-
     return {
-        listWithMeta,
-
         async list(kind = null, scopeOpts = {}) {
-            const { sessions } = await listWithMeta(kind, scopeOpts);
-            return sessions;
+            const adapter = resolveAdapter(getCtx(), scopeOpts);
+            const state = await readIndexState(adapter);
+            const all = normalizeSessions(state);
+            rememberScopes(scopeOpts, all);
+            return all
+                .filter(s => !kind || s.kind === kind)
+                .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+                .map(s => (isInlineSession(s) ? toSessionSummary(s) : clone(s)));
         },
 
         async get(id, scopeOpts = null) {
@@ -335,7 +335,7 @@ export function createSessionStore(ctxOrProvider = null) {
                 try {
                     await migrateInlineSessions(adapter, idxRes.state);
                 } catch (err) {
-                    console.warn('[workbench/sessions] lazy v1->v2 split deferred:', err);
+                    console.error('[workbench/sessions] lazy v1->v2 split failed:', err);
                 }
                 return clone(found);
             }
@@ -372,9 +372,11 @@ export function createSessionStore(ctxOrProvider = null) {
                 assertOk(idxRes, 'create');
                 rememberScopes(scopeOpts, normalizeSessions(idxRes.state));
             } catch (err) {
-                await adapter.del(bodyNs).catch((delErr) => {
-                    console.warn('[workbench/sessions] failed to remove orphaned session body:', delErr);
-                });
+                try {
+                    await adapter.del(bodyNs);
+                } catch (delErr) {
+                    console.error('[workbench/sessions] failed to remove orphaned session body:', delErr);
+                }
                 throw err;
             }
             idToScope.set(session.id, clone(scopeOpts));
@@ -441,9 +443,11 @@ export function createSessionStore(ctxOrProvider = null) {
             assertOk(idxRes, 'update');
             if (!foundInIndex) {
                 // Session was deleted concurrently; remove orphaned body instead of resurrecting it.
-                await adapter.del(bodyNs).catch((delErr) => {
-                    console.warn('[workbench/sessions] failed to remove orphaned session body:', delErr);
-                });
+                try {
+                    await adapter.del(bodyNs);
+                } catch (delErr) {
+                    console.error('[workbench/sessions] failed to remove orphaned session body:', delErr);
+                }
                 idToScope.delete(id);
                 return null;
             }
@@ -463,7 +467,9 @@ export function createSessionStore(ctxOrProvider = null) {
                 if (bodyRes?.ok && isPlainObject(bodyRes.state)) {
                     attachmentPaths = collectSessionAttachmentPaths(bodyRes.state);
                 }
-            } catch { /* best-effort read for attachment cleanup */ }
+            } catch (readErr) {
+                console.error(`[workbench/sessions] failed to read session body "${id}" before attachment cleanup:`, readErr);
+            }
 
             const res = await adapter.update(SESSIONS_NAMESPACE, (current) => {
                 const base = isPlainObject(current) ? current : {};
@@ -513,22 +519,27 @@ export function createSessionStore(ctxOrProvider = null) {
             }
 
             const toDelete = removedIds.length ? removedIds : uniqueIds;
-            const attachmentPaths = new Set();
-            for (const id of toDelete) {
-                const bodyNs = sessionBodyNamespace(id);
-                try {
-                    const bodyRes = await adapter.read(bodyNs);
-                    if (bodyRes?.ok && isPlainObject(bodyRes.state)) {
-                        for (const p of collectSessionAttachmentPaths(bodyRes.state)) {
-                            attachmentPaths.add(p);
+            const deletedAttachmentPaths = new Set();
+            try {
+                for (const id of toDelete) {
+                    const bodyNs = sessionBodyNamespace(id);
+                    let pathsForBody = [];
+                    try {
+                        const bodyRes = await adapter.read(bodyNs);
+                        if (bodyRes?.ok && isPlainObject(bodyRes.state)) {
+                            pathsForBody = collectSessionAttachmentPaths(bodyRes.state);
                         }
+                    } catch (readErr) {
+                        console.error(`[workbench/sessions] failed to read session body "${id}" before attachment cleanup:`, readErr);
                     }
-                } catch { /* best-effort read for attachment cleanup */ }
-                const delRes = await adapter.del(bodyNs);
-                assertOk(delRes, 'remove');
-                idToScope.delete(id);
+                    const delRes = await adapter.del(bodyNs);
+                    assertOk(delRes, 'remove');
+                    idToScope.delete(id);
+                    for (const p of pathsForBody) deletedAttachmentPaths.add(p);
+                }
+            } finally {
+                await cleanupSessionAttachments(ctx, [...deletedAttachmentPaths]);
             }
-            await cleanupSessionAttachments(ctx, [...attachmentPaths]);
             return { removed: removedIds };
         },
     };

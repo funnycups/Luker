@@ -435,4 +435,12 @@ describe('workbench state-backed session store', () => {
         expect(res.removed).toEqual([b.id]);
         expect((await sessions.list('iterate', { scope: 'global' })).map(s => s.id)).toEqual([keep.id]);
     });
+
+    test('throws unsupported when delete state API is missing instead of returning ok', async () => {
+        const { ctx } = makeMockStateContext();
+        delete ctx.deleteGlobalState;
+        const sessions = createSessionStore(ctx);
+        const s = await sessions.create({ kind: 'ask', title: 'Test' }, { scope: 'global' });
+        await expect(sessions.remove(s.id, { scope: 'global' })).rejects.toThrow(/delete API is unavailable/i);
+    });
 });

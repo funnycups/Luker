@@ -1019,7 +1019,14 @@ export function createIteratePage(app) {
             return created;
         } catch (err) {
             if (copyMap.size > 0) {
-                await deleteChatAttachments(ctx, [...copyMap.values()]).catch(() => {});
+                try {
+                    const cleanup = await deleteChatAttachments(ctx, [...copyMap.values()]);
+                    if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                        console.error('[workbench/iterate] Partial failure rolling back forked attachments:', cleanup.failed);
+                    }
+                } catch (cleanupErr) {
+                    console.error('[workbench/iterate] Failed to roll back forked attachments:', cleanupErr);
+                }
             }
             app.toast(String(err?.message || err), { error: true });
             return null;
@@ -1071,11 +1078,26 @@ export function createIteratePage(app) {
             }
             applying.add(targetSessionId);
             paintSessions();
+            let priorTurnsSnapshot = null;
+            let priorMessagesSnapshot = null;
+            let priorNote = '';
+            let priorLastDraft = null;
+            let priorBusState = null;
+            let lastIndex = -1;
+            let outcomeDraft = null;
+            let strippedPersisted = false;
+            let mutatedLocalDraft = false;
             try {
-                const lastIndex = turns.length - 1;
-                const outcomeDraft = last.state === 'pending'
+                const currentTurns = session.turns;
+                lastIndex = currentTurns.length - 1;
+                outcomeDraft = last.state === 'pending'
                     ? draftOf(targetSessionId, lastIndex)
                     : latestDraft();
+                priorTurnsSnapshot = capturePendingDrafts(targetSessionId, currentTurns);
+                priorMessagesSnapshot = clone(session.messages || []);
+                priorNote = session.note || '';
+                priorLastDraft = draftOf(targetSessionId, lastIndex);
+                priorBusState = outcomeDraft?.bus ? outcomeDraft.bus.serialize() : null;
                 const discardIds = Array.isArray(last.proposalIds) && last.proposalIds.length
                     ? last.proposalIds
                     : (last.state === 'pending' && Array.isArray(outcomeDraft?.proposalIds) ? outcomeDraft.proposalIds : []);
@@ -1087,7 +1109,7 @@ export function createIteratePage(app) {
                     stagedBus.discardEntries(discardIds);
                     nextBusState = stagedBus.serialize();
                 }
-                const nextTurns = capturePendingDrafts(targetSessionId, turns.slice(0, -2))
+                const nextTurns = capturePendingDrafts(targetSessionId, currentTurns.slice(0, -2))
                     .map(x => (nextBusState && x.state === 'pending' && x.draft
                         ? { ...x, draft: { ...x.draft, busState: nextBusState } }
                         : x));
@@ -1097,23 +1119,60 @@ export function createIteratePage(app) {
                     note: '',
                 }, sOpts);
                 if (!updated) return;
-                if (outcomeDraft?.bus && discardIds.length) {
-                    outcomeDraft.bus.discardEntries(discardIds);
+                strippedPersisted = true;
+                if (version === selectionVersion && session?.id === targetSessionId) {
+                    if (outcomeDraft?.bus && discardIds.length) {
+                        outcomeDraft.bus.discardEntries(discardIds);
+                    }
+                    draftStore.deleteTurn(targetSessionId, lastIndex);
+                    mutatedLocalDraft = true;
+                    session = updated;
+                    readyToSend = true;
                 }
-                draftStore.deleteTurn(targetSessionId, lastIndex);
-                if (version !== selectionVersion || session?.id !== targetSessionId) return;
-                session = updated;
-                readyToSend = true;
             } finally {
                 applying.delete(targetSessionId);
                 paintSessions();
             }
+            let sentResult = null;
             if (readyToSend) {
                 if (q.hidden) {
-                    await send({ promptText: q.text, hideFromUi: true, reuseAttachments });
+                    sentResult = await send({ promptText: q.text, hideFromUi: true, reuseAttachments });
                 } else {
                     input.value = q.text || '';
-                    await send({ reuseAttachments });
+                    sentResult = await send({ reuseAttachments });
+                }
+            }
+            if (strippedPersisted && !sentResult?.persisted) {
+                try {
+                    const current = await store.get(targetSessionId, sOpts);
+                    if (current) {
+                        const restored = await store.update(targetSessionId, {
+                            turns: priorTurnsSnapshot,
+                            messages: priorMessagesSnapshot,
+                            note: priorNote,
+                        }, sOpts);
+                        if (mutatedLocalDraft) {
+                            if (outcomeDraft?.bus && priorBusState) {
+                                outcomeDraft.bus.hydrate(priorBusState);
+                            }
+                            if (priorLastDraft) {
+                                draftStore.set(targetSessionId, lastIndex, priorLastDraft);
+                            }
+                        }
+                        if (restored && session?.id === targetSessionId) {
+                            session = restored;
+                            if (!q.hidden && input.value === (q.text || '')) {
+                                input.value = '';
+                                grow();
+                            }
+                            paintBody();
+                            paintSessions();
+                            paintPreview();
+                        }
+                    }
+                } catch (restoreErr) {
+                    console.error('[workbench/iterate] Failed to restore turns after cancelled regenerate:', restoreErr);
+                    app.toast(String(restoreErr?.message || restoreErr), { error: true });
                 }
             }
         } catch (err) {
@@ -1347,10 +1406,10 @@ export function createIteratePage(app) {
         const hasTrayAttachments = !isProgrammatic && !hasReuseAttachments && attachmentTray.hasItems();
         const hasAnyAttachments = (hasReuseAttachments && sendOpts.reuseAttachments.length > 0) || hasTrayAttachments;
         const runTargetObj = selectDefaultTarget();
-        if ((!text && !hasAnyAttachments) || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
+        if ((!text && !hasAnyAttachments) || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return { persisted: false };
         if (hasPendingDecision(session)) {
             app.toast(i18n('Save the pending review decision before continuing.'), { error: true });
-            return;
+            return { persisted: false };
         }
 
         const selection = selectionVersion;
@@ -1384,7 +1443,7 @@ export function createIteratePage(app) {
                     loadError = msg;
                     app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
                 }
-                return;
+                return { persisted: false };
             }
             if (stillViewingRunScope()) loadError = '';
             const w = { base: loaded.live, target: loaded.target, title: loaded.title };
@@ -1392,10 +1451,10 @@ export function createIteratePage(app) {
             const id = targetIdFor(w.target, runTargetObj);
 
             let current = startingSession ? await store.get(startingSession.id, runScopeOpts) : null;
-            if (startingSession && !current) return;
+            if (startingSession && !current) return { persisted: false };
             if (current?.targetId && current.targetId !== id) {
                 app.toast(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', current.scopeName || targetName(runWs)), { error: true, duration: 7000 });
-                return;
+                return { persisted: false };
             }
 
             const ctx = getCtx();
@@ -1440,7 +1499,7 @@ export function createIteratePage(app) {
                 sessionScopes.set(ownerId, clone(runScopeOpts));
                 if (!current.targetId) {
                     current = await store.update(ownerId, { targetId: id }, runScopeOpts);
-                    if (!current) return;
+                    if (!current) return { persisted: false };
                     if (session?.id === ownerId) session = current;
                 }
             }
@@ -1521,7 +1580,7 @@ export function createIteratePage(app) {
             });
             if (!current) {
                 draftStore.deleteTurn(ownerId, turnIndex);
-                return;
+                return { persisted: false };
             }
             turnPersisted = true;
             if (hasTrayAttachments && selection === selectionVersion && session?.id === ownerId) {
@@ -1552,7 +1611,7 @@ export function createIteratePage(app) {
                 controller,
             });
             const latest = await store.get(ownerId, runScopeOpts);
-            if (!latest) return;
+            if (!latest) return { persisted: turnPersisted };
             const updatedSession = await saveTo({
                 turns: [...latest.turns, turn],
                 ...(nextMessages ? { messages: nextMessages } : {}),
@@ -1560,11 +1619,20 @@ export function createIteratePage(app) {
             if (turn.changes?.length && app.settings().reviewChanges === false && updatedSession) {
                 await apply(ownerId, updatedSession.turns.length - 1, turn.changes.map(c => c.key));
             }
+            return { persisted: turnPersisted };
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
+            return { persisted: turnPersisted };
         } finally {
             if (!turnPersisted && newlyCreatedAttachmentPaths.length > 0) {
-                await deleteChatAttachments(getCtx(), newlyCreatedAttachmentPaths).catch(() => {});
+                try {
+                    const cleanup = await deleteChatAttachments(getCtx(), newlyCreatedAttachmentPaths);
+                    if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                        console.error('[workbench/iterate] Partial failure cleaning up temporary attachments:', cleanup.failed);
+                    }
+                } catch (cleanupErr) {
+                    console.error('[workbench/iterate] Failed to clean up temporary attachments:', cleanupErr);
+                }
             }
             if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (ownerId) pendingSessions.delete(ownerId);
@@ -1701,6 +1769,86 @@ export function createIteratePage(app) {
         }
     }
 
+    async function computeLaterPendingRebase({ id, index, owner, draft, sessionTarget, bus = null }) {
+        const rebasedDrafts = new Map();
+        const hasLaterPending = Boolean(
+            draft
+            && sessionTarget
+            && typeof sessionTarget.units === 'function'
+            && typeof sessionTarget.rebuild === 'function'
+            && owner.turns.slice(index + 1).some((t, offset) => t?.state === 'pending' && Boolean(draftOf(id, index + 1 + offset))),
+        );
+        if (!hasLaterPending) return rebasedDrafts;
+
+        let savedBase;
+        if (typeof sessionTarget.load === 'function') {
+            const loaded = await sessionTarget.load(owner.scope, getCtx());
+            if (owner.targetId && targetIdFor(loaded.target, sessionTarget) !== owner.targetId) {
+                throw new Error(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', owner.scopeName || targetName(owner.ws)));
+            }
+            savedBase = loaded.live;
+            work.set(draft.workKey, { base: loaded.live, target: loaded.target, title: loaded.title });
+        } else {
+            savedBase = work.get(draft.workKey)?.base ?? draft.base;
+        }
+        let runningBase = clone(savedBase);
+        for (let i = 0; i < index; i++) {
+            if (owner.turns[i]?.state !== 'pending') continue;
+            const earlierDraft = draftOf(id, i);
+            if (!earlierDraft) continue;
+            const earlierKeys = diffUnits(
+                sessionTarget.units(earlierDraft.base, earlierDraft.target),
+                sessionTarget.units(earlierDraft.ai, earlierDraft.target),
+            ).map(change => change.key);
+            if (earlierKeys.length) {
+                runningBase = sessionTarget.rebuild(runningBase, earlierDraft.ai, earlierKeys, earlierDraft.target);
+            }
+        }
+        for (let i = index + 1; i < owner.turns.length; i++) {
+            const laterTurn = owner.turns[i];
+            if (laterTurn?.state !== 'pending') continue;
+            const laterDraft = draftOf(id, i);
+            if (!laterDraft) continue;
+            const ownKeys = diffUnits(
+                sessionTarget.units(laterDraft.base, laterDraft.target),
+                sessionTarget.units(laterDraft.ai, laterDraft.target),
+            ).map(change => change.key);
+            const nextBase = clone(runningBase);
+            const nextAi = ownKeys.length
+                ? sessionTarget.rebuild(clone(nextBase), laterDraft.ai, ownKeys, laterDraft.target)
+                : clone(nextBase);
+            const nextChanges = buildTurnChanges({
+                base: nextBase,
+                ai: nextAi,
+                units: sessionTarget.units,
+                bus: bus ?? laterDraft.bus,
+                proposalIds: laterTurn.proposalIds || laterDraft.proposalIds || [],
+                kindAdapters: sessionTarget.proposalKinds,
+                targetRef: laterDraft.target,
+            });
+            rebasedDrafts.set(i, {
+                draft: laterDraft,
+                base: nextBase,
+                ai: nextAi,
+                changes: nextChanges,
+            });
+            runningBase = nextAi;
+        }
+        return rebasedDrafts;
+    }
+
+    function applyLaterPendingRebaseToMemory(id, rebasedDrafts) {
+        for (const [laterIdx, rebased] of rebasedDrafts.entries()) {
+            if (rebased.changes.length) {
+                rebased.draft.base = rebased.base;
+                rebased.draft.ai = rebased.ai;
+                rebased.draft.changes = rebased.changes;
+            } else {
+                draftStore.deleteTurn(id, laterIdx);
+            }
+        }
+    }
+
     // ----- decide ---------------------------------------------------------
     async function apply(id, index, keys) {
         const sOpts = sessionScopes.get(id) || scopeOptsFor() || { scope: 'global' };
@@ -1772,13 +1920,35 @@ export function createIteratePage(app) {
             const { state, historyId, requiresUndo, savedCount, unsaved, failure, note } = draft.decision;
             const fresh = await store.get(id, sOpts);
             if (!fresh) throw new Error(i18nFormat('Session "${0}" no longer exists. The review decision was not saved.', id));
+            const rebasedDrafts = await computeLaterPendingRebase({
+                id,
+                index,
+                owner: fresh,
+                draft,
+                sessionTarget,
+                bus: draft.bus,
+            });
+            const busState = draft.bus?.serialize?.() || null;
+            const nextTurns = fresh.turns.map((x, i) => {
+                if (i === index) return { ...x, state, historyId, requiresUndo, draft: null };
+                const rebased = rebasedDrafts.get(i);
+                if (rebased) {
+                    const updatedDraft = { ...rebased.draft, base: rebased.base, ai: rebased.ai, changes: rebased.changes };
+                    return rebased.changes.length
+                        ? { ...x, changes: rebased.changes, draft: serializeIterationDraft(updatedDraft) }
+                        : { ...x, changes: [], state: 'discarded', draft: null };
+                }
+                const existingDraft = draftOf(id, i);
+                return x.state === 'pending' && existingDraft
+                    ? { ...x, draft: serializeIterationDraft(existingDraft) }
+                    : x;
+            }).map(x => (busState && x.state === 'pending' && x.draft ? { ...x, draft: { ...x.draft, busState } } : x));
             const updated = await store.update(id, {
-                turns: capturePendingDrafts(id, fresh.turns.map((x, i) => (i === index
-                    ? { ...x, state, historyId, requiresUndo, draft: null }
-                    : x))),
+                turns: nextTurns,
                 note,
             }, sOpts);
             if (!updated) throw new Error(i18nFormat('Session "${0}" no longer exists. The review decision was not saved.', id));
+            applyLaterPendingRebaseToMemory(id, rebasedDrafts);
             if (session?.id === id) session = updated;
             work.delete(draft.workKey);
             draftStore.deleteTurn(id, index);
@@ -1840,70 +2010,14 @@ export function createIteratePage(app) {
             // Rebase any later stacked pending turns onto the current saved base
             // plus earlier remaining pending turns so their diffs reflect any
             // applied/external changes while dropping only the discarded turn.
-            const rebasedDrafts = new Map();
-            const hasLaterPending = Boolean(
-                draft
-                && sessionTarget
-                && typeof sessionTarget.units === 'function'
-                && typeof sessionTarget.rebuild === 'function'
-                && owner.turns.slice(index + 1).some((t, offset) => t?.state === 'pending' && Boolean(draftOf(id, index + 1 + offset))),
-            );
-            if (hasLaterPending) {
-                let savedBase;
-                if (typeof sessionTarget.load === 'function') {
-                    const loaded = await sessionTarget.load(owner.scope, getCtx());
-                    if (owner.targetId && targetIdFor(loaded.target, sessionTarget) !== owner.targetId) {
-                        throw new Error(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', owner.scopeName || targetName(owner.ws)));
-                    }
-                    savedBase = loaded.live;
-                    work.set(draft.workKey, { base: loaded.live, target: loaded.target, title: loaded.title });
-                } else {
-                    savedBase = work.get(draft.workKey)?.base ?? draft.base;
-                }
-                let runningBase = clone(savedBase);
-                for (let i = 0; i < index; i++) {
-                    if (owner.turns[i]?.state !== 'pending') continue;
-                    const earlierDraft = draftOf(id, i);
-                    if (!earlierDraft) continue;
-                    const earlierKeys = diffUnits(
-                        sessionTarget.units(earlierDraft.base, earlierDraft.target),
-                        sessionTarget.units(earlierDraft.ai, earlierDraft.target),
-                    ).map(change => change.key);
-                    if (earlierKeys.length) {
-                        runningBase = sessionTarget.rebuild(runningBase, earlierDraft.ai, earlierKeys, earlierDraft.target);
-                    }
-                }
-                for (let i = index + 1; i < owner.turns.length; i++) {
-                    const laterTurn = owner.turns[i];
-                    if (laterTurn?.state !== 'pending') continue;
-                    const laterDraft = draftOf(id, i);
-                    if (!laterDraft) continue;
-                    const ownKeys = diffUnits(
-                        sessionTarget.units(laterDraft.base, laterDraft.target),
-                        sessionTarget.units(laterDraft.ai, laterDraft.target),
-                    ).map(change => change.key);
-                    const nextBase = clone(runningBase);
-                    const nextAi = ownKeys.length
-                        ? sessionTarget.rebuild(clone(nextBase), laterDraft.ai, ownKeys, laterDraft.target)
-                        : clone(nextBase);
-                    const nextChanges = buildTurnChanges({
-                        base: nextBase,
-                        ai: nextAi,
-                        units: sessionTarget.units,
-                        bus: staged?.bus ?? laterDraft.bus,
-                        proposalIds: laterTurn.proposalIds || laterDraft.proposalIds || [],
-                        kindAdapters: sessionTarget.proposalKinds,
-                        targetRef: laterDraft.target,
-                    });
-                    rebasedDrafts.set(i, {
-                        draft: laterDraft,
-                        base: nextBase,
-                        ai: nextAi,
-                        changes: nextChanges,
-                    });
-                    runningBase = nextAi;
-                }
-            }
+            const rebasedDrafts = await computeLaterPendingRebase({
+                id,
+                index,
+                owner,
+                draft,
+                sessionTarget,
+                bus: staged?.bus ?? null,
+            });
 
             const turns = owner.turns.map((x, i) => {
                 if (i === index) return { ...x, state: 'discarded', draft: null };
@@ -1929,15 +2043,7 @@ export function createIteratePage(app) {
                 for (const pid of proposalIds) draft.bus.reject(pid);
                 draft.bus.drainOutcomes?.();
             }
-            for (const [laterIdx, rebased] of rebasedDrafts.entries()) {
-                if (rebased.changes.length) {
-                    rebased.draft.base = rebased.base;
-                    rebased.draft.ai = rebased.ai;
-                    rebased.draft.changes = rebased.changes;
-                } else {
-                    draftStore.deleteTurn(id, laterIdx);
-                }
-            }
+            applyLaterPendingRebaseToMemory(id, rebasedDrafts);
             draftStore.deleteTurn(id, index);
             if (session?.id === id) session = updated;
         } catch (err) {
