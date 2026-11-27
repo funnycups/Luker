@@ -12,7 +12,6 @@ import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
 import { incomingRefFor } from '../../../src/sync/backends/lan/incoming.js';
 import { THROWPOINTS } from '../../../src/sync/pipeline/failpoints.js';
 import { registerSyncHooks } from '../../../src/sync/pipeline/sync-hooks.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { syncService } from '../../../src/sync/sync-service.js';
 import { commitFiles } from '../_lib/commits.js';
 
@@ -25,7 +24,6 @@ describe('authenticated /session/offer', () => {
     let A;
     let B;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         B = await startLanDevice();
         callback = B.userStore.selfCallback();

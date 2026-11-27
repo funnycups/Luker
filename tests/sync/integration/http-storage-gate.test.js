@@ -18,7 +18,6 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { CONTRACT_HARNESSES } from '../_lib/required-engines.js';
 import { startLanDevice } from '../_lib/lan-devices.js';
 import { upsertLanBackend } from '../../../src/sync/state.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 
 const SECRET = 'd'.repeat(64);
 const PEER = 'u@0a1b2c3d';
@@ -28,7 +27,6 @@ describe.each(CONTRACT_HARNESSES)('sync routes on $name', ({ make }) => {
     let harness;
 
     beforeEach(async () => {
-        _resetGateForTests();
         device = await startLanDevice({
             makeEngine: async () => {
                 harness = await make();

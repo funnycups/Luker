@@ -13,7 +13,6 @@ import { makeUserDirs } from './_lib/user-dirs.js';
 import { runSyncCycle } from '../../src/sync/pipeline/cycle.js';
 import { PAUSEPOINTS } from '../../src/sync/pipeline/failpoints.js';
 import { FsEngine } from '../../src/storage/engines/fs-engine.js';
-import { _resetGateForTests } from '../../src/sync/in-progress-gate.js';
 
 describe('IncomingRefBackend', () => {
     let userRoot;
@@ -33,7 +32,6 @@ describe('IncomingRefBackend', () => {
     });
 
     test('a cycle over the incoming ref passes the remote-head pausepoint without pausing', async () => {
-        _resetGateForTests();
         const pauseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-incoming-pause-'));
         process.env.LUKER_SYNC_PAUSEPOINT = PAUSEPOINTS.AFTER_REMOTE_HEAD;
         process.env.LUKER_SYNC_PAUSE_DIR = pauseDir;

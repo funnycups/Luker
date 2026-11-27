@@ -8,7 +8,7 @@ import { router as statsRouter, flushStatsForHandle, registerStatsSyncHooks } fr
 import { getStorageEngine } from '../../../src/storage/index.js';
 import { runSyncCycle } from '../../../src/sync/pipeline/cycle.js';
 import { runBeforeSnapshot, runAfterReconcile } from '../../../src/sync/pipeline/sync-hooks.js';
-import { withWriterLock, setDirtyListener, getGateState, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { withWriterLock, setDirtyListener, getGateState } from '../../../src/sync/in-progress-gate.js';
 import { readBlobBytes, readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { until } from '../_lib/until.js';
@@ -28,7 +28,7 @@ describe('stats around sync', () => {
     const statsFile = () => JSON.parse(fs.readFileSync(path.join(harness.dirs.root, 'stats.json'), 'utf8'));
 
     beforeEach(async () => {
-        _resetGateForTests();
+        setDirtyListener(null);
         remote = await makeRemote();
         harness = await makeEndpointHarness({ mode: 'fs', mount: app => app.use('/api/stats', statsRouter) });
         owner = { handle: harness.handle, userRoot: harness.dirs.root, directories: harness.dirs };

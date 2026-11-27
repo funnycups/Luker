@@ -7,13 +7,12 @@ import { startLanDevice, pair } from '../_lib/lan-devices.js';
 import { until } from '../_lib/until.js';
 import { ensureShadowRepo } from '../../../src/sync/shadow.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
-import { getGateState, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { getGateState } from '../../../src/sync/in-progress-gate.js';
 
 describe('undo over the sync API', () => {
     let A;
     let B;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         B = await startLanDevice();
     });

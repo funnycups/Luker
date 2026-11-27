@@ -16,7 +16,6 @@ import { SYNC_AUTHOR } from '../../../src/sync/pipeline/merge.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
 import { readSqlRecordValue, writeSqlRecordValue } from '../../../src/sync/materialize.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { CONTRACT_HARNESSES } from '../_lib/required-engines.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { BACKEND_ID, makeDevice, makeRemote, remoteHead, resolveRefOrNull } from '../_lib/devices.js';
@@ -79,7 +78,6 @@ describe('local sync operations', () => {
     }
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(() => {
@@ -653,7 +651,6 @@ describe.each(CONTRACT_HARNESSES.filter(h => h.name !== 'FsEngine'))('resolving 
     const chatValue = { header: { user_name: 'U', character_name: 'Seraphina', chat_metadata: {} }, body: [{ name: 'U', is_user: true, mes: 'hi' }] };
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(async () => {

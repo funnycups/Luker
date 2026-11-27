@@ -18,7 +18,6 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
 import { startLanDevice } from '../_lib/lan-devices.js';
 import { readRegistry, upsertLanBackend } from '../../../src/sync/state.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { ensureShadowRepo } from '../../../src/sync/shadow.js';
 import { readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
 
@@ -29,7 +28,6 @@ describe('sync session lifecycle', () => {
     let device;
 
     beforeEach(async () => {
-        _resetGateForTests();
         device = await startLanDevice();
         await upsertLanBackend({ userRoot: device.userRoot, backendId: PEER, label: 'p', categories: [], syncSecret: SECRET });
     });

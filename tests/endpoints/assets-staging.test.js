@@ -53,12 +53,11 @@ describe('assets staging', () => {
         assetsDir = path.join(userRoot, 'assets');
         fs.mkdirSync(assetsDir);
         dirtyCalls = [];
-        gate._resetGateForTests();
         gate.setDirtyListener(info => { dirtyCalls.push(info); });
     });
 
     afterEach(() => {
-        gate._resetGateForTests();
+        gate.setDirtyListener(null);
         fs.rmSync(userRoot, { recursive: true, force: true });
     });
 

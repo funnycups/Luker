@@ -104,12 +104,11 @@ describe('staged extension install and update', () => {
         extensionsDir = path.join(userRoot, 'extensions');
         fs.mkdirSync(extensionsDir, { recursive: true });
         dirtyCalls = [];
-        gate._resetGateForTests();
         gate.setDirtyListener(info => { dirtyCalls.push(info); });
     }
 
     afterEach(() => {
-        gate._resetGateForTests();
+        gate.setDirtyListener(null);
     });
 
     function buildApp() {

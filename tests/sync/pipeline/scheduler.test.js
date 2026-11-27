@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createScheduler } from '../../../src/sync/pipeline/scheduler.js';
 import { registerSyncHooks } from '../../../src/sync/pipeline/sync-hooks.js';
 import { upsertLanBackend, readRegistry, setSchedule, recordLastSync, updateRegistry } from '../../../src/sync/state.js';
-import { getGateState, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { getGateState, setDirtyListener } from '../../../src/sync/in-progress-gate.js';
 import { IncomingRefBackend } from '../../../src/sync/backends/lan/incoming.js';
 import { syncError } from '../../../src/sync/errors.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
@@ -80,7 +80,7 @@ describe('sync scheduler', () => {
     }
 
     beforeEach(async () => {
-        _resetGateForTests();
+        setDirtyListener(null);
         remotes = {};
         for (const id of ['r1', 'r2']) {
             const r = await makeRemote();

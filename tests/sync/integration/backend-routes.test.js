@@ -9,7 +9,6 @@ import { createSyncRouter } from '../../../src/endpoints/sync.js';
 import { readRegistry, updateRegistry, upsertLanBackend } from '../../../src/sync/state.js';
 import { ensureShadowRepo } from '../../../src/sync/shadow.js';
 import { syncService } from '../../../src/sync/sync-service.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { makeDevice, makeRemote } from '../_lib/devices.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { runSyncCycle, readUndoPoint } from '../../../src/sync/pipeline/cycle.js';
@@ -20,7 +19,6 @@ const PEER = 'u@0a1b2c3d';
 describe('backend routes', () => {
     let A;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         await upsertLanBackend({ userRoot: A.userRoot, backendId: PEER, label: 'Phone', categories: ['worlds'], peerAuth: { username: 'u', password: 'pw' }, syncSecret: 'a'.repeat(64) });
     });

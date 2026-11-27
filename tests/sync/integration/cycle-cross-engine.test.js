@@ -7,7 +7,6 @@ import { runSyncCycle, MAIN_REF } from '../../../src/sync/pipeline/cycle.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
 import { readSqlRecordValue, writeSqlRecordValue } from '../../../src/sync/materialize.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { BACKEND_ID, makeRemote } from '../_lib/devices.js';
 import { withNestedDirs } from '../_lib/nested-dirs.js';
@@ -96,7 +95,6 @@ describe.each(pairs)('cross-engine sync %s ↔ %s', (nameA, nameB) => {
     }
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(async () => {

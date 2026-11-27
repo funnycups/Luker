@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, test, expect } from '@jest/globals';
+import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHook } from 'node:async_hooks';
@@ -182,6 +182,12 @@ describe('live backup config reload', () => {
         fs.mkdirSync(chatsDir, { recursive: true });
     });
 
+    afterEach(() => {
+        if (backupsDir) {
+            chats.flushChatBackups(backupsDir);
+        }
+    });
+
     test('toggling backups.chat.enabled off and back on takes effect immediately after reloadConfigCache', async () => {
         writeBackupYaml({ enabled: false, throttleInterval: 0 });
         await chats.trySaveChat(makeChat('disabled'), path.join(chatsDir, 'a.jsonl'), true, 'live-user', 'Alpha', backupsDir);
@@ -193,20 +199,16 @@ describe('live backup config reload', () => {
     });
 
     test('saves while backups.chat.enabled is false do not arm throttle cooldown after re-enabling', async () => {
-        try {
-            writeBackupYaml({ enabled: false, throttleInterval: 60000 });
-            await chats.trySaveChat(makeChat('while-disabled'), path.join(chatsDir, 'cd.jsonl'), true, 'live-user', 'CooldownChar', backupsDir);
-            expect(fs.readdirSync(backupsDir)).toHaveLength(0);
+        writeBackupYaml({ enabled: false, throttleInterval: 60000 });
+        await chats.trySaveChat(makeChat('while-disabled'), path.join(chatsDir, 'cd.jsonl'), true, 'live-user', 'CooldownChar', backupsDir);
+        expect(fs.readdirSync(backupsDir)).toHaveLength(0);
 
-            writeBackupYaml({ enabled: true, throttleInterval: 60000 });
-            await chats.trySaveChat(makeChat('after-reenable'), path.join(chatsDir, 'cd.jsonl'), true, 'live-user', 'CooldownChar', backupsDir);
+        writeBackupYaml({ enabled: true, throttleInterval: 60000 });
+        await chats.trySaveChat(makeChat('after-reenable'), path.join(chatsDir, 'cd.jsonl'), true, 'live-user', 'CooldownChar', backupsDir);
 
-            const files = fs.readdirSync(backupsDir);
-            expect(files).toHaveLength(1);
-            expect(fs.readFileSync(path.join(backupsDir, files[0]), 'utf8')).toContain('"after-reenable"');
-        } finally {
-            chats._resetChatBackupThrottlesForTests();
-        }
+        const files = fs.readdirSync(backupsDir);
+        expect(files).toHaveLength(1);
+        expect(fs.readFileSync(path.join(backupsDir, files[0]), 'utf8')).toContain('"after-reenable"');
     });
 
     test('lowering backups.chat.maxTotalBackups trims total chat backups on next save', async () => {
@@ -252,15 +254,5 @@ describe('live backup config reload', () => {
         await expect(
             chats.trySaveChat(staleChat, chatFile, false, 'live-user', 'IntegrityChar', backupsDir),
         ).rejects.toThrow();
-    });
-
-    test('_resetChatBackupThrottlesForTests cleanly cancels throttled and zero-interval entries', async () => {
-        writeBackupYaml({ enabled: true, throttleInterval: 60000 });
-        await chats.trySaveChat(makeChat('throttled'), path.join(chatsDir, 'r1.jsonl'), true, 'live-user', 'ResetA', backupsDir);
-
-        writeBackupYaml({ enabled: true, throttleInterval: 0 });
-        await chats.trySaveChat(makeChat('immediate'), path.join(chatsDir, 'r2.jsonl'), true, 'live-user', 'ResetB', backupsDir);
-
-        expect(() => chats._resetChatBackupThrottlesForTests()).not.toThrow();
     });
 });

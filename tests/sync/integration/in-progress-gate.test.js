@@ -6,7 +6,7 @@ import path from 'node:path';
 import { startLanDevice, pair } from '../_lib/lan-devices.js';
 import { until } from '../_lib/until.js';
 import { upsertLanBackend } from '../../../src/sync/state.js';
-import { getGateState, runGatedWrite, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { getGateState, runGatedWrite } from '../../../src/sync/in-progress-gate.js';
 
 const IDLE = { readers: 0, writerHeld: false, waitingReaders: 0, waitingWriters: 0 };
 
@@ -15,7 +15,6 @@ describe('the write gate around LAN syncs', () => {
     let B;
     let pauseDir;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         B = await startLanDevice();
         pauseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-gate-pause-'));

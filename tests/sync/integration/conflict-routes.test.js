@@ -12,7 +12,6 @@ import { CONFLICTS_PATH, NOTICES_PATH, serializeEntries } from '../../../src/syn
 import { blobOidOf, readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { reviewedChoice } from '../_lib/conflict-choices.js';
 import { PAUSEPOINTS } from '../../../src/sync/pipeline/failpoints.js';
 
@@ -26,7 +25,6 @@ describe('conflict routes across two devices', () => {
     const sync = device => device.call('POST', `/backends/${id}/sync`);
     const status = async device => (await device.call('GET', '/status')).body;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice({ deviceLabel: 'A device' });
         B = await startLanDevice({ deviceLabel: 'B device' });
     });

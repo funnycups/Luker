@@ -6,7 +6,7 @@ import request from 'supertest';
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../../storage/harness/endpoint-harness.js';
 import { router as settingsRouter } from '../../../src/endpoints/settings.js';
 import { router as worldInfoRouter } from '../../../src/endpoints/worldinfo.js';
-import { acquireWriter, getGateState, setDirtyListener, syncWriteGateMiddleware, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { acquireWriter, getGateState, setDirtyListener, syncWriteGateMiddleware } from '../../../src/sync/in-progress-gate.js';
 
 const FS_HARNESSES = ENDPOINT_HARNESSES.filter(h => h.mode === 'fs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -17,7 +17,7 @@ async function until(predicate) {
 describe.each(FS_HARNESSES)('sync write gate with real routers on $name', ({ mode }) => {
     let h;
     beforeEach(async () => {
-        _resetGateForTests();
+        setDirtyListener(null);
         h = await makeEndpointHarness({
             mode,
             mount: (app) => {
@@ -28,7 +28,7 @@ describe.each(FS_HARNESSES)('sync write gate with real routers on $name', ({ mod
         });
     });
     afterEach(async () => {
-        _resetGateForTests();
+        setDirtyListener(null);
         if (h) await h.cleanup();
     });
 

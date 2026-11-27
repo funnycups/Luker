@@ -15,7 +15,6 @@ import { jest } from '@jest/globals';
 import { makeFixtureUser } from './_fixture-helper.js';
 import {
     enumerateRoot,
-    __setCategoryWalkSoftTimeoutForTest,
 } from '../../src/storage/inspector.js';
 
 const FAKE_USER = { handle: 'default-user', storageQuotaBytes: -1 };
@@ -33,7 +32,6 @@ describe('enumerateRoot — timeout contract (deterministic via fake timers)', (
 
     afterEach(() => {
         jest.useRealTimers();
-        __setCategoryWalkSoftTimeoutForTest(30_000);
     });
 
     test('all categories time out → every entry has sizeBytes:null, note about time, canDrill:false', async () => {
@@ -41,8 +39,7 @@ describe('enumerateRoot — timeout contract (deterministic via fake timers)', (
             worlds: true, extensions: true, vectors: true,
         });
         try {
-            __setCategoryWalkSoftTimeoutForTest(1);
-            const p = enumerateRoot(userRoot, FAKE_USER, FAKE_ADMIN_SETTINGS);
+            const p = enumerateRoot(userRoot, FAKE_USER, FAKE_ADMIN_SETTINGS, { softTimeoutMs: 1 });
             // Fire the wrapper's setTimeout(...1ms) synchronously. walkP is
             // still pending on real fs I/O (libuv has not had a chance to
             // deliver readdir/stat completions because we have not yielded
@@ -76,8 +73,7 @@ describe('enumerateRoot — timeout contract (deterministic via fake timers)', (
             // Timeout is 30s; we never advance fake timers, so the wrapper's
             // setTimeout can never win the race. Real fs I/O (still on real
             // timers because we did not fake libuv) completes normally.
-            __setCategoryWalkSoftTimeoutForTest(30_000);
-            const res = await enumerateRoot(userRoot, FAKE_USER, FAKE_ADMIN_SETTINGS);
+            const res = await enumerateRoot(userRoot, FAKE_USER, FAKE_ADMIN_SETTINGS, { softTimeoutMs: 30_000 });
 
             expect(res.entries.length).toBe(10);
             for (const e of res.entries) {

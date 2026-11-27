@@ -8,7 +8,6 @@ import { runSyncCycle, MAIN_REF } from '../../../src/sync/pipeline/cycle.js';
 import { blobOidOf, readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
 import { createConflictPolicy } from '../../../src/sync/pipeline/conflict-policy.js';
 import { CONFLICTS_PATH, NOTICES_PATH, readEntries } from '../../../src/sync/pipeline/conflict-records.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { write as writeCard } from '../../../src/character-card-parser.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { BACKEND_ID, makeDevice, makeRemote, resolveRefOrNull } from '../_lib/devices.js';
@@ -23,7 +22,6 @@ const card = chat => writeCard(SEED_PNG, JSON.stringify({ spec: 'chara_card_v2',
 
 describe('two devices merging the same heads at once', () => {
     const cleanups = [];
-    beforeEach(() => _resetGateForTests());
     afterEach(() => {
         for (const cleanup of cleanups.splice(0)) cleanup();
     });

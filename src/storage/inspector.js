@@ -328,35 +328,23 @@ async function computeCategorySize(userRoot, category) {
 /**
  * 单类别 walk 的软超时上限 (毫秒)。
  *
- * 30 s = HTTP 客户端不合理等待阈值 · 触发时返回 null size 让前端标 ?
- *        并显示 tooltip · 不 abort walker (允许 background 完成 · 下次刷新
- *        可能因 fs cache 加热而不再超时)。
- *
- * 用 `let` 而非 `const` 以便测试专用 setter (__setCategoryWalkSoftTimeoutForTest)
- * 临时调低到 ms 级验证 wrapper 契约。生产代码不应改写此值。
+ * 30 s = HTTP 客户端等待上限 · 触发时返回 null size 让前端标 ?
+ *        并显示 tooltip · 不 abort walker (允许 background 完成)。
  */
-export let CATEGORY_WALK_SOFT_TIMEOUT_MS = 30_000;
-
-/**
- * 测试专用 · 临时改写单类别 walk 软超时 · 用完必须还原为 30_000。
- * 命名带 `__` 与 `ForTest` 双重前缀 · 生产代码不允许调用。
- */
-export function __setCategoryWalkSoftTimeoutForTest(ms) {
-    CATEGORY_WALK_SOFT_TIMEOUT_MS = ms;
-}
+export const CATEGORY_WALK_SOFT_TIMEOUT_MS = 30_000;
 
 /**
  * computeCategorySize 的软超时包装。
  * 超时时返回 { sizeBytes: null, childCount: 0, error: 'timeout' } ·
  * walker 本身 (computeCategorySize) 继续在后台跑,不 hard-abort。
  */
-export async function computeCategorySizeWithTimeout(userRoot, category) {
+export async function computeCategorySizeWithTimeout(userRoot, category, { softTimeoutMs = CATEGORY_WALK_SOFT_TIMEOUT_MS } = {}) {
     const walkP = computeCategorySize(userRoot, category);
     let timer;
     const timerP = new Promise((resolve) => {
         timer = setTimeout(
             () => resolve({ __timeout: true }),
-            CATEGORY_WALK_SOFT_TIMEOUT_MS,
+            softTimeoutMs,
         );
     });
     const winner = await Promise.race([walkP, timerP]);
@@ -364,7 +352,7 @@ export async function computeCategorySizeWithTimeout(userRoot, category) {
         // walker 未完成 · 让它继续跑到底 (不 detach warning)
         walkP.catch(() => { /* swallow · walker 结果被丢弃 */ });
         console.warn(
-            `storage-inspector: category ${category.key} walk exceeded ${CATEGORY_WALK_SOFT_TIMEOUT_MS}ms, returning null size`,
+            `storage-inspector: category ${category.key} walk exceeded ${softTimeoutMs}ms, returning null size`,
         );
         return { sizeBytes: null, childCount: 0, error: 'timeout' };
     }
@@ -376,9 +364,9 @@ export async function computeCategorySizeWithTimeout(userRoot, category) {
  * L0 (打开 Inspector 时的第一层) · 返回全 10 类 total + quota。
  * 并行 walk 每类 · 各类间独立超时不影响其它类。
  */
-export async function enumerateRoot(userRoot, user, adminSettings) {
+export async function enumerateRoot(userRoot, user, adminSettings, { softTimeoutMs = CATEGORY_WALK_SOFT_TIMEOUT_MS } = {}) {
     const catResults = await Promise.all(CATEGORIES.map(async (cat) => {
-        const { sizeBytes, childCount, error } = await computeCategorySizeWithTimeout(userRoot, cat);
+        const { sizeBytes, childCount, error } = await computeCategorySizeWithTimeout(userRoot, cat, { softTimeoutMs });
         return {
             key: cat.key,
             label: cat.label,

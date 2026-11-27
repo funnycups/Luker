@@ -9,7 +9,6 @@ import { blobOidOf, readCommitFiles } from '../../../src/sync/pipeline/git-tree.
 import { CONFLICTS_PATH, readEntries } from '../../../src/sync/pipeline/conflict-records.js';
 import { ensureShadowRepo } from '../../../src/sync/shadow.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 
 const HEADER = JSON.stringify({ user_name: 'U', character_name: 'Seraphina', chat_metadata: {} });
 const CHAT = 'chats/Seraphina/c1.jsonl';
@@ -18,7 +17,6 @@ describe('two LAN devices on the shared pipeline', () => {
     let A;
     let B;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         B = await startLanDevice();
     });

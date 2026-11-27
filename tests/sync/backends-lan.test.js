@@ -15,7 +15,6 @@ import { readRegistry, upsertLanBackend, removeBackendCompletely } from '../../s
 import { ensureShadowRepo } from '../../src/sync/shadow.js';
 import { atomicFs } from '../../src/sync/pipeline/atomic-fs.js';
 import { FsEngine } from '../../src/storage/engines/fs-engine.js';
-import { _resetGateForTests } from '../../src/sync/in-progress-gate.js';
 import { syncService } from '../../src/sync/sync-service.js';
 import { until } from './_lib/until.js';
 import { startDnsFixture, startTlsFixture, startHttpFixture } from './_lib/network-fixtures.js';
@@ -35,7 +34,6 @@ describe('LanBackend against a real peer router', () => {
     const writeB = (rel, content) => { const abs = path.join(bRoot, ...rel.split('/')); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, content); };
 
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         await upsertLanBackend({ userRoot: A.userRoot, backendId: PEER, label: 'B device', categories: ['worlds'], syncSecret: SECRET });
         bRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-lan-b-'));

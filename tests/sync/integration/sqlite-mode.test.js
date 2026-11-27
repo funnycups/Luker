@@ -5,7 +5,6 @@ import { startLanDevice, pair } from '../_lib/lan-devices.js';
 import { until } from '../_lib/until.js';
 import { SqliteEngine } from '../../../src/storage/engines/sqlite-engine.js';
 import { readSqlRecordValue, writeSqlRecordValue } from '../../../src/sync/materialize.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 
 const WORLD = { kind: 'world', name: 'Glade Lore' };
 const CHAT = { kind: 'chat', charDir: 'Seraphina', name: 'Forest Path', isGroup: false };
@@ -16,7 +15,6 @@ describe('LAN sync between two sqlite devices', () => {
     let A;
     let B;
     beforeEach(async () => {
-        _resetGateForTests();
         A = await sqliteDevice();
         B = await sqliteDevice();
     });

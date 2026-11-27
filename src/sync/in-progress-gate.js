@@ -338,12 +338,6 @@ export function getGateState(userRoot) {
     };
 }
 
-/** Test-only: forget every gate and the dirty listener. */
-export function _resetGateForTests() {
-    GATES.clear();
-    dirtyListener = null;
-}
-
 /**
  * @param {unknown} requestPath
  * @returns {GatedRoute | null}

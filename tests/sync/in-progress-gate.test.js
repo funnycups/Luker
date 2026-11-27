@@ -2,7 +2,7 @@
  * Unit tests for the sync write gate: a per-user-root reader/writer lock,
  * the waiting middleware and the dirty listener.
  */
-import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -22,12 +22,12 @@ import {
     syncWriteGateMiddleware,
     GATED_ROUTES,
     matchGatedRoute,
-    _resetGateForTests,
 } from '../../src/sync/in-progress-gate.js';
 import { SYNC_CATEGORIES } from '../../src/sync/categories.js';
 
-const ROOT = '/tmp/luker-gate-alice';
-const OTHER_ROOT = '/tmp/luker-gate-bob';
+let rootSeq = 0;
+let ROOT = '/tmp/luker-gate-alice-0';
+let OTHER_ROOT = '/tmp/luker-gate-bob-0';
 const IDLE = { readers: 0, writerHeld: false, waitingReaders: 0, waitingWriters: 0 };
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -45,7 +45,14 @@ function track(promise) {
 }
 
 beforeEach(() => {
-    _resetGateForTests();
+    setDirtyListener(null);
+    rootSeq += 1;
+    ROOT = `/tmp/luker-gate-alice-${rootSeq}`;
+    OTHER_ROOT = `/tmp/luker-gate-bob-${rootSeq}`;
+});
+
+afterEach(() => {
+    setDirtyListener(null);
 });
 
 describe('opt-in dirty notification trace', () => {

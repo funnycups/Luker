@@ -6,7 +6,6 @@ import { CONTRACT_HARNESSES } from '../_lib/required-engines.js';
 import { WorldInfoRepo } from '../../../src/storage/repositories/world-info-repo.js';
 import { runSyncCycle } from '../../../src/sync/pipeline/cycle.js';
 import { readSqlRecordValue, writeSqlRecordValue } from '../../../src/sync/materialize.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { DirectoryBackend } from '../_lib/directory-backend.js';
 import { BACKEND_ID, makeRemote, remoteHead } from '../_lib/devices.js';
 import { orderLocalHead } from '../_lib/merge-roles.js';
@@ -38,7 +37,6 @@ describe.each(CONTRACT_HARNESSES)('runSyncCycle with engine records — $name', 
     }
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(async () => {
@@ -94,7 +92,6 @@ describe.each(CONTRACT_HARNESSES.filter(h => h.name !== 'FsEngine'))('state comp
     }
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(async () => {

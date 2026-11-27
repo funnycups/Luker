@@ -12,7 +12,6 @@ import { listObjectsChildrenFirst, readObjectForWire } from '../../../src/sync/o
 import { incomingRefFor } from '../../../src/sync/backends/lan/incoming.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
 import { PAUSEPOINTS } from '../../../src/sync/pipeline/failpoints.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { syncService } from '../../../src/sync/sync-service.js';
 import { createSyncSession } from '../../../src/sync/session.js';
 import { commitFiles } from '../_lib/commits.js';
@@ -38,7 +37,6 @@ describe('incoming-ref protocol', () => {
     const ref = (refName, expectedOid, newOid) => A.call('POST', '/session/ref', { body: { ref: refName, expectedOid, newOid }, headers: auth() });
 
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         await upsertLanBackend({ userRoot: A.userRoot, backendId: PEER, label: 'Phone', categories: ['worlds'], syncSecret: SECRET });
         token = (await A.offer({ peerId: PEER, label: 'Phone', protocol: 2 }, { secret: SECRET })).body.token;

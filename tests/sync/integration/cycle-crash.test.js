@@ -12,7 +12,6 @@ import { hasObjectLocally } from '../../../src/sync/objects.js';
 import { readSnapshotCategories } from '../../../src/sync/pipeline/snapshot-categories.js';
 import { CONFLICTS_PATH, readEntries } from '../../../src/sync/pipeline/conflict-records.js';
 import { createConflictPolicy } from '../../../src/sync/pipeline/conflict-policy.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { BACKEND_ID, makeDevice, makeRemote, readAllReachable, remoteHead, resolveRefOrNull } from '../_lib/devices.js';
 
 const CHILD = fileURLToPath(new URL('../_lib/cycle-child.mjs', import.meta.url));
@@ -77,7 +76,6 @@ describe('sync cycle survives a process kill', () => {
     };
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(() => {

@@ -591,23 +591,6 @@ process.on('exit', () => {
 });
 
 /**
- * Test-only: clear the per-handle chat-backup throttle map so each test
- * starts with a leading-edge call window. Production code never calls this.
- * The 10s throttle is module-scoped and survives across tests in the same
- * worker, which would otherwise hide backup activity behind a deferred
- * trailing call that fires after the test has already cleaned up its data
- * dir. Exported for tests in tests/storage/endpoints/.
- */
-export function _resetChatBackupThrottlesForTests() {
-    for (const functions of backupFunctions.values()) {
-        for (const entry of functions.values()) {
-            entry.cancel();
-        }
-    }
-    backupFunctions.clear();
-}
-
-/**
  * Imports a chat from Ooba's format.
  * @param {string} userName User name
  * @param {string} characterName Character name

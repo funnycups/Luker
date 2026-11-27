@@ -8,7 +8,6 @@ function barrier() {
     return { reached: new Promise(r => { enter = r; }), released: new Promise(r => { release = r; }), enter: () => enter(), release: () => release() };
 }
 import { until } from '../_lib/until.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 import { syncService } from '../../../src/sync/sync-service.js';
 
 describe('pair accept', () => {
@@ -18,7 +17,6 @@ describe('pair accept', () => {
     const idle = device => Object.values(syncService.getRunning(device.userRoot)).every(running => !running);
 
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         B = await startLanDevice();
     });

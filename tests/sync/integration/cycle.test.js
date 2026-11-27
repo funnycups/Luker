@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
 
-import { runSyncCycle, commitLocalEdit, readUndoPoint, clearUndoPoint, MAIN_REF, PENDING_REF, BACKUP_TAG_PREFIX, UNDO_TARGET_REF, _sweptGitdirsForTests } from '../../../src/sync/pipeline/cycle.js';
+import { runSyncCycle, commitLocalEdit, readUndoPoint, clearUndoPoint, MAIN_REF, PENDING_REF, BACKUP_TAG_PREFIX, UNDO_TARGET_REF } from '../../../src/sync/pipeline/cycle.js';
 import { journalPath, readReconcileJournal, writeReconcileJournal } from '../../../src/sync/pipeline/reconcile-journal.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
 import { blobOidOf, readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
-import { getGateState, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
+import { getGateState } from '../../../src/sync/in-progress-gate.js';
 import { createConflictPolicy } from '../../../src/sync/pipeline/conflict-policy.js';
 import { deviceLabelForCommit } from '../../../src/sync/pipeline/commit-provenance.js';
 import { CONFLICTS_PATH, NOTICES_PATH, readEntries, serializeEntries } from '../../../src/sync/pipeline/conflict-records.js';
@@ -31,7 +31,6 @@ describe('runSyncCycle against a directory remote', () => {
     const head = () => remoteHead(remote.remoteDir);
 
     beforeEach(async () => {
-        _resetGateForTests();
         remote = await makeRemote();
     });
     afterEach(() => {
@@ -712,16 +711,20 @@ describe('runSyncCycle against a directory remote', () => {
 
     test('stale temps are swept once per repository per process', async () => {
         const A = device();
+        fs.mkdirSync(A.shadow.gitDir, { recursive: true });
+        const past = (performance.timeOrigin - 60_000) / 1000;
+        const firstStale = path.join(A.shadow.gitDir, 'stale.111');
+        fs.writeFileSync(firstStale, 'x');
+        fs.utimesSync(firstStale, past, past);
         A.write('characters/a.png', 'A1');
         await runSyncCycle(A.ctx);
-        expect(_sweptGitdirsForTests()).toContain(A.shadow.gitDir);
-        const stale = path.join(A.shadow.gitDir, 'stale.123');
-        fs.writeFileSync(stale, 'x');
-        const past = (performance.timeOrigin - 60_000) / 1000;
-        fs.utimesSync(stale, past, past);
+        expect(fs.existsSync(firstStale)).toBe(false);
+        const secondStale = path.join(A.shadow.gitDir, 'stale.123');
+        fs.writeFileSync(secondStale, 'x');
+        fs.utimesSync(secondStale, past, past);
         A.write('characters/a.png', 'A2');
         await runSyncCycle(A.ctx);
-        expect(fs.existsSync(stale)).toBe(true);
+        expect(fs.existsSync(secondStale)).toBe(true);
     });
 
     const seedConflictDevices = async () => {

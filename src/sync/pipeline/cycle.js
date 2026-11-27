@@ -395,10 +395,6 @@ async function snapshotStep(ctx, shadow) {
 const SWEEPS = new Map();
 const runUnlocked = fn => fn();
 
-export function _sweptGitdirsForTests() {
-    return new Set(SWEEPS.keys());
-}
-
 // Temp files of this process are still in flight; only an earlier process
 // can leave stale ones, so one sweep per repository per process suffices.
 // Concurrent first cycles share the sweep; a failed sweep is retried.

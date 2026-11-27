@@ -21,7 +21,6 @@ import { upsertLanBackend } from '../../../src/sync/state.js';
 import { listObjectsChildrenFirst, readObjectForWire } from '../../../src/sync/objects.js';
 import { incomingRefFor } from '../../../src/sync/backends/lan/incoming.js';
 import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
-import { _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 
 const SECRET = 'a'.repeat(64);
 const PEER = 'u@0a1b2c3d';
@@ -59,7 +58,6 @@ describe('sync HTTP object transfer', () => {
     const ref = (refName, expectedOid, newOid) => A.call('POST', '/session/ref', { body: { ref: refName, expectedOid, newOid }, headers: bearer(token) });
 
     beforeEach(async () => {
-        _resetGateForTests();
         A = await startLanDevice();
         token = await openSession(PEER);
         shadow = await ensureShadowRepo({ userRoot: A.userRoot, peerId: PEER });
