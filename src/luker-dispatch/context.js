@@ -83,7 +83,7 @@ function pickWhitelistedHeaders(headers) {
     return out;
 }
 
-export function createDispatchContext({ request, abortController, onEmit, onCloseHandlers, onStreamMode }) {
+export function createDispatchContext({ request, abortController, onEmit, onCloseHandlers, onStreamMode, streamingToolReply = null }) {
     let terminal = false;
 
     function setStreamMode(isStream) {
@@ -106,6 +106,7 @@ export function createDispatchContext({ request, abortController, onEmit, onClos
     }
     return {
         body: request.body,
+        streamingToolReply,
         user: {
             handle: request.user?.profile?.handle,
             directories: request.user?.directories,

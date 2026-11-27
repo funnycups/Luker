@@ -33,6 +33,11 @@ import {
     resolveGeminiModelCapabilities,
     validateGeminiRequestCapabilities,
 } from '../../../../public/scripts/lib/provider-capabilities.js';
+import {
+    isStringSchemaNode,
+    normalizeStreamingToolReplyConfig,
+    resolveSchemaPropertyAtPath,
+} from '../../../../public/scripts/lib/streaming-tool-reply.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
@@ -284,12 +289,28 @@ export async function dispatchMakerSuite(ctx) {
             requestBody.tools = tools;
 
             const hasFunctionDeclarations = tools.some(tool => Array.isArray(tool.functionDeclarations) && tool.functionDeclarations.length > 0);
-            const functionCallingConfig = hasFunctionDeclarations
+            let functionCallingConfig = hasFunctionDeclarations
                 ? convertGeminiToolChoice(body.tool_choice)
                 : null;
 
-            if (hasFunctionDeclarations && functionCallingConfig) {
-                requestBody.toolConfig = { functionCallingConfig };
+            if (hasFunctionDeclarations) {
+                const preview = normalizeStreamingToolReplyConfig(ctx.streamingToolReply ?? body.luker_streaming_tool_reply);
+                const toolChoicePermitsPreview = functionCallingConfig?.mode !== 'NONE'
+                    && (!Array.isArray(functionCallingConfig?.allowedFunctionNames)
+                        || functionCallingConfig.allowedFunctionNames.includes(preview?.name));
+                if (stream && caps.streamFunctionCallArguments === 'supported' && preview && toolChoicePermitsPreview) {
+                    const declaration = functionDeclarations.find(fn => fn.name === preview.name);
+                    const leafSchema = resolveSchemaPropertyAtPath(declaration?.parameters, preview.path);
+                    if (isStringSchemaNode(leafSchema)) {
+                        functionCallingConfig = {
+                            ...(functionCallingConfig || { mode: 'AUTO' }),
+                            streamFunctionCallArguments: true,
+                        };
+                    }
+                }
+                if (functionCallingConfig) {
+                    requestBody.toolConfig = { functionCallingConfig };
+                }
             }
         }
 

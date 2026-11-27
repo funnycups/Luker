@@ -810,5 +810,46 @@ describe('dispatchMakerSuite', () => {
             expect(heads[0].data.status).toBe(429);
             expect(ctx._emitted.some(e => e.kind === 'end')).toBe(true);
         });
+
+        test.each([
+            ['gemini-4-argon', true, { type: 'function', function: { name: 'reply' } }, 'body', true, { mode: 'ANY', allowedFunctionNames: ['reply'], streamFunctionCallArguments: true }],
+            ['gemini-4-argon', true, 'required', 'body', true, { mode: 'ANY', streamFunctionCallArguments: true }],
+            ['gemini-4-argon', true, 'auto', 'body', true, { mode: 'AUTO', streamFunctionCallArguments: true }],
+            ['gemini-4-argon', true, undefined, 'body', true, { mode: 'AUTO', streamFunctionCallArguments: true }],
+            ['gemini-4-argon', true, 'none', 'body', false, { mode: 'NONE' }],
+            ['gemini-4-argon', true, { type: 'function', function: { name: 'reply' } }, 'payload.text', true, { mode: 'ANY', allowedFunctionNames: ['reply'], streamFunctionCallArguments: true }],
+            ['gemini-3.1-pro-preview', true, 'auto', 'body', true, { mode: 'AUTO', streamFunctionCallArguments: true }],
+            ['gemini-5-pro', true, 'auto', 'body', true, { mode: 'AUTO', streamFunctionCallArguments: true }],
+            ['gemini-4-argon', true, 'auto', undefined, false, { mode: 'AUTO' }],
+            ['gemini-4-argon', false, 'auto', 'body', false, { mode: 'AUTO' }],
+            ['gemini-2.5-flash', true, 'auto', 'body', false, { mode: 'AUTO' }],
+            ['gemini-3.1-flash-lite', true, 'auto', 'body', false, { mode: 'AUTO' }],
+            ['custom-gemini-alias', true, 'auto', 'body', false, { mode: 'AUTO' }],
+        ])('streamFunctionCallArguments for %s, stream=%s, tool_choice=%j, argument=%s', async (model, stream, toolChoice, argument, enabled, expectedConfig) => {
+            const fn = {
+                name: 'reply',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        body: { type: 'string' },
+                        payload: { type: 'object', properties: { text: { type: 'string' } } },
+                    },
+                },
+            };
+            const ctx = fakeCtx({
+                body: {
+                    model,
+                    stream,
+                    tools: [{ type: 'function', function: fn }],
+                    ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+                    ...(argument ? { luker_streaming_tool_reply: { name: fn.name, argument } } : {}),
+                },
+            });
+            await dispatchMakerSuite(ctx);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.toolConfig.functionCallingConfig).toEqual(expectedConfig);
+            expect(Boolean(sent.toolConfig.functionCallingConfig.streamFunctionCallArguments)).toBe(enabled);
+            expect(sent).not.toHaveProperty('luker_streaming_tool_reply');
+        });
     });
 });

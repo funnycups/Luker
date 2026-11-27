@@ -28,6 +28,7 @@ import {
     parseProtocolResponse,
     resolveWireProtocol,
 } from '../../public/scripts/lib/protocol-parser/index.js';
+import { normalizeStreamingToolReplyConfig } from '../../public/scripts/lib/streaming-tool-reply.js';
 import { createDispatchContext } from './context.js';
 import {
     applyPlainTextResultToResponseParts,
@@ -102,6 +103,16 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
     const bodyJobId = String(request.body?.luker_generation?.job_id || '').trim();
     const headerId = String(request.headers?.['x-luker-request-id'] || '').trim();
     const requestId = bodyJobId || headerId || randomUUID();
+
+    // Extract and strip internal streaming tool-reply preview config before
+    // plain-text preparation or provider selection so it can never leak upstream.
+    const rawIncomingBody = request.body && typeof request.body === 'object' ? request.body : {};
+    const streamingToolReply = normalizeStreamingToolReplyConfig(rawIncomingBody.luker_streaming_tool_reply);
+    if (Object.hasOwn(rawIncomingBody, 'luker_streaming_tool_reply')) {
+        const sanitizedBody = { ...rawIncomingBody };
+        delete sanitizedBody.luker_streaming_tool_reply;
+        request.body = sanitizedBody;
+    }
 
     // Prepare backend-owned plain-text function calling orchestration before
     // selecting the provider so `luker_plain_text_tools` and native
@@ -323,6 +334,7 @@ export async function runLukerDispatch(request, response, { endpoint, select, po
         const ctx = createDispatchContext({
             request, abortController,
             onCloseHandlers,
+            streamingToolReply,
             onStreamMode: (streamMode) => {
                 effectiveIsStream = Boolean(streamMode);
                 job._isStream = effectiveIsStream;

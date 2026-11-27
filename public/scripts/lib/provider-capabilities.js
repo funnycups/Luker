@@ -92,12 +92,13 @@ export function resolveGeminiModelCapabilities(model) {
     const lower = base.toLowerCase();
     const isGemini3 = /^gemini-3/i.test(lower);
     const isGemini4 = /^gemini-4/i.test(lower);
+    const isGemini5Plus = /^gemini-(?:[5-9]|\d{2,})(?:\.|-|$)/i.test(lower);
     const isGemini25 = /^gemini-2\.5/i.test(lower);
     const isImageFamily = /(?:^|-)image(?:$|-)|nano-banana/i.test(lower);
-    const noPrefill = /^gemini-3\.[678]-flash|^gemini-3\.5-flash-lite|^gemini-4/i.test(lower);
-    const supportsMediaResolution = isGemini3 || isGemini4;
-    const supportsThoughtSignature = isGemini25 || isGemini3 || isGemini4 || /nano-banana/i.test(lower);
-    const requiresToolThoughtSignature = isGemini3 || isGemini4 || /nano-banana/i.test(lower);
+    const noPrefill = /^gemini-3\.[678]-flash|^gemini-3\.5-flash-lite|^gemini-(?:[4-9]|\d{2,})/i.test(lower);
+    const supportsMediaResolution = isGemini3 || isGemini4 || isGemini5Plus;
+    const supportsThoughtSignature = isGemini25 || isGemini3 || isGemini4 || isGemini5Plus || /nano-banana/i.test(lower);
+    const requiresToolThoughtSignature = isGemini3 || isGemini4 || isGemini5Plus || /nano-banana/i.test(lower);
     const requiresImageThoughtSignature = isImageFamily && requiresToolThoughtSignature;
     const sharedFlags = {
         noPrefill,
@@ -116,6 +117,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: false,
             functionCalling: 'unsupported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -134,6 +136,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -152,6 +155,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -170,6 +174,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -192,6 +197,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: true,
             systemInstruction: true,
             functionCalling: 'unsupported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'supported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'level',
@@ -211,6 +217,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: true,
             systemInstruction: true,
             functionCalling: 'unsupported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'level',
@@ -230,6 +237,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: true,
             systemInstruction: true,
             functionCalling: 'unsupported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'supported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'level',
@@ -248,6 +256,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'unsupported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unsupported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -258,7 +267,7 @@ export function resolveGeminiModelCapabilities(model) {
     }
 
     if (/(?:^|-)image(?:$|-)/i.test(lower)) {
-        const isGemini3Plus = /^gemini-[34]/i.test(lower);
+        const isGemini3Plus = /^gemini-(?:[3-9]|\d{2,})/i.test(lower);
         return {
             ...sharedFlags,
             modelId: base,
@@ -267,24 +276,26 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: isGemini3Plus || !/^gemini-2/i.test(lower),
             systemInstruction: true,
             functionCalling: 'unknown',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'unknown',
             combineBuiltinAndFunctionTools: 'unknown',
             thinkingMode: isGemini3Plus ? 'level' : 'none',
             thinkingSupportsOff: isGemini3Plus,
             thinkingSupportsMinimal: /^gemini-3/i.test(lower) && !/^gemini-3\.7-flash|^gemini-3[.\d]*-pro/i.test(lower),
-            supportsSampling: !/^gemini-4/i.test(lower),
+            supportsSampling: !/^gemini-(?:[4-9]|\d{2,})/i.test(lower),
         };
     }
 
-    if (isGemini4) {
+    if (isGemini4 || isGemini5Plus) {
         return {
             ...sharedFlags,
             modelId: base,
-            family: 'gemini-4',
+            family: isGemini4 ? 'gemini-4' : 'gemini-5+',
             imageOutput: 'unsupported',
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'supported',
             googleSearch: 'supported',
             combineBuiltinAndFunctionTools: 'supported',
             thinkingMode: 'level',
@@ -298,6 +309,7 @@ export function resolveGeminiModelCapabilities(model) {
         const isThinking = /^gemini-3[.\d]*-(flash|pro)/i.test(lower);
         const lacksMinimal = /^gemini-3\.7-flash|^gemini-3[.\d]*-pro/i.test(lower);
         const noSampling = /^gemini-3\.[678]-flash|^gemini-3\.5-flash-lite/i.test(lower);
+        const supportsStreamArgs = !/^gemini-3\.1-flash-lite/i.test(lower);
         return {
             ...sharedFlags,
             modelId: base,
@@ -306,6 +318,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: supportsStreamArgs ? 'supported' : 'unsupported',
             googleSearch: 'supported',
             combineBuiltinAndFunctionTools: 'supported',
             thinkingMode: isThinking ? 'level' : 'none',
@@ -326,6 +339,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: 'supported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: isThinking ? 'budget' : 'none',
@@ -345,6 +359,7 @@ export function resolveGeminiModelCapabilities(model) {
             imageSize: false,
             systemInstruction: true,
             functionCalling: 'supported',
+            streamFunctionCallArguments: 'unsupported',
             googleSearch: isLite ? 'unsupported' : 'supported',
             combineBuiltinAndFunctionTools: 'unsupported',
             thinkingMode: 'none',
@@ -363,6 +378,7 @@ export function resolveGeminiModelCapabilities(model) {
         imageSize: true,
         systemInstruction: true,
         functionCalling: 'unknown',
+        streamFunctionCallArguments: 'unknown',
         googleSearch: 'unknown',
         combineBuiltinAndFunctionTools: 'unknown',
         thinkingMode: 'none',
@@ -489,6 +505,7 @@ export function resolveClaudeModelCapabilities(model, { enableAdaptiveThinking =
     }
 
     const supportsNativeStructuredOutput = /^claude-(opus-4-1|opus-4-5|sonnet-4-5|haiku-4-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5)/.test(lower);
+    const supportsEagerInputStreaming = /^claude-(opus-4|sonnet-4|haiku-4-5|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5)/.test(lower);
     const rejectsForcedToolWithAdaptiveThinking = /^claude-(opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)/.test(lower);
     const adaptiveThinkingByDefault = /^claude-(fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5)/.test(lower);
     // Official Anthropic model specs (verified 2026-11-25): 1M context window
@@ -512,6 +529,7 @@ export function resolveClaudeModelCapabilities(model, { enableAdaptiveThinking =
         offThinkingMode,
         defaultThinkingRequiresDisplay,
         supportsNativeStructuredOutput,
+        supportsEagerInputStreaming,
         rejectsForcedToolWithAdaptiveThinking,
         adaptiveThinkingByDefault,
         maxContextTokens,

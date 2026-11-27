@@ -119,9 +119,40 @@ describe('provider-capabilities', () => {
             });
             expect(searchConflict?.conflictCode).toBe('gemini_web_search_unsupported');
         });
+
+        test('resolves streamFunctionCallArguments capability across Gemini families', () => {
+            expect(resolveGeminiModelCapabilities('gemini-4-argon').streamFunctionCallArguments).toBe('supported');
+            expect(resolveGeminiModelCapabilities('gemini-3.1-pro-preview').streamFunctionCallArguments).toBe('supported');
+            expect(resolveGeminiModelCapabilities('gemini-3.8-flash').streamFunctionCallArguments).toBe('supported');
+            expect(resolveGeminiModelCapabilities('gemini-5-pro').streamFunctionCallArguments).toBe('supported');
+            expect(resolveGeminiModelCapabilities('gemini-3.1-flash-lite').streamFunctionCallArguments).toBe('unsupported');
+            expect(resolveGeminiModelCapabilities('gemini-2.5-flash').streamFunctionCallArguments).toBe('unsupported');
+            expect(resolveGeminiModelCapabilities('gemini-2.0-flash').streamFunctionCallArguments).toBe('unsupported');
+            expect(resolveGeminiModelCapabilities('gemini-3-pro-image').streamFunctionCallArguments).toBe('unsupported');
+            expect(resolveGeminiModelCapabilities('gemma-4-27b-it').streamFunctionCallArguments).toBe('unsupported');
+            expect(resolveGeminiModelCapabilities('custom-proxy-alias').streamFunctionCallArguments).toBe('unknown');
+        });
     });
 
     describe('Claude model capabilities', () => {
+        test('modern Claude 4+/5+ support eager_input_streaming while legacy Claude 3.x do not', () => {
+            for (const model of [
+                'claude-opus-4-1',
+                'claude-sonnet-4-5',
+                'claude-opus-4-6',
+                'claude-sonnet-4-6',
+                'claude-opus-4-7',
+                'claude-fable-5-1',
+                'claude-opus-5-5',
+                'claude-sonnet-5-5',
+                'claude-haiku-5-5',
+            ]) {
+                expect(resolveClaudeModelCapabilities(model).supportsEagerInputStreaming).toBe(true);
+            }
+            expect(resolveClaudeModelCapabilities('claude-3-5-sonnet-20241022').supportsEagerInputStreaming).toBe(false);
+            expect(resolveClaudeModelCapabilities('claude-3-7-sonnet-20250219').supportsEagerInputStreaming).toBe(false);
+        });
+
         test('modern Claude 4.1+/4.5+/4.6+/4.7+/5+ support native structured outputs; legacy 3.5 falls back', () => {
             for (const model of [
                 'claude-opus-4-1',

@@ -697,5 +697,61 @@ describe('dispatchClaude', () => {
                 errorSpy.mockRestore();
             }
         });
+
+        test.each([
+            ['claude-sonnet-4-5', true, undefined, 'auto', 'body', true],
+            ['claude-opus-5-5', true, undefined, 'auto', 'payload.text', true],
+            ['claude-sonnet-4-5', true, undefined, { type: 'function', function: { name: 'reply' } }, 'body', true],
+            ['claude-sonnet-4-5', true, undefined, 'none', 'body', false],
+            ['claude-sonnet-4-5', false, undefined, 'auto', 'body', false],
+            ['claude-3-5-sonnet-20241022', true, undefined, 'auto', 'body', false],
+            ['claude-sonnet-4-5', true, 'https://bedrock-proxy.example.com/v1', 'auto', 'body', false],
+            ['claude-sonnet-4-5', true, undefined, 'auto', 'count', false],
+        ])('eager_input_streaming for %s, stream=%s, base_url=%s, tool_choice=%j, argument=%s', async (model, stream, baseUrl, toolChoice, argument, expectedEager) => {
+            const tools = [
+                {
+                    type: 'function',
+                    function: {
+                        name: 'reply',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                body: { type: 'string' },
+                                count: { type: 'number' },
+                                payload: { type: 'object', properties: { text: { type: 'string' } } },
+                            },
+                        },
+                    },
+                },
+                {
+                    type: 'function',
+                    function: {
+                        name: 'other',
+                        parameters: { type: 'object', properties: { body: { type: 'string' } } },
+                    },
+                },
+            ];
+            const ctx = fakeCtx({
+                body: {
+                    model,
+                    stream,
+                    ...(baseUrl ? { base_url: baseUrl } : {}),
+                    tools,
+                    tool_choice: toolChoice,
+                    luker_streaming_tool_reply: { name: 'reply', argument },
+                },
+            });
+            await dispatchClaude(ctx);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            const replyTool = sent.tools.find(t => t.name === 'reply');
+            const otherTool = sent.tools.find(t => t.name === 'other');
+            if (expectedEager) {
+                expect(replyTool.eager_input_streaming).toBe(true);
+            } else {
+                expect(replyTool.eager_input_streaming).toBeUndefined();
+            }
+            expect(otherTool.eager_input_streaming).toBeUndefined();
+            expect(sent).not.toHaveProperty('luker_streaming_tool_reply');
+        });
     });
 });

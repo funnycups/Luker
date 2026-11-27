@@ -32,6 +32,11 @@ import {
     resolveClaudeModelCapabilities,
     validateClaudeRequestCapabilities,
 } from '../../../../public/scripts/lib/provider-capabilities.js';
+import {
+    isStringSchemaNode,
+    normalizeStreamingToolReplyConfig,
+    resolveSchemaPropertyAtPath,
+} from '../../../../public/scripts/lib/streaming-tool-reply.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -72,9 +77,10 @@ export async function dispatchClaude(ctx) {
     }
 
     let apiUrl;
+    let parsedApiUrl;
     try {
         apiUrl = normalizeProviderBaseUrl('claude', body.reverse_proxy || body.base_url || API_CLAUDE);
-        new URL(apiUrl);
+        parsedApiUrl = new URL(apiUrl);
     } catch (parseErr) {
         const err = new Error(`Claude upstream URL invalid: ${parseErr?.message || parseErr}`);
         ctx.inspection.fail(err, 400);
@@ -168,8 +174,19 @@ export async function dispatchClaude(ctx) {
         }
 
         if (functionTools.length) {
-            requestBody.tools = functionTools;
             const toolChoice = convertClaudeToolChoice(body.tool_choice, body.parallel_tool_calls);
+            const preview = normalizeStreamingToolReplyConfig(ctx.streamingToolReply ?? body.luker_streaming_tool_reply);
+            const isOfficialAnthropicApi = parsedApiUrl.hostname === 'api.anthropic.com';
+            const toolChoicePermitsPreview = toolChoice?.type !== 'none'
+                && (toolChoice?.type !== 'tool' || toolChoice.name === preview?.name);
+            if (Boolean(body.stream) && caps.supportsEagerInputStreaming && isOfficialAnthropicApi && preview && toolChoicePermitsPreview) {
+                const targetTool = functionTools.find(tool => tool.name === preview.name);
+                const leafSchema = resolveSchemaPropertyAtPath(targetTool?.input_schema, preview.path);
+                if (targetTool && isStringSchemaNode(leafSchema)) {
+                    targetTool.eager_input_streaming = true;
+                }
+            }
+            requestBody.tools = functionTools;
             if (toolChoice) {
                 requestBody.tool_choice = toolChoice;
             }

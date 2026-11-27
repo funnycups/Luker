@@ -767,4 +767,40 @@ describe('runLukerDispatch', () => {
         expect(abortEntry.status).toBe('aborted');
         expect(getTaskByRequestId('image-abort-inspect-1', 'alice').status).toBe('failed');
     });
+
+    test('strips luker_streaming_tool_reply from request.body before dispatch and exposes normalized ctx.streamingToolReply', async () => {
+        let seenBody = null;
+        let seenStreamingToolReply = null;
+        const req = fakeRequest({
+            requestId: 'strip-streaming-tool-reply-1',
+            body: {
+                chat_completion_source: 'openai',
+                model: 'gpt-4o',
+                stream: true,
+                messages: [{ role: 'user', content: 'hi' }],
+                luker_streaming_tool_reply: { name: ' reply ', argument: 'payload.body' },
+            },
+        });
+        const res = fakeResponse();
+        await runLukerDispatch(req, res, {
+            endpoint: 'chat-completions',
+            select: (body) => {
+                expect(body).not.toHaveProperty('luker_streaming_tool_reply');
+                return async (ctx) => {
+                    seenBody = { ...ctx.body };
+                    seenStreamingToolReply = ctx.streamingToolReply;
+                    ctx.emit.head({ status: 200, headers: { 'content-type': 'text/event-stream' } });
+                    ctx.emit.chunk(Buffer.from('data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+                    ctx.emit.end();
+                };
+            },
+        });
+        await new Promise(r => setTimeout(r, 30));
+        expect(seenBody).not.toHaveProperty('luker_streaming_tool_reply');
+        expect(seenStreamingToolReply).toEqual({
+            name: 'reply',
+            argument: 'payload.body',
+            path: ['payload', 'body'],
+        });
+    });
 });
