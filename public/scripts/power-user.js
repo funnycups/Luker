@@ -35,6 +35,7 @@ import {
     getThumbnailUrl,
 } from '../script.js';
 import { hasActiveSource, hasKeepAliveHold, subscribeActivityGuard } from './activity-guard.js';
+import { createMobileKeepAliveController, selectRandomCharacter } from './lib/mobile-keep-alive-controller.js';
 import { getPipViewStatus, updatePipView } from './luker-pip-view.js';
 import { isMobile, initMovingUI, favsToHotswap, shouldSendOnEnter, autoFitSendTextAreaDebounced } from './RossAscends-mods.js';
 import {
@@ -733,70 +734,42 @@ function syncMobileKeepAliveCheckbox() {
     $('#luker_mobile_keep_alive').prop('checked', checked);
 }
 
-// Web audio, HarmonyOS, and iOS keep-alive are activity-scoped: while the setting
-// is enabled, any active keepAlive lease in activity-guard enters the mode (web
-// audio builds the oscillator + <audio> + MediaSession; HarmonyOS/iOS mark the
-// generation active so the shell holds a continuous task in the background) and
-// when the last keep-alive lease releases, exiting is scheduled after a grace
-// window so chained rounds do not tear down between steps.
-const SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS = 10000;
-let scopedKeepAliveDeactivateTimer = null;
+const mobileKeepAliveController = createMobileKeepAliveController({
+    getPowerUser: () => power_user,
+    getCharacters: () => characters,
+    getChat: () => chat,
+    getThisChid: () => this_chid,
+    getName2: () => name2,
+    getThumbnailUrl: (...args) => getThumbnailUrl(...args),
+    eventSource: {
+        on: (...args) => eventSource.on(...args),
+    },
+    getEventTypes: () => event_types,
+    saveSettingsDebounced: (...args) => saveSettingsDebounced(...args),
+    isMobile: (...args) => isMobile(...args),
+    shouldSendOnEnter: (...args) => shouldSendOnEnter(...args),
+    getActiveKeepAliveMode: (...args) => getActiveKeepAliveMode(...args),
+    getKeepAlivePlatform: (...args) => getKeepAlivePlatform(...args),
+    hasNativeKeepAliveBridge: (...args) => hasNativeKeepAliveBridge(...args),
+    initKeepAlive: (...args) => initKeepAlive(...args),
+    isKeepAliveSupported: (...args) => isKeepAliveSupported(...args),
+    isPipWindowOpen: (...args) => isPipWindowOpen(...args),
+    onKeepAliveStateChanged: (...args) => onKeepAliveStateChanged(...args),
+    setKeepAliveMode: (...args) => setKeepAliveMode(...args),
+    setPipPrimingEnabled: (...args) => setPipPrimingEnabled(...args),
+    getPipViewStatus: (...args) => getPipViewStatus(...args),
+    updatePipView: (...args) => updatePipView(...args),
+    hasActiveSource: (...args) => hasActiveSource(...args),
+    hasKeepAliveHold: (...args) => hasKeepAliveHold(...args),
+    subscribeActivityGuard: (...args) => subscribeActivityGuard(...args),
+    syncMobileKeepAliveCheckbox: (...args) => syncMobileKeepAliveCheckbox(...args),
+    t: (...args) => t(...args),
+});
 
-/**
- * @returns {'audio'|'harmony'|'ios'|null} the generation-scoped mode enabled on this device
- */
-function getScopedKeepAliveMode() {
-    const platform = getKeepAlivePlatform();
-    if (platform === 'web' && power_user.luker_mobile_keep_alive_web_audio_enabled) return 'audio';
-    if (platform === 'harmony' && power_user.luker_mobile_keep_alive_harmony_enabled) return 'harmony';
-    if (platform === 'ios' && power_user.luker_mobile_keep_alive_ios_enabled) return 'ios';
-    return null;
-}
-
-export function scopedKeepAliveShouldHold() {
-    return hasKeepAliveHold();
-}
-
-function scopedKeepAliveActivationSync() {
-    const mode = getScopedKeepAliveMode();
-    if (!mode) return;
-    if (scopedKeepAliveShouldHold()) {
-        if (scopedKeepAliveDeactivateTimer) {
-            clearTimeout(scopedKeepAliveDeactivateTimer);
-            scopedKeepAliveDeactivateTimer = null;
-        }
-        if (getActiveKeepAliveMode() !== mode) {
-            setKeepAliveMode(mode).catch((error) => {
-                console.warn(`[Luker] Failed to enter ${mode} keep-alive`, error);
-            });
-        } else if (mode === 'harmony' || mode === 'ios') {
-            // Native leases can expire while a generation is still running.
-            // Re-arm on every in-flight transition so the next generation
-            // starts a fresh lease instead of trusting the stale active mode.
-            setKeepAliveMode(mode).catch((error) => {
-                console.warn(`[Luker] Failed to renew ${mode} keep-alive`, error);
-            });
-        }
-    } else if (!scopedKeepAliveDeactivateTimer) {
-        scopedKeepAliveDeactivateTimer = setTimeout(() => {
-            scopedKeepAliveDeactivateTimer = null;
-            if (scopedKeepAliveShouldHold()) return;
-            const active = getActiveKeepAliveMode();
-            if (active === 'audio' || active === 'harmony' || active === 'ios') {
-                setKeepAliveMode('off').catch((error) => {
-                    console.warn(`[Luker] Failed to exit ${active} keep-alive`, error);
-                });
-            }
-        }, SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS);
-    }
-}
-
-function cancelScopedKeepAliveDeactivateTimer() {
-    if (scopedKeepAliveDeactivateTimer) {
-        clearTimeout(scopedKeepAliveDeactivateTimer);
-        scopedKeepAliveDeactivateTimer = null;
-    }
-}
+export const scopedKeepAliveShouldHold = (...args) => mobileKeepAliveController.scopedKeepAliveShouldHold(...args);
+const cancelScopedKeepAliveDeactivateTimer = (...args) => mobileKeepAliveController.cancelScopedKeepAliveDeactivateTimer(...args);
+export const syncPipReopenBanner = (...args) => mobileKeepAliveController.syncPipReopenBanner(...args);
+export const syncMobileKeepAliveUi = (...args) => mobileKeepAliveController.syncMobileKeepAliveUi(...args);
 
 /**
  * The shell that accepts the external link policy, or null when the page runs
@@ -836,224 +809,6 @@ function syncExternalLinkPolicyUi() {
     $row.show();
     $('#luker_open_external_links_in_browser').prop('checked', !!power_user.luker_open_external_links_in_browser);
     pushExternalLinkPolicy(power_user.luker_open_external_links_in_browser);
-}
-
-// Closing the PiP window (including tapping it to return to the page) must not
-// switch keep-alive off: iOS closes it every time the user comes back. PiP can
-// only be reopened from a user tap, so the taps that start a generation reopen
-// it. This also restores PiP after a page reload.
-const PIP_REOPEN_SELECTOR = '#send_but, #mes_continue, #mes_impersonate, #option_regenerate, #option_continue, #option_impersonate, .swipe_right';
-
-function reopenPipFromGesture() {
-    if (getKeepAlivePlatform() !== 'web' || !power_user.luker_mobile_keep_alive_web_pip_enabled) return;
-    if (isPipWindowOpen()) return;
-    setKeepAliveMode('pip')
-        .then(() => {
-            syncMobileKeepAliveCheckbox();
-            syncPipReopenBanner();
-        })
-        .catch((error) => {
-            console.warn('[Luker] Failed to reopen PiP keep-alive', error);
-        });
-}
-
-function reopenPipOnGenerationTap(event) {
-    // Auto-continue and scripted triggers dispatch clicks without a user
-    // gesture; WebKit rejects the PiP request and the attempt is wasted.
-    if (event.isTrusted === false) return;
-    if (!(event.target instanceof Element) || !event.target.closest(PIP_REOPEN_SELECTOR)) return;
-    reopenPipFromGesture();
-}
-
-// Enter sends the message without a click, so the keydown itself is the
-// gesture that can reopen PiP.
-function reopenPipOnGenerationKey(event) {
-    if (event.isTrusted === false || event.isComposing || event.key !== 'Enter') return;
-    if (event.shiftKey || event.ctrlKey || event.altKey) return;
-    if (!(event.target instanceof Element) || !event.target.closest('#send_textarea')) return;
-    if (!shouldSendOnEnter()) return;
-    reopenPipFromGesture();
-}
-
-// Tapping the PiP window to return to the page closes it, and a generation that
-// is already running has no tap left to reopen it. This button is that tap.
-let pipReopenBanner = null;
-
-function ensurePipReopenBanner() {
-    if (pipReopenBanner) return pipReopenBanner;
-    pipReopenBanner = $('<button></button>')
-        .attr({ id: 'luker_pip_reopen', type: 'button' })
-        .addClass('menu_button')
-        .text(t`Restore Picture-in-Picture`)
-        .css({
-            position: 'fixed',
-            left: '50%',
-            // Clear the message input so the stop button stays reachable.
-            bottom: 'calc(88px + env(safe-area-inset-bottom, 0px))',
-            transform: 'translateX(-50%)',
-            zIndex: 40000,
-            display: 'none',
-        })
-        .on('click', () => {
-            setKeepAliveMode('pip')
-                .then(() => {
-                    syncMobileKeepAliveCheckbox();
-                    syncPipReopenBanner();
-                })
-                .catch((error) => {
-                    console.warn('[Luker] Failed to restore PiP keep-alive', error);
-                    toastr.warning(t`Picture-in-Picture could not be restored. Tap the page and try again.`);
-                });
-        });
-    $('body').append(pipReopenBanner);
-    return pipReopenBanner;
-}
-
-export function syncPipReopenBanner() {
-    // Quiet generations and ambient request-baseline calls run silently and
-    // never surface in the PiP window, while explicit non-core long tasks
-    // still prompt the user to restore it.
-    const visibleGeneration = getPipViewStatus() === 'generating'
-        || hasKeepAliveHold({
-            excludeAmbient: true,
-            excludeSources: ['core:generation', 'core:generation-quiet', 'core:group-generation'],
-        });
-    const shouldShow = getKeepAlivePlatform() === 'web'
-        && !!power_user.luker_mobile_keep_alive_web_pip_enabled
-        && visibleGeneration
-        && !isPipWindowOpen();
-    if (!shouldShow) {
-        pipReopenBanner?.hide();
-        return;
-    }
-    ensurePipReopenBanner().show();
-}
-
-// Feeds the PiP keep-alive window: who is replying, the status and the tail of
-// the reply. Updates are throttled inside the view, so per-token calls are fine.
-function syncPipViewCharacter() {
-    const character = this_chid !== undefined ? characters[this_chid] : null;
-    updatePipView({
-        name: character?.name || name2 || '',
-        avatarUrl: character?.avatar ? getThumbnailUrl('avatar', character.avatar) : '',
-    });
-}
-
-let pipGenerationStopped = false;
-
-// The single listener owned by keep-alive: the generation-scoped modes follow
-// activity-guard leases, the PiP window closes out its reply status when core
-// generation finishes, and the restore button tracks both.
-function onActivityGuardChanged() {
-    scopedKeepAliveActivationSync();
-    if (!hasActiveSource('core:generation') && !hasActiveSource('core:group-generation') && !pipGenerationStopped && getPipViewStatus() === 'generating') {
-        updatePipView({ status: 'done' });
-    }
-    syncPipReopenBanner();
-}
-
-function initPipViewFeed() {
-    pipGenerationStopped = false;
-    syncPipViewCharacter();
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        pipGenerationStopped = false;
-        syncPipViewCharacter();
-        updatePipView({ status: 'idle', text: '' });
-        syncPipReopenBanner();
-    });
-    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, (type, _params, dryRun) => {
-        if (dryRun || type === 'quiet') return;
-        pipGenerationStopped = false;
-        syncPipViewCharacter();
-        updatePipView({ status: 'generating', text: '' });
-        syncPipReopenBanner();
-    });
-    eventSource.on(event_types.STREAM_TOKEN_RECEIVED, (text) => {
-        if (pipGenerationStopped) return;
-        updatePipView({ status: 'generating', text: String(text || '') });
-    });
-    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
-        // A stopped generation still persists its partial reply; keep the
-        // "Stopped" status instead of reporting it as completed.
-        if (pipGenerationStopped) return;
-        const message = chat[messageId];
-        if (!message || message.is_user) return;
-        updatePipView({ name: message.name || name2 || '', status: 'done', text: String(message.mes || '') });
-        syncPipReopenBanner();
-    });
-    eventSource.on(event_types.IMPERSONATE_READY, (text) => {
-        pipGenerationStopped = false;
-        updatePipView({ status: 'done', text: String(text || '') });
-        syncPipReopenBanner();
-    });
-    eventSource.on(event_types.GENERATION_STOPPED, () => {
-        pipGenerationStopped = true;
-        updatePipView({ status: 'stopped' });
-        syncPipReopenBanner();
-    });
-}
-
-export function syncMobileKeepAliveUi() {
-    // isMobile() gates the entire subsystem, not just UI visibility. The
-    // audio-mode setting persists in settings.json across devices; if a user
-    // enables it on their phone and then loads the same account on a desktop
-    // browser, initKeepAlive() would report platform === 'web' (AudioContext
-    // exists everywhere) and the in-flight listener would enter
-    // audio mode on every generation — pausing the user's Spotify/YouTube
-    // and showing a MediaSession card, with no UI to turn it off. Skip init
-    // entirely on non-mobile so the persisted flag is inert off-device. A
-    // native app shell bridge identifies the device regardless of the UA.
-    if (!isMobile() && !hasNativeKeepAliveBridge()) {
-        $('#luker_mobile_keep_alive').closest('label.checkbox_label').hide();
-        return;
-    }
-
-    if (!syncMobileKeepAliveUi._initialized) {
-        initKeepAlive();
-        setPipPrimingEnabled(!!power_user.luker_mobile_keep_alive_web_pip_enabled);
-        subscribeActivityGuard(onActivityGuardChanged);
-        document.addEventListener('click', reopenPipOnGenerationTap, true);
-        document.addEventListener('keydown', reopenPipOnGenerationKey, true);
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') syncPipReopenBanner();
-        });
-        initPipViewFeed();
-        onKeepAliveStateChanged(() => {
-            // Reflect whatever the module says is currently in effect — the user closing the
-            // PiP window from the OS UI or autoplay being denied both land here.
-            const active = getActiveKeepAliveMode();
-            const platform = getKeepAlivePlatform();
-            if (platform === 'android') {
-                power_user.luker_mobile_keep_alive_android_enabled = active === 'android';
-                saveSettingsDebounced();
-            }
-            syncMobileKeepAliveCheckbox();
-            syncPipReopenBanner();
-        });
-        syncMobileKeepAliveUi._initialized = true;
-    }
-    const supported = isKeepAliveSupported();
-    const $row = $('#luker_mobile_keep_alive').closest('label.checkbox_label');
-    $row.toggle(supported);
-    syncMobileKeepAliveCheckbox();
-    syncPipReopenBanner();
-
-    if (!supported) return;
-
-    const platform = getKeepAlivePlatform();
-
-    // Android bridge accepts toggling without a user gesture: restore immediately.
-    if (
-        platform === 'android'
-        && power_user.luker_mobile_keep_alive_android_enabled
-        && getActiveKeepAliveMode() !== 'android'
-    ) {
-        setKeepAliveMode('android')
-            .then(syncMobileKeepAliveCheckbox)
-            .catch((error) => {
-                console.warn('[Luker] Failed to restore Android background keep-alive', error);
-            });
-    }
 }
 
 /**
@@ -4106,39 +3861,15 @@ function findTagIdByName(name) {
 }
 
 export async function doRandomChat(_, tagName) {
-    /**
-     * Gets the ID of a random character.
-     * @returns {string} The order index of the randomly selected character.
-     */
-    function getRandomCharacterId() {
-        if (!tagName) {
-            return Math.floor(Math.random() * characters.length).toString();
-        }
-
-        const tagId = findTagIdByName(tagName);
-        const taggedCharacters = Object.entries(tag_map)
-            .filter(x => x[1].includes(tagId)) // Get only records that include the tag
-            .map(x => x[0]) // Map the character avatar
-            .filter(x => characters.find(y => y.avatar === x)); // Filter out characters that don't exist
-        const randomCharacter = taggedCharacters[Math.floor(Math.random() * taggedCharacters.length)];
-        const randomIndex = characters.findIndex(x => x.avatar === randomCharacter);
-        if (randomIndex === -1) {
-            return;
-        }
-        return randomIndex.toString();
-    }
-
-    const characterId = getRandomCharacterId();
-    if (!characterId || characters[characterId] === undefined) {
-        toastr.error('No characters found');
-        return;
-    }
-    if (!await selectCharacterById(characterId)) {
-        return '';
-    }
-    setActiveCharacter(characters[characterId]?.avatar);
-    setActiveGroup(null);
-    return characters[characterId]?.name;
+    return await selectRandomCharacter({
+        tagName,
+        characters,
+        tagMap: tag_map,
+        findTagIdByName,
+        selectCharacterById,
+        setActiveCharacter,
+        setActiveGroup,
+    });
 }
 
 /**

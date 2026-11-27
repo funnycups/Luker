@@ -22,6 +22,7 @@ import { splitRecursive } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
 import { buildTranslateSummaryModel } from './behavior-summary-model.js';
+import { autoModeOptions, createTranslateController } from './translate-controller.js';
 
 let translateSummaryHandle = null;
 
@@ -91,28 +92,31 @@ function mountTranslateBehaviorSummary() {
     return translateSummaryHandle;
 }
 
-async function withTranslateActivity(fn) {
-    const guard = getContext()?.activityGuard;
-    if (typeof guard?.run !== 'function') {
-        return await fn();
-    }
-    return await guard.run({
-        source: 'translate:run',
-        label: t`Message translation`,
-        scope: 'chat',
-    }, fn);
-}
+export { autoModeOptions };
 
-export const autoModeOptions = {
-    NONE: 'none',
-    RESPONSES: 'responses',
-    INPUT: 'inputs',
-    BOTH: 'both',
-};
-
-const incomingTypes = [autoModeOptions.RESPONSES, autoModeOptions.BOTH];
-const outgoingTypes = [autoModeOptions.INPUT, autoModeOptions.BOTH];
-const recentlyEditedMessageIds = new Set();
+const {
+    translate,
+    translateIncomingMessage,
+    translateIncomingMessageReasoning,
+    handleIncomingMessage,
+    handleOutgoingMessage,
+    handleImpersonateReady,
+    handleMessageEdited,
+    handleMessageUpdate,
+    handleMessageReasoningEdit,
+    handleMessageReasoningDelete,
+    clearRecentlyEditedMessages,
+} = createTranslateController({
+    getSettings: () => extension_settings.translate,
+    getContext: (...args) => getContext(...args),
+    getRequestHeaders: (...args) => getRequestHeaders(...args),
+    getSecretState: () => secret_state,
+    substituteParams: (...args) => substituteParams(...args),
+    updateMessageBlock: (...args) => updateMessageBlock(...args),
+    updateReasoningUI: (...args) => updateReasoningUI(...args),
+    splitRecursive: (...args) => splitRecursive(...args),
+    t: (...args) => t(...args),
+});
 
 const defaultSettings = {
     target_language: 'en',
@@ -258,394 +262,6 @@ function loadSettings() {
     refreshTranslateBehaviorSummary();
 }
 
-/**
- * Check if the swipe is being generated for a message.
- * @param {string|number} messageId Message ID
- * @returns {boolean} Whether the swipe is being generated
- */
-function isGeneratingSwipe(messageId) {
-    return $(`#chat .mes[mesid="${messageId}"] .mes_text`).text() === '...';
-}
-
-async function translateImpersonate() {
-    return await withTranslateActivity(async () => {
-        const sendTextArea = $('#send_textarea');
-        const text = sendTextArea.val().toString();
-        const translatedText = await translate(text, extension_settings.translate.target_language);
-        sendTextArea.val(translatedText);
-    });
-}
-
-async function translateIncomingMessageInner(messageId) {
-    const context = getContext();
-    const message = context.chat[messageId];
-
-    if (!message) {
-        return;
-    }
-
-    if (typeof message.extra !== 'object') {
-        message.extra = {};
-    }
-
-    if (isGeneratingSwipe(messageId)) {
-        return;
-    }
-
-    const textToTranslate = substituteParams(message.mes, { name2Override: message.name });
-    const translation = await translate(textToTranslate, extension_settings.translate.target_language);
-    message.extra.display_text = translation;
-
-    updateMessageBlock(Number(messageId), message);
-}
-
-/**
- * Translates the contents of an incoming message.
- * @param {string | number} messageId Message ID
- * @returns {Promise<void>}
- */
-async function translateIncomingMessage(messageId) {
-    return await withTranslateActivity(() => translateIncomingMessageInner(messageId));
-}
-
-async function translateIncomingMessageReasoningInner(messageId) {
-    const context = getContext();
-    const message = context.chat[messageId];
-
-    if (!message) {
-        return false;
-    }
-
-    if (typeof message.extra !== 'object') {
-        message.extra = {};
-    }
-
-    if (!message.extra.reasoning || isGeneratingSwipe(messageId)) {
-        return false;
-    }
-
-    const textToTranslate = substituteParams(message.extra.reasoning, { name2Override: message.name });
-    const translation = await translate(textToTranslate, extension_settings.translate.target_language);
-    message.extra.reasoning_display_text = translation;
-
-    updateReasoningUI(Number(messageId));
-    return true;
-}
-
-/**
- * Translates the reasoning of an incoming message.
- * @param {string | number} messageId
- * @returns {Promise<boolean>} translated or not
- */
-async function translateIncomingMessageReasoning(messageId) {
-    return await withTranslateActivity(() => translateIncomingMessageReasoningInner(messageId));
-}
-
-async function translateProviderOneRing(text, lang) {
-    let from_lang = lang == extension_settings.translate.internal_language
-        ? extension_settings.translate.target_language
-        : extension_settings.translate.internal_language;
-
-    const response = await fetch('/api/translate/onering', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, from_lang: from_lang, to_lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the LibreTranslate API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderLibre(text, lang) {
-    const response = await fetch('/api/translate/libre', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the Google Translate API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderGoogle(text, lang) {
-    const response = await fetch('/api/translate/google', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using an instance of the Lingva Translate
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderLingva(text, lang) {
-    const response = await fetch('/api/translate/lingva', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the DeepL API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderDeepl(text, lang) {
-    if (!secret_state.deepl) {
-        throw new Error('No DeepL API key');
-    }
-
-    const endpoint = extension_settings.translate.deepl_endpoint || 'free';
-    const response = await fetch('/api/translate/deepl', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang, endpoint: endpoint }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the DeepLX API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderDeepLX(text, lang) {
-    const response = await fetch('/api/translate/deeplx', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the Bing API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderBing(text, lang) {
-    const response = await fetch('/api/translate/bing', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ text: text, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Translates text using the Yandex Translate API
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @returns {Promise<string>} Translated text
- */
-async function translateProviderYandex(text, lang) {
-    let chunks = [];
-    const chunkSize = 5000;
-    if (text.length <= chunkSize) {
-        chunks.push(text);
-    } else {
-        chunks = splitRecursive(text, chunkSize);
-    }
-    const response = await fetch('/api/translate/yandex', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ chunks: chunks, lang: lang }),
-    });
-
-    if (response.ok) {
-        const result = await response.text();
-        return result;
-    }
-
-    throw new Error(response.statusText);
-}
-
-/**
- * Splits text into chunks and translates each chunk separately
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @param {(text: string, lang: string) => Promise<string>} translateFn Function to translate a single chunk (must return a Promise)
- * @param {number} chunkSize Maximum chunk size
- * @returns {Promise<string>} Translated text
- */
-async function chunkedTranslate(text, lang, translateFn, chunkSize = 5000) {
-    if (text.length <= chunkSize) {
-        return await translateFn(text, lang);
-    }
-
-    const chunks = splitRecursive(text, chunkSize);
-
-    let result = '';
-    for (const chunk of chunks) {
-        result += await translateFn(chunk, lang);
-    }
-    return result;
-}
-
-/**
- * Translates text using the selected translation provider
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @param {string} provider Translation provider to use
- * @returns {Promise<string>} Translated text
- */
-async function translate(text, lang, provider = null) {
-    try {
-        if (text == '') {
-            return '';
-        }
-
-        if (!lang) {
-            lang = extension_settings.translate.target_language;
-        }
-
-        if (!provider) {
-            provider = extension_settings.translate.provider;
-        }
-
-        // split text by embedded images links
-        const chunks = text.split(/!\[.*?]\([^)]*\)/);
-        const links = [...text.matchAll(/!\[.*?]\([^)]*\)/g)];
-
-        let result = '';
-        for (let i = 0; i < chunks.length; i++) {
-            result += await translateInner(chunks[i], lang, provider);
-            if (i < links.length) result += links[i][0];
-        }
-
-        return result;
-    } catch (error) {
-        console.log(error);
-        toastr.error(String(error), 'Failed to translate message');
-    }
-}
-
-/**
- * Common translation function that handles the translation logic
- * @param {string} text Text to translate
- * @param {string} lang Target language code
- * @param {string} provider Translation provider to use
- * @returns {Promise<string>} Translated text
- */
-async function translateInner(text, lang, provider) {
-    if (text == '') {
-        return '';
-    }
-    if (!provider) {
-        provider = extension_settings.translate.provider;
-    }
-    switch (provider) {
-        case 'libre':
-            return await translateProviderLibre(text, lang);
-        case 'google':
-            return await chunkedTranslate(text, lang, translateProviderGoogle, 5000);
-        case 'lingva':
-            return await chunkedTranslate(text, lang, translateProviderLingva, 5000);
-        case 'deepl':
-            return await translateProviderDeepl(text, lang);
-        case 'deeplx':
-            return await chunkedTranslate(text, lang, translateProviderDeepLX, 1500);
-        case 'oneringtranslator':
-            return await translateProviderOneRing(text, lang);
-        case 'bing':
-            return await chunkedTranslate(text, lang, translateProviderBing, 1000);
-        case 'yandex':
-            return await translateProviderYandex(text, lang);
-        default:
-            console.error('Unknown translation provider', provider);
-            return text;
-    }
-}
-
-async function translateOutgoingMessage(messageId) {
-    return await withTranslateActivity(async () => {
-        const context = getContext();
-        const message = context.chat[messageId];
-
-        if (typeof message.extra !== 'object') {
-            message.extra = {};
-        }
-
-        const originalText = message.mes;
-        message.extra.display_text = originalText;
-        message.mes = await translate(originalText, extension_settings.translate.internal_language);
-        updateMessageBlock(messageId, message);
-
-        console.log('translateOutgoingMessage', messageId);
-    });
-}
-
-function shouldTranslate(types) {
-    return types.includes(extension_settings.translate.auto_mode);
-}
-
-function createEventHandler(translateFunction, shouldTranslateFunction) {
-    return async (data) => {
-        if (shouldTranslateFunction()) {
-            await translateFunction(data);
-        }
-    };
-}
-
 async function onTranslateInputMessageClick() {
     const textarea = document.getElementById('send_textarea');
 
@@ -716,89 +332,6 @@ async function onTranslationsClearClick() {
     await reloadCurrentChat();
 }
 
-async function translateMessageEdit(messageId, { didContentEdit = false } = {}) {
-    const context = getContext();
-    const message = context.chat[messageId];
-    if (!message) {
-        return;
-    }
-
-    if (!didContentEdit) {
-        if (message.extra?.display_text) {
-            updateMessageBlock(messageId, message);
-        }
-        return;
-    }
-
-    const shouldClearTranslation = message.is_system
-        || (extension_settings.translate.auto_mode == autoModeOptions.NONE && Boolean(message.extra?.display_text));
-    const shouldRunTranslation = !shouldClearTranslation
-        && ((message.is_user && shouldTranslate(outgoingTypes)) || (!message.is_user && shouldTranslate(incomingTypes)));
-
-    if (!shouldClearTranslation && !shouldRunTranslation) {
-        return;
-    }
-
-    return await withTranslateActivity(async () => {
-        if (shouldClearTranslation) {
-            if (message.extra) {
-                delete message.extra.display_text;
-            }
-            updateMessageBlock(messageId, message);
-        } else {
-            await translateIncomingMessageInner(messageId);
-        }
-
-        await context.saveChat();
-    });
-}
-
-async function translateMessageReasoningEdit(messageId) {
-    const context = getContext();
-    const message = context.chat[messageId];
-    if (!message) {
-        return;
-    }
-
-    const shouldClearTranslation = message.is_system
-        || (extension_settings.translate.auto_mode == autoModeOptions.NONE && Boolean(message.extra?.reasoning_display_text));
-    const shouldRunTranslation = !shouldClearTranslation
-        && ((message.is_user && shouldTranslate(outgoingTypes)) || (!message.is_user && shouldTranslate(incomingTypes)))
-        && Boolean(message.extra?.reasoning)
-        && !isGeneratingSwipe(messageId);
-
-    if (!shouldClearTranslation && !shouldRunTranslation) {
-        return;
-    }
-
-    return await withTranslateActivity(async () => {
-        let anyChange = false;
-        if (shouldClearTranslation) {
-            if (message.extra) {
-                delete message.extra.reasoning_display_text;
-            }
-            updateReasoningUI(Number(messageId));
-            anyChange = true;
-        } else {
-            anyChange = await translateIncomingMessageReasoningInner(messageId);
-        }
-
-        if (anyChange) {
-            await context.saveChat();
-        }
-    });
-}
-
-async function removeReasoningDisplayText(messageId) {
-    const context = getContext();
-    const message = context.chat[messageId];
-    if (message.extra?.reasoning_display_text) {
-        delete message.extra.reasoning_display_text;
-        updateReasoningUI(Number(messageId));
-        await context.saveChat();
-    }
-}
-
 async function onMessageTranslateClick() {
     const context = getContext();
     const messageId = $(this).closest('.mes').attr('mesid');
@@ -825,26 +358,6 @@ async function onMessageTranslateClick() {
 
     await context.saveChat();
 }
-
-const handleIncomingMessage = createEventHandler(async (messageId) => {
-    await translateIncomingMessageReasoning(messageId);
-    await translateIncomingMessage(messageId);
-}, () => shouldTranslate(incomingTypes));
-const handleOutgoingMessage = createEventHandler(translateOutgoingMessage, () => shouldTranslate(outgoingTypes));
-const handleImpersonateReady = createEventHandler(translateImpersonate, () => shouldTranslate(incomingTypes));
-const handleMessageEdited = createEventHandler((messageId) => {
-    const normalizedMessageId = Number(messageId);
-    if (Number.isInteger(normalizedMessageId) && normalizedMessageId >= 0) {
-        recentlyEditedMessageIds.add(normalizedMessageId);
-    }
-}, () => true);
-const handleMessageUpdate = createEventHandler(async (messageId) => {
-    const normalizedMessageId = Number(messageId);
-    const didContentEdit = recentlyEditedMessageIds.delete(normalizedMessageId);
-    await translateMessageEdit(normalizedMessageId, { didContentEdit });
-}, () => true);
-const handleMessageReasoningEdit = createEventHandler(translateMessageReasoningEdit, () => true);
-const handleMessageReasoningDelete = createEventHandler(removeReasoningDisplayText, () => true);
 
 globalThis.translate = translate;
 
@@ -919,7 +432,7 @@ export async function init() {
     eventSource.on(event_types.MESSAGE_UPDATED, handleMessageUpdate);
     eventSource.on(event_types.MESSAGE_REASONING_EDITED, handleMessageReasoningEdit);
     eventSource.on(event_types.MESSAGE_REASONING_DELETED, handleMessageReasoningDelete);
-    eventSource.on(event_types.CHAT_CHANGED, () => recentlyEditedMessageIds.clear());
+    eventSource.on(event_types.CHAT_CHANGED, () => clearRecentlyEditedMessages());
 
     document.body.classList.add('translate');
 

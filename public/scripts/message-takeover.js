@@ -229,3 +229,300 @@ export function createMessageEditorHandle(opts = {}) {
         get abortSignal() { return signal; },
     };
 }
+
+/**
+ * Computes controller and timer ownership for a single `generateInternal` call
+ * so prompt estimates (`dryRun`) and background `quiet` prompts never replace
+ * a live foreground generation's controller or timing state.
+ */
+export function resolveGenerationOwnership({
+    type,
+    dryRun = false,
+    isSendPress = false,
+    abortController = null,
+    quietAbortController = null,
+    externalSignal = null,
+    generationStarted = null,
+    now = () => new Date(),
+}) {
+    const sharesInFlightController = type === 'quiet'
+        && isSendPress
+        && Boolean(abortController)
+        && !abortController.signal.aborted;
+
+    const nextGenerationStarted = (!dryRun && type !== 'quiet')
+        ? now()
+        : generationStarted;
+
+    let nextAbortController = abortController;
+    if (!dryRun && type !== 'quiet' && !(abortController && externalSignal)) {
+        nextAbortController = new AbortController();
+    }
+
+    let nextQuietAbortController = quietAbortController;
+    let generationAbortController;
+    if (dryRun) {
+        generationAbortController = new AbortController();
+    } else if (type === 'quiet') {
+        nextQuietAbortController = new AbortController();
+        generationAbortController = nextQuietAbortController;
+    } else {
+        generationAbortController = nextAbortController;
+    }
+
+    const isGenerationAborted = () => Boolean(
+        generationAbortController?.signal?.aborted
+        || (externalSignal && typeof externalSignal === 'object' && 'aborted' in externalSignal && externalSignal.aborted),
+    );
+
+    return {
+        sharesInFlightController,
+        abortController: nextAbortController,
+        quietAbortController: nextQuietAbortController,
+        generationAbortController,
+        generationStarted: nextGenerationStarted,
+        isGenerationAborted,
+    };
+}
+
+/**
+ * Extends the active generation timer when continuing an existing message.
+ * Dry runs leave both live and message timestamps untouched.
+ */
+export function computeContinuedGenerationStart({
+    dryRun = false,
+    isContinue = false,
+    lastMessage = null,
+    now = () => new Date(),
+}) {
+    if (dryRun || !isContinue || !lastMessage) {
+        return null;
+    }
+    const prevFinished = lastMessage.gen_finished;
+    const prevStarted = lastMessage.gen_started;
+    if (!prevFinished || !prevStarted) {
+        return null;
+    }
+    const timePassed = Number(prevFinished) - Number(prevStarted);
+    const started = new Date(now().getTime() - timePassed);
+    lastMessage.gen_started = started;
+    return started;
+}
+
+/**
+ * Aborts both the active foreground controller and any background quiet controller.
+ */
+export function abortGenerationControllers({ abortController = null, quietAbortController = null, reason = 'Clicked stop button' }) {
+    let stopped = false;
+    if (abortController) {
+        abortController.abort(reason);
+        stopped = true;
+    }
+    if (quietAbortController) {
+        quietAbortController.abort(reason);
+        stopped = true;
+    }
+    return stopped;
+}
+
+/**
+ * Executes the kernel-side message takeover lifecycle (placeholder acquisition,
+ * live streaming updates, and committed/aborted/discarded finalization) fenced
+ * by foreground controller identity and chat transition epoch.
+ */
+export async function runTakeoverLifecycle({
+    type,
+    handle,
+    isContinue = false,
+    isImpersonate = false,
+    genEpoch,
+    myAbortController,
+    getAbortController,
+    getChatTransitionEpoch,
+    getChat,
+    powerUser = {},
+    now = () => new Date(),
+    getMessageTimeStamp,
+    getGeneratingApi,
+    getGeneratingModel,
+    acquireTakeoverPlaceholder,
+    rollbackTakeoverPlaceholder,
+    applyPostGenerationText,
+    resolveAssistantTokenCount,
+    extractMessageById,
+    redrawMessageBubble,
+    hideSwipeButtons,
+    showSwipeButtons,
+    appendChatMessages,
+    saveChatConditional,
+    isLastLukerReplyPersistedByServerForApi,
+    emitEvent,
+    unblockThisGeneration,
+    triggerAutoContinue,
+}) {
+    const isStale = () => getAbortController() !== myAbortController || getChatTransitionEpoch() !== genEpoch;
+    const emptyTakeoverResult = () => Object.defineProperties(new String(''), {
+        fromTakeover: { value: true },
+    });
+
+    const gen_started = now();
+    hideSwipeButtons();
+
+    // ── 1. Acquire/push placeholder per type ──
+    const placeholderId = await acquireTakeoverPlaceholder(type);
+    if (isStale()) {
+        try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
+        return emptyTakeoverResult();
+    }
+    const initialChat = getChat();
+    const originalText = String(initialChat[placeholderId]?.mes ?? '');
+    const originalReasoning = String(initialChat[placeholderId]?.extra?.reasoning ?? '');
+    if (initialChat[placeholderId]) {
+        initialChat[placeholderId].gen_started = gen_started;
+    }
+
+    // ── 2. Wire onUpdate → live redraw + chat mutation ──
+    handle.setOnUpdate?.((text, reasoning) => {
+        if (isStale()) return;
+        const liveChat = getChat();
+        if (!liveChat[placeholderId]) return;
+        liveChat[placeholderId].mes = String(text ?? '');
+        if (!liveChat[placeholderId].extra) liveChat[placeholderId].extra = {};
+        liveChat[placeholderId].extra.reasoning = String(reasoning ?? '');
+        liveChat[placeholderId].gen_finished = now();
+        redrawMessageBubble(placeholderId);
+        emitEvent(event_types.MESSAGE_UPDATED, placeholderId);
+    });
+
+    // ── 3. Wait for plugin handle to settle ──
+    const outcome = await handle.complete;
+    try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
+
+    if (isStale()) {
+        return emptyTakeoverResult();
+    }
+    showSwipeButtons();
+
+    // ── 4. Route by outcome ──
+    if (outcome.status === 'committed') {
+        const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
+        const finalReasoning = String(outcome.finalReasoning ?? '');
+        const liveChat = getChat();
+        const slot = liveChat[placeholderId];
+
+        if (slot) {
+            slot.mes = cleanedText;
+            if (!slot.extra) slot.extra = {};
+            slot.extra.reasoning = finalReasoning;
+            slot.extra.reasoning_duration = null;
+            slot.extra.api = getGeneratingApi();
+            slot.extra.model = getGeneratingModel();
+            slot.gen_started = gen_started;
+            slot.gen_finished = now();
+            slot.send_date = getMessageTimeStamp();
+            if (powerUser.message_token_count_enabled) {
+                const tokenCountText = (finalReasoning || '') + cleanedText;
+                slot.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
+                if (isStale()) {
+                    return emptyTakeoverResult();
+                }
+            }
+            if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
+                slot.swipes[slot.swipe_id] = slot.mes;
+                if (Array.isArray(slot.swipe_info)) {
+                    slot.swipe_info[slot.swipe_id] = {
+                        send_date: slot.send_date,
+                        gen_started: slot.gen_started,
+                        gen_finished: slot.gen_finished,
+                        extra: structuredClone(slot.extra),
+                    };
+                }
+            }
+        }
+
+        extractMessageById(placeholderId);
+        redrawMessageBubble(placeholderId);
+
+        const activeController = getAbortController();
+        const isAborted = activeController && activeController.signal.aborted;
+        const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
+        const canUseIncrementalAppend = !isAborted
+            && type === 'normal'
+            && placeholderId === liveChat.length - 1
+            && liveChat[placeholderId]
+            && !liveChat[placeholderId].is_user
+            && !serverPersistedReply;
+        if (serverPersistedReply) {
+            // Server already has it; nothing to do.
+        } else if (canUseIncrementalAppend) {
+            const appended = await appendChatMessages([liveChat[placeholderId]]);
+            if (!appended && !isStale()) {
+                await saveChatConditional();
+            }
+        } else {
+            await saveChatConditional();
+        }
+        if (isStale()) {
+            return emptyTakeoverResult();
+        }
+
+        unblockThisGeneration(type);
+
+        await emitEvent(event_types.MESSAGE_RECEIVED, placeholderId, type);
+        if (isStale()) {
+            return emptyTakeoverResult();
+        }
+        await emitEvent(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
+
+        if (!isStale()) {
+            triggerAutoContinue?.(cleanedText, false);
+        }
+        return Object.defineProperties(new String(cleanedText), {
+            fromTakeover: { value: true },
+        });
+    }
+
+    if (outcome.status === 'aborted') {
+        const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
+        const finalReasoning = String(outcome.finalReasoning ?? '');
+        const liveChat = getChat();
+        const slot = liveChat[placeholderId];
+        if (slot) {
+            slot.mes = cleanedText;
+            if (!slot.extra) slot.extra = {};
+            slot.extra.reasoning = finalReasoning;
+            slot.extra.reasoning_duration = null;
+            slot.extra.api = getGeneratingApi();
+            slot.extra.model = getGeneratingModel();
+            slot.gen_started = gen_started;
+            slot.gen_finished = now();
+            slot.send_date = getMessageTimeStamp();
+            if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
+                slot.swipes[slot.swipe_id] = slot.mes;
+            }
+        }
+        extractMessageById(placeholderId);
+        redrawMessageBubble(placeholderId);
+        unblockThisGeneration(type);
+        return Object.defineProperties(new String(cleanedText), {
+            fromTakeover: { value: true },
+        });
+    }
+
+    // status === 'discarded'
+    try {
+        await rollbackTakeoverPlaceholder(placeholderId, type, originalText, originalReasoning);
+    } catch (rollbackErr) {
+        console.error('[takeover] rollback failed', rollbackErr);
+    }
+    if (isStale()) {
+        return emptyTakeoverResult();
+    }
+    try {
+        await emitEvent(event_types.GENERATION_STOPPED);
+    } catch (emitErr) {
+        console.error('[takeover] failed to emit GENERATION_STOPPED', emitErr);
+    }
+    unblockThisGeneration(type);
+    return emptyTakeoverResult();
+}

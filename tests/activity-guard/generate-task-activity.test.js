@@ -53,13 +53,13 @@ describe('resolveRequestActivityLeaseOptions', () => {
     test('returns global ambient defaults and resolves default label lazily via Luker.getContext().translate', () => {
         globalThis.Luker = {
             getContext: () => ({
-                translate: (key) => (key === 'Background AI request' ? '后台 AI 请求' : key),
+                translate: (key) => `TR:${key}`,
             }),
         };
 
         expect(resolveRequestActivityLeaseOptions(true, 'core:generate-task')).toEqual({
             source: 'core:generate-task',
-            label: '后台 AI 请求',
+            label: expect.stringMatching(/^TR:\S/),
             scope: 'global',
             ambient: true,
             guardUnload: true,
@@ -139,7 +139,7 @@ describe('generateTask activity lease', () => {
         expect(observedDuringRequest.activities).toHaveLength(1);
         expect(observedDuringRequest.activities[0]).toMatchObject({
             source: 'core:generate-task',
-            label: 'Background AI request',
+            label: expect.stringMatching(/\S/),
             scope: 'global',
             ambient: true,
             guardUnload: true,

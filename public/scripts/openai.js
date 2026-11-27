@@ -65,6 +65,9 @@ import { withProfileRetry } from './extensions/connection-manager/profile-retry.
 
 import { getEventSourceStream } from './sse-stream.js';
 import { getLukerResponseMeta, onLukerResponseMeta } from './ws-delivery.js';
+import { createGenerationMetaTracker } from './lib/response-meta-subscription.js';
+import { chat_completion_sources, extractStreamingReply } from './lib/openai-streaming-reply.js';
+export { chat_completion_sources };
 import { transientSessionHeaders } from './lib/transient-session.js';
 import {
     resolveClaudeModelCapabilities,
@@ -82,7 +85,6 @@ import {
 } from './lib/protocol-parser/index.js';
 import { readPresetDocument } from './named-resource-read.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
-import { pushReasoningDetails } from './util/reasoning-details.js';
 import {
     areLookupNamesEqual,
     findCanonicalNameInList,
@@ -258,10 +260,10 @@ const textCompletionModels = [
 
 let biasCache = undefined;
 export let model_list = [];
-let lastOpenAIReplyPersistedByServer = false;
-let lastOpenAIGenerationId = '';
-let activeOpenAILukerGenerationToken = 0;
-let disposeOpenAILukerResponseMetaListener = null;
+const openAiLukerMetaTracker = createGenerationMetaTracker({
+    onLukerResponseMeta,
+    onLog: (eventName, details) => logOpenAILukerPersistenceDebug(eventName, details),
+});
 
 // Tracks the in-flight remote status check for the current chat-completion
 // source. Consumers that must observe a truly-populated model dropdown
@@ -547,36 +549,6 @@ export async function syncSavedCharacterBoundPreset({ name, previousBody, body }
 }
 let lastOpenAIPresetSelectValue = '';
 
-export const chat_completion_sources = {
-    OPENAI: 'openai',
-    CLAUDE: 'claude',
-    OPENROUTER: 'openrouter',
-    AI21: 'ai21',
-    MAKERSUITE: 'makersuite',
-    VERTEXAI: 'vertexai',
-    MISTRALAI: 'mistralai',
-    CUSTOM: 'custom',
-    OPENAI_RESPONSES: 'openai_responses',
-    COHERE: 'cohere',
-    PERPLEXITY: 'perplexity',
-    GROQ: 'groq',
-    ELECTRONHUB: 'electronhub',
-    CHUTES: 'chutes',
-    NANOGPT: 'nanogpt',
-    DEEPSEEK: 'deepseek',
-    AIMLAPI: 'aimlapi',
-    XAI: 'xai',
-    POLLINATIONS: 'pollinations',
-    MOONSHOT: 'moonshot',
-    FIREWORKS: 'fireworks',
-    COMETAPI: 'cometapi',
-    AZURE_OPENAI: 'azure_openai',
-    ZAI: 'zai',
-    SILICONFLOW: 'siliconflow',
-    WORKERS_AI: 'workers_ai',
-    MINIMAX: 'minimax',
-};
-
 const lukerServerPersistenceUnsupportedSources = new Set();
 
 function isLukerServerPersistenceSupported(source) {
@@ -623,11 +595,11 @@ function shouldUseLukerServerPersistence(type, source = oai_settings.chat_comple
 }
 
 function isLastOpenAIReplyPersistedByServer() {
-    return lastOpenAIReplyPersistedByServer;
+    return openAiLukerMetaTracker.isLastReplyPersisted();
 }
 
 function getLastOpenAIGenerationId() {
-    return lastOpenAIGenerationId;
+    return openAiLukerMetaTracker.getLastGenerationId();
 }
 
 const character_names_behavior = {
@@ -4698,11 +4670,7 @@ async function sendOpenAIRequest(type, messages, signal, {
     let trackedGenerationToken = 0;
     let trackedGenerationId = '';
     if (shouldTrackLukerGenerationState) {
-        trackedGenerationToken = ++activeOpenAILukerGenerationToken;
-        disposeOpenAILukerResponseMetaListener?.();
-        disposeOpenAILukerResponseMetaListener = null;
-        lastOpenAIReplyPersistedByServer = false;
-        lastOpenAIGenerationId = '';
+        trackedGenerationToken = openAiLukerMetaTracker.beginGeneration();
         const persistTarget = buildLukerPersistTarget();
         if (persistTarget) {
             const generationId = uuidv4();
@@ -4714,7 +4682,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                     persist_target: persistTarget,
                 },
             };
-            lastOpenAIGenerationId = generationId;
+            openAiLukerMetaTracker.setGenerationId(generationId);
             logOpenAILukerPersistenceDebug('request_init', {
                 type,
                 generation_id: generationId,
@@ -4727,79 +4695,15 @@ async function sendOpenAIRequest(type, messages, signal, {
         transientSessionId,
         onPreparedRequest,
     });
-    let disposeGenerationMeta = null;
-    const cleanupGenerationMeta = () => {
-        signal?.removeEventListener?.('abort', cleanupGenerationMeta);
-        if (disposeOpenAILukerResponseMetaListener === cleanupGenerationMeta) {
-            disposeOpenAILukerResponseMetaListener = null;
-        }
-        if (!disposeGenerationMeta) {
-            return;
-        }
-        const dispose = disposeGenerationMeta;
-        disposeGenerationMeta = null;
-        dispose();
-    };
-    const generationIdHeader = response.headers.get('x-luker-generation-id') || '';
-    const persistedHeader = response.headers.get('x-luker-server-persisted');
-    const hasMismatchedGenerationIdHeader = Boolean(
-        generationIdHeader && trackedGenerationId && generationIdHeader !== trackedGenerationId,
-    );
-    if (shouldTrackLukerGenerationState && trackedGenerationToken === activeOpenAILukerGenerationToken && main_api === 'openai' && !hasMismatchedGenerationIdHeader) {
-        if (generationIdHeader && (!trackedGenerationId || generationIdHeader === trackedGenerationId)) {
-            trackedGenerationId = generationIdHeader;
-            lastOpenAIGenerationId = generationIdHeader;
-        }
-        if (persistedHeader === '1') {
-            lastOpenAIReplyPersistedByServer = true;
-        } else if (persistedHeader === '0') {
-            lastOpenAIReplyPersistedByServer = false;
-        }
-        if (generationIdHeader || persistedHeader === '0' || persistedHeader === '1') {
-            logOpenAILukerPersistenceDebug('response_header_meta', {
-                ...(generationIdHeader ? { generation_id: generationIdHeader } : {}),
-                ...(persistedHeader === '0' || persistedHeader === '1' ? { persisted: persistedHeader === '1' } : {}),
-            });
-        }
-        disposeOpenAILukerResponseMetaListener?.();
-        const tokenForListener = trackedGenerationToken;
-        const dispose = onLukerResponseMeta(response, (meta) => {
-            if (tokenForListener !== activeOpenAILukerGenerationToken || main_api !== 'openai') {
-                return;
-            }
-            const metaGenerationId = typeof meta?.generation_id === 'string' ? meta.generation_id : '';
-            if (trackedGenerationId && lastOpenAIGenerationId && lastOpenAIGenerationId !== trackedGenerationId) {
-                return;
-            }
-            if (metaGenerationId && trackedGenerationId && metaGenerationId !== trackedGenerationId) {
-                return;
-            }
-            if (metaGenerationId && !trackedGenerationId) {
-                trackedGenerationId = metaGenerationId;
-            }
-            const logPayload = {};
-            if (metaGenerationId) {
-                lastOpenAIGenerationId = metaGenerationId;
-                logPayload.generation_id = metaGenerationId;
-            }
-            if (typeof meta?.persisted === 'boolean') {
-                lastOpenAIReplyPersistedByServer = meta.persisted;
-                logPayload.persisted = meta.persisted;
-            }
-            if (Object.keys(logPayload).length > 0) {
-                logOpenAILukerPersistenceDebug(stream ? 'stream_meta' : 'response_meta', logPayload);
-            }
-        });
-        disposeGenerationMeta = dispose;
-        disposeOpenAILukerResponseMetaListener = cleanupGenerationMeta;
-        if (signal && disposeGenerationMeta) {
-            if (signal.aborted) {
-                cleanupGenerationMeta();
-            } else {
-                signal.addEventListener('abort', cleanupGenerationMeta, { once: true });
-            }
-        }
-    }
+    const { cleanup: cleanupGenerationMeta } = openAiLukerMetaTracker.attachResponse({
+        response,
+        expectedEpoch: trackedGenerationToken,
+        expectedGenerationId: trackedGenerationId,
+        signal,
+        shouldTrack: shouldTrackLukerGenerationState,
+        isApiActive: () => main_api === 'openai',
+        metaEventName: stream ? 'stream_meta' : 'response_meta',
+    });
 
     const effectiveChatCompletionSource = requestBody?.chat_completion_source || requestSettings.chat_completion_source;
     const responseContentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
@@ -5315,133 +5219,10 @@ async function sendOpenAIRequest(type, messages, signal, {
  * @returns {string} The reply extracted from the response data
  */
 export function getStreamingReply(data, state = {}, { chatCompletionSource = null, overrideShowThoughts = null } = {}) {
-    const chat_completion_source = chatCompletionSource ?? oai_settings.chat_completion_source;
-    const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
-    const targetState = state && typeof state === 'object' ? state : {};
-
-    if (chat_completion_source === chat_completion_sources.CLAUDE) {
-        if (data?.type === 'content_block_start' && data?.content_block && Number.isInteger(data?.index)) {
-            if (!Array.isArray(targetState.reasoningBlocks)) {
-                targetState.reasoningBlocks = [];
-            }
-            const block = data.content_block;
-            if (block.type === 'thinking') {
-                targetState.reasoningBlocks[data.index] = { type: 'thinking', thinking: String(block.thinking || '') };
-            } else if (block.type === 'redacted_thinking') {
-                targetState.reasoningBlocks[data.index] = { type: 'redacted_thinking', data: String(block.data || '') };
-            }
-        } else if (data?.type === 'content_block_delta' && data?.delta && Number.isInteger(data?.index)) {
-            const existing = Array.isArray(targetState.reasoningBlocks) ? targetState.reasoningBlocks[data.index] : null;
-            if (existing) {
-                if (data.delta.type === 'thinking_delta' && existing.type === 'thinking') {
-                    existing.thinking += String(data.delta.thinking || '');
-                } else if (data.delta.type === 'signature_delta' && existing.type === 'thinking') {
-                    existing.signature = (existing.signature || '') + String(data.delta.signature || '');
-                }
-            }
-        }
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (data?.delta?.thinking || '');
-        }
-        return data?.delta?.text || '';
-    } else if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(chat_completion_source)) {
-        const inlineData = data?.candidates?.[0]?.content?.parts?.filter(x => x.inlineData && !x.thought)?.map(x => x.inlineData) || [];
-        if (Array.isArray(inlineData) && inlineData.length > 0) {
-            if (!Array.isArray(targetState.images)) {
-                targetState.images = [];
-            }
-            targetState.images.push(...inlineData.map(x => `data:${x.mimeType};base64,${x.data}`).filter(isDataURL));
-        }
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (data?.candidates?.[0]?.content?.parts?.filter(x => x.thought)?.map(x => x.text)?.[0] || '');
-        }
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        parts.forEach((part) => {
-            if (part?.thoughtSignature && typeof part.text === 'string') {
-                targetState.signature = part.thoughtSignature;
-            }
-        });
-        return data?.candidates?.[0]?.content?.parts?.filter(x => !x.thought)?.map(x => x.text)?.[0] || '';
-    } else if (chat_completion_source === chat_completion_sources.COHERE) {
-        return data?.delta?.message?.content?.text || data?.delta?.message?.tool_plan || '';
-    } else if (chat_completion_source === chat_completion_sources.DEEPSEEK || chat_completion_source === chat_completion_sources.XAI) {
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content || '');
-        }
-        return data?.choices?.[0]?.delta?.content || '';
-    } else if (chat_completion_source === chat_completion_sources.OPENROUTER) {
-        const imageUrls = data?.choices?.[0]?.delta?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url) || [];
-        if (Array.isArray(imageUrls) && imageUrls.length > 0) {
-            if (!Array.isArray(targetState.images)) {
-                targetState.images = [];
-            }
-            targetState.images.push(...imageUrls.filter(isDataURL));
-        }
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (
-                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
-                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
-                data?.choices?.filter(x => x?.message?.reasoning)?.[0]?.message?.reasoning ??
-                data?.choices?.filter(x => x?.message?.reasoning_content)?.[0]?.message?.reasoning_content ??
-                ''
-            );
-        }
-        pushReasoningDetails(targetState, [
-            ...(data?.choices?.[0]?.delta?.reasoning_details || []),
-            ...(data?.choices?.[0]?.message?.reasoning_details || []),
-        ]);
-        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
-    } else if (chat_completion_source === chat_completion_sources.OPENAI_RESPONSES) {
-        const eventType = typeof data?.type === 'string' ? data.type : '';
-        if (eventType === 'response.output_text.delta' && typeof data.delta === 'string') {
-            return data.delta;
-        }
-        if ((eventType === 'response.reasoning_text.delta' || eventType === 'response.reasoning_summary_text.delta') && typeof data.delta === 'string') {
-            if (show_thoughts) {
-                targetState.reasoning = (targetState.reasoning || '') + data.delta;
-            }
-            return '';
-        }
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (
-                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
-                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
-                ''
-            );
-        }
-        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
-    } else if ([
-        chat_completion_sources.CUSTOM,
-        chat_completion_sources.POLLINATIONS,
-        chat_completion_sources.AIMLAPI,
-        chat_completion_sources.MOONSHOT,
-        chat_completion_sources.COMETAPI,
-        chat_completion_sources.ELECTRONHUB,
-        chat_completion_sources.NANOGPT,
-        chat_completion_sources.ZAI,
-        chat_completion_sources.SILICONFLOW,
-        chat_completion_sources.CHUTES,
-        chat_completion_sources.WORKERS_AI,
-        chat_completion_sources.FIREWORKS,
-        chat_completion_sources.MINIMAX,
-    ].includes(chat_completion_source)) {
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (
-                data?.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
-                data?.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning ??
-                ''
-            );
-        }
-        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
-    } else if (chat_completion_source === chat_completion_sources.MISTRALAI) {
-        if (show_thoughts) {
-            targetState.reasoning = (targetState.reasoning || '') + (data?.choices?.filter(x => x?.delta?.content?.[0]?.thinking)?.[0]?.delta?.content?.[0]?.thinking?.[0]?.text || '');
-        }
-        const content = data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
-        return Array.isArray(content) ? content.map(x => x.text).filter(x => x).join('') : content;
-    } else {
-        return data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
-    }
+    return extractStreamingReply(data, state, {
+        chatCompletionSource: chatCompletionSource ?? oai_settings.chat_completion_source,
+        showThoughts: overrideShowThoughts ?? oai_settings.show_thoughts,
+    });
 }
 
 /**

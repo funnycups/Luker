@@ -1,26 +1,7 @@
-import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
-import { installDomReadyJQuery } from '../util/browser-module-context.js';
-import {
-    getActiveActivities,
-    hasUnloadGuard,
-    hasChatSwitchGuard,
-    hasKeepAliveHold,
-    hasActiveSource,
-    subscribeActivityGuard,
-} from '../../public/scripts/activity-guard.js';
-
-const noop = () => {};
-const asyncNoop = async () => {};
-
-function stubExports(names, overrides = {}) {
-    const out = { ...overrides };
-    for (const name of names) {
-        if (!(name in out)) out[name] = noop;
-    }
-    return out;
-}
-
-class StubClass {}
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { createActivityGuardRegistry } from '../../public/scripts/activity-guard.js';
+import { createChatTransitionCoordinator } from '../../public/scripts/lib/chat-transition-coordinator.js';
+import { normalizeGenerateRawArgs } from '../../public/scripts/lib/request-activity-lease.js';
 
 function deferred() {
     let resolve;
@@ -32,367 +13,50 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
-let generateRaw;
-let generateRawData;
-let sendOpenAIRequestMock;
-let currentLocaleTranslation = null;
+describe('generateRaw / generateRawData activity lease and argument normalization', () => {
+    let registry;
+    let translateImpl;
+    let coordinator;
 
-beforeAll(async () => {
-    sendOpenAIRequestMock = jest.fn();
-
-    jest.unstable_mockModule('../../public/scripts/RossAscends-mods.js', () => stubExports([
-        'humanizedDateTime', 'favsToHotswap', 'getMessageTimeStamp', 'dragElement',
-        'isMobile', 'initNavPanelPins', 'initRossMods', 'initSendTextareaState',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/stats.js', () => stubExports(['userStatsHandler', 'statMesProcess', 'initStats']));
-    jest.unstable_mockModule('../../public/scripts/kai-settings.js', () => stubExports([
-        'generateKoboldWithStreaming', 'hydrateKoboldPresetData', 'loadKoboldSettings',
-        'getKoboldGenerationData', 'initKoboldSettings',
-    ], { kai_settings: {}, kai_flags: {}, koboldai_settings: {}, koboldai_setting_names: {} }));
-    jest.unstable_mockModule('../../public/scripts/textgen-settings.js', () => stubExports([
-        'hydrateTextGenPresetData', 'loadTextGenSettings', 'generateTextGenWithStreaming',
-        'getTextGenGenerationData', 'parseTextgenLogprobs', 'parseTabbyLogprobs', 'initTextGenSettings',
-    ], { textgenerationwebui_settings: {}, textgenerationwebui_presets: [], textgenerationwebui_preset_names: [], textgen_types: {} }));
-    jest.unstable_mockModule('../../public/scripts/world-info.js', () => stubExports([
-        'getWorldInfoPrompt', 'setWorldInfoSettings', 'importEmbeddedWorldInfo',
-        'checkEmbeddedWorld', 'setWorldInfoButtonClass', 'initWorldInfo',
-        'charUpdatePrimaryWorld', 'charSetAuxWorlds', 'deleteWorldInfoWithUndo',
-    ], {
-        world_info: {},
-        world_names: [],
-        wi_anchor_position: {},
-        world_info_include_names: {},
-        getWorldInfoSettings: () => ({}),
-    }));
-    jest.unstable_mockModule('../../public/scripts/group-chats.js', () => stubExports([
-        'saveGroupChat', 'getGroups', 'primeGroupsSnapshot', 'generateGroupWrapper',
-        'resetSelectedGroup', 'select_group_chats', 'regenerateGroup', 'getGroupChat',
-        'loadGroupChat', 'renameGroupMember', 'createNewGroupChat', 'editGroup',
-        'getGroupAvatar', 'deleteGroupChat', 'renameGroupChat', 'importGroupChat',
-        'getGroupBlock', 'getGroupCharacterCardsLazy', 'getGroupDepthPrompts',
-    ], { groups: [], selected_group: null, is_group_generating: false, group_generation_id: null }));
-    jest.unstable_mockModule('../../public/scripts/power-user.js', () => stubExports([
-        'collapseNewlines', 'loadPowerUserSettings', 'playMessageSound', 'fixMarkdown',
-        'loadMovingUIState', 'renderStoryString',
-        'sortEntitiesList', 'registerDebugFunction', 'flushEphemeralStoppingStrings',
-        'resetMovableStyles', 'forceCharacterEditorTokenize', 'applyPowerUserSettings',
-        'generatedTextFiltered', 'applyStylePins', 'notifyMessageComplete',
-        'notifyMessageFailure', 'notifyMessageProgressStart', 'clearMessageProgressNotification',
-    ], {
-        getCustomStoppingStrings: () => [],
-        power_user: { instruct: { enabled: false }, context: { names_as_stop_strings: false } },
-        persona_description_positions: {},
-        MAX_CONTEXT_DEFAULT: 4096,
-        MAX_RESPONSE_DEFAULT: 300,
-    }));
-    jest.unstable_mockModule('../../public/scripts/openai.js', () => stubExports([
-        'setOpenAIMessageExamples', 'setOpenAIMessages', 'setupChatCompletionPromptManager',
-        'prepareOpenAIMessages', 'isLastOpenAIReplyPersistedByServer',
-        'getLastOpenAIGenerationId', 'hydrateOpenAIPresetData', 'loadOpenAISettings',
-        'getChatCompletionModel', 'loadProxyPresets', 'bindCurrentChatCompletionPresetToCharacter',
-        'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'captureCharacterBoundSettingsSave', 'initOpenAI',
-    ], {
-        sendOpenAIRequest: sendOpenAIRequestMock,
-        oai_settings: {},
-        openai_settings: [],
-        openai_setting_names: {},
-        openai_messages_count: 0,
-        chat_completion_sources: {},
-        proxies: [],
-        selected_proxy: '',
-    }));
-    jest.unstable_mockModule('../../public/scripts/character/manage-bound-presets-dialog.js', () => ({ openManageBoundPresetsDialog: noop }));
-    jest.unstable_mockModule('../../public/scripts/character/card-binding-preservation.js', () => ({ handlePostReplaceBindings: noop }));
-    jest.unstable_mockModule('../../public/scripts/character/post-replace-actions.js', () => ({ handlePostReplaceWorldBook: noop }));
-    jest.unstable_mockModule('../../public/scripts/character/resource-read.js', () => ({
-        invalidateCharacterResource: noop,
-        loadCharacterResource: asyncNoop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/nai-settings.js', () => stubExports([
-        'generateNovelWithStreaming', 'getNovelGenerationData', 'getKayraMaxContextTokens',
-        'hydrateNovelPresetData', 'loadNovelSettings', 'adjustNovelInstructionPrompt',
-        'parseNovelAILogprobs', 'initNovelAISettings',
-    ], { nai_settings: {}, novelai_settings: {}, novelai_setting_names: {} }));
-    jest.unstable_mockModule('../../public/scripts/bookmarks.js', () => stubExports(['initBookmarks', 'showBookmarksButtons', 'updateBookmarkDisplay']));
-    jest.unstable_mockModule('../../public/scripts/horde.js', () => stubExports([
-        'loadHordeSettings', 'generateHorde', 'getStatusHorde', 'getHordeModels',
-        'adjustHordeGenerationParams', 'isHordeGenerationNotAllowed', 'initHorde',
-    ], { horde_settings: {}, MIN_LENGTH: 1 }));
-    jest.unstable_mockModule('../../public/scripts/utils.js', () => stubExports([
-        'debounce', 'cancelDebounce', 'delay', 'trimToEndSentence', 'countOccurrences',
-        'isOdd', 'sortMoments', 'timestampToMoment', 'isDataURL', 'getCharaFilename',
-        'waitUntilCondition', 'escapeRegex', 'resetScrollHeight', 'onlyUnique',
-        'getBase64Async', 'humanFileSize', 'isValidUrl', 'ensureImageFormatSupported',
-        'flashHighlight', 'toggleDrawer', 'isElementInViewport', 'copyText', 'escapeHtml',
-        'saveBase64AsFile', 'uuidv4', 'equalsIgnoreCaseAndAccents', 'findCanonicalNameInList',
-        'localizePagination', 'renderPaginationDropdown', 'paginationDropdownChangeHandler',
-        'importFromExternalUrl', 'shiftUpByOne', 'shiftDownByOne', 'canUseNegativeLookbehind',
-        'trimSpaces', 'clamp', 'shakeElement', 'createTimeout',
-    ], { PAGINATION_TEMPLATE: '', Stopwatch: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/luker-download.js', () => ({ downloadFromServer: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/extensions.js', () => stubExports([
-        'bootstrapExtensions', 'cancelDebouncedMetadataSave', 'doDailyExtensionUpdatesCheck',
-        'initExtensions', 'primeExtensionSettings', 'runGenerationInterceptors', 'saveMetadataDebounced',
-    ], { extension_settings: {} }));
-    jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => stubExports([
-        'consumeEphemeralScriptInjectsForMainGeneration', 'executeSlashCommandsOnChatInput',
-        'initDefaultSlashCommands', 'initSlashCommandAutoComplete', 'isExecutingCommandsFromChatInput',
-        'pauseScriptExecution', 'processChatSlashCommands', 'stopScriptExecution',
-    ], { COMMENT_NAME_DEFAULT: '', CONNECT_API_MAP: {}, UNIQUE_APIS: {} }));
-    jest.unstable_mockModule('../../public/scripts/tags.js', () => stubExports([
-        'filterByTagState', 'isBogusFolder', 'isBogusFolderOpen', 'chooseBogusFolder',
-        'getTagBlock', 'loadTagsSettings', 'printTagFilters', 'getTagKeyForEntity',
-        'printTagList', 'createTagMapFromList', 'renameTagKey', 'importTags',
-        'compareTagsForSort', 'initTags', 'applyTagsOnCharacterSelect',
-        'applyTagsOnGroupSelect', 'applyCharacterTagsToMessageDivs',
-    ], { tag_map: {}, tags: [], tag_filter_type: {}, tag_import_setting: {} }));
-    jest.unstable_mockModule('../../public/scripts/secrets.js', () => stubExports([
-        'checkOpenRouterAuth', 'initSecrets', 'primeSecretStateSnapshot', 'readSecretState',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/showdown-exclusion.js', () => ({ markdownExclusionExt: {} }));
-    jest.unstable_mockModule('../../public/scripts/showdown-underscore.js', () => ({ markdownUnderscoreExt: {} }));
-    jest.unstable_mockModule('../../public/scripts/authors-note.js', () => stubExports([
-        'initAuthorsNote', 'setFloatingPrompt', 'shouldWIAddPrompt',
-    ], { NOTE_MODULE_NAME: '', metadata_keys: {} }));
-    jest.unstable_mockModule('../../public/scripts/PromptManager.js', () => ({ registerPromptManagerMigration: noop }));
-    jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-        getRegexedString: (s) => s,
-        regex_placement: {},
-    }));
-    jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/auto-continue-truncated.js', () => ({
-        getAutoContinueOnTruncated: () => false,
-        isTruncatedFinishReason: () => false,
-    }));
-    jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-retry.js', () => ({ withProfileRetry: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/request-timeout.js', () => ({ getRequestTimeoutMs: () => 0 }));
-    jest.unstable_mockModule('../../public/scripts/logprobs.js', () => ({ initLogprobs: noop, saveLogprobsForActiveMessage: noop }));
-    jest.unstable_mockModule('../../public/scripts/filters.js', () => ({ FILTER_STATES: {}, FILTER_TYPES: {}, FilterHelper: StubClass, isFilterState: () => false }));
-    jest.unstable_mockModule('../../public/scripts/cfg-scale.js', () => ({ getCfgPrompt: () => '', getGuidanceScale: () => 1, initCfg: noop }));
-    jest.unstable_mockModule('../../public/scripts/instruct-mode.js', () => stubExports([
-        'formatInstructModeChat', 'formatInstructModePrompt', 'formatInstructModeExamples',
-        'formatInstructModeStoryString',
-    ], { getInstructStoppingSequences: () => [], force_output_sequence: {} }));
-    jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-        getCurrentLocale: () => 'en',
-        initLocales: asyncNoop,
-        t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
-        translate: (s) => (currentLocaleTranslation ? currentLocaleTranslation(s) : String(s ?? '')),
-    }));
-    jest.unstable_mockModule('../../public/scripts/tokenizers.js', () => stubExports([
-        'getFriendlyTokenizerName', 'getTokenCount', 'getTokenCountAsync',
-        'initTokenizers', 'saveTokenCacheDebounced', 'flushTokenCacheSave',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/last-usage.js', () => ({ consumeLastUsage: noop }));
-    jest.unstable_mockModule('../../public/scripts/personas.js', () => stubExports([
-        'getUserAvatars', 'getUserAvatar', 'setUserAvatar', 'primeUserAvatarsSnapshot',
-        'initPersonas', 'setPersonaDescription', 'initUserAvatar', 'updatePersonaConnectionsAvatarList',
-        'isPersonaPanelOpen',
-    ], { user_avatar: 'default.png' }));
-    jest.unstable_mockModule('../../public/scripts/backgrounds.js', () => ({ initBackgrounds: noop, loadBackgroundSettings: noop, background_settings: {} }));
-    jest.unstable_mockModule('../../public/scripts/loader.js', () => ({ hideLoader: asyncNoop, isLoaderVisible: () => false, showLoader: noop }));
-    jest.unstable_mockModule('../../public/scripts/action-loader.js', () => ({ loader: {} }));
-    jest.unstable_mockModule('../../public/scripts/BulkEditOverlay.js', () => ({ BulkEditOverlay: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/textgen-models.js', () => ({ initTextGenModels: noop, initTextGenModelSelects: noop }));
-    jest.unstable_mockModule('../../public/scripts/chats.js', () => stubExports([
-        'appendFileContent', 'hasPendingFileAttachment', 'populateFileAttachment', 'decodeStyleTags',
-        'encodeStyleTags', 'hideChatMessageRange', 'isExternalMediaAllowed', 'preserveNeutralChat',
-        'restoreNeutralChat', 'formatCreatorNotes', 'initChatUtilities', 'addDOMPurifyHooks',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/chat-merge-split.js', () => ({ wireEntryPoints: noop }));
-    jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({ getPresetManager: () => null, initPresetManager: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/macros.js', () => ({ evaluateMacros: (s) => s, getLastMessageId: () => -1, initMacros: noop }));
-    jest.unstable_mockModule('../../public/scripts/variable-op-log/index.js', () => ({ initVariableOpLog: noop, extractMessageById: noop, pushFloorVarOp: noop }));
-    jest.unstable_mockModule('../../public/scripts/variable-op-log/extractor.js', () => ({ extractFromText: noop }));
-    jest.unstable_mockModule('../../public/scripts/variable-op-log/panel.js', () => ({ initVarOpsPanelHandler: noop }));
-    jest.unstable_mockModule('../../public/scripts/media-deletion-dialog.js', () => stubExports([
-        'fetchMediaDeletionCandidates', 'deleteMediaFiles', 'promptMediaDeletion', 'notifyMediaDeleteResult',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/frontend-log-manager.js', () => ({
-        installFrontendLogCapture: noop,
-        setFrontendConsoleDebugLoggingEnabled: noop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/debug-export.js', () => ({ initDebugExportButton: noop }));
-    jest.unstable_mockModule('../../public/scripts/debug-menu-capture.js', () => ({ initDebugMenuCapture: noop }));
-    jest.unstable_mockModule('../../public/scripts/luker-android-debug-trail.js', () => ({ initAndroidDebugTrail: noop }));
-    jest.unstable_mockModule('../../public/scripts/user.js', () => ({
-        currentUser: null,
-        getConfigValidationMessage: () => '',
-        isAdmin: () => false,
-        setUserControls: asyncNoop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/sync-status.js', () => ({}));
-    jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-        POPUP_RESULT: {},
-        POPUP_TYPE: {},
-        Popup: StubClass,
-        callGenericPopup: asyncNoop,
-        fixToastrForDialogs: noop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/templates.js', () => ({ renderTemplate: () => '', renderTemplateAsync: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/scrapers.js', () => ({ initScrapers: noop }));
-    jest.unstable_mockModule('../../public/scripts/samplerSelect.js', () => ({ initCustomSelectedSamplers: noop, validateDisabledSamplers: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/dragdrop.js', () => ({ DragAndDropHandler: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/keyboard.js', () => ({ INTERACTABLE_CONTROL_CLASS: '', initKeyboard: noop }));
-    jest.unstable_mockModule('../../public/scripts/dynamic-styles.js', () => ({ initDynamicStyles: noop }));
-    jest.unstable_mockModule('../../public/scripts/input-md-formatting.js', () => ({ initInputMarkdown: noop }));
-    jest.unstable_mockModule('../../public/scripts/sysprompt.js', () => ({ initSystemPrompts: noop }));
-    jest.unstable_mockModule('../../public/scripts/extensions-slashcommands.js', () => ({ registerExtensionSlashCommands: noop }));
-    jest.unstable_mockModule('../../public/scripts/tool-calling.js', () => ({ ToolManager: {} }));
-    jest.unstable_mockModule('../../public/scripts/tool-invocation-hide.js', () => ({ classifyInvocationSummary: noop, getOpenToolTaskTailStart: () => 0 }));
-    jest.unstable_mockModule('../../public/scripts/skills/embed-lifecycle.js', () => ({ registerSkillEmbedLifecycle: noop }));
-    jest.unstable_mockModule('../../public/scripts/util/showdown-patch.js', () => ({ addShowdownPatch: noop }));
-    jest.unstable_mockModule('../../public/scripts/browser-fixes.js', () => ({ applyBrowserFixes: noop }));
-    jest.unstable_mockModule('../../public/scripts/server-history.js', () => ({ initServerHistory: noop }));
-    jest.unstable_mockModule('../../public/scripts/setting-search.js', () => ({ initSettingsSearch: noop }));
-    jest.unstable_mockModule('../../public/scripts/bulk-edit.js', () => ({ initBulkEdit: noop }));
-    jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({ getContext: () => ({}) }));
-    jest.unstable_mockModule('../../public/scripts/lukerContext.js', () => ({}));
-    jest.unstable_mockModule('../../public/scripts/reasoning.js', () => stubExports([
-        'extractReasoningBlocksFromData', 'extractReasoningDetailsFromData', 'extractReasoningFromData',
-        'extractReasoningSignatureFromData', 'initReasoning', 'parseReasoningInSwipes', 'PromptReasoning',
-        'registerReasoningSlashCommands', 'removeReasoningFromString', 'updateReasoningUI',
-    ], {
-        extractNativeTurnFromData: () => ({ nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null }),
-        ReasoningHandler: StubClass,
-        ReasoningType: {},
-    }));
-    jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
-        accountStorage: { getState: () => ({}), init: noop, getItem: () => null, setItem: noop, removeItem: noop },
-    }));
-    jest.unstable_mockModule('../../public/scripts/welcome-screen.js', () => stubExports([
-        'fetchRecentChatsSnapshot', 'initWelcomeScreen', 'openPermanentAssistantChat',
-        'openPermanentAssistantCard', 'getPermanentAssistantAvatar', 'openWelcomeScreen',
-        'primeRecentChatsSnapshotPromise',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/data-maid.js', () => ({ initDataMaid: noop }));
-    jest.unstable_mockModule('../../public/scripts/itemized-prompts.js', () => stubExports([
-        'clearItemizedPrompts', 'deleteItemizedPromptForMessage', 'deleteItemizedPrompts',
-        'findItemizedPromptSet', 'flushItemizedPromptsSave', 'initItemizedPrompts', 'loadItemizedPrompts',
-        'promptItemize', 'replaceItemizedPromptText', 'saveItemizedPrompts',
-        'saveItemizedPromptsDebounced', 'swapItemizedPrompts',
-    ], { itemizedParams: {}, itemizedPrompts: [] }));
-    jest.unstable_mockModule('../../public/scripts/system-messages.js', () => stubExports([
-        'getSystemMessageByType', 'initSystemMessages', 'sendSystemMessage',
-    ], { SAFETY_CHAT: '', system_message_types: {}, system_messages: {} }));
-    jest.unstable_mockModule('../../public/scripts/announcements.js', () => ({ initAnnouncements: noop, whenCriticalAnnouncementsDone: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/whats-new.js', () => ({ initWhatsNew: noop }));
-    jest.unstable_mockModule('../../public/scripts/floor-state.js', () => stubExports([
-        'settleChatChanged', 'settleMessageDeleted', 'settleMessageSwipeDeleted', 'settleMessageSwiped',
-    ]));
-    jest.unstable_mockModule('../../public/scripts/a11y.js', () => ({ initAccessibility: noop }));
-    jest.unstable_mockModule('../../public/scripts/util/stream-fadein.js', () => ({ applyStreamFadeIn: noop }));
-    jest.unstable_mockModule('../../public/scripts/dom-handlers.js', () => ({ initDomHandlers: noop }));
-    jest.unstable_mockModule('../../public/scripts/audio-player.js', () => ({ AudioPlayer: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/macros/engine/MacroEnvBuilder.js', () => ({ MacroEnvBuilder: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/message-formatter.js', () => ({ MessageFormatter: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/macros/engine/MacroEngine.js', () => ({ MacroEngine: StubClass }));
-    jest.unstable_mockModule('../../public/scripts/chat-backups.js', () => ({ addChatBackupsBrowser: noop }));
-    jest.unstable_mockModule('../../public/scripts/macros/engine/MacroDiagnostics.js', () => ({ onboardingExperimentalMacroEngine: noop }));
-    jest.unstable_mockModule('../../public/scripts/undo-toast.js', () => ({ showUndoToast: noop }));
-    jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({ setRequestCompressionConfig: noop }));
-    jest.unstable_mockModule('../../public/scripts/swipe-picker.js', () => ({
-        canJumpToSwipeForMessage: () => false,
-        canOpenSwipePickerForMessage: () => false,
-        initSwipePicker: noop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/self-profiler.js', () => ({ bootSelfProfilerFromStorage: noop }));
-    jest.unstable_mockModule('../../public/scripts/ws-delivery.js', () => ({
-        createLukerDelivery: noop,
-        getLukerResponseMeta: () => null,
-        installFetchProxy: noop,
-        installFetchProxyForAllIframes: noop,
-        installLifecycleHooks: noop,
-        onLukerResponseMeta: () => noop,
-    }));
-    jest.unstable_mockModule('../../public/scripts/settings-resource-read.js', () => ({ loadSettingsEnvelope: asyncNoop }));
-    jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
-        listPresetDocuments: async () => [],
-        loadPresetResources: async () => ({}),
-        readPresetDocument: async () => null,
-    }));
-    jest.unstable_mockModule('../../public/scripts/workbench/index.js', () => ({ initWorkbench: noop }));
-
-    globalThis.document = {
-        readyState: 'complete',
-        addEventListener: noop,
-        removeEventListener: noop,
-        documentElement: { style: { setProperty: noop } },
-        getElementById: () => null,
-        querySelector: () => null,
-        querySelectorAll: () => [],
-    };
-    globalThis.window = Object.assign(globalThis, {
-        addEventListener: noop,
-        removeEventListener: noop,
-    });
-    globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
-    installDomReadyJQuery({
-        selectionMethods: {
-            val: (sel, v) => (v !== undefined ? sel : ''),
-            attr: (sel, ...args) => (args.length >= 2 ? sel : undefined),
-            css: (sel, ...args) => (args.length >= 2 ? sel : 'none'),
-            text: (sel, ...args) => (args.length >= 1 ? sel : ''),
-            html: (sel, ...args) => (args.length >= 1 ? sel : ''),
-            prop: (sel, ...args) => (args.length >= 2 ? sel : false),
-            is: () => false,
-            hasClass: () => false,
-            addClass: (sel) => sel,
-            removeClass: (sel) => sel,
-            toggleClass: (sel) => sel,
-            show: (sel) => sel,
-            hide: (sel) => sel,
-            append: (sel) => sel,
-            empty: (sel) => sel,
-            remove: (sel) => sel,
-            find: (sel) => sel,
-            trigger: (sel) => sel,
-        },
-        staticProperties: { ajaxPrefilter: noop },
-    });
-    Object.defineProperty(globalThis, 'localStorage', {
-        configurable: true,
-        value: { getItem: () => null, setItem: noop, removeItem: noop },
-    });
-
-    ({ generateRaw, generateRawData } = await import('../../public/script.js'));
-});
-
-describe('public/script.js generateRaw / generateRawData activity lease', () => {
     beforeEach(() => {
-        sendOpenAIRequestMock.mockReset();
-        currentLocaleTranslation = null;
-        if (getActiveActivities().length > 0) {
-            throw new Error(`Expected empty activity guard before test, got: ${JSON.stringify(getActiveActivities())}`);
-        }
+        registry = createActivityGuardRegistry();
+        translateImpl = (key) => key;
+        coordinator = createChatTransitionCoordinator({
+            isGenerating: () => false,
+            hasActiveMessageEdit: () => false,
+            getStreamingProcessor: () => null,
+            clearStreamingProcessorIfSame: () => {},
+            stopGeneration: () => {},
+            confirmPopup: async () => 1,
+            escapeHtml: (s) => String(s),
+            t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
+            translate: (key) => translateImpl(key),
+            activityGuard: registry,
+        });
     });
 
     afterEach(() => {
-        currentLocaleTranslation = null;
-        if (getActiveActivities().length > 0) {
-            throw new Error(`Leaked activity leases after test: ${JSON.stringify(getActiveActivities())}`);
+        const leftover = registry.getActiveActivities();
+        if (leftover.length > 0) {
+            throw new Error(`Leaked activity leases after test: ${JSON.stringify(leftover)}`);
         }
     });
 
-    test('generateRawData holds core:generate-raw baseline lease during request and releases on resolve', async () => {
+    test('runWithGenerateRawLease holds core:generate-raw baseline lease during request and releases on resolve', async () => {
         const gate = deferred();
         let observed = null;
-        currentLocaleTranslation = (key) => (key === 'Background AI request' ? '后台 AI 请求' : key);
+        translateImpl = (key) => `TR:${key}`;
 
-        sendOpenAIRequestMock.mockImplementation(async () => {
+        const reqPromise = coordinator.runWithGenerateRawLease(true, async () => {
             observed = {
-                activities: getActiveActivities(),
-                unload: hasUnloadGuard(),
-                chatSwitch: hasChatSwitchGuard(),
-                keepAlive: hasKeepAliveHold(),
-                keepAliveNonAmbient: hasKeepAliveHold({ excludeAmbient: true }),
+                activities: registry.getActiveActivities(),
+                unload: registry.hasUnloadGuard(),
+                chatSwitch: registry.hasChatSwitchGuard(),
+                keepAlive: registry.hasKeepAliveHold(),
+                keepAliveNonAmbient: registry.hasKeepAliveHold({ excludeAmbient: true }),
             };
             return await gate.promise;
         });
-
-        const reqPromise = generateRawData({ prompt: 'Hello', api: 'openai' });
-
-        await Promise.resolve();
-        await Promise.resolve();
 
         expect(observed).toBeTruthy();
         expect(observed.unload).toBe(true);
@@ -402,7 +66,7 @@ describe('public/script.js generateRaw / generateRawData activity lease', () => 
         expect(observed.activities).toHaveLength(1);
         expect(observed.activities[0]).toMatchObject({
             source: 'core:generate-raw',
-            label: '后台 AI 请求',
+            label: expect.stringMatching(/^TR:\S/),
             scope: 'global',
             ambient: true,
             guardUnload: true,
@@ -413,50 +77,40 @@ describe('public/script.js generateRaw / generateRawData activity lease', () => 
         gate.resolve({ choices: [{ message: { content: 'ok' } }] });
         const result = await reqPromise;
         expect(result).toEqual({ choices: [{ message: { content: 'ok' } }] });
-        expect(getActiveActivities()).toEqual([]);
+        expect(registry.getActiveActivities()).toEqual([]);
     });
 
-    test('generateRawData releases lease on error', async () => {
-        sendOpenAIRequestMock.mockImplementation(async () => {
-            expect(hasActiveSource('core:generate-raw')).toBe(true);
+    test('runWithGenerateRawLease releases lease on error', async () => {
+        await expect(coordinator.runWithGenerateRawLease(true, async () => {
+            expect(registry.hasActiveSource('core:generate-raw')).toBe(true);
             throw new Error('raw failure');
-        });
+        })).rejects.toThrow('raw failure');
 
-        await expect(generateRawData({ prompt: 'Hello', api: 'openai' })).rejects.toThrow('raw failure');
-        expect(getActiveActivities()).toEqual([]);
-        expect(hasUnloadGuard()).toBe(false);
+        expect(registry.getActiveActivities()).toEqual([]);
+        expect(registry.hasUnloadGuard()).toBe(false);
     });
 
-    test('generateRaw forwards activity: false, custom overrides, and positional calls keep default lease', async () => {
+    test('supports activity: false opt-out, custom overrides, and positional generateRaw calls', async () => {
         const listener = jest.fn();
-        const unsub = subscribeActivityGuard(listener);
+        const unsub = registry.subscribeActivityGuard(listener);
         try {
             let observedOptOut = null;
-            sendOpenAIRequestMock.mockImplementationOnce(async () => {
-                observedOptOut = getActiveActivities();
-                return { choices: [{ message: { content: 'quiet' } }] };
-            });
-
-            const out = await generateRaw({
-                prompt: 'Hello',
-                api: 'openai',
-                activity: false,
+            const out = await coordinator.runWithGenerateRawLease(false, async () => {
+                observedOptOut = registry.getActiveActivities();
+                return 'quiet';
             });
             expect(out).toBe('quiet');
             expect(observedOptOut).toEqual([]);
             expect(listener).not.toHaveBeenCalled();
 
             let observedCustom = null;
-            sendOpenAIRequestMock.mockImplementationOnce(async () => {
-                observedCustom = getActiveActivities();
-                return { choices: [{ message: { content: 'custom reply' } }] };
-            });
-
-            const out2 = await generateRaw({
-                prompt: 'Hello',
-                api: 'openai',
-                activity: { scope: 'chat', label: 'Raw override', ambient: false },
-            });
+            const out2 = await coordinator.runWithGenerateRawLease(
+                { scope: 'chat', label: 'Raw override', ambient: false },
+                async () => {
+                    observedCustom = registry.getActiveActivities();
+                    return 'custom reply';
+                },
+            );
             expect(out2).toBe('custom reply');
             expect(observedCustom).toHaveLength(1);
             expect(observedCustom[0]).toMatchObject({
@@ -467,26 +121,28 @@ describe('public/script.js generateRaw / generateRawData activity lease', () => 
                 guardChatSwitch: true,
             });
 
-            let observedPositional = null;
-            sendOpenAIRequestMock.mockImplementationOnce(async () => {
-                observedPositional = getActiveActivities();
-                return { choices: [{ message: { content: 'positional reply' } }] };
+            const positional = normalizeGenerateRawArgs(['Hello positional', 'openai']);
+            expect(positional.positional).toBe(true);
+            expect(positional.params).toMatchObject({
+                prompt: 'Hello positional',
+                api: 'openai',
+                activity: true,
             });
-            const warnSpy = jest.spyOn(console, 'trace').mockImplementation(() => {});
-            try {
-                const out3 = await generateRaw('Hello positional', 'openai');
-                expect(out3).toBe('positional reply');
-                expect(observedPositional).toHaveLength(1);
-                expect(observedPositional[0]).toMatchObject({
-                    source: 'core:generate-raw',
-                    scope: 'global',
-                    ambient: true,
-                    guardUnload: true,
-                    keepAlive: true,
-                });
-            } finally {
-                warnSpy.mockRestore();
-            }
+
+            let observedPositional = null;
+            const out3 = await coordinator.runWithGenerateRawLease(positional.params.activity, async () => {
+                observedPositional = registry.getActiveActivities();
+                return 'positional reply';
+            });
+            expect(out3).toBe('positional reply');
+            expect(observedPositional).toHaveLength(1);
+            expect(observedPositional[0]).toMatchObject({
+                source: 'core:generate-raw',
+                scope: 'global',
+                ambient: true,
+                guardUnload: true,
+                keepAlive: true,
+            });
         } finally {
             unsub();
         }

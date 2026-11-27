@@ -1,98 +1,166 @@
 import { describe, expect, test } from '@jest/globals';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
 
 import { event_types } from '../public/scripts/events.js';
-import { createMessageEditorHandle } from '../public/scripts/message-takeover.js';
-
-const source = readFileSync(new URL('../public/script.js', import.meta.url), 'utf8');
-
-function between(start, end) {
-    const startAt = source.indexOf(start);
-    const endAt = source.indexOf(end, startAt + start.length);
-    if (startAt < 0 || endAt < 0) throw new Error(`Missing host source boundary: ${start}`);
-    return source.slice(startAt, endAt);
-}
-
-// Run the host's state initialization, continuation timer and WI signal payload
-// without assembling a browser prompt or dispatching a model request. Keep the
-// takeover finalizer, placeholder acquisition and saveReply bodies intact.
-const initializationSource = between('async function generateInternal(', '\n    if (!(dryRun || depth || type == \'regenerate\'')
-    + '\nconst lastMessage = chat[chat.length - 1];\n'
-    + between('    const isContinue = type == \'continue\';', '\n    if (!dryRun && !sharesInFlightController) {\n        deactivateSendButtons();')
-    + between('    const wiScanPayload = {', '\n    await eventSource.emit(event_types.GENERATION_BEFORE_WORLD_INFO_SCAN, wiScanPayload);')
-    + '\nreturn { signal: wiScanPayload.signal, aborted: isGenerationAborted(), exited: exitAbortedGenerationIfNeeded() };\n}';
-const takeoverSource = between('                const handle = dispatchEvent.takeoverHandle;', '\n            }\n        }\n\n        if (isStreamingEnabled()');
-const saveReplySource = between('function clearPerSwipeExtraFields(', '\n/**\n * Creates a message\'s').replace('export async function saveReply(', 'async function saveReply(');
-const acquireSource = between('async function acquireTakeoverPlaceholder(', '\n/**\n * Roll back the placeholder');
-const stopSource = between('export function stopGeneration() {', '\n/**\n * Injects extension prompts').replace('export ', '');
+import {
+    abortGenerationControllers,
+    computeContinuedGenerationStart,
+    createMessageEditorHandle,
+    resolveGenerationOwnership,
+    runTakeoverLifecycle,
+} from '../public/scripts/message-takeover.js';
 
 function createHost() {
-    let now = '2026-01-01T00:00:10.000Z';
-    class ClockDate extends Date {
-        constructor(...args) { super(...(args.length ? args : [now])); }
-        static now() { return new Date(now).getTime(); }
-    }
-    const effects = [], saved = [];
-    const context = vm.createContext({
-        Date: ClockDate, AbortController, structuredClone,
-        console: { log() {}, debug() {}, error() {} },
-        event_types,
-        eventSource: { emit: async (event) => { effects.push(event); } },
+    let nowIso = '2026-01-01T00:00:10.000Z';
+    const now = () => new Date(nowIso);
+    const effects = [];
+    const saved = [];
+
+    const state = {
         abortController: new AbortController(),
-        is_send_press: false,
         quietAbortController: null,
-        generation_started: new Date('2026-01-01T00:00:00.000Z'),
+        isSendPress: false,
+        generationStarted: new Date('2026-01-01T00:00:00.000Z'),
         chat: [{ is_user: true, mes: 'input', extra: {} }],
-        chat_metadata: {}, name2: 'Assistant', selected_group: null, characters: [{}], this_chid: '0',
-        power_user: { trim_spaces: false, message_token_count_enabled: false },
-        setGenerationProgress() {}, setActiveWorldInfoPromptSnapshot() {}, unshallowCharacter: async () => {},
-        setExtensionPrompt() {}, inject_ids: { QUIET_PROMPT: 'quiet' }, extension_prompt_types: { IN_PROMPT: 0 },
-        this_max_context: 4096, coreChat: [], chatForWI: [], globalScanData: {}, runWIScan: async () => {},
-        getMessageTimeStamp: () => now,
-        getGeneratingApi: () => 'custom', getGeneratingModel: () => 'test-model',
-        processImageAttachment: async () => {}, extractMessageById() {}, addOneMessage() {}, statMesProcess() {},
-        hideSwipeButtons() {}, showSwipeButtons() {}, redrawMessageBubble() {},
-        applyPostGenerationText: (text) => text,
-        isLastLukerReplyPersistedByServerForApi: () => false,
-        appendChatMessages: async (messages) => { saved.push(structuredClone(messages)); return true; },
-        saveChatConditional: async () => { saved.push(structuredClone(context.chat.slice(-1))); },
-        unblockGeneration: () => { effects.push('unblock'); },
-        triggerAutoContinue: () => { effects.push('autoContinue'); },
-        clearMessageProgressNotification() {},
-        forceUnblockGenerationUi() { effects.push('forceUnblock'); },
-        getLastLukerGenerationIdForApi: () => '',
-        streamingProcessor: null,
         chatTransitionEpoch: 0,
-        getChatTransitionEpoch: () => context.chatTransitionEpoch,
-        bumpChatTransitionEpoch: () => (++context.chatTransitionEpoch),
-    });
-    vm.runInContext(initializationSource + '\n' + saveReplySource + '\n' + acquireSource + '\n' + stopSource, context);
+        emitEvent: async (event) => { effects.push(event); },
+    };
+
+    async function initialize(type = 'normal', options = {}, dryRun = false) {
+        const genEpoch = state.chatTransitionEpoch;
+        const ownership = resolveGenerationOwnership({
+            type,
+            dryRun,
+            isSendPress: state.isSendPress,
+            abortController: state.abortController,
+            quietAbortController: state.quietAbortController,
+            externalSignal: options.signal ?? null,
+            generationStarted: state.generationStarted,
+            now,
+        });
+        state.abortController = ownership.abortController;
+        state.quietAbortController = ownership.quietAbortController;
+        state.generationStarted = ownership.generationStarted;
+
+        const continuedStart = computeContinuedGenerationStart({
+            dryRun,
+            isContinue: type === 'continue',
+            lastMessage: state.chat[state.chat.length - 1] ?? null,
+            now,
+        });
+        if (continuedStart) {
+            state.generationStarted = continuedStart;
+        }
+
+        const aborted = ownership.isGenerationAborted();
+        let exited = false;
+        if (aborted) {
+            if (state.chatTransitionEpoch === genEpoch && !dryRun && type !== 'quiet') {
+                effects.push('unblock');
+            }
+            exited = true;
+        }
+        return {
+            signal: ownership.generationAbortController.signal,
+            aborted,
+            exited,
+            sharesInFlightController: ownership.sharesInFlightController,
+        };
+    }
 
     async function startTakeover(type = 'normal') {
-        const handle = createMessageEditorHandle({ generationType: type, abortSignal: context.abortController.signal, flushIntervalMs: 0 });
+        const myAbortController = state.abortController;
+        const genEpoch = state.chatTransitionEpoch;
+        const handle = createMessageEditorHandle({
+            generationType: type,
+            abortSignal: myAbortController.signal,
+            flushIntervalMs: 0,
+        });
         let ready;
         const attached = new Promise(resolve => { ready = resolve; });
-        const setOnUpdate = handle.setOnUpdate;
-        handle.setOnUpdate = (callback) => { setOnUpdate(callback); if (callback) ready(); };
-        context.dispatchEvent = { takeoverHandle: handle };
-        context.takeoverType = type;
-        const complete = vm.runInContext(`(async (type) => {
-            const genEpoch = getChatTransitionEpoch();
-            const isStaleEpoch = () => getChatTransitionEpoch() !== genEpoch;
-            const isContinue = type === 'continue', isImpersonate = false;
-            const unblockThisGeneration = (generationType) => unblockGeneration(generationType);
-            ${takeoverSource}
-        })(takeoverType)`, context);
+        const origSetOnUpdate = handle.setOnUpdate;
+        handle.setOnUpdate = (callback) => {
+            origSetOnUpdate(callback);
+            if (callback) ready();
+        };
+
+        const complete = runTakeoverLifecycle({
+            type,
+            handle,
+            isContinue: type === 'continue',
+            isImpersonate: false,
+            genEpoch,
+            myAbortController,
+            getAbortController: () => state.abortController,
+            getChatTransitionEpoch: () => state.chatTransitionEpoch,
+            getChat: () => state.chat,
+            powerUser: { message_token_count_enabled: false },
+            now,
+            getMessageTimeStamp: () => nowIso,
+            getGeneratingApi: () => 'custom',
+            getGeneratingModel: () => 'test-model',
+            acquireTakeoverPlaceholder: async (genType) => {
+                if (genType === 'continue' || genType === 'swipe') {
+                    return state.chat.length - 1;
+                }
+                const placeholder = {
+                    name: 'Assistant',
+                    is_user: false,
+                    is_system: false,
+                    mes: '',
+                    send_date: nowIso,
+                    gen_started: state.generationStarted,
+                    gen_finished: now(),
+                    swipe_id: 0,
+                    swipes: [''],
+                    swipe_info: [{ send_date: nowIso, gen_started: state.generationStarted, gen_finished: now(), extra: {} }],
+                    extra: {},
+                };
+                state.chat.push(placeholder);
+                return state.chat.length - 1;
+            },
+            rollbackTakeoverPlaceholder: async (messageId, genType, origText, origReasoning) => {
+                if (genType === 'normal' || genType === 'regenerate') {
+                    state.chat.splice(messageId, 1);
+                    return;
+                }
+                if (state.chat[messageId]) {
+                    state.chat[messageId].mes = origText;
+                    state.chat[messageId].extra = { ...(state.chat[messageId].extra || {}), reasoning: origReasoning };
+                }
+            },
+            applyPostGenerationText: (text) => text,
+            resolveAssistantTokenCount: async () => 0,
+            extractMessageById: () => {},
+            redrawMessageBubble: () => {},
+            hideSwipeButtons: () => {},
+            showSwipeButtons: () => {},
+            appendChatMessages: async (messages) => {
+                saved.push(structuredClone(messages));
+                return true;
+            },
+            saveChatConditional: async () => {
+                saved.push(structuredClone(state.chat.slice(-1)));
+            },
+            isLastLukerReplyPersistedByServerForApi: () => false,
+            emitEvent: (event, ...args) => state.emitEvent(event, ...args),
+            unblockThisGeneration: () => { effects.push('unblock'); },
+            triggerAutoContinue: () => { effects.push('autoContinue'); },
+        });
         await attached;
         return { handle, complete };
     }
 
     return {
-        context, effects, saved, startTakeover,
-        initialize: (type = 'normal', options = {}, dryRun = false) => context.generateInternal(type, options, dryRun),
-        stop: () => context.stopGeneration(),
-        setTime: (time) => { now = time; },
+        state,
+        effects,
+        saved,
+        initialize,
+        startTakeover,
+        stop: () => abortGenerationControllers({
+            abortController: state.abortController,
+            quietAbortController: state.quietAbortController,
+        }),
+        setTime: (time) => { nowIso = time; },
     };
 }
 
@@ -109,7 +177,7 @@ describe('dry-run generation ownership', () => {
         await handle.commit();
         const result = await complete;
 
-        const message = host.context.chat.at(-1);
+        const message = host.state.chat.at(-1);
         expect(message.swipes[0]).toBe('final answer');
         expect(message.swipe_info[0].extra.reasoning).toBe('final reasoning');
         expect(message.swipe_info[0].gen_started.toISOString()).toBe('2026-01-01T00:00:10.000Z');
@@ -123,12 +191,12 @@ describe('dry-run generation ownership', () => {
 
     test.each([false, true])('an estimate preserves live state with an aborted controller: %s', async (aborted) => {
         const host = createHost();
-        const controller = host.context.abortController;
-        const started = host.context.generation_started;
+        const controller = host.state.abortController;
+        const started = host.state.generationStarted;
         if (aborted) controller.abort();
         const estimate = await host.initialize('normal', {}, true);
-        expect(host.context.abortController).toBe(controller);
-        expect(host.context.generation_started).toBe(started);
+        expect(host.state.abortController).toBe(controller);
+        expect(host.state.generationStarted).toBe(started);
         expect(estimate.signal).not.toBe(controller.signal);
         expect(estimate.signal.aborted).toBe(false);
         expect(estimate.exited).toBe(false);
@@ -136,36 +204,36 @@ describe('dry-run generation ownership', () => {
 
     test('an estimate honors its passed abort signal without replacing the live controller', async () => {
         const host = createHost();
-        const controller = host.context.abortController;
+        const controller = host.state.abortController;
         const external = new AbortController();
         external.abort();
         const estimate = await host.initialize('normal', { signal: external.signal }, true);
         expect(estimate.aborted).toBe(true);
         expect(estimate.exited).toBe(true);
-        expect(host.context.abortController).toBe(controller);
+        expect(host.state.abortController).toBe(controller);
         expect(controller.signal.aborted).toBe(false);
         expect(host.effects).not.toContain('unblock');
     });
 
     test('a continuation estimate leaves both live and message start times intact', async () => {
         const host = createHost();
-        const started = host.context.generation_started;
+        const started = host.state.generationStarted;
         const messageStarted = new Date('2026-01-01T00:00:01.000Z');
-        host.context.chat = [{ mes: 'answer', gen_started: messageStarted, gen_finished: new Date('2026-01-01T00:00:04.000Z') }];
+        host.state.chat = [{ mes: 'answer', gen_started: messageStarted, gen_finished: new Date('2026-01-01T00:00:04.000Z') }];
         await host.initialize('continue', {}, true);
-        expect(host.context.generation_started).toBe(started);
-        expect(host.context.chat[0].gen_started).toBe(messageStarted);
+        expect(host.state.generationStarted).toBe(started);
+        expect(host.state.chat[0].gen_started).toBe(messageStarted);
     });
 
     test('a live continuation reuses its passed controller and extends its timer', async () => {
         const host = createHost();
-        const controller = host.context.abortController;
-        host.context.chat = [{ mes: 'answer', gen_started: new Date('2026-01-01T00:00:01.000Z'), gen_finished: new Date('2026-01-01T00:00:04.000Z') }];
+        const controller = host.state.abortController;
+        host.state.chat = [{ mes: 'answer', gen_started: new Date('2026-01-01T00:00:01.000Z'), gen_finished: new Date('2026-01-01T00:00:04.000Z') }];
         const generation = await host.initialize('continue', { signal: controller.signal });
-        expect(host.context.abortController).toBe(controller);
+        expect(host.state.abortController).toBe(controller);
         expect(generation.signal).toBe(controller.signal);
-        expect(host.context.generation_started.toISOString()).toBe('2026-01-01T00:00:07.000Z');
-        expect(host.context.chat[0].gen_started).toBe(host.context.generation_started);
+        expect(host.state.generationStarted.toISOString()).toBe('2026-01-01T00:00:07.000Z');
+        expect(host.state.chat[0].gen_started).toBe(host.state.generationStarted);
         controller.abort();
         expect(generation.signal.aborted).toBe(true);
     });
@@ -173,15 +241,15 @@ describe('dry-run generation ownership', () => {
     test('a new live generation still rejects an older takeover commit', async () => {
         const host = createHost();
         await host.initialize();
-        const controller = host.context.abortController;
+        const controller = host.state.abortController;
         const { handle, complete } = await host.startTakeover();
         await host.initialize();
         handle.setText('old answer');
         await handle.commit();
         const result = await complete;
 
-        expect(host.context.abortController).not.toBe(controller);
-        expect(host.context.chat.at(-1).swipes[0]).toBe('');
+        expect(host.state.abortController).not.toBe(controller);
+        expect(host.state.chat.at(-1).swipes[0]).toBe('');
         expect(host.saved).toHaveLength(0);
         expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
         expect(String(result)).toBe('');
@@ -192,12 +260,12 @@ describe('dry-run generation ownership', () => {
         await host.initialize();
         const { handle, complete } = await host.startTakeover();
         handle.setText('partial answer');
-        host.context.abortController.abort();
+        host.state.abortController.abort();
         expect(handle.abortSignal.aborted).toBe(true);
         await handle.abort();
         await complete;
 
-        expect(host.context.chat.at(-1).swipes[0]).toBe('partial answer');
+        expect(host.state.chat.at(-1).swipes[0]).toBe('partial answer');
         expect(host.saved).toHaveLength(0);
         expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
     });
@@ -206,14 +274,13 @@ describe('dry-run generation ownership', () => {
         const host = createHost();
         await host.initialize();
         const { handle, complete } = await host.startTakeover();
-        host.context.bumpChatTransitionEpoch();
-        // Simulate new chat replacing chat[]
-        host.context.chat = [{ is_user: false, mes: 'New chat greeting', extra: {} }];
+        host.state.chatTransitionEpoch += 1;
+        host.state.chat = [{ is_user: false, mes: 'New chat greeting', extra: {} }];
         handle.setText('stale chunk');
         await handle.commit();
         const result = await complete;
 
-        expect(host.context.chat).toEqual([{ is_user: false, mes: 'New chat greeting', extra: {} }]);
+        expect(host.state.chat).toEqual([{ is_user: false, mes: 'New chat greeting', extra: {} }]);
         expect(host.saved).toHaveLength(0);
         expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
         expect(host.effects).not.toContain('unblock');
@@ -225,11 +292,11 @@ describe('dry-run generation ownership', () => {
         await host.initialize();
         const { handle, complete } = await host.startTakeover();
 
-        const origEmit = host.context.eventSource.emit;
-        host.context.eventSource.emit = async (event, ...args) => {
+        const origEmit = host.state.emitEvent;
+        host.state.emitEvent = async (event, ...args) => {
             await origEmit(event, ...args);
             if (event === event_types.MESSAGE_RECEIVED) {
-                host.context.bumpChatTransitionEpoch();
+                host.state.chatTransitionEpoch += 1;
             }
         };
 
@@ -256,7 +323,7 @@ describe('quiet generation ownership', () => {
         await handle.commit();
         const result = await complete;
 
-        const message = host.context.chat.at(-1);
+        const message = host.state.chat.at(-1);
         expect(message.swipes[0]).toBe('final answer');
         expect(host.saved).toEqual([[message]]);
         expect(host.effects.filter(effect => effect === event_types.MESSAGE_RECEIVED)).toHaveLength(1);
@@ -265,21 +332,21 @@ describe('quiet generation ownership', () => {
 
     test('a quiet generation does not replace the live controller or restart its timer', async () => {
         const host = createHost();
-        const controller = host.context.abortController;
-        const started = host.context.generation_started;
+        const controller = host.state.abortController;
+        const started = host.state.generationStarted;
         await host.initialize('quiet', { quiet_prompt: 'classify' });
 
-        expect(host.context.abortController).toBe(controller);
-        expect(host.context.generation_started).toBe(started);
-        expect(host.context.quietAbortController).not.toBeNull();
-        expect(host.context.quietAbortController).not.toBe(controller);
+        expect(host.state.abortController).toBe(controller);
+        expect(host.state.generationStarted).toBe(started);
+        expect(host.state.quietAbortController).not.toBeNull();
+        expect(host.state.quietAbortController).not.toBe(controller);
     });
 
     test('stopping aborts the live controller and the quiet controller', async () => {
         const host = createHost();
-        const live = host.context.abortController;
+        const live = host.state.abortController;
         await host.initialize('quiet', { quiet_prompt: 'classify' });
-        const quiet = host.context.quietAbortController;
+        const quiet = host.state.quietAbortController;
         expect(quiet).not.toBeNull();
 
         host.stop();

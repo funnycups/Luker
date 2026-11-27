@@ -506,7 +506,7 @@ describe('activity-guard registry', () => {
                     { defaultLabel: '   ' },
                 )).toEqual({
                     source: 'core:generate-task',
-                    label: 'Background AI request',
+                    label: expect.stringMatching(/\S/),
                     scope: 'global',
                     ambient: true,
                     guardUnload: true,

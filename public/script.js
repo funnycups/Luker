@@ -12,6 +12,12 @@ import {
 } from './lib.js';
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initNavPanelPins, initRossMods, initSendTextareaState } from './scripts/RossAscends-mods.js';
+import {
+    abortGenerationControllers,
+    computeContinuedGenerationStart,
+    resolveGenerationOwnership,
+    runTakeoverLifecycle,
+} from './scripts/message-takeover.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -283,17 +289,10 @@ import {
 } from './scripts/instruct-mode.js';
 import { getCurrentLocale, initLocales, t, translate } from './scripts/i18n.js';
 import { setToastTranslator } from './scripts/luker-toast.js';
-import {
-    buildChatSwitchBlockingReasons,
-    cancelChatSwitchActivities,
-    createChatSwitchConfirmRunner,
-    getChatSwitchBlockingLabels,
-    hasActiveSource,
-    hasChatSwitchGuard,
-    hasUnloadGuard,
-    resolveRequestActivityLeaseOptions,
-    withActivityLease,
-} from './scripts/activity-guard.js';
+import { hasUnloadGuard } from './scripts/activity-guard.js';
+import { createBeforeUnloadCoordinator } from './scripts/lib/before-unload-coordinator.js';
+import { createChatTransitionCoordinator } from './scripts/lib/chat-transition-coordinator.js';
+import { normalizeGenerateRawArgs } from './scripts/lib/request-activity-lease.js';
 import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
 import { consumeLastUsage } from './scripts/last-usage.js';
 import {
@@ -7453,13 +7452,13 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
  * @param {GenerateRawParams} params Parameters for generating a message
  * @returns {Promise<string>} Generated message
  */
-export async function generateRaw({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, trimNames = true, prefill = '', jsonSchema = null, llmPresetName = '', apiPresetName = '', apiSettingsOverride = null, activity = true } = {}) {
-    if (arguments.length > 0 && typeof arguments[0] !== 'object') {
+export async function generateRaw(...args) {
+    const normalized = normalizeGenerateRawArgs(args);
+    if (normalized.positional) {
         console.trace('generateRaw called with positional arguments. Please use an object instead.');
-        [prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, trimNames, prefill, jsonSchema, llmPresetName, apiPresetName, apiSettingsOverride, activity] = arguments;
     }
-
-    const data = await generateRawData({ prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, prefill, jsonSchema, llmPresetName, apiPresetName, apiSettingsOverride, activity });
+    const { api, trimNames, jsonSchema } = normalized.params;
+    const data = await generateRawData(normalized.params);
 
     // JSON string (matching the provided schema) will already be extracted.
     if (jsonSchema) {
@@ -7491,9 +7490,6 @@ export async function generateRaw({ prompt = '', api = null, instructOverride = 
  * @returns {Promise<object | string>} Raw API response data, or a JSON string extracted from the response when `jsonSchema` is provided.
  */
 export async function generateRawData({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, prefill = '', jsonSchema = null, llmPresetName = '', apiPresetName = '', apiSettingsOverride = null, activity = true } = {}) {
-    const leaseOptions = resolveRequestActivityLeaseOptions(activity, 'core:generate-raw', {
-        defaultLabel: translate('Background AI request'),
-    });
     const run = async () => {
         if (!api) {
             api = main_api;
@@ -7614,7 +7610,7 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
             }
         }
     };
-    return leaseOptions ? await withActivityLease(leaseOptions, run) : await run();
+    return await chatTransitionCoordinator.runWithGenerateRawLease(activity, run);
 }
 
 class TempResponseLength {
@@ -7945,16 +7941,20 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // progress bar, timing, Send/Stop buttons, swipes and `is_send_press`
     // belong to the generation in flight, which unblocks them once, whether
     // it ends before or after this quiet generation.
-    const sharesInFlightController = type === 'quiet'
-        && is_send_press
-        && Boolean(abortController)
-        && !abortController.signal.aborted;
+    const initialOwnership = resolveGenerationOwnership({
+        type,
+        dryRun,
+        isSendPress: is_send_press,
+        abortController,
+        quietAbortController,
+        externalSignal: signal,
+        generationStarted: generation_started,
+    });
+    const sharesInFlightController = initialOwnership.sharesInFlightController;
     if (!sharesInFlightController) {
         setGenerationProgress(0);
     }
-    if (!dryRun && type !== 'quiet') {
-        generation_started = new Date();
-    }
+    generation_started = initialOwnership.generationStarted;
     setActiveWorldInfoPromptSnapshot();
     const generationEventParams = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage };
 
@@ -7967,24 +7967,21 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // Prompt estimates and quiet background prompts must not replace the
     // controller that owns a live foreground generation. Don't recreate the
     // live controller if a signal is passed (group generation).
-    if (!dryRun && type !== 'quiet' && !(abortController && signal)) {
-        abortController = new AbortController();
-    }
-    let generationAbortController;
-    if (dryRun) {
-        generationAbortController = new AbortController();
-    } else if (type === 'quiet') {
-        quietAbortController = new AbortController();
-        generationAbortController = quietAbortController;
-    } else {
-        generationAbortController = abortController;
-    }
+    const postStartOwnership = resolveGenerationOwnership({
+        type,
+        dryRun,
+        isSendPress: is_send_press,
+        abortController,
+        quietAbortController,
+        externalSignal: signal,
+        generationStarted: generation_started,
+    });
+    abortController = postStartOwnership.abortController;
+    quietAbortController = postStartOwnership.quietAbortController;
+    const generationAbortController = postStartOwnership.generationAbortController;
     const unblockThisGeneration = (generationType) => unblockGeneration(generationType, { suppress: sharesInFlightController });
 
-    const isGenerationAborted = () => Boolean(
-        generationAbortController?.signal?.aborted
-        || (signal && typeof signal === 'object' && 'aborted' in signal && signal.aborted),
-    );
+    const isGenerationAborted = postStartOwnership.isGenerationAborted;
 
     const exitAbortedGenerationIfNeeded = () => {
         if (!isGenerationAborted()) {
@@ -8036,23 +8033,10 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
         exitAbortedGenerationIfNeeded,
     };
 
-    if (dryRun) {
-        return await generateInternalAfterCommands(generationPayload);
-    }
-
-    return await withActivityLease({
-        source: type === 'quiet' ? 'core:generation-quiet' : 'core:generation',
-        label: type === 'quiet' ? t`Background generation` : t`Message generation`,
-        scope: 'chat',
-        guardUnload: true,
-        guardChatSwitch: true,
-        keepAlive: true,
-        onCancel: () => {
-            if (!generationAbortController.signal.aborted) {
-                stopGeneration();
-            }
-        },
-    }, () => generateInternalAfterCommands(generationPayload));
+    return await chatTransitionCoordinator.runWithGenerationLease(
+        { type, dryRun, abortController: generationAbortController },
+        () => generateInternalAfterCommands(generationPayload),
+    );
 }
 
 async function generateInternalAfterCommands({ type, automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, dryRun, genEpoch, generationEventParams, generationAbortController, sharesInFlightController, unblockThisGeneration, exitAbortedGenerationIfNeeded }) {
@@ -8217,15 +8201,13 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
     const isContinue = type == 'continue';
 
     // Rewrite the generation timer to account for the time passed for all the continuations.
-    if (!dryRun && isContinue && chat.length) {
-        const prevFinished = lastMessage.gen_finished;
-        const prevStarted = lastMessage.gen_started;
-
-        if (prevFinished && prevStarted) {
-            const timePassed = Number(prevFinished) - Number(prevStarted);
-            generation_started = new Date(Date.now() - timePassed);
-            lastMessage.gen_started = generation_started;
-        }
+    const continuedStart = computeContinuedGenerationStart({
+        dryRun,
+        isContinue,
+        lastMessage: chat.length ? lastMessage : null,
+    });
+    if (continuedStart) {
+        generation_started = continuedStart;
     }
 
     if (!dryRun && !sharesInFlightController) {
@@ -9557,280 +9539,34 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     generate_data.prompt = hookData.messages;
                 }
 
-                const handle = dispatchEvent.takeoverHandle;
-                // Snapshot the module-level abortController. A fresh
-                // foreground Generate() replaces it (see the recreate
-                // earlier in this function; dry runs and quiet prompts use
-                // their own controllers) — so reference inequality is the canonical
-                // "a new Generate has started" signal. We use it below
-                // to bail out of the committed/discarded cleanup the
-                // moment a quick user "stop then regenerate" has
-                // already kicked off the next turn into the SAME chat
-                // slot. Without the bail-out, our remaining pipeline
-                // (emit MESSAGE_RECEIVED, redrawMessageBubble,
-                // appendChatMessages, unblockGeneration, plus the
-                // discard-branch rollback's reloadCurrentChat) all
-                // step on the new generation's writes, producing the
-                // observed two-messages-alternating bug.
-                const myAbortController = abortController;
-                const gen_started = new Date();
-                hideSwipeButtons();
-
-                // ── 1. Acquire/push placeholder per type ──
-                const placeholderId = await acquireTakeoverPlaceholder(type);
-                if (abortController !== myAbortController || isStaleEpoch()) {
-                    try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
-                    return Object.defineProperties(new String(''), {
-                        'fromTakeover': { value: true },
-                    });
-                }
-                const originalText = String(chat[placeholderId]?.mes ?? '');
-                const originalReasoning = String(chat[placeholderId]?.extra?.reasoning ?? '');
-                // Seed the slot's gen_started with the takeover claim time so
-                // redrawMessageBubble can render a live, growing timer during
-                // streaming. saveReply's placeholder push left gen_started at
-                // the module-level `generation_started` and gen_finished at
-                // the push moment, which collapses to 0.0s. Mirrors core
-                // streaming, whose timer also walks from claim-time forward
-                // chunk by chunk.
-                if (chat[placeholderId]) {
-                    chat[placeholderId].gen_started = gen_started;
-                }
-
-                // ── 2. Wire onUpdate → live redraw + chat mutation ──
-                handle.setOnUpdate?.((text, reasoning) => {
-                    if (abortController !== myAbortController || isStaleEpoch()) return;
-                    if (!chat[placeholderId]) return;
-                    chat[placeholderId].mes = String(text ?? '');
-                    if (!chat[placeholderId].extra) chat[placeholderId].extra = {};
-                    chat[placeholderId].extra.reasoning = String(reasoning ?? '');
-                    chat[placeholderId].gen_finished = new Date();
-                    redrawMessageBubble(placeholderId);
-                    eventSource.emit(event_types.MESSAGE_UPDATED, placeholderId);
-                });
-
-                // ── 3. Wait for plugin handle to settle ──
-                // No time-based watchdog: per project policy the kernel does
-                // not time-trigger aborts. Abort is user-driven (stop button
-                // → abortController.abort() → plugin honors the signal and
-                // calls handle.discard in its catch path). If a plugin
-                // never settles the handle, that is a plugin bug, not
-                // something the kernel papers over with a timeout.
-                const outcome = await handle.complete;
-                try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
-
-                // Liveness boundary: a fresh Generate() or chat switch may have
-                // replaced our abortController or bumped the chat epoch while
-                // we awaited handle.complete — the typical "stop then send a
-                // new message" or "switch chats mid-generation" sequence. The
-                // plugin's late settle is stale for every outcome, not just
-                // `discarded`: a late `committed` would mutate a slot the user
-                // already cancelled or left behind, emit MESSAGE_RECEIVED + run
-                // saveChatConditional / triggerAutoContinue against state the
-                // new turn or new chat now owns; a late `aborted` would clobber
-                // the slot the new turn pushed. setOnUpdate is already detached
-                // above so the plugin can't keep writing either. Drop everything
-                // and let the new turn/chat proceed unaware.
-                if (abortController !== myAbortController || isStaleEpoch()) {
-                    return Object.defineProperties(new String(''), {
-                        'fromTakeover': { value: true },
-                    });
-                }
-                showSwipeButtons();
-
-                // ── 4. Route by outcome ──
-                if (outcome.status === 'committed') {
-                    const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
-                    const finalReasoning = String(outcome.finalReasoning ?? '');
-                    const slot = chat[placeholderId];
-
-                    // Mutate the canonical slot directly. The placeholder
-                    // for `normal`/`regenerate` was already pushed by
-                    // `saveReply(fromStreaming:true)` in
-                    // `acquireTakeoverPlaceholder`, so the slot is the
-                    // canonical chat entry — no second saveReply needed.
-                    // (Mirrors the streaming pattern: saveReply once at
-                    // start, then mutate-and-emit on finish.)
-                    if (slot) {
-                        slot.mes = cleanedText;
-                        if (!slot.extra) slot.extra = {};
-                        slot.extra.reasoning = finalReasoning;
-                        slot.extra.reasoning_duration = null;
-                        slot.extra.api = getGeneratingApi();
-                        slot.extra.model = getGeneratingModel();
-                        slot.gen_started = gen_started;
-                        slot.gen_finished = new Date();
-                        slot.send_date = getMessageTimeStamp();
-                        if (power_user.message_token_count_enabled) {
-                            const tokenCountText = (finalReasoning || '') + cleanedText;
-                            slot.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
-                            if (abortController !== myAbortController || isStaleEpoch()) {
-                                return Object.defineProperties(new String(''), {
-                                    'fromTakeover': { value: true },
-                                });
-                            }
-                        }
-                        // Sync mes into the active swipe slot (saveReply
-                        // initialised `swipes`/`swipe_info` at placeholder
-                        // push time for `normal`/`regenerate`; for `swipe`
-                        // the swipe-create logic did it; for `continue`
-                        // the existing assistant slot already has them).
-                        // For overswipe→regenerate via swipe, `swipe_id`
-                        // points past `swipe_info.length` — we must extend
-                        // it, not skip, or `loadFromSwipeId` later reads
-                        // undefined and drops `extra` (including reasoning).
-                        if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
-                            slot.swipes[slot.swipe_id] = slot.mes;
-                            if (Array.isArray(slot.swipe_info)) {
-                                slot.swipe_info[slot.swipe_id] = {
-                                    send_date: slot.send_date,
-                                    gen_started: slot.gen_started,
-                                    gen_finished: slot.gen_finished,
-                                    extra: structuredClone(slot.extra),
-                                };
-                            }
-                        }
-                    }
-
-                    extractMessageById(placeholderId);
-                    redrawMessageBubble(placeholderId);
-
-                    // Persist (mirrors onFinishStreaming's strategy).
-                    // Emit MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED AFTER
-                    // the persist below — see commit 6c99b32d0 for why running
-                    // emits first lets extension listeners race us into a
-                    // double-write + BE dedup + snapshot phantom.
-                    const isAborted = abortController && abortController.signal.aborted;
-                    const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
-                    const canUseIncrementalAppend = !isAborted
-                        && type === 'normal'
-                        && placeholderId === chat.length - 1
-                        && chat[placeholderId]
-                        && !chat[placeholderId].is_user
-                        && !serverPersistedReply;
-                    if (serverPersistedReply) {
-                        // Server already has it; nothing to do.
-                    } else if (canUseIncrementalAppend) {
-                        const appended = await appendChatMessages([chat[placeholderId]]);
-                        if (!appended && abortController === myAbortController && !isStaleEpoch()) {
-                            await saveChatConditional();
-                        }
-                    } else {
-                        await saveChatConditional();
-                    }
-                    if (abortController !== myAbortController || isStaleEpoch()) {
-                        return Object.defineProperties(new String(''), {
-                            'fromTakeover': { value: true },
-                        });
-                    }
-
-                    // Unblock the UI (and fire GENERATION_ENDED via
-                    // activateSendButtons → hideStopButton) BEFORE emitting
-                    // MESSAGE_RECEIVED, mirroring onFinishStreaming's
-                    // `markUIGenStopped`-first ordering. Listeners of
-                    // GENERATION_ENDED that arm debounced work now run in
-                    // parallel with async MESSAGE_RECEIVED handlers instead
-                    // of strictly after them — matching streaming semantics
-                    // so extensions see the same relative timing as the core
-                    // streaming path. Persistence still happens above, so
-                    // the write race fixed in 497a767824 stays fixed.
-                    unblockThisGeneration(type);
-
-                    await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
-                    if (abortController !== myAbortController || isStaleEpoch()) {
-                        return Object.defineProperties(new String(''), {
-                            'fromTakeover': { value: true },
-                        });
-                    }
-                    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
-
-                    // Note: `statMesProcess` was already called inside the
-                    // `saveReply({ fromStreaming: true })` placeholder push
-                    // in `acquireTakeoverPlaceholder`. We deliberately don't
-                    // re-run it here — matching the streaming pattern
-                    // (`onStartStreaming` runs stats once, `onFinishStreaming`
-                    // does not). Word counts therefore reflect the message
-                    // existence, not its final length, which is consistent
-                    // with streaming. For `swipe`/`continue` (no
-                    // placeholder push), stats were already updated by
-                    // the prior bookkeeping that created the slot.
-
-                    if (abortController === myAbortController && !isStaleEpoch()) {
-                        triggerAutoContinue?.(cleanedText, false);
-                    }
-                    // Wrap with `fromTakeover` so onSuccess short-circuits
-                    // (otherwise it would re-run saveReply on the returned
-                    // text and duplicate the entry).
-                    return Object.defineProperties(new String(cleanedText), {
-                        'fromTakeover': { value: true },
-                    });
-                }
-
-                if (outcome.status === 'aborted') {
-                    // Plugin signalled mid-turn abort (typically user
-                    // clicked stop and the plugin chose to preserve
-                    // whatever partial output had streamed so far).
-                    // Mirrors core streaming's `isStreamFinished` gate
-                    // below: a stopped stream publishes its partial in the
-                    // chat slot but skips `onFinishStreaming` (no
-                    // MESSAGE_RECEIVED / persistence / autoContinue). Same
-                    // trade-off: the aborted partial lives locally until the
-                    // user's next action (regenerate / swipe / send / reload).
-                    // Skipping persistence is deliberate — saving the aborted
-                    // partial to the server would crystallise state the user
-                    // just clicked stop to prevent.
-                    //
-                    // The sync writes below mirror the committed branch in
-                    // structure but skip the metadata that only matters for
-                    // persisted messages: no token-count `await` (transient
-                    // content, metadata not worth the yield point that opens
-                    // a stop+regenerate race window) and no swipe_info clone
-                    // (the partial is not a finished swipe).
-                    const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
-                    const finalReasoning = String(outcome.finalReasoning ?? '');
-                    const slot = chat[placeholderId];
-                    if (slot) {
-                        slot.mes = cleanedText;
-                        if (!slot.extra) slot.extra = {};
-                        slot.extra.reasoning = finalReasoning;
-                        slot.extra.reasoning_duration = null;
-                        slot.extra.api = getGeneratingApi();
-                        slot.extra.model = getGeneratingModel();
-                        slot.gen_started = gen_started;
-                        slot.gen_finished = new Date();
-                        slot.send_date = getMessageTimeStamp();
-                        if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
-                            slot.swipes[slot.swipe_id] = slot.mes;
-                        }
-                    }
-                    extractMessageById(placeholderId);
-                    redrawMessageBubble(placeholderId);
-                    unblockThisGeneration(type);
-                    return Object.defineProperties(new String(cleanedText), {
-                        'fromTakeover': { value: true },
-                    });
-                }
-
-                // status === 'discarded'
-                // Plugin requested rollback (explicit programmatic discard,
-                // not the user-stop flow — that goes through `aborted`
-                // above). The race check at the top of the outcome handling
-                // already filtered out late settles, so we always own the
-                // slot here.
-                try {
-                    await rollbackTakeoverPlaceholder(placeholderId, type, originalText, originalReasoning);
-                } catch (rollbackErr) {
-                    console.error('[takeover] rollback failed', rollbackErr);
-                }
-                if (abortController !== myAbortController || isStaleEpoch()) {
-                    return Object.defineProperties(new String(''), {
-                        'fromTakeover': { value: true },
-                    });
-                }
-                try { await eventSource.emit(event_types.GENERATION_STOPPED); } catch { /* best-effort */ }
-                unblockThisGeneration(type);
-                return Object.defineProperties(new String(''), {
-                    'fromTakeover': { value: true },
+                return await runTakeoverLifecycle({
+                    type,
+                    handle: dispatchEvent.takeoverHandle,
+                    isContinue,
+                    isImpersonate,
+                    genEpoch,
+                    myAbortController: abortController,
+                    getAbortController: () => abortController,
+                    getChatTransitionEpoch,
+                    getChat: () => chat,
+                    powerUser: power_user,
+                    getMessageTimeStamp,
+                    getGeneratingApi,
+                    getGeneratingModel,
+                    acquireTakeoverPlaceholder,
+                    rollbackTakeoverPlaceholder,
+                    applyPostGenerationText,
+                    resolveAssistantTokenCount,
+                    extractMessageById,
+                    redrawMessageBubble,
+                    hideSwipeButtons,
+                    showSwipeButtons,
+                    appendChatMessages,
+                    saveChatConditional,
+                    isLastLukerReplyPersistedByServerForApi,
+                    emitEvent: (event, ...args) => eventSource.emit(event, ...args),
+                    unblockThisGeneration,
+                    triggerAutoContinue,
                 });
             }
         }
@@ -10350,12 +10086,7 @@ export function stopGeneration() {
         streamingProcessor.onStopStreaming();
         stopped = true;
     }
-    if (abortController) {
-        abortController.abort('Clicked stop button');
-        stopped = true;
-    }
-    if (quietAbortController) {
-        quietAbortController.abort('Clicked stop button');
+    if (abortGenerationControllers({ abortController, quietAbortController })) {
         stopped = true;
     }
     if (stopped) {
@@ -15848,63 +15579,36 @@ export async function unshallowCharacter(characterId) {
     await getOneCharacter(avatar, { preserveChat: true });
 }
 
-let chatTransitionInProgress = false;
-let chatTransitionEpoch = 0;
-
-export function getChatTransitionEpoch() {
-    return chatTransitionEpoch;
-}
-
-export function bumpChatTransitionEpoch() {
-    chatTransitionEpoch += 1;
-    return chatTransitionEpoch;
-}
-
 function hasActiveMessageEdit() {
     return (typeof this_edit_mes_id === 'number' || (typeof this_edit_mes_id === 'string' && this_edit_mes_id.trim() !== ''))
         && Number.isFinite(Number(this_edit_mes_id))
         && Number(this_edit_mes_id) >= 0;
 }
 
-const runChatSwitchConfirm = createChatSwitchConfirmRunner({
-    getBlockingReasons: () => buildChatSwitchBlockingReasons({
-        activityLabels: getChatSwitchBlockingLabels(),
-        hasChatSwitchActivity: hasChatSwitchGuard(),
-        activityFallbackLabel: t`Background task`,
-        isGenerating: is_send_press || Boolean(streamingProcessor) || is_group_generating,
-        hasGenerationLease: hasActiveSource('core:generation') || hasActiveSource('core:group-generation'),
-        generationFallbackLabel: t`Message generation`,
-        hasUnsavedEdit: hasActiveMessageEdit(),
-        unsavedEditLabel: t`Unsaved message edit`,
-    }),
+const chatTransitionCoordinator = createChatTransitionCoordinator({
     isGenerating: () => is_send_press || Boolean(streamingProcessor) || is_group_generating,
-    confirmDialog: async (reasons) => {
-        const listHtml = reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('');
-        const html = `<p>${escapeHtml(t`Switching chats will interrupt the following in-progress work:`)}</p><ul>${listHtml}</ul>`;
-        const result = await Popup.show.confirm(t`Tasks still in progress`, html, {
-            okButton: t`Switch anyway`,
-            cancelButton: t`Cancel`,
-            defaultResult: POPUP_RESULT.NEGATIVE,
-        });
-        return Boolean(result);
-    },
-    onEpochBump: () => {
-        bumpChatTransitionEpoch();
-    },
-    onStopGeneration: () => {
-        const proc = streamingProcessor;
-        stopGeneration();
+    hasActiveMessageEdit,
+    getStreamingProcessor: () => streamingProcessor,
+    clearStreamingProcessorIfSame: (proc) => {
         if (streamingProcessor === proc) {
             streamingProcessor = null;
         }
     },
-    onCancelActivities: () => {
-        cancelChatSwitchActivities();
-        if (streamingProcessor?.abortController?.signal?.aborted) {
-            streamingProcessor = null;
-        }
-    },
+    stopGeneration: (...args) => stopGeneration(...args),
+    confirmPopup: (...args) => Popup.show.confirm(...args),
+    escapeHtml: (...args) => escapeHtml(...args),
+    t: (...args) => t(...args),
+    translate: (...args) => translate(...args),
+    negativePopupResult: 0,
 });
+
+export function getChatTransitionEpoch() {
+    return chatTransitionCoordinator.getChatTransitionEpoch();
+}
+
+export function bumpChatTransitionEpoch() {
+    return chatTransitionCoordinator.bumpChatTransitionEpoch();
+}
 
 /**
  * Prompts for confirmation before switching chats when active chat-scoped work,
@@ -15915,7 +15619,7 @@ const runChatSwitchConfirm = createChatSwitchConfirmRunner({
  * @returns {Promise<boolean>} True if safe to proceed, false if cancelled
  */
 export async function confirmChatSwitchGuard({ skipConfirmation = false } = {}) {
-    return await runChatSwitchConfirm({ skipConfirmation });
+    return await chatTransitionCoordinator.confirmChatSwitchGuard({ skipConfirmation });
 }
 
 /**
@@ -15925,16 +15629,15 @@ export async function confirmChatSwitchGuard({ skipConfirmation = false } = {}) 
  * them as load failures. Cleared by getChat.
  */
 function beginChatTransition() {
-    chatTransitionInProgress = true;
-    bumpChatTransitionEpoch();
+    chatTransitionCoordinator.beginChatTransition();
 }
 
 function endChatTransition() {
-    chatTransitionInProgress = false;
+    chatTransitionCoordinator.endChatTransition();
 }
 
 export function isChatTransitionInProgress() {
-    return chatTransitionInProgress;
+    return chatTransitionCoordinator.isChatTransitionInProgress();
 }
 
 export async function getChat() {
@@ -20891,29 +20594,28 @@ function restoreCharacterSearchVisibility() {
     searchButton.toggleClass('active', isVisible);
 }
 
+const beforeUnloadCoordinator = createBeforeUnloadCoordinator({
+    hasUnloadGuard: () => hasUnloadGuard(),
+    isGenerationActive: () => is_send_press || Boolean(streamingProcessor) || is_group_generating,
+    hasActiveMessageEdit,
+    getSendTextareaValue: () => $('#send_textarea').val(),
+    isChatSaving: () => isChatSaving,
+    hasPendingChatSaveTimeout: () => chatSaveTimeout !== null && chatSaveTimeout !== undefined,
+    cancelTtsPlay: (...args) => cancelTtsPlay(...args),
+    getStreamingProcessor: () => streamingProcessor,
+    isStreamingRecoverable: (proc) => shouldUseLukerServerPersistenceForType(proc.type) && supportsLukerServerPersistence(main_api),
+    flushTokenCacheSave: (...args) => flushTokenCacheSave(...args),
+    flushItemizedPromptsSave: (...args) => flushItemizedPromptsSave(...args),
+    saveChatConditional: (...args) => saveChatConditional(...args),
+});
+
 /**
  * Evaluates whether leaving or reloading the page would lose active work.
  * @param {boolean} [debouncePending=false] Whether a debounced chat save was pending prior to flush
  * @returns {boolean}
  */
 export function shouldWarnBeforeUnload(debouncePending = false) {
-    if (hasUnloadGuard()) {
-        return true;
-    }
-    if (is_send_press || Boolean(streamingProcessor) || is_group_generating) {
-        return true;
-    }
-    if (hasActiveMessageEdit()) {
-        return true;
-    }
-    if (String($('#send_textarea').val() ?? '').trim().length > 0) {
-        return true;
-    }
-    const hasPendingSaveTimeout = chatSaveTimeout !== null && chatSaveTimeout !== undefined;
-    if (isChatSaving || debouncePending || hasPendingSaveTimeout) {
-        return true;
-    }
-    return false;
+    return beforeUnloadCoordinator.shouldWarnBeforeUnload(debouncePending);
 }
 
 /**
@@ -20922,42 +20624,7 @@ export function shouldWarnBeforeUnload(debouncePending = false) {
  * @param {BeforeUnloadEvent} e
  */
 export function handleBeforeUnload(e) {
-    cancelTtsPlay();
-    // Only abort the in-flight stream when the reply is NOT recoverable
-    // server-side. For a recoverable generation (normal / regenerate on a
-    // server-persistence API) the job survives the disconnect by design:
-    // aborting here would fire the ws-delivery abort notification
-    // (/api/generation/:id/abort), kill the upstream fetch mid-stream
-    // and leave nothing to recover for the reopened tab.
-    const isRecoverableGeneration = Boolean(streamingProcessor)
-        && shouldUseLukerServerPersistenceForType(streamingProcessor.type)
-        && supportsLukerServerPersistence(main_api);
-    if (streamingProcessor && !isRecoverableGeneration) {
-        console.log('Page reloaded. Aborting streaming...');
-        streamingProcessor.onStopStreaming();
-    }
-
-    // Fire-and-forget: flush queues an IDB transaction synchronously,
-    // commit happens off-main-thread before the page tears down.
-    try { flushTokenCacheSave(); } catch { /* best-effort */ }
-    try { flushItemizedPromptsSave(); } catch { /* best-effort */ }
-
-    // If a debounced chat save is pending, capture that before calling
-    // saveChatConditional() (which synchronously cancels chatSaveTimeout) and
-    // dispatch the fetch immediately with `keepalive: true`.
-    const debouncePending = chatSaveTimeout !== null && chatSaveTimeout !== undefined;
-    if (debouncePending) {
-        try { saveChatConditional(); } catch { /* best-effort */ }
-    }
-
-    if (!shouldWarnBeforeUnload(debouncePending)) {
-        return;
-    }
-
-    e?.preventDefault?.();
-    if (e) {
-        e.returnValue = '';
-    }
+    return beforeUnloadCoordinator.handleBeforeUnload(e);
 }
 
 // MARK: DOM Handlers Start

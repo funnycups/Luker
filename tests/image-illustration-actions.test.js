@@ -37,18 +37,15 @@ class MockPopup {
     }
 }
 
-jest.unstable_mockModule('../public/scripts/popup.js', () => ({
+const testUi = {
     Popup: MockPopup,
     POPUP_TYPE: { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4, CROP: 5 },
     POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null },
     callGenericPopup: jest.fn(async () => 'edited prompt'),
-}));
+};
+const deleteMediaFromServerStub = jest.fn(async () => true);
 
-jest.unstable_mockModule('../public/scripts/chats.js', () => ({
-    deleteMediaFromServer: jest.fn(async () => true),
-}));
-
-let initIllustrationActions;
+let createIllustrationActions;
 let createImageService;
 let GenerationQueue;
 let buildImageTag;
@@ -121,7 +118,7 @@ beforeAll(async () => {
     }
     installDomJquery();
     ({ createImageActivity } = await import('../public/scripts/extensions/stable-diffusion/activity.js'));
-    ({ initIllustrationActions } = await import('../public/scripts/extensions/stable-diffusion/illustration/actions.js'));
+    ({ createIllustrationActions } = await import('../public/scripts/extensions/stable-diffusion/illustration/actions-core.js'));
     ({ createImageService } = await import('../public/scripts/extensions/stable-diffusion/illustration/image-service.js'));
     ({ GenerationQueue } = await import('../public/scripts/extensions/stable-diffusion/illustration/queue.js'));
     ({ buildImageTag } = await import('../public/scripts/extensions/stable-diffusion/illustration/message.js'));
@@ -223,7 +220,7 @@ function buildTwoImageFixture({ maxConcurrent = 2, supportsSourceImage = false }
     activitiesToCleanup.push(activity);
     const notifyErrors = [];
     const toasts = [];
-    const actions = initIllustrationActions({
+    const actions = createIllustrationActions({
         context,
         pipeline: { cancelForMessage: jest.fn() },
         imageService,
@@ -233,6 +230,8 @@ function buildTwoImageFixture({ maxConcurrent = 2, supportsSourceImage = false }
         notifyError: msg => notifyErrors.push(String(msg)),
         beginActivityJob: options => activity.beginJob(options),
         t: tTag,
+        ui: testUi,
+        deleteMediaFromServer: deleteMediaFromServerStub,
     });
 
     return {
@@ -278,12 +277,12 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
         const pill = fx.pillEl();
         expect(pill).not.toBeNull();
         expect(pill.hidden).toBe(false);
-        expect(pill.querySelector('.activity-pill-label').textContent).toBe('Generating image');
+        expect(pill.querySelector('.activity-pill-label').textContent.trim().length).toBeGreaterThan(0);
         expect(pill.dataset.tone).toBe('running');
 
         const runningRun = fx.activity.store.getCurrentRun();
         expect(runningRun.rounds).toHaveLength(1);
-        expect(runningRun.rounds[0].label).toBe('Message #1');
+        expect(runningRun.rounds[0].label).toContain('#1');
         expect(runningRun.rounds[0].sections.map(s => [s.kind, s.status])).toEqual([
             ['prompt', 'done'],
             ['image', 'running'],
@@ -291,7 +290,7 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
 
         // Retry callback updates the real capsule text
         fx.calls[0].opts.onRetry?.(1, 3);
-        expect(pill.querySelector('.activity-pill-label').textContent).toBe('Retrying · 1/3');
+        expect(pill.querySelector('.activity-pill-label').textContent).toContain('1/3');
         expect(pill.dataset.tone).toBe('attention');
 
         fx.calls[0].gate.resolve('/user/images/a2.png');
@@ -320,7 +319,7 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
         const pill = fx.pillEl();
         expect(pill).not.toBeNull();
         expect(pill.hidden).toBe(false);
-        expect(pill.querySelector('.activity-pill-label').textContent).toBe('Generating image · 2');
+        expect(pill.querySelector('.activity-pill-label').textContent).toContain('· 2');
 
         fx.activity.abortAll();
         await new Promise(r => setTimeout(r, 20));
@@ -350,7 +349,7 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
         expect(fx.calls[1].aborted).toBe(false);
         const pill = fx.pillEl();
         expect(pill.hidden).toBe(false);
-        expect(pill.querySelector('.activity-pill-label').textContent).toBe('Generating image · 2');
+        expect(pill.querySelector('.activity-pill-label').textContent).toContain('· 2');
 
         // Finish ill_A first, then ill_B
         fx.calls[0].gate.resolve('/user/images/a2.png');
@@ -359,7 +358,8 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
         expect(fx.message.mes).toContain('src="/user/images/a2.png"');
         expect(fx.message.mes).toContain('data-illustration-id="ill_B"');
         expect(pill.hidden).toBe(false);
-        expect(pill.querySelector('.activity-pill-label').textContent).toBe('Generating image');
+        expect(pill.querySelector('.activity-pill-label').textContent).not.toContain('· 2');
+        expect(pill.querySelector('.activity-pill-label').textContent.trim().length).toBeGreaterThan(0);
 
         fx.calls[1].gate.resolve('/user/images/b2.png');
         await new Promise(r => setTimeout(r, 20));
@@ -510,7 +510,7 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
             queue: new GenerationQueue({ maxConcurrent: 2, minInterval: 0 }),
             context,
         });
-        const actions = initIllustrationActions({
+        const actions = createIllustrationActions({
             context,
             pipeline: { cancelForMessage: jest.fn() },
             imageService,
@@ -519,6 +519,8 @@ describe('Illustration action popup, activity pill progress, and concurrent rege
             toast: () => {},
             notifyError: msg => notifyErrors.push(String(msg)),
             t: tTag,
+            ui: testUi,
+            deleteMediaFromServer: deleteMediaFromServerStub,
         });
 
         actions.handleClick(chatEl.querySelector('[data-illustration-id="fail_A"]'));

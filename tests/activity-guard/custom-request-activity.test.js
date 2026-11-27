@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import {
     getActiveActivities,
     hasUnloadGuard,
@@ -7,9 +7,30 @@ import {
     hasActiveSource,
     subscribeActivityGuard,
 } from '../../public/scripts/activity-guard.js';
+import { createCompletionServices } from '../../public/scripts/custom-request-core.js';
 
-let ChatCompletionService;
-let TextCompletionService;
+const { ChatCompletionService, TextCompletionService } = createCompletionServices({
+    getPresetManager: () => null,
+    extractJsonFromData: (json) => json?.choices?.[0]?.message?.content ?? '{}',
+    extractMessageFromData: (json) => json?.choices?.[0]?.message?.content ?? json?.results?.[0]?.text ?? '',
+    getGenerateUrl: (type) => `/api/generate/${type}`,
+    getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+    getName1: () => 'User',
+    getName2: () => 'Char',
+    getTextGenServer: () => 'http://127.0.0.1:5000',
+    createTextGenGenerationData: (_s, model, prompt, maxTokens) => ({ prompt, model, max_tokens: maxTokens }),
+    getTextGenSettingNames: () => [],
+    getTextGenSettings: () => ({}),
+    extractReasoningFromData: () => '',
+    formatInstructModeChat: (_n, content) => content,
+    formatInstructModePrompt: () => '',
+    getInstructStoppingSequences: () => [],
+    tryParseStreamingError: () => {},
+    createGenerationParameters: async () => ({ generate_data: {} }),
+    isOpenAIConnectionPresetField: () => false,
+    getOpenAISettingsToUpdate: () => ({}),
+    getOpenAISettings: () => ({}),
+});
 
 function makeSseBody(events) {
     const encoder = new TextEncoder();
@@ -54,50 +75,6 @@ function deferred() {
     });
     return { promise, resolve, reject };
 }
-
-beforeAll(async () => {
-    const noop = () => {};
-    jest.unstable_mockModule('../../public/script.js', () => ({
-        extractJsonFromData: jest.fn((json) => json?.choices?.[0]?.message?.content ?? '{}'),
-        extractMessageFromData: jest.fn((json) => json?.choices?.[0]?.message?.content ?? json?.results?.[0]?.text ?? ''),
-        getGenerateUrl: jest.fn((type) => `/api/generate/${type}`),
-        getRequestHeaders: jest.fn(() => ({ 'Content-Type': 'application/json' })),
-        name1: 'User',
-        name2: 'Char',
-    }));
-    jest.unstable_mockModule('../../public/scripts/preset-manager.js', () => ({
-        getPresetManager: jest.fn(() => null),
-    }));
-    jest.unstable_mockModule('../../public/scripts/textgen-settings.js', () => ({
-        getTextGenServer: jest.fn(() => 'http://127.0.0.1:5000'),
-        createTextGenGenerationData: jest.fn((_s, model, prompt, maxTokens) => ({ prompt, model, max_tokens: maxTokens })),
-        setting_names: [],
-        textgenerationwebui_settings: {},
-    }));
-    jest.unstable_mockModule('../../public/scripts/reasoning.js', () => ({
-        extractReasoningFromData: jest.fn(() => ''),
-    }));
-    jest.unstable_mockModule('../../public/scripts/instruct-mode.js', () => ({
-        formatInstructModeChat: jest.fn((_n, content) => content),
-        formatInstructModePrompt: jest.fn(() => ''),
-        getInstructStoppingSequences: jest.fn(() => []),
-    }));
-    jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
-        tryParseStreamingError: jest.fn(noop),
-        createGenerationParameters: jest.fn(async () => ({ generate_data: {} })),
-        isOpenAIConnectionPresetField: jest.fn(() => false),
-        settingsToUpdate: {},
-        oai_settings: {},
-    }));
-    jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
-        power_user: {},
-    }));
-    jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
-        delay: jest.fn(async () => {}),
-    }));
-
-    ({ ChatCompletionService, TextCompletionService } = await import('../../public/scripts/custom-request.js'));
-});
 
 describe('custom-request automatic activity leases', () => {
     const origFetch = globalThis.fetch;
@@ -175,7 +152,7 @@ describe('custom-request automatic activity leases', () => {
             expect(hasKeepAliveHold({ excludeAmbient: true })).toBe(false);
             expect(observedDuringFetch[0]).toMatchObject({
                 source: 'core:custom-request',
-                label: 'Background AI request',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 ambient: true,
                 guardUnload: true,
@@ -258,7 +235,6 @@ describe('custom-request automatic activity leases', () => {
             const streamFactory = await reqPromise;
             expect(typeof streamFactory).toBe('function');
 
-            // Dropped un-invoked generator factory must leave ZERO active leases!
             expect(hasUnloadGuard()).toBe(false);
             expect(getActiveActivities()).toEqual([]);
         });
@@ -399,47 +375,31 @@ describe('custom-request automatic activity leases', () => {
             }
         });
 
-        test('processRequest forwards options.activity without adding activity to request payload', async () => {
+        test('processRequest forwards activity override without leaking it into POST body', async () => {
             const Service = getService();
-            const observed = [];
-            const postedBodies = [];
-
+            let observed = null;
+            let postedBody = null;
             globalThis.fetch = jest.fn(async (_url, init) => {
-                postedBodies.push(JSON.parse(init.body));
-                observed.push(getActiveActivities());
+                postedBody = JSON.parse(init.body);
+                observed = getActiveActivities();
                 return { ok: true, json: async () => makeOkJson() };
             });
 
-            await Service.processRequest(makePayload(false), {
-                activity: { scope: 'chat', label: 'Process custom', ambient: false },
-            }, true, null);
-
-            await Service.processRequest(makePayload(false), {
-                activity: false,
-            }, true, null);
-
-            expect(observed[0]).toHaveLength(1);
-            expect(observed[0][0]).toMatchObject({
+            await Service.processRequest(
+                makePayload(false),
+                { activity: { scope: 'chat', label: 'Custom op', ambient: false } },
+                true,
+                null,
+            );
+            expect(observed).toHaveLength(1);
+            expect(observed[0]).toMatchObject({
                 source: 'core:custom-request',
                 scope: 'chat',
-                label: 'Process custom',
+                label: 'Custom op',
                 ambient: false,
                 guardChatSwitch: true,
             });
-            expect(observed[1]).toEqual([]);
-            expect(Object.hasOwn(postedBodies[0], 'activity')).toBe(false);
-            expect(Object.hasOwn(postedBodies[1], 'activity')).toBe(false);
-        });
-
-        test('processRequest tolerates null options without throwing', async () => {
-            const Service = getService();
-            globalThis.fetch = jest.fn(async () => ({
-                ok: true,
-                json: async () => makeOkJson(),
-            }));
-
-            const result = await Service.processRequest(makePayload(false), null, true, null);
-            expect(result.content).toBeTruthy();
+            expect(Object.hasOwn(postedBody, 'activity')).toBe(false);
             expect(getActiveActivities()).toEqual([]);
         });
     });

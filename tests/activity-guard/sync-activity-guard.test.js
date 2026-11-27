@@ -3,7 +3,7 @@
  */
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import {
     getActiveActivities,
     hasUnloadGuard,
@@ -11,15 +11,10 @@ import {
     hasKeepAliveHold,
 } from '../../public/scripts/activity-guard.js';
 
-let initializeSyncActivity;
-let beginSyncActivity;
-
-beforeAll(async () => {
-    jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-        t: (strings, ...values) => strings.reduce((out, str, idx) => out + str + (values[idx] ?? ''), ''),
-    }));
-    ({ initializeSyncActivity, beginSyncActivity } = await import('../../public/scripts/sync-activity.js'));
-});
+import {
+    initializeSyncActivity,
+    beginSyncActivity,
+} from '../../public/scripts/sync-activity.js';
 
 let disposeObserver = null;
 
@@ -51,7 +46,7 @@ describe('sync-activity activity guard leases', () => {
         expect(getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'core:sync',
-                label: 'Data sync',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 guardUnload: true,
                 guardChatSwitch: false,

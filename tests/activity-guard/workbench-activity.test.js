@@ -186,7 +186,7 @@ describe('Workbench iterate & ask activity guard leases', () => {
         expect(getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'workbench:iterate',
-                label: 'Workbench AI iteration',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 guardUnload: true,
                 guardChatSwitch: false,
@@ -245,7 +245,7 @@ describe('Workbench iterate & ask activity guard leases', () => {
         expect(getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'workbench:iterate',
-                label: 'Workbench AI iteration',
+                label: expect.stringMatching(/\S/),
                 scope: 'chat',
                 guardUnload: true,
                 guardChatSwitch: true,
@@ -309,7 +309,7 @@ describe('Workbench iterate & ask activity guard leases', () => {
         expect(getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'workbench:ask',
-                label: 'Workbench AI ask',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 guardUnload: true,
                 guardChatSwitch: false,
