@@ -805,7 +805,7 @@ export function dispatchToSenderStreaming({
                         ...(finalRefusal ? { refusal: finalRefusal } : {}),
                         tool_calls: finalToolCalls,
                     },
-                    finish_reason: lastFrame?.state?.finishReason || 'stop',
+                    finish_reason: lastFrame?.state?.finishReason ?? null,
                     ...(lastFrame?.state?.nativeFinishReason ? { native_finish_reason: lastFrame.state.nativeFinishReason } : {}),
                     ...(lastFrame?.state?.stopSequence ? { stop_sequence: lastFrame.state.stopSequence } : {}),
                     ...(lastFrame?.state?.stopDetails ? { stop_details: lastFrame.state.stopDetails } : {}),

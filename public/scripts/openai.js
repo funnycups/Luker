@@ -414,22 +414,9 @@ export function getActiveCardBoundGhostSnapshot() {
  * @returns {boolean} true when a matching runtime slot was refreshed
  */
 export function refreshCharacterBoundPresetRuntimeBody(snapshot, body) {
-    if (!snapshot) return false;
-    let cached = null;
-    if (typeof snapshot === 'string') {
-        for (const entry of characterBoundPresetState.runtimeOptions.values()) {
-            if (entry?.name === snapshot) {
-                cached = entry;
-                break;
-            }
-        }
-        if (!cached?.body) return false;
-    } else if (typeof snapshot === 'object' && snapshot.ghostValue) {
-        cached = characterBoundPresetState.runtimeOptions.get(snapshot.ghostValue);
-        if (!cached || cached.body !== snapshot.body) return false;
-    } else {
-        return false;
-    }
+    if (!snapshot || typeof snapshot !== 'object' || !snapshot.ghostValue) return false;
+    const cached = characterBoundPresetState.runtimeOptions.get(snapshot.ghostValue);
+    if (!cached || cached.body !== snapshot.body) return false;
     const stripped = stripOpenAIConnectionFieldsFromPreset(body);
     const target = cached.body;
     for (const key of Object.keys(target)) {
@@ -4312,10 +4299,6 @@ export async function createGenerationParameters(settings, model, type, messages
                 }
             });
             delete generate_data.n;
-            if (!isPlainTextTools) {
-                delete generate_data.tools;
-                delete generate_data.tool_choice;
-            }
         }
     }
 
@@ -4323,23 +4306,20 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
-        if (openaiCaps.isChatLatestGpt5) {
-            if (!isPlainTextTools) {
-                delete generate_data.tools;
-                delete generate_data.tool_choice;
+        if (!openaiCaps.isChatLatestGpt5) {
+            if (openaiCaps.isGpt51To54NonChat && (!generate_data.reasoning_effort || generate_data.reasoning_effort === 'off')) {
+                delete generate_data.frequency_penalty;
+                delete generate_data.presence_penalty;
+                delete generate_data.logit_bias;
+                delete generate_data.stop;
+            } else {
+                delete generate_data.temperature;
+                delete generate_data.top_p;
+                delete generate_data.frequency_penalty;
+                delete generate_data.presence_penalty;
+                delete generate_data.logit_bias;
+                delete generate_data.stop;
             }
-        } else if (openaiCaps.isGpt51To54NonChat && (!generate_data.reasoning_effort || generate_data.reasoning_effort === 'off')) {
-            delete generate_data.frequency_penalty;
-            delete generate_data.presence_penalty;
-            delete generate_data.logit_bias;
-            delete generate_data.stop;
-        } else {
-            delete generate_data.temperature;
-            delete generate_data.top_p;
-            delete generate_data.frequency_penalty;
-            delete generate_data.presence_penalty;
-            delete generate_data.logit_bias;
-            delete generate_data.stop;
         }
         // Azure documents that gpt-5.6 cannot combine native tools with reasoning on
         // Chat Completions: the request fails even without an explicit effort.
@@ -4394,14 +4374,9 @@ export async function createGenerationParameters(settings, model, type, messages
         if (generate_data.request_images && geminiCaps.imageOutput === 'unsupported') {
             generate_data.request_images = false;
         }
-        let hasNativeFunctionTools = !isPlainTextTools
+        const hasNativeFunctionTools = !isPlainTextTools
             && Array.isArray(generate_data.tools)
             && generate_data.tools.some(tool => tool?.type === 'function');
-        if (hasNativeFunctionTools && geminiCaps.functionCalling === 'unsupported') {
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
-            hasNativeFunctionTools = false;
-        }
         if (generate_data.enable_web_search) {
             if (geminiCaps.googleSearch === 'unsupported'
                 || (hasNativeFunctionTools && geminiCaps.combineBuiltinAndFunctionTools === 'unsupported')) {
@@ -4440,7 +4415,9 @@ function getPlainTextFunctionCallRetryConfig(settings = null) {
  * @param {object} ptMeta
  */
 function applyBackendPlainTextResultToNonStreamData(responseData, ptMeta) {
-    if (!ptMeta?.enabled) return responseData;
+    if (!ptMeta?.enabled || ptMeta.status === 'pending') {
+        throw new Error('Plain-text function call evaluation metadata was missing or incomplete.');
+    }
     if (ptMeta.status === 'aborted') {
         throw new DOMException(ptMeta.error || 'Aborted', 'AbortError');
     }
@@ -4718,25 +4695,9 @@ async function postChatCompletionGenerateRequest(requestBody, signal, {
             body: responseBody.substring(0, 500),
         });
         tryParseStreamingError(response, responseBody, { quiet: suppressToasts });
-        let parsedError = null;
-        try {
-            const parsed = JSON.parse(responseBody);
-            if (parsed && typeof parsed === 'object' && parsed.error && typeof parsed.error === 'object') {
-                parsedError = parsed.error;
-            }
-        } catch {
-            // Non-JSON error body
-        }
-        const message = parsedError?.message
-            ? String(parsedError.message)
-            : `Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`;
+        const message = `Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`;
         const err = /** @type {any} */ (new Error(message));
         err.status = response.status;
-        if (parsedError?.non_retryable === true || parsedError?.type === 'capability_conflict') {
-            err.nonRetryable = true;
-            err.code = parsedError.type === 'capability_conflict' ? 'capability_conflict' : (parsedError.code || 'non_retryable');
-            if (parsedError.code) err.conflictCode = parsedError.code;
-        }
         throw err;
     }
 
@@ -5189,15 +5150,8 @@ async function sendOpenAIRequest(type, messages, signal, {
                 }
                 plainTextToolCallFinalized = true;
                 const ptMeta = getLukerResponseMeta(response)?.plain_text_function_call || latestPlainTextMeta;
-                if (!ptMeta?.enabled) {
-                    if (streamDisplayMask) {
-                        const tail = streamDisplayMask.finalize();
-                        if (tail.displayDelta) {
-                            text += tail.displayDelta;
-                            return true;
-                        }
-                    }
-                    return false;
+                if (!ptMeta?.enabled || ptMeta.status === 'pending') {
+                    throw new Error('Plain-text function call evaluation metadata was missing or incomplete.');
                 }
                 if (ptMeta.status === 'aborted') {
                     throw new DOMException(ptMeta.error || 'Aborted', 'AbortError');
@@ -5463,7 +5417,14 @@ async function sendOpenAIRequest(type, messages, signal, {
 
             if (plainTextActive) {
                 const ptMeta = getLukerResponseMeta(response)?.plain_text_function_call || null;
-                data = applyBackendPlainTextResultToNonStreamData(data, ptMeta);
+                try {
+                    data = applyBackendPlainTextResultToNonStreamData(data, ptMeta);
+                } catch (err) {
+                    if (err?.name !== 'AbortError') {
+                        toastr.error(err?.message || String(err), t`API returned an error`);
+                    }
+                    throw err;
+                }
             }
 
             if (type !== 'quiet') {

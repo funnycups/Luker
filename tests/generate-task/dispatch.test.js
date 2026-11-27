@@ -284,7 +284,7 @@ describe('dispatchToSenderStreaming — openai', () => {
                 // mirror openai.js streaming sender: returns a generator factory
                 async function* gen() {
                     yield { text: 'Hello', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
-                    yield { text: 'Hello world', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                    yield { text: 'Hello world', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {}, finishReason: 'stop' } };
                 }
                 return gen;
             },
@@ -306,6 +306,26 @@ describe('dispatchToSenderStreaming — openai', () => {
         expect(raw.choices[0].message.tool_calls).toEqual([]);
         expect(raw.choices[0].finish_reason).toBe('stop');
         expect(raw.usage).toBeNull();
+    });
+
+    test('preserves null finish_reason when stream ends without a finishReason', async () => {
+        const senders = {
+            sendOpenAIRequest: async () => {
+                async function* gen() {
+                    yield { text: 'partial', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                }
+                return gen;
+            },
+        };
+        const out = dispatchToSenderStreaming({
+            requestApi: 'openai',
+            payload: [{ role: 'user', content: 'hi' }],
+        }, { senders });
+        const drained = [];
+        for await (const c of out.stream) drained.push(c);
+        expect(drained).toHaveLength(1);
+        const raw = await out.rawTerminal;
+        expect(raw.choices[0].finish_reason).toBeNull();
     });
 
     test('yields reasoning deltas separately from text', async () => {
