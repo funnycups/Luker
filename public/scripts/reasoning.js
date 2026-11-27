@@ -17,6 +17,7 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
 import { applyStreamFadeIn } from './util/stream-fadein.js';
 import { copyText, escapeRegex, isFalseBoolean, isTrueBoolean, setDatasetProperty, stringToRange, trimSpaces } from './utils.js';
+import { isSummaryResourceEntry, readPresetDocument } from './named-resource-read.js';
 
 /**
  * @typedef {object} ReasoningTemplate
@@ -30,6 +31,7 @@ import { copyText, escapeRegex, isFalseBoolean, isTrueBoolean, setDatasetPropert
  * @type {ReasoningTemplate[]} List of reasoning templates
  */
 export const reasoning_templates = [];
+let reasoningSelectionToken = 0;
 
 export const DEFAULT_REASONING_TEMPLATE = 'Think XML';
 
@@ -1044,10 +1046,34 @@ function loadReasoningSettings() {
     $('#chat').attr('data-show-hidden-reasoning', power_user.reasoning.show_hidden ? 'true' : null);
 
     UI.$select.on('change', async function () {
+        const selectionToken = ++reasoningSelectionToken;
         const name = String($(this).val());
-        const template = reasoning_templates.find(p => p.name === name);
+        let template = reasoning_templates.find(p => p.name === name);
         if (!template) {
             return;
+        }
+        if (isSummaryResourceEntry(template)) {
+            try {
+                const fetched = await readPresetDocument('reasoning', name);
+                if (selectionToken !== reasoningSelectionToken) {
+                    return;
+                }
+                if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+                    throw new Error(`Reasoning template "${name}" payload is not a JSON object`);
+                }
+                const stamped = typeof fetched.name === 'string' && fetched.name
+                    ? fetched
+                    : { ...fetched, name };
+                const idx = reasoning_templates.findIndex(p => p.name === name);
+                if (idx !== -1) {
+                    reasoning_templates[idx] = stamped;
+                }
+                template = stamped;
+            } catch (error) {
+                console.error(`Failed to load reasoning template "${name}"`, error);
+                toastr.error(t`Failed to load template.`);
+                return;
+            }
         }
 
         UI.$prefix.val(template.prefix);

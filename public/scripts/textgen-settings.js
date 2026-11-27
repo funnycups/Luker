@@ -796,7 +796,7 @@ async function getStatusTextgen() {
         power_user.chat_template_hash = '';
 
         // Determine instruct mode preset
-        const autoSelected = autoSelectInstructPreset(online_status);
+        const autoSelected = await autoSelectInstructPreset(online_status);
 
         const supportsTokenization = response.headers.get('x-supports-tokenization') === 'true';
         supportsTokenization ? sessionStorage.setItem(TOKENIZER_SUPPORTED_KEY, 'true') : sessionStorage.removeItem(TOKENIZER_SUPPORTED_KEY);

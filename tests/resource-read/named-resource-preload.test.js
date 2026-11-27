@@ -9,11 +9,15 @@ import {
     normalizeLookupText,
 } from '../../public/scripts/util/lookup-name.js';
 import {
+    isSummaryResourceEntry,
+    loadLazyNamedDocumentEntries,
+    loadLazyPresetDocumentEntries,
     loadPresetResources,
     resolveBootstrapSelectedNames,
 } from '../../public/scripts/named-resource-read.js';
 import {
     activePresetApiId,
+    loadSettingsEnvelope,
     selectedPresetNames,
 } from '../../public/scripts/settings-resource-read.js';
 import { resetResourceReads } from '../../public/scripts/resource-read.js';
@@ -271,5 +275,197 @@ describe('loadPresetResources bounded concurrency, scoping, and abort handling',
             signal: controller.signal,
         })).rejects.toMatchObject({ name: 'AbortError' });
         expect(externallyAborted).toBe(true);
+    });
+});
+
+describe('lazy advanced formatting and movingUI bootstrap hydration', () => {
+    const origFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+        resetResourceReads();
+    });
+
+    test('loadSettingsEnvelope({ bootstrap: true }) fetches only active formatting templates, active theme, and active API preset', async () => {
+        const fetchedUrls = [];
+        const settingsDoc = {
+            main_api: 'openai',
+            preset_settings_novel: 'NovelUnused',
+            oai_settings: {
+                global_preset_settings_openai: 'ActiveOpenAI',
+                preset_settings_openai: 'ActiveOpenAI',
+            },
+            power_user: {
+                theme: 'NightTheme',
+                instruct: { preset: 'ChatML' },
+                context: { preset: 'DefaultContext' },
+                sysprompt: { name: 'Concise' },
+                reasoning: { name: 'Think XML' },
+            },
+        };
+        const presetCatalog = {
+            openai: { ActiveOpenAI: { temperature: 0.7 }, ColdOpenAI: { temperature: 1.0 } },
+            novel: { NovelUnused: { temperature: 0.8 } },
+            textgenerationwebui: { TextUnused: { temp: 0.9 } },
+            kobold: { KoboldUnused: { temp: 0.9 } },
+            instruct: { ChatML: { input_sequence: '<|im_start|>user\n' }, Alpaca: { input_sequence: '### Instruction:\n' } },
+            context: { DefaultContext: { story_string: '{{system}}' }, Roleplay: { story_string: '{{char}}' } },
+            sysprompt: { Concise: { content: 'Be brief.' }, Verbose: { content: 'Be thorough.' } },
+            reasoning: { 'Think XML': { prefix: '<think>', suffix: '</think>' }, DeepSeek: { prefix: '<thought>', suffix: '</thought>' } },
+        };
+        const namedCatalog = {
+            themes: { NightTheme: { main_text_color: '#fff' }, DayTheme: { main_text_color: '#000' } },
+            'moving-ui': { Default: { movingUIState: { a: 1 } }, Compact: { movingUIState: { b: 2 } } },
+        };
+
+        globalThis.fetch = jest.fn(async (url) => {
+            const urlText = String(url);
+            fetchedUrls.push(urlText);
+            if (urlText.startsWith('/api/bootstrap/metadata')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: async () => ({
+                        account: 'default-user',
+                        enable_extensions: true,
+                        enable_extensions_auto_update: false,
+                        enable_accounts: false,
+                    }),
+                };
+            }
+            const parsed = new URL(urlText, 'http://127.0.0.1');
+            if (parsed.pathname === '/api/settings/fields') {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json', etag: 'W/"dir"' }),
+                    text: async () => JSON.stringify({
+                        containers: [{ path: '', keys: Object.keys(settingsDoc) }],
+                        fields: Object.keys(settingsDoc).map(key => ({ path: `/${key}`, etag: `W/"${key}"` })),
+                    }),
+                };
+            }
+            if (parsed.pathname === '/api/settings/field') {
+                const fieldPath = parsed.searchParams.get('path');
+                const key = fieldPath.slice(1);
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json', etag: `W/"${key}"` }),
+                    text: async () => JSON.stringify(settingsDoc[key]),
+                };
+            }
+            if (parsed.pathname === '/api/worldinfo/list') {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify({ names: [] }),
+                };
+            }
+            if (parsed.pathname === '/api/presets/list') {
+                const apiId = parsed.searchParams.get('apiId');
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify({ names: Object.keys(presetCatalog[apiId] || {}) }),
+                };
+            }
+            if (parsed.pathname === '/api/presets/get') {
+                const apiId = parsed.searchParams.get('apiId');
+                const name = parsed.searchParams.get('name');
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify(presetCatalog[apiId][name]),
+                };
+            }
+            if (parsed.pathname === '/api/themes/list') {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify({ names: Object.keys(namedCatalog.themes), builtin: ['NightTheme'] }),
+                };
+            }
+            if (parsed.pathname === '/api/themes/get') {
+                const name = parsed.searchParams.get('name');
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify(namedCatalog.themes[name]),
+                };
+            }
+            if (parsed.pathname === '/api/moving-ui/list') {
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify({ names: Object.keys(namedCatalog['moving-ui']) }),
+                };
+            }
+            if (parsed.pathname === '/api/moving-ui/get') {
+                const name = parsed.searchParams.get('name');
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    text: async () => JSON.stringify(namedCatalog['moving-ui'][name]),
+                };
+            }
+            throw new Error(`Unexpected fetch URL: ${urlText}`);
+        });
+
+        const envelope = await loadSettingsEnvelope({ bootstrap: true });
+
+        expect(envelope.movingUIPresets).toEqual([
+            { name: 'Default', _summary: true },
+            { name: 'Compact', _summary: true },
+        ]);
+        expect(fetchedUrls.some(url => url.includes('/api/moving-ui/get'))).toBe(false);
+
+        expect(envelope.instruct).toEqual([
+            { name: 'ChatML', input_sequence: '<|im_start|>user\n' },
+            { name: 'Alpaca', _summary: true },
+        ]);
+        expect(envelope.context).toEqual([
+            { name: 'DefaultContext', story_string: '{{system}}' },
+            { name: 'Roleplay', _summary: true },
+        ]);
+        expect(envelope.sysprompt).toEqual([
+            { name: 'Concise', content: 'Be brief.' },
+            { name: 'Verbose', _summary: true },
+        ]);
+        expect(envelope.reasoning).toEqual([
+            { name: 'Think XML', prefix: '<think>', suffix: '</think>' },
+            { name: 'DeepSeek', _summary: true },
+        ]);
+        expect(isSummaryResourceEntry(envelope.instruct[0])).toBe(false);
+        expect(isSummaryResourceEntry(envelope.instruct[1])).toBe(true);
+
+        const presetGets = fetchedUrls.filter(url => url.includes('/api/presets/get'));
+        expect(presetGets).toHaveLength(5);
+        expect(presetGets.some(url => url.includes('ColdOpenAI'))).toBe(false);
+        expect(presetGets.some(url => url.includes('NovelUnused'))).toBe(false);
+        expect(presetGets.some(url => url.includes('Alpaca'))).toBe(false);
+        expect(presetGets.some(url => url.includes('Roleplay'))).toBe(false);
+        expect(presetGets.some(url => url.includes('Verbose'))).toBe(false);
+        expect(presetGets.some(url => url.includes('DeepSeek'))).toBe(false);
+
+        // Direct helpers match case-insensitively without falling back to names[0]
+        const lazyMoving = await loadLazyNamedDocumentEntries('movingUI', ['compact']);
+        expect(lazyMoving).toEqual([
+            { name: 'Default', _summary: true },
+            { name: 'Compact', movingUIState: { b: 2 } },
+        ]);
+        const lazyMissing = await loadLazyPresetDocumentEntries('instruct', ['DoesNotExist']);
+        expect(lazyMissing).toEqual([
+            { name: 'ChatML', _summary: true },
+            { name: 'Alpaca', _summary: true },
+        ]);
     });
 });

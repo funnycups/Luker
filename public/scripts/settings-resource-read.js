@@ -3,12 +3,18 @@ import { assembleJsonFields } from './util/resource-fields.js';
 import {
     listThemeDirectory,
     listWorldInfoNames,
+    loadLazyNamedDocumentEntries,
+    loadLazyPresetDocumentEntries,
     loadNamedDocumentEntries,
     loadPresetDocumentEntries,
     loadPresetResources,
     readThemeDocument,
     stampNamedDocuments,
 } from './named-resource-read.js';
+
+// Mirrors DEFAULT_REASONING_TEMPLATE in reasoning.js without pulling DOM/UI
+// dependencies into this pure loader module.
+const DEFAULT_REASONING_TEMPLATE_NAME = 'Think XML';
 
 function uniqueNonEmptyStrings(values) {
     const seen = new Set();
@@ -94,6 +100,13 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
     const selectedThemeName = typeof settingsDocument?.power_user?.theme === 'string'
         ? settingsDocument.power_user.theme
         : '';
+    const selectedInstructNames = uniqueNonEmptyStrings([settingsDocument?.power_user?.instruct?.preset]);
+    const selectedContextNames = uniqueNonEmptyStrings([settingsDocument?.power_user?.context?.preset]);
+    const selectedSyspromptNames = uniqueNonEmptyStrings([settingsDocument?.power_user?.sysprompt?.name]);
+    const rawReasoningName = settingsDocument?.power_user?.reasoning?.name;
+    const selectedReasoningNames = rawReasoningName === undefined
+        ? [DEFAULT_REASONING_TEMPLATE_NAME]
+        : uniqueNonEmptyStrings([rawReasoningName]);
 
     const [
         presetData,
@@ -117,12 +130,22 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
                 listThemeDirectory({ signal }),
                 loadNamedDocumentEntries('themes', { signal }),
             ]).then(([directory, entries]) => ({ directory, entries })),
-        loadNamedDocumentEntries('movingUI', { signal }),
+        bootstrap
+            ? loadLazyNamedDocumentEntries('movingUI', [], { signal })
+            : loadNamedDocumentEntries('movingUI', { signal }).then(stampNamedDocuments),
         bootstrap ? [] : loadNamedDocumentEntries('quickReplies', { signal }),
-        loadAdvancedPreset('instruct', { signal }),
-        loadAdvancedPreset('context', { signal }),
-        loadAdvancedPreset('sysprompt', { signal }),
-        loadAdvancedPreset('reasoning', { signal }),
+        bootstrap
+            ? loadLazyPresetDocumentEntries('instruct', selectedInstructNames, { signal })
+            : loadAdvancedPreset('instruct', { signal }),
+        bootstrap
+            ? loadLazyPresetDocumentEntries('context', selectedContextNames, { signal })
+            : loadAdvancedPreset('context', { signal }),
+        bootstrap
+            ? loadLazyPresetDocumentEntries('sysprompt', selectedSyspromptNames, { signal })
+            : loadAdvancedPreset('sysprompt', { signal }),
+        bootstrap
+            ? loadLazyPresetDocumentEntries('reasoning', selectedReasoningNames, { signal })
+            : loadAdvancedPreset('reasoning', { signal }),
     ]);
 
     const themeDirectory = themeData.directory;
@@ -151,7 +174,7 @@ export async function loadSettingsEnvelope({ bootstrap = false, signal } = {}) {
         themes,
         theme_directory: themeDirectory,
         active_theme: activeTheme,
-        movingUIPresets: stampNamedDocuments(movingUIPresets),
+        movingUIPresets,
         quickReplyPresets: bootstrap ? [] : stampNamedDocuments(quickReplyEntries),
         instruct,
         context,

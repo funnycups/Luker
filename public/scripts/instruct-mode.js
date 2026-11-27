@@ -2,17 +2,47 @@
 
 import { extension_prompt_types, name1, name2, online_status, saveSettingsDebounced, substituteParams } from '../script.js';
 import { selected_group } from './group-chats.js';
+import { t } from './i18n.js';
 import { parseExampleIntoIndividual } from './openai.js';
 import {
     power_user,
     context_presets,
 } from './power-user.js';
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
+import {
+    isSummaryResourceEntry,
+    loadPresetDocumentEntries,
+    readPresetDocument,
+    stampNamedDocuments,
+} from './named-resource-read.js';
 
 /**
  * @type {InstructSettings[]} Instruct mode presets.
  */
 export let instruct_presets = [];
+let instructPresetSelectionToken = 0;
+let allInstructPresetsHydratePromise = null;
+
+async function ensureAllInstructPresetsHydrated() {
+    if (!instruct_presets.some(isSummaryResourceEntry)) {
+        return;
+    }
+    if (!allInstructPresetsHydratePromise) {
+        allInstructPresetsHydratePromise = (async () => {
+            const fullEntries = stampNamedDocuments(await loadPresetDocumentEntries('instruct'));
+            const byName = new Map(fullEntries.map(entry => [entry.name, entry]));
+            for (let index = 0; index < instruct_presets.length; index += 1) {
+                const current = instruct_presets[index];
+                if (isSummaryResourceEntry(current) && byName.has(current.name)) {
+                    instruct_presets[index] = byName.get(current.name);
+                }
+            }
+        })().finally(() => {
+            allInstructPresetsHydratePromise = null;
+        });
+    }
+    await allInstructPresetsHydratePromise;
+}
 
 export const names_behavior_types = {
     NONE: 'none',
@@ -231,9 +261,9 @@ export function selectInstructPreset(preset, { quiet = false, isAuto = false } =
  * Automatically select instruct preset based on model id.
  * Otherwise, if default instruct preset is set, selects it.
  * @param {string} modelId Model name reported by the API.
- * @returns {boolean} True if instruct preset was activated by model id, false otherwise.
+ * @returns {Promise<boolean>} True if instruct preset was activated by model id, false otherwise.
  */
-export function autoSelectInstructPreset(modelId) {
+export async function autoSelectInstructPreset(modelId) {
     const modelTemplatesMap = power_user.model_templates_mappings[modelId];
 
     if (modelTemplatesMap) {
@@ -253,6 +283,8 @@ export function autoSelectInstructPreset(modelId) {
     if (!power_user.instruct.enabled) {
         return false;
     }
+
+    await ensureAllInstructPresetsHydrated();
 
     // Select matching instruct preset
     let foundMatch = false;
@@ -823,12 +855,37 @@ jQuery(() => {
         $('#instruct_bind_to_context').parent().find('i').toggleClass('toggleEnabled', !!power_user.instruct.bind_to_context);
     });
 
-    $('#instruct_presets').on('change', function () {
+    $('#instruct_presets').on('change', async function () {
+        const selectionToken = ++instructPresetSelectionToken;
         const name = String($(this).find(':selected').val());
-        const preset = instruct_presets.find(x => x.name === name);
+        let preset = instruct_presets.find(x => x.name === name);
 
         if (!preset) {
             return;
+        }
+
+        if (isSummaryResourceEntry(preset)) {
+            try {
+                const fetched = await readPresetDocument('instruct', name);
+                if (selectionToken !== instructPresetSelectionToken) {
+                    return;
+                }
+                if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+                    throw new Error(`Instruct template "${name}" payload is not a JSON object`);
+                }
+                const stamped = typeof fetched.name === 'string' && fetched.name
+                    ? fetched
+                    : { ...fetched, name };
+                const idx = instruct_presets.findIndex(x => x.name === name);
+                if (idx !== -1) {
+                    instruct_presets[idx] = stamped;
+                }
+                preset = stamped;
+            } catch (error) {
+                console.error(`Failed to load instruct template "${name}"`, error);
+                toastr.error(t`Failed to load template.`);
+                return;
+            }
         }
 
         migrateInstructModeSettings(preset);

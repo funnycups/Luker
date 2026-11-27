@@ -52,11 +52,39 @@ async function readNamedEntries(bucket, names, { signal, concurrency = BULK_RESO
     }, { signal, abortOnError: true });
 }
 
-async function listNamedDocuments(bucket, { signal } = {}) {
+export async function listNamedDocuments(bucket, { signal } = {}) {
     const route = namedRoute(bucket);
-    const query = await resourceQuery();
+    const query = await resourceQuery({}, { signal });
     const { value } = await readResourceJson(`${route}/list?${query}`, { signal });
     return Array.isArray(value?.names) ? value.names : [];
+}
+
+export function isSummaryResourceEntry(entry) {
+    return Boolean(entry && typeof entry === 'object' && entry._summary === true);
+}
+
+export async function readNamedDocument(bucket, name, { signal } = {}) {
+    if (typeof name !== 'string' || !name) {
+        return null;
+    }
+    const route = namedRoute(bucket);
+    try {
+        const query = await resourceQuery({ name }, { signal });
+        const { value } = await readResourceJson(`${route}/get?${query}`, { signal });
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            return typeof value.name === 'string' && value.name ? value : { ...value, name };
+        }
+        return null;
+    } catch (error) {
+        if (error?.status === 404) {
+            return null;
+        }
+        if (isInvalidResource(error)) {
+            warnInvalidResource(`${bucket} document ${name}`, error);
+            return null;
+        }
+        throw error;
+    }
 }
 
 function withoutMissing(entries) {
@@ -104,6 +132,84 @@ export async function loadNamedDocumentCollection(bucket, { signal, concurrency 
     return stampNamedDocuments(await loadNamedDocumentEntries(bucket, { signal, concurrency }));
 }
 
+function resolveRequestedNamesWithoutFallback(names, rawSelected) {
+    if (!Array.isArray(names) || names.length === 0) {
+        return [];
+    }
+    const rawList = Array.isArray(rawSelected) ? rawSelected : [rawSelected];
+    const matched = [];
+    const seen = new Set();
+    for (const candidate of rawList) {
+        const trimmed = typeof candidate === 'string' ? candidate.trim() : '';
+        if (!trimmed) {
+            continue;
+        }
+        const canonical = findCanonicalNameInList(names, trimmed, { caseInsensitive: true });
+        if (canonical && !seen.has(canonical)) {
+            seen.add(canonical);
+            matched.push(canonical);
+        }
+    }
+    return matched;
+}
+
+/**
+ * Lists all named documents in `bucket`, eagerly hydrating only the matched
+ * `selectedNames` and returning `{ name, _summary: true }` placeholders for
+ * all remaining documents.
+ *
+ * @param {string} bucket
+ * @param {string|string[]} [selectedNames]
+ * @param {{ signal?: AbortSignal, concurrency?: number }} [options]
+ * @returns {Promise<object[]>}
+ */
+export async function loadLazyNamedDocumentEntries(
+    bucket,
+    selectedNames = [],
+    { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {},
+) {
+    let names = await listNamedDocuments(bucket, { signal });
+    let targets = resolveRequestedNamesWithoutFallback(names, selectedNames);
+    let fetchedEntries = targets.length > 0
+        ? await readNamedEntries(bucket, targets, { signal, concurrency })
+        : [];
+    if (fetchedEntries.some(entry => entry?.missing)) {
+        names = await listNamedDocuments(bucket, { signal });
+        targets = resolveRequestedNamesWithoutFallback(names, selectedNames);
+        fetchedEntries = targets.length > 0
+            ? await readNamedEntries(bucket, targets, { signal, concurrency })
+            : [];
+        assertNoMissing(fetchedEntries);
+    }
+
+    const hydratedByName = new Map();
+    const invalidNames = new Set();
+    for (let index = 0; index < targets.length; index += 1) {
+        const entry = fetchedEntries[index];
+        if (!entry) {
+            invalidNames.add(targets[index]);
+            continue;
+        }
+        if (!entry.missing) {
+            const [stamped] = stampNamedDocuments([entry]);
+            hydratedByName.set(entry.name, stamped);
+        }
+    }
+
+    const result = [];
+    for (const name of names) {
+        if (invalidNames.has(name)) {
+            continue;
+        }
+        if (hydratedByName.has(name)) {
+            result.push(hydratedByName.get(name));
+        } else {
+            result.push({ name, _summary: true });
+        }
+    }
+    return result;
+}
+
 async function readPresetEntries(apiId, names, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
     return mapWithConcurrency(names, concurrency, async (name, _index, itemSignal) => {
         try {
@@ -130,6 +236,63 @@ export async function loadPresetDocumentEntries(apiId, { signal, concurrency = B
         assertNoMissing(entries);
     }
     return withoutMissing(entries);
+}
+
+/**
+ * Lists all presets for `apiId`, eagerly hydrating only the matched
+ * `selectedNames` and returning `{ name, _summary: true }` placeholders for
+ * all remaining entries.
+ *
+ * @param {string} apiId
+ * @param {string|string[]} [selectedNames]
+ * @param {{ signal?: AbortSignal, concurrency?: number }} [options]
+ * @returns {Promise<object[]>}
+ */
+export async function loadLazyPresetDocumentEntries(
+    apiId,
+    selectedNames = [],
+    { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {},
+) {
+    let names = await listPresetDocuments(apiId, { signal });
+    let targets = resolveRequestedNamesWithoutFallback(names, selectedNames);
+    let fetchedEntries = targets.length > 0
+        ? await readPresetEntries(apiId, targets, { signal, concurrency })
+        : [];
+    if (fetchedEntries.some(entry => entry?.missing)) {
+        names = await listPresetDocuments(apiId, { signal });
+        targets = resolveRequestedNamesWithoutFallback(names, selectedNames);
+        fetchedEntries = targets.length > 0
+            ? await readPresetEntries(apiId, targets, { signal, concurrency })
+            : [];
+        assertNoMissing(fetchedEntries);
+    }
+
+    const hydratedByName = new Map();
+    const invalidNames = new Set();
+    for (let index = 0; index < targets.length; index += 1) {
+        const entry = fetchedEntries[index];
+        if (!entry) {
+            invalidNames.add(targets[index]);
+            continue;
+        }
+        if (!entry.missing) {
+            const [stamped] = stampNamedDocuments([entry]);
+            hydratedByName.set(entry.name, stamped);
+        }
+    }
+
+    const result = [];
+    for (const name of names) {
+        if (invalidNames.has(name)) {
+            continue;
+        }
+        if (hydratedByName.has(name)) {
+            result.push(hydratedByName.get(name));
+        } else {
+            result.push({ name, _summary: true });
+        }
+    }
+    return result;
 }
 
 export async function listThemeDirectory({ signal } = {}) {

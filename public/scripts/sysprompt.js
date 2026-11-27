@@ -1,6 +1,7 @@
 import { Fuse } from '../lib.js';
 
 import { saveSettingsDebounced } from '../script.js';
+import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { power_user } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
@@ -11,8 +12,37 @@ import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { renderTemplateAsync } from './templates.js';
 import { isTrueBoolean, resetScrollHeight } from './utils.js';
+import {
+    isSummaryResourceEntry,
+    loadPresetDocumentEntries,
+    readPresetDocument,
+    stampNamedDocuments,
+} from './named-resource-read.js';
 
 export let system_prompts = [];
+let syspromptSelectionToken = 0;
+let allSystemPromptsHydratePromise = null;
+
+async function ensureAllSystemPromptsHydrated() {
+    if (!system_prompts.some(isSummaryResourceEntry)) {
+        return;
+    }
+    if (!allSystemPromptsHydratePromise) {
+        allSystemPromptsHydratePromise = (async () => {
+            const fullEntries = stampNamedDocuments(await loadPresetDocumentEntries('sysprompt'));
+            const byName = new Map(fullEntries.map(entry => [entry.name, entry]));
+            for (let index = 0; index < system_prompts.length; index += 1) {
+                const current = system_prompts[index];
+                if (isSummaryResourceEntry(current) && byName.has(current.name)) {
+                    system_prompts[index] = byName.get(current.name);
+                }
+            }
+        })().finally(() => {
+            allSystemPromptsHydratePromise = null;
+        });
+    }
+    await allSystemPromptsHydratePromise;
+}
 
 const $enabled = $('#sysprompt_enabled');
 const $select = $('#sysprompt_select');
@@ -22,6 +52,7 @@ const $contentBlock = $('#SystemPromptBlock');
 
 async function migrateSystemPromptFromInstructMode() {
     if ('system_prompt' in power_user.instruct) {
+        await ensureAllSystemPromptsHydrated();
         const prompt = String(power_user.instruct.system_prompt);
         delete power_user.instruct.system_prompt;
         power_user.sysprompt.enabled = power_user.instruct.enabled;
@@ -78,6 +109,7 @@ export async function checkForSystemPromptInInstructTemplate(name, template) {
         return;
     }
     if ('system_prompt' in template && template.system_prompt) {
+        await ensureAllSystemPromptsHydrated();
         const existingName = system_prompts.find(x => x.content === template.system_prompt)?.name;
         const html = await renderTemplateAsync('migrateInstructPrompt', { prompt: template.system_prompt, existing: existingName });
         const confirm = await callGenericPopup(html, POPUP_TYPE.CONFIRM);
@@ -161,12 +193,36 @@ export function initSystemPrompts() {
     });
 
     $select.on('change', async function () {
+        const selectionToken = ++syspromptSelectionToken;
         if (!power_user.sysprompt.enabled) {
             $enabled.prop('checked', true).trigger('input');
         }
 
         const name = String($(this).val());
-        const prompt = system_prompts.find(p => p.name === name);
+        let prompt = system_prompts.find(p => p.name === name);
+        if (prompt && isSummaryResourceEntry(prompt)) {
+            try {
+                const fetched = await readPresetDocument('sysprompt', name);
+                if (selectionToken !== syspromptSelectionToken) {
+                    return;
+                }
+                if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+                    throw new Error(`System prompt "${name}" payload is not a JSON object`);
+                }
+                const stamped = typeof fetched.name === 'string' && fetched.name
+                    ? fetched
+                    : { ...fetched, name };
+                const idx = system_prompts.findIndex(p => p.name === name);
+                if (idx !== -1) {
+                    system_prompts[idx] = stamped;
+                }
+                prompt = stamped;
+            } catch (error) {
+                console.error(`Failed to load system prompt "${name}"`, error);
+                toastr.error(t`Failed to load template.`);
+                return;
+            }
+        }
         if (prompt) {
             $content.val(prompt.content || '');
             $postHistory.val(prompt.post_history || '');

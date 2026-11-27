@@ -95,6 +95,7 @@ import { createThemeManager } from './theme-manager.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
 import { registerDebugMenuAction, setDebugMenuToggleState } from './debug-export.js';
+import { isSummaryResourceEntry, readNamedDocument, readPresetDocument } from './named-resource-read.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
 
 export const toastPositionClasses = [
@@ -2339,11 +2340,41 @@ async function applyTheme(name) {
     return true;
 }
 
+let movingUIPresetSelectionToken = 0;
+let contextPresetSelectionToken = 0;
+
 async function applyMovingUIPreset(name) {
-    await resetMovablePanels('quiet');
-    const movingUIPreset = movingUIPresets.find(x => x.name == name);
+    const selectionToken = ++movingUIPresetSelectionToken;
+    let movingUIPresetIndex = movingUIPresets.findIndex(x => x.name == name);
+    let movingUIPreset = movingUIPresetIndex !== -1 ? movingUIPresets[movingUIPresetIndex] : null;
 
     if (!movingUIPreset) {
+        return;
+    }
+
+    if (isSummaryResourceEntry(movingUIPreset)) {
+        try {
+            const hydrated = await readNamedDocument('movingUI', movingUIPreset.name);
+            if (selectionToken !== movingUIPresetSelectionToken) {
+                return;
+            }
+            if (!hydrated) {
+                return;
+            }
+            movingUIPresetIndex = movingUIPresets.findIndex(x => x.name == movingUIPreset.name);
+            if (movingUIPresetIndex !== -1) {
+                movingUIPresets[movingUIPresetIndex] = hydrated;
+            }
+            movingUIPreset = hydrated;
+        } catch (error) {
+            console.error(`Failed to load MovingUI preset "${name}"`, error);
+            toastr.error(t`Failed to load preset.`);
+            return;
+        }
+    }
+
+    await resetMovablePanels('quiet');
+    if (selectionToken !== movingUIPresetSelectionToken) {
         return;
     }
 
@@ -3013,12 +3044,37 @@ async function loadContextSettings() {
         $('#context_presets').append(option);
     });
 
-    $('#context_presets').on('change', function () {
+    $('#context_presets').on('change', async function () {
+        const selectionToken = ++contextPresetSelectionToken;
         const name = String($(this).find(':selected').text());
-        const preset = context_presets.find(x => x.name === name);
+        let preset = context_presets.find(x => x.name === name);
 
         if (!preset) {
             return;
+        }
+
+        if (isSummaryResourceEntry(preset)) {
+            try {
+                const fetched = await readPresetDocument('context', name);
+                if (selectionToken !== contextPresetSelectionToken) {
+                    return;
+                }
+                if (!fetched || typeof fetched !== 'object' || Array.isArray(fetched)) {
+                    throw new Error(`Context template "${name}" payload is not a JSON object`);
+                }
+                const stamped = typeof fetched.name === 'string' && fetched.name
+                    ? fetched
+                    : { ...fetched, name };
+                const idx = context_presets.findIndex(x => x.name === name);
+                if (idx !== -1) {
+                    context_presets[idx] = stamped;
+                }
+                preset = stamped;
+            } catch (error) {
+                console.error(`Failed to load context template "${name}"`, error);
+                toastr.error(t`Failed to load template.`);
+                return;
+            }
         }
 
         // Migrate story string to add missing fields
@@ -4686,7 +4742,7 @@ jQuery(() => {
         console.log('saw MUI preset change');
         const movingUIPresetSelected = String($(this).find(':selected').val());
         power_user.movingUIPreset = movingUIPresetSelected;
-        applyMovingUIPreset(movingUIPresetSelected);
+        await applyMovingUIPreset(movingUIPresetSelected);
         saveSettingsDebounced();
     });
 

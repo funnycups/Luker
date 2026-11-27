@@ -8513,5 +8513,6 @@
     "Theme deleted.": "主题已删除。",
     "Enter a theme preset name:": "请输入主题预设名称：",
     "Theme imported": "主题已导入",
-    "Failed to load preset.": "加载预设失败。"
+    "Failed to load preset.": "加载预设失败。",
+    "Failed to load template.": "加载模板失败。"
 }

@@ -109,6 +109,90 @@ test('defers non-selected preset preload past welcome screen without re-fetching
     expect(secondaryPresetIndex).toBeGreaterThan(welcomePanelIndex);
 });
 
+test('lazy-loads non-selected formatting templates and movingUI at bootstrap and hydrates on UI selection', async ({ page }) => {
+    const contextDir = join(server.dataRoot, 'default-user', 'context');
+    const instructDir = join(server.dataRoot, 'default-user', 'instruct');
+    const syspromptDir = join(server.dataRoot, 'default-user', 'sysprompt');
+    const reasoningDir = join(server.dataRoot, 'default-user', 'reasoning');
+    mkdirSync(contextDir, { recursive: true });
+    mkdirSync(instructDir, { recursive: true });
+    mkdirSync(syspromptDir, { recursive: true });
+    mkdirSync(reasoningDir, { recursive: true });
+
+    writeFileSync(join(contextDir, 'LazyContext_E2E.json'), JSON.stringify({
+        name: 'LazyContext_E2E',
+        story_string: 'LAZY_CONTEXT_STORY_MARKER {{system}}',
+        example_separator: '***',
+        chat_start: '***',
+    }));
+    writeFileSync(join(instructDir, 'LazyInstruct_E2E.json'), JSON.stringify({
+        name: 'LazyInstruct_E2E',
+        input_sequence: 'LAZY_INSTRUCT_INPUT:',
+        output_sequence: 'LAZY_INSTRUCT_OUTPUT:',
+    }));
+    writeFileSync(join(syspromptDir, 'LazySysprompt_E2E.json'), JSON.stringify({
+        name: 'LazySysprompt_E2E',
+        content: 'LAZY_SYSPROMPT_CONTENT_MARKER',
+    }));
+    writeFileSync(join(reasoningDir, 'LazyReasoning_E2E.json'), JSON.stringify({
+        name: 'LazyReasoning_E2E',
+        prefix: '<lazy-think>',
+        suffix: '</lazy-think>',
+        separator: '\n',
+    }));
+
+    const requests = [];
+    page.on('request', (request) => {
+        requests.push(request.url());
+    });
+
+    await awaitMainUI(page, server.baseURL);
+
+    // Non-selected templates and MovingUI presets must NOT be fetched at bootstrap.
+    expect(requests.some(url => url.includes('/api/moving-ui/get?'))).toBe(false);
+    expect(requests.some(url => url.includes('LazyContext_E2E'))).toBe(false);
+    expect(requests.some(url => url.includes('LazyInstruct_E2E'))).toBe(false);
+    expect(requests.some(url => url.includes('LazySysprompt_E2E'))).toBe(false);
+    expect(requests.some(url => url.includes('LazyReasoning_E2E'))).toBe(false);
+
+    // Open Advanced Formatting drawer and select each lazy template through the real UI.
+    const drawer = page.locator('#advanced-formatting-button');
+    if (await drawer.locator('.drawer-icon.closedIcon').count()) {
+        await drawer.locator('.drawer-toggle').click();
+    }
+
+    const selectVisibleTemplate = async (selectId, optionText) => {
+        const container = page.locator(`#${selectId} + .select2-container`);
+        if (await container.count()) {
+            await container.locator('.select2-selection').click();
+            const searchField = page.locator('.select2-container--open .select2-search__field');
+            if (await searchField.isVisible().catch(() => false)) {
+                await searchField.fill(optionText);
+            }
+            await page.locator('.select2-results__option', { hasText: optionText }).first().click();
+        } else {
+            await page.locator(`#${selectId}`).selectOption(optionText);
+        }
+    };
+
+    await selectVisibleTemplate('context_presets', 'LazyContext_E2E');
+    await expect(page.locator('#context_story_string')).toHaveValue(/LAZY_CONTEXT_STORY_MARKER/, { timeout: 10_000 });
+    expect(requests.filter(url => url.includes('/api/presets/get?') && url.includes('apiId=context') && url.includes('LazyContext_E2E'))).toHaveLength(1);
+
+    await selectVisibleTemplate('instruct_presets', 'LazyInstruct_E2E');
+    await expect(page.locator('#instruct_input_sequence')).toHaveValue('LAZY_INSTRUCT_INPUT:', { timeout: 10_000 });
+    expect(requests.filter(url => url.includes('/api/presets/get?') && url.includes('apiId=instruct') && url.includes('LazyInstruct_E2E'))).toHaveLength(1);
+
+    await selectVisibleTemplate('sysprompt_select', 'LazySysprompt_E2E');
+    await expect(page.locator('#sysprompt_content')).toHaveValue('LAZY_SYSPROMPT_CONTENT_MARKER', { timeout: 10_000 });
+    expect(requests.filter(url => url.includes('/api/presets/get?') && url.includes('apiId=sysprompt') && url.includes('LazySysprompt_E2E'))).toHaveLength(1);
+
+    await page.locator('summary[data-i18n="Reasoning Formatting"]').click();
+    await selectVisibleTemplate('reasoning_select', 'LazyReasoning_E2E');
+    await expect(page.locator('#reasoning_prefix')).toHaveValue('<lazy-think>', { timeout: 10_000 });
+    expect(requests.filter(url => url.includes('/api/presets/get?') && url.includes('apiId=reasoning') && url.includes('LazyReasoning_E2E'))).toHaveLength(1);
+});
+
 test('recovers cleanly at cold bootstrap when the saved OpenAI preset was deleted externally', async ({ page }) => {
     const presetDir = join(server.dataRoot, 'default-user', 'OpenAI Settings');
     const settingsPath = join(server.dataRoot, 'default-user', 'settings.json');
