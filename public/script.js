@@ -243,7 +243,7 @@ import { downloadFromServer } from './scripts/luker-download.js';
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/lib/state-errors.js';
 import { invalidateStateResources, normalizeStateNamespace, readStateEnvelope } from './scripts/state-resource.js';
-import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './scripts/util/concurrent-map.js';
+import { BACKGROUND_PRELOAD_CONCURRENCY, BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './scripts/util/concurrent-map.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -402,8 +402,8 @@ import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks, onLukerResponseMeta } from './scripts/ws-delivery.js';
 import { createGenerationMetaTracker } from './scripts/lib/response-meta-subscription.js';
 import { createSettingsSaveCoordinator, persistFirstRunCompletion } from './scripts/lib/settings-save-coordinator.js';
-import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
-import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
+import { activePresetApiId, loadSettingsEnvelope } from './scripts/settings-resource-read.js';
+import { PRESET_API_IDS, listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 import { initWorkbench } from './scripts/workbench/index.js';
 import { listHydratedIndexedPresetNames, listHydratedOrderedPresetNames } from './scripts/util/preset-hydration.js';
 
@@ -2015,8 +2015,9 @@ let settingsSnapshotCache = null;
 let settingsSaveBlockedForImport = false;
 let forceAsyncDiffForNextSettingsSave = false;
 let forceAsyncDiffForNextSettingsSaveTimer = null;
-let fullSettingsLoaded = false;
-let fullSettingsLoadPromise = null;
+const loadedPresetApis = new Set();
+const presetApiPreloadPromises = new Map();
+let initialStartupReady = false;
 export let amount_gen = 80; //default max length of AI generated responses
 export let max_context = 2048;
 
@@ -2368,8 +2369,6 @@ async function firstLoadInit() {
         await yieldToBrowser();
     }
 
-    void warmPreloadFullSettings();
-
     console.debug('[init] startup tasks batch 2 start (extensions)');
     await runStartupTasks([
         () => initTextGenModelSelects(),
@@ -2441,6 +2440,8 @@ async function firstLoadInit() {
     performance.mark('[init] batch3 done');
     await eventSource.emit(event_types.APP_INITIALIZED);
     await eventSource.emit(event_types.APP_READY);
+    initialStartupReady = true;
+    void warmPreloadFullSettings({ apiIds: Array.from(new Set([activePresetApiId({ main_api }), 'openai'])) });
     console.debug('[init] firstLoadInit complete');
     performance.mark('[init] complete');
     initDebugExportButton();
@@ -16099,6 +16100,9 @@ export function changeMainAPI(api = null) {
     validateDisabledSamplers();
     setupChatCompletionPromptManager(oai_settings);
     forceCharacterEditorTokenize();
+    if (initialStartupReady) {
+        void warmPreloadFullSettings({ apiIds: [activePresetApiId({ main_api })] });
+    }
 }
 
 export function setUserName(value, { toastPersonaNameChange = true } = {}) {
@@ -16383,11 +16387,22 @@ async function fetchBootstrapSnapshot() {
 }
 
 function hydrateFullSettingsPresetData(data, options = {}) {
-    hydrateKoboldPresetData(data, options);
-    hydrateNovelPresetData(data, options);
-    hydrateTextGenPresetData(data, options);
-    hydrateOpenAIPresetData(data, options);
-    fullSettingsLoaded = true;
+    if (Object.prototype.hasOwnProperty.call(data, 'koboldai_settings')) {
+        hydrateKoboldPresetData(data, options);
+        loadedPresetApis.add('kobold');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'novelai_settings')) {
+        hydrateNovelPresetData(data, options);
+        loadedPresetApis.add('novel');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'textgenerationwebui_presets')) {
+        hydrateTextGenPresetData(data, options);
+        loadedPresetApis.add('textgenerationwebui');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'openai_settings')) {
+        hydrateOpenAIPresetData(data, options);
+        loadedPresetApis.add('openai');
+    }
 }
 
 function collectHydratedPresetNamesByApi() {
@@ -16399,39 +16414,79 @@ function collectHydratedPresetNamesByApi() {
     };
 }
 
-async function warmPreloadFullSettings() {
-    if (fullSettingsLoaded) {
+async function warmPreloadFullSettings({
+    apiIds = PRESET_API_IDS,
+    concurrency = BACKGROUND_PRELOAD_CONCURRENCY,
+} = {}) {
+    const requestedApis = Array.from(new Set(
+        (Array.isArray(apiIds) ? apiIds : PRESET_API_IDS)
+            .filter(apiId => PRESET_API_IDS.includes(apiId)),
+    ));
+    if (requestedApis.length === 0) {
         return true;
     }
 
-    if (fullSettingsLoadPromise) {
-        return fullSettingsLoadPromise;
+    const inFlightPromises = new Set();
+    const apisToLoad = [];
+    for (const apiId of requestedApis) {
+        if (loadedPresetApis.has(apiId)) {
+            continue;
+        }
+        const existingPromise = presetApiPreloadPromises.get(apiId);
+        if (existingPromise) {
+            inFlightPromises.add(existingPromise);
+            continue;
+        }
+        apisToLoad.push(apiId);
     }
 
-    fullSettingsLoadPromise = (async () => {
+    if (apisToLoad.length === 0) {
+        if (inFlightPromises.size === 0) {
+            return true;
+        }
+        const settled = await Promise.all([...inFlightPromises]);
+        return settled.every(Boolean);
+    }
+
+    const batchPromise = (async () => {
         try {
             const skipNames = collectHydratedPresetNamesByApi();
-            const data = await loadPresetResources({ complete: true, skipNames });
+            const data = await loadPresetResources({
+                apiIds: apisToLoad,
+                complete: true,
+                skipNames,
+                concurrency,
+            });
             hydrateFullSettingsPresetData(data, { preserveExisting: true });
             return true;
         } catch (error) {
             console.warn('Deferred settings preload failed', error);
             return false;
+        } finally {
+            for (const apiId of apisToLoad) {
+                if (presetApiPreloadPromises.get(apiId) === batchPromise) {
+                    presetApiPreloadPromises.delete(apiId);
+                }
+            }
         }
     })();
 
-    try {
-        return await fullSettingsLoadPromise;
-    } finally {
-        fullSettingsLoadPromise = null;
+    for (const apiId of apisToLoad) {
+        presetApiPreloadPromises.set(apiId, batchPromise);
     }
+
+    const settled = await Promise.all([...inFlightPromises, batchPromise]);
+    return settled.every(Boolean);
 }
 
 export async function ensureFullSettingsLoaded() {
-    if (fullSettingsLoaded) {
+    if (PRESET_API_IDS.every(apiId => loadedPresetApis.has(apiId))) {
         return true;
     }
-    return warmPreloadFullSettings();
+    return warmPreloadFullSettings({
+        apiIds: PRESET_API_IDS,
+        concurrency: BULK_RESOURCE_READ_CONCURRENCY,
+    });
 }
 
 export async function getSettings(options = {}) {
@@ -16461,7 +16516,7 @@ export async function getSettings(options = {}) {
     rememberSettingsSnapshot(null);
 
     if (useBootstrap) {
-        fullSettingsLoaded = false;
+        loadedPresetApis.clear();
     } else {
         hydrateFullSettingsPresetData(data);
     }

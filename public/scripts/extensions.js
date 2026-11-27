@@ -1,6 +1,6 @@
 import { Popper } from '../lib.js';
 
-import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneAsJsonWire, ensureFullSettingsLoaded } from '../script.js';
+import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneAsJsonWire } from '../script.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { renderTemplate, renderTemplateAsync } from './templates.js';
 import { delay, deleteValueByPath, equalsIgnoreCaseAndAccents, escapeHtml, isSubsetOf, sanitizeSelector, setValueByPath, versionCompare } from './utils.js';
@@ -1839,9 +1839,6 @@ export async function bootstrapExtensions(options = null) {
             await autoUpdateExtensions(false);
         }
 
-        if (!await ensureFullSettingsLoaded()) {
-            throw new Error('Full settings resources could not be loaded.');
-        }
         await activateExtensions();
         await eventSource.emit(event_types.EXTENSION_SETTINGS_LOADED);
     })();
