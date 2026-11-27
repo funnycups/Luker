@@ -4837,6 +4837,15 @@ async function sendOpenAIRequest(type, messages, signal, {
     // configured format-correction retries) entirely to the backend runner via
     // the internal `luker_plain_text_tools` envelope (stripped before upstream).
     const plainTextActive = usePromptXmlFunctionCalls && Array.isArray(requestBody.tools) && requestBody.tools.length > 0;
+    // A preset which consumes a reply tool may preview one string argument while
+    // its formatter waits for the complete call. Other tools keep normal execution.
+    const isGemini = [chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(requestBody.chat_completion_source);
+    const replyPreview = isGemini && stream && shouldRunChatCompletionHooks && !usePromptXmlFunctionCalls
+        ? requestSettings.extensions?.luker?.streaming_tool_reply
+        : null;
+    if (replyPreview?.name && replyPreview?.argument) {
+        requestBody.luker_streaming_tool_reply = { name: replyPreview.name, argument: replyPreview.argument };
+    }
     if (plainTextActive) {
         const protocolStyle = modeOptions.protocolStyle === TOOL_PROTOCOL_STYLE.TABLE
             ? TOOL_PROTOCOL_STYLE.TABLE
@@ -5087,6 +5096,9 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
+            const getToolCallPreview = () => replyPreview
+                ? streamParser.getToolCallPreview?.(replyPreview.name, replyPreview.argument)
+                : undefined;
             const state = {
                 reasoning: '',
                 images: [],
@@ -5347,7 +5359,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                                 throw err;
                             }
                             if (stateUpdated || ptUpdated) {
-                                yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
+                                yield { text, toolCallPreview: getToolCallPreview(), swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
                             }
                         } else {
                             syncTurnIntoState(streamParser.getSnapshot());
@@ -5412,6 +5424,7 @@ async function sendOpenAIRequest(type, messages, signal, {
 
                     yield {
                         text,
+                        toolCallPreview: getToolCallPreview(),
                         swipes: swipes,
                         logprobs: frameDelta.logprobsPayload ? parseChatCompletionLogprobs(frameDelta.logprobsPayload) : null,
                         toolCalls: toolCalls,

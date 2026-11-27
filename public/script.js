@@ -7368,7 +7368,10 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs, toolCalls, state } of this.generator()) {
+            for await (const { text: output, toolCallPreview, swipes, logprobs, toolCalls, state } of this.generator()) {
+                // A consuming formatter replaces its preview with the formatted reply at EOF.
+                // Keep the visible prefix on interruption without invoking an unfinished tool.
+                const text = !output && toolCallPreview ? toolCallPreview : output;
                 const now = Date.now();
                 timestamps.push(now);
                 if (!this.timeToFirstToken) {
@@ -7378,6 +7381,7 @@ class StreamingProcessor {
                     return this.result;
                 }
 
+                const firstToolPreview = !this.result && !output && Boolean(toolCallPreview);
                 this.toolCalls = toolCalls;
                 this.result = text;
                 this.swipes = Array.from(swipes ?? []);
@@ -7422,7 +7426,9 @@ class StreamingProcessor {
                 if (this.isStaleEpoch()) {
                     return this.result;
                 }
-                await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                const render = () => this.onProgressStreaming(this.messageId, this.continueMessage + text);
+                if (firstToolPreview) await render();
+                else await sw.tick(render);
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);

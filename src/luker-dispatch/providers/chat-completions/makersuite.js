@@ -289,6 +289,15 @@ export async function dispatchMakerSuite(ctx) {
                 : null;
 
             if (hasFunctionDeclarations && functionCallingConfig) {
+                const preview = body.luker_streaming_tool_reply;
+                const supportsArgumentStreaming = caps.family === 'gemini-4'
+                    || (caps.family === 'gemini-3' && !/^gemini-3\.1-flash-lite/i.test(caps.modelId));
+                if (stream && supportsArgumentStreaming && preview?.name && preview?.argument
+                    && functionCallingConfig.allowedFunctionNames?.includes(preview.name)) {
+                    const declaration = functionDeclarations.find(fn => fn.name === preview.name);
+                    const field = declaration?.parameters?.properties?.[preview.argument];
+                    if (typeof field?.type === 'string' && field.type.toLowerCase() === 'string') functionCallingConfig.streamFunctionCallArguments = true;
+                }
                 requestBody.toolConfig = { functionCallingConfig };
             }
         }

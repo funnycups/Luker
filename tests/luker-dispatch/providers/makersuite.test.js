@@ -186,6 +186,28 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.fetch).not.toHaveBeenCalled();
     });
 
+    test.each([
+        ['gemini-4-argon', true, 'body', true],
+        ['gemini-4-argon', true, undefined, false],
+        ['gemini-4-argon', false, 'body', false],
+        ['gemini-2.5-flash', true, 'body', false],
+        ['gemini-3.1-flash-lite', true, 'body', false],
+    ])('streamed tool arguments for %s, stream=%s, preview=%s', async (model, stream, argument, enabled) => {
+        const fn = { name: 'reply', parameters: { type: 'object', properties: { body: { type: 'string' } } } };
+        const ctx = fakeCtx({ body: {
+            model, stream,
+            tools: [{ type: 'function', function: fn }],
+            tool_choice: { type: 'function', function: { name: fn.name } },
+            luker_streaming_tool_reply: argument && { name: fn.name, argument },
+        } });
+        await dispatchMakerSuite(ctx);
+        const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        expect(sent.toolConfig.functionCallingConfig).toEqual({
+            mode: 'ANY', allowedFunctionNames: ['reply'], ...(enabled ? { streamFunctionCallArguments: true } : {}),
+        });
+        expect(sent).not.toHaveProperty('luker_streaming_tool_reply');
+    });
+
     test('MAKERSUITE streaming: forwards upstream SSE chunks verbatim, URL contains alt=sse', async () => {
         const sseBody =
             'data: {"candidates":[{"content":{"parts":[{"text":"he"}]}}]}\n\n' +

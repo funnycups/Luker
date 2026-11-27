@@ -8,6 +8,7 @@ import {
     normalizeFinishReason,
     normalizeGeminiUsage,
 } from '../protocol.js';
+import { createGeminiFunctionArgumentStream } from './gemini-function-arguments.js';
 import { cloneValue, parseSseJsonFrame } from './common.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.GEMINI;
@@ -74,6 +75,11 @@ function createAccumulator() {
     let nativeFinishReason = null;
     let promptBlockReason = null;
     let callCounter = 0;
+    const argumentStream = createGeminiFunctionArgumentStream();
+    // Reserve the first fragment's position in all three histories. An unfinished
+    // function is displayable but must never be executed or replayed as a tool call.
+    const reservations = new Map();
+    const hidden = new Set();
 
     function ingestGroundingMetadata(groundingMetadata) {
         const chunks = Array.isArray(groundingMetadata?.groundingChunks) ? groundingMetadata.groundingChunks : [];
@@ -123,8 +129,30 @@ function createAccumulator() {
         let reasoningDelta = '';
         const imagesDelta = [];
 
-        for (const part of rawParts) {
+        for (let part of rawParts) {
             if (!part || typeof part !== 'object') continue;
+
+            const streamed = argumentStream.ingest(part);
+            let reserved;
+            if (streamed) {
+                const { call, started, complete } = streamed;
+                if (started) {
+                    const marker = {};
+                    reservations.set(call, { marker, native: nativeParts.length, ordered: parts.length, tool: toolCalls.length, id: call.id || makeFallbackCallId(++callCounter) });
+                    hidden.add(marker);
+                    nativeParts.push(marker);
+                    parts.push(marker);
+                    toolCalls.push(marker);
+                }
+                if (!complete) continue;
+                reserved = reservations.get(call);
+                hidden.delete(reserved.marker);
+                reservations.delete(call);
+                part = {
+                    functionCall: { name: call.name, args: call.args, ...(call.id ? { id: call.id } : {}) },
+                    ...(call.signature ? { thoughtSignature: call.signature } : {}),
+                };
+            }
 
             // Preserve ordered native Parts without merging across signed
             // boundaries or non-text parts.
@@ -132,7 +160,9 @@ function createAccumulator() {
             const isMergeableText = typeof part.text === 'string'
                 && !part.functionCall && !part.function_call && !part.inlineData
                 && !part.thoughtSignature;
-            if (isMergeableText && prevNative && typeof prevNative.text === 'string'
+            if (reserved) {
+                nativeParts[reserved.native] = part;
+            } else if (isMergeableText && prevNative && typeof prevNative.text === 'string'
                 && Boolean(prevNative.thought) === Boolean(part.thought)
                 && !prevNative.functionCall && !prevNative.function_call && !prevNative.inlineData
                 && !prevNative.thoughtSignature) {
@@ -160,11 +190,11 @@ function createAccumulator() {
 
             const fc = part.functionCall || part.function_call;
             if (fc && typeof fc === 'object') {
-                callCounter += 1;
-                const callId = (typeof fc.id === 'string' && fc.id.length > 0) ? fc.id : makeFallbackCallId(callCounter);
+                const sequence = reserved ? null : ++callCounter;
+                const callId = reserved?.id ?? (fc.id || makeFallbackCallId(sequence));
                 const callName = String(fc.name || '');
                 const callArgs = fc.args && typeof fc.args === 'object' ? fc.args : {};
-                toolCalls.push({
+                toolCalls[reserved?.tool ?? toolCalls.length] = {
                     id: callId,
                     type: 'function',
                     ...(sig ? { signature: sig } : {}),
@@ -172,14 +202,14 @@ function createAccumulator() {
                         name: callName,
                         arguments: JSON.stringify(callArgs),
                     },
-                });
-                parts.push({
+                };
+                parts[reserved?.ordered ?? parts.length] = {
                     type: 'tool_call',
                     id: typeof fc.id === 'string' ? fc.id : '',
                     name: callName,
                     args: cloneValue(callArgs),
                     ...(sig ? { signature: sig } : {}),
-                });
+                };
             }
 
             if (part.inlineData && typeof part.inlineData === 'object' && !part.thought) {
@@ -223,22 +253,24 @@ function createAccumulator() {
             hasMetadataUpdate = true;
         }
         const rawParts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
-        const prevToolCount = toolCalls.length;
+        const prevToolCount = toolCalls.length - hidden.size;
         const prevSignature = signature;
         const partDelta = ingestParts(rawParts);
-        if (toolCalls.length !== prevToolCount || signature !== prevSignature) {
+        if (toolCalls.length - hidden.size !== prevToolCount || signature !== prevSignature) {
             hasMetadataUpdate = true;
         }
         return { ...partDelta, hasMetadataUpdate };
     }
 
     function getSnapshot() {
+        const completedCalls = toolCalls.filter(call => !hidden.has(call));
+        const completedNativeParts = nativeParts.filter(part => !hidden.has(part));
         let finishReason = normalizeFinishReason(PROTOCOL, nativeFinishReason);
-        if (toolCalls.length > 0 && (!finishReason || finishReason === 'stop')) {
+        if (completedCalls.length > 0 && (!finishReason || finishReason === 'stop')) {
             finishReason = 'tool_calls';
         }
         const blockedReason = promptBlockReason
-            || (!text && toolCalls.length === 0 && images.length === 0 && nativeFinishReason && GEMINI_BLOCKED_FINISH_REASONS.has(nativeFinishReason)
+            || (!text && completedCalls.length === 0 && images.length === 0 && nativeFinishReason && GEMINI_BLOCKED_FINISH_REASONS.has(nativeFinishReason)
                 ? nativeFinishReason
                 : null);
 
@@ -250,14 +282,14 @@ function createAccumulator() {
             signature,
             reasoningBlocks: null,
             reasoningDetails: null,
-            nativeParts: nativeParts.length > 0 ? nativeParts.map(cloneValue) : null,
+            nativeParts: completedNativeParts.length > 0 ? completedNativeParts.map(cloneValue) : null,
             nativeContentBlocks: null,
             responsesOutputItems: null,
-            toolCalls: toolCalls.map(cloneValue),
+            toolCalls: completedCalls.map(cloneValue),
             images: images.slice(),
             citations: citations.length > 0 ? citations.map(cloneValue) : null,
             refusal: null,
-            parts: parts.map(cloneValue),
+            parts: parts.filter(part => !hidden.has(part)).map(cloneValue),
             usage: usage ? cloneValue(usage) : null,
             finishReason,
             nativeFinishReason,
@@ -267,7 +299,7 @@ function createAccumulator() {
         };
     }
 
-    return { ingestPayload, getSnapshot };
+    return { ingestPayload, getSnapshot, argumentStream };
 }
 
 /**
@@ -426,6 +458,9 @@ export function createGeminiStreamParser() {
             });
         }
         const turn = acc.getSnapshot();
+        if (acc.argumentStream.pendingCount && turn.nativeFinishReason === 'STOP') {
+            throw new ProtocolParseError({ protocol: PROTOCOL, stage: 'payload', location: 'functionCall', message: 'Gemini stopped with an unfinished function call.' });
+        }
         if (!sawAnyCandidate && promptBlockReason) {
             throw new ProtocolParseError({
                 protocol: PROTOCOL,
@@ -449,5 +484,5 @@ export function createGeminiStreamParser() {
         return turn;
     }
 
-    return { feedFrame, finish, getSnapshot: acc.getSnapshot };
+    return { feedFrame, finish, getSnapshot: acc.getSnapshot, getToolCallPreview: acc.argumentStream.getPreview };
 }
