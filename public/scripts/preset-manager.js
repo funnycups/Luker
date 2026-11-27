@@ -34,6 +34,7 @@ import { createPresetLineage } from './character/preset-mutation.js';
 import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
 import { readPresetDocument } from './named-resource-read.js';
+import { synthesizeCardBoundPresetList } from './util/preset-hydration.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
 import { reasoning_templates } from './reasoning.js';
@@ -1105,15 +1106,7 @@ class PresetManager {
         const resolvedApi = api === undefined ? this.apiId : api;
 
         if (resolvedApi === 'openai') {
-            const ghost = getActiveCardBoundGhostSnapshot();
-            if (ghost?.name && ghost?.body && raw.preset_names && !(ghost.name in raw.preset_names)) {
-                const synthIndex = raw.presets.length;
-                return {
-                    presets: [...raw.presets, ghost.body],
-                    preset_names: { ...raw.preset_names, [ghost.name]: synthIndex },
-                    settings: raw.settings,
-                };
-            }
+            return synthesizeCardBoundPresetList(raw, getActiveCardBoundGhostSnapshot());
         }
 
         return raw;

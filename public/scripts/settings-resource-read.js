@@ -10,12 +10,39 @@ import {
     stampNamedDocuments,
 } from './named-resource-read.js';
 
-function selectedPresetNames(settings) {
+/**
+ * Collects deduplicated non-empty preset candidate names.
+ * @param {...any} values Candidate preset names
+ * @returns {string[]}
+ */
+function collectPresetCandidates(...values) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values) {
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        if (trimmed && !seen.has(trimmed)) {
+            seen.add(trimmed);
+            result.push(trimmed);
+        }
+    }
+    return result;
+}
+
+/**
+ * Extracts preset names to hydrate eagerly during initial bootstrap.
+ * OpenAI retains both global and active preset candidates so divergent saved names never leave an unhydrated active slot.
+ * @param {object} settings Settings document
+ * @returns {object}
+ */
+export function selectedPresetNames(settings) {
+    const openaiCandidates = collectPresetCandidates(
+        settings?.oai_settings?.global_preset_settings_openai,
+        settings?.oai_settings?.preset_settings_openai,
+        settings?.preset_settings_openai,
+    );
     return {
         novel: settings?.preset_settings_novel,
-        openai: settings?.oai_settings?.global_preset_settings_openai
-            || settings?.oai_settings?.preset_settings_openai
-            || settings?.preset_settings_openai,
+        openai: openaiCandidates.length > 0 ? openaiCandidates : ['Default'],
         textgenerationwebui: settings?.textgenerationwebui_settings?.preset,
         kobold: settings?.kai_settings?.preset_settings ?? settings?.preset_settings,
     };

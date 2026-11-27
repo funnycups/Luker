@@ -5,6 +5,7 @@ import {
     hydrateOrderedPresetEntries,
     listHydratedIndexedPresetNames,
     listHydratedOrderedPresetNames,
+    synthesizeCardBoundPresetList,
 } from '../../public/scripts/util/preset-hydration.js';
 
 describe('preset hydration helpers', () => {
@@ -120,5 +121,44 @@ describe('preset hydration helpers', () => {
         expect(completed.bodies[0]).toEqual({ temp: 0.1 });
         expect(completed.bodies[1]).toBe(editedSelected);
         expect(completed.bodies[2]).toBe(createdOrdered);
+    });
+
+    test('synthesizes appended slot when card-bound preset name does not collide with global presets', () => {
+        const raw = {
+            presets: [{ temperature: 0.7 }],
+            preset_names: { Default: 0 },
+            settings: { preset_settings_openai: 'Default' },
+        };
+        const ghostBody = { temperature: 0.9, extensions: { tavern_helper: { scripts: [{ id: 's1' }] } } };
+        const result = synthesizeCardBoundPresetList(raw, { name: 'CardOnly', body: ghostBody });
+
+        expect(result.preset_names).toEqual({ Default: 0, CardOnly: 1 });
+        expect(result.presets[1]).toBe(ghostBody);
+        expect(raw.presets).toHaveLength(1);
+    });
+
+    test('fills unhydrated null global slot with card-bound body while yielding to already-hydrated global preset', () => {
+        const ghostBody = { temperature: 0.85, extensions: { tavern_helper: { scripts: [{ id: 'spreset' }] } } };
+        const unhydratedRaw = {
+            presets: [{ temperature: 0.7 }, null],
+            preset_names: { Default: 0, SharedPreset: 1 },
+            settings: { preset_settings_openai: 'SharedPreset' },
+        };
+
+        const filled = synthesizeCardBoundPresetList(unhydratedRaw, { name: 'SharedPreset', body: ghostBody });
+        expect(filled.presets[1]).toBe(ghostBody);
+        expect(filled.preset_names).toEqual({ Default: 0, SharedPreset: 1 });
+        expect(unhydratedRaw.presets[1]).toBeNull();
+
+        const hydratedGlobalBody = { temperature: 0.4, source: 'global' };
+        const hydratedRaw = {
+            presets: [{ temperature: 0.7 }, hydratedGlobalBody],
+            preset_names: { Default: 0, SharedPreset: 1 },
+            settings: { preset_settings_openai: 'SharedPreset' },
+        };
+
+        const yielded = synthesizeCardBoundPresetList(hydratedRaw, { name: 'SharedPreset', body: ghostBody });
+        expect(yielded).toBe(hydratedRaw);
+        expect(yielded.presets[1]).toBe(hydratedGlobalBody);
     });
 });

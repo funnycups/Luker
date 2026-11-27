@@ -151,3 +151,41 @@ export function hydrateOrderedPresetEntries({
 
     return { names, bodies };
 }
+
+/**
+ * Synthesizes a third-party-compatible preset list view for an active card-bound preset:
+ * - No name collision with global presets: appends a synthesized entry at the tail.
+ * - Same-name collision with an unhydrated (`null`/`undefined`) global slot: fills the hole with `ghost.body` so
+ *   third-party extensions do not read `null` before background warm preload finishes.
+ * - Same-name collision with an already-hydrated global object: returns `raw` unchanged (yield-to-global contract).
+ * @param {{ presets: any[], preset_names: object, settings: object }} raw Raw preset list
+ * @param {{ name?: string, body?: object }|null|undefined} ghost Active card-bound ghost preset snapshot
+ * @returns {{ presets: any[], preset_names: object, settings: object }}
+ */
+export function synthesizeCardBoundPresetList(raw, ghost) {
+    if (!raw || !ghost?.name || !ghost?.body || !raw.preset_names) {
+        return raw;
+    }
+
+    if (!(ghost.name in raw.preset_names)) {
+        const synthIndex = raw.presets.length;
+        return {
+            presets: [...raw.presets, ghost.body],
+            preset_names: { ...raw.preset_names, [ghost.name]: synthIndex },
+            settings: raw.settings,
+        };
+    }
+
+    const existingIndex = raw.preset_names[ghost.name];
+    if (Number.isInteger(existingIndex) && existingIndex >= 0 && raw.presets[existingIndex] == null) {
+        const nextPresets = [...raw.presets];
+        nextPresets[existingIndex] = ghost.body;
+        return {
+            presets: nextPresets,
+            preset_names: { ...raw.preset_names },
+            settings: raw.settings,
+        };
+    }
+
+    return raw;
+}

@@ -2428,8 +2428,6 @@ async function firstLoadInit() {
         await yieldToBrowser();
     }
 
-    void warmPreloadFullSettings();
-
     console.debug('[init] startup tasks batch 2 start (extensions)');
     await runStartupTasks([
         () => initTextGenModelSelects(),
@@ -2504,6 +2502,8 @@ async function firstLoadInit() {
     console.debug('[init] firstLoadInit complete');
     performance.mark('[init] complete');
     initDebugExportButton();
+    // Defer background preset warm-up until after extensions and APP_READY complete so startup requests are never starved.
+    void warmPreloadFullSettings();
 }
 
 async function fixViewport() {
@@ -2512,11 +2512,19 @@ async function fixViewport() {
     document.body.style.position = '';
 }
 
-function runStartupTasks(tasks) {
-    return tasks.reduce(
-        (chain, task) => chain.then(() => task()),
-        Promise.resolve(),
-    );
+/**
+ * Runs startup tasks sequentially while isolating individual task failures so APP_READY still fires.
+ * @param {Array<() => any>} tasks Startup tasks to execute
+ * @returns {Promise<void>}
+ */
+async function runStartupTasks(tasks) {
+    for (const task of tasks) {
+        try {
+            await task();
+        } catch (error) {
+            console.error('[init] Startup task failed:', error);
+        }
+    }
 }
 
 async function yieldToBrowser() {

@@ -6873,6 +6873,7 @@ function loadOpenAISettings(data, settings) {
     const rawSavedPresetName = String(settings?.preset_settings_openai ?? '').trim();
     const rawSavedGlobalName = String(settings?.global_preset_settings_openai || rawSavedPresetName || default_settings.preset_settings_openai).trim();
     const resolvedGlobalPresetName = resolveExistingOpenAIPresetName(rawSavedGlobalName)
+        || resolveExistingOpenAIPresetName(rawSavedPresetName)
         || getOrderedPresetNames(openai_setting_names || {})[0]
         || default_settings.preset_settings_openai;
     const wasCharacterBoundSession = Boolean(settings?.character_bound_preset_active)
@@ -7213,8 +7214,17 @@ function getSelectedNonCharacterBoundPresetName() {
 }
 
 function resolveExistingOpenAIPresetName(name = '') {
+    const requested = String(name ?? '').trim();
+    if (!requested) {
+        return '';
+    }
     const presetNames = getOrderedPresetNames(openai_setting_names || {});
-    return findCanonicalNameInList(presetNames, name) || '';
+    const canonical = findCanonicalNameInList(presetNames, requested);
+    if (canonical) {
+        return canonical;
+    }
+    const lowerRequested = requested.normalize('NFC').toLocaleLowerCase();
+    return presetNames.find(item => String(item ?? '').trim().normalize('NFC').toLocaleLowerCase() === lowerRequested) || '';
 }
 
 function getStoredGlobalOpenAIPresetName() {
