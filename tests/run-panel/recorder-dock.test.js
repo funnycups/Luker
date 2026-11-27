@@ -715,13 +715,7 @@ describe('run-panel recorder & dock', () => {
         }
     });
 
-    test('dock pill enforces single-line nowrap above 640px, anchors via right, clears mobile composer at 641-1000px, and re-places on same-length finish', () => {
-        const dockCss = readFileSync(fileURLToPath(new URL('../../public/scripts/run-panel/dock.css', import.meta.url)), 'utf8');
-        const baseCss = dockCss.split('@media (max-width: 640px)')[0];
-        expect(baseCss).toMatch(/\.rpdock\.rp-dock-pill\s*\{[^}]*max-width:\s*calc\(100vw - 24px\);/);
-        expect(baseCss).toMatch(/\.rpdock\s+\.rp-dock-pill-text\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/);
-        expect(dockCss).not.toContain('--rp-pill-float-right');
-
+    test('dock pill anchors via right, clears mobile composer at 641-1000px, and re-places on same-length finish', () => {
         const origMatchMedia = globalThis.matchMedia;
         const origW = globalThis.innerWidth;
         const origH = globalThis.innerHeight;

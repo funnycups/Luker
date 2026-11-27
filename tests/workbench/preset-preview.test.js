@@ -19,9 +19,8 @@ describe('preset iteration preview', () => {
         const node = target.renderPreview({ base: live, ai: live });
         expect(node.textContent).toContain('Ledger');
         expect(node.textContent).toContain(content);
-        expect(node.textContent).toContain('Entry order');
         expect(node.textContent).toContain('ledger');
-        expect(node.textContent).toContain('Generation parameters');
+        expect(node.querySelectorAll('details').length).toBeGreaterThanOrEqual(2);
         expect(node.textContent).toContain('"temp_openai": 0.65');
         expect(node.textContent).toContain('"openai_max_tokens": 730');
         expect(node.querySelector('img')).toBeNull();

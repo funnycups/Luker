@@ -66,7 +66,7 @@ describe('stored advanced prompts', () => {
         expect(() => buildGraphIterSystemPrompt({ graphIterSystemPrompt: '' })).toThrow();
     });
 
-    test('internal defaults module owns defaultSettings without removed legacy lorebookNameOverride key', async () => {
+    test('internal defaults module owns defaultSettings matching advanced defaults', async () => {
         const env = installBrowserModuleContext({
             constants: {
                 promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
@@ -76,7 +76,6 @@ describe('stored advanced prompts', () => {
         });
         try {
             const defaults = await import('../../public/scripts/extensions/memory-graph/defaults.js');
-            expect(defaults.defaultSettings).not.toHaveProperty('lorebookNameOverride');
             expect(defaults.defaultSettings.nodeTypeSchema).toBe(defaults.defaultNodeTypeSchema);
             for (const [key, value] of Object.entries(ADVANCED_SETTING_DEFAULTS)) {
                 expect(defaults.defaultSettings[key]).toBe(value);

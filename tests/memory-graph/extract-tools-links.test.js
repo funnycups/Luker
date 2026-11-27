@@ -30,9 +30,11 @@ test('links on by default', () => {
     const create = toolNamed(tools, 'luker_rpg_extract_event_create');
     expect(Object.keys(create.function.parameters.properties)).toEqual(expect.arrayContaining(['ref', 'links', 'no_link_reason']));
     expect(create.function.parameters.required).toContain('links');
-    expect(create.function.parameters.properties.links.items.properties.direction.description).toMatch(/outgoing/i);
+    expect(create.function.parameters.properties.links.items.properties.direction.type).toBe('string');
+    expect(create.function.parameters.properties.links.items.properties.direction.enum).toEqual(['outgoing', 'incoming', 'bidirectional']);
     const linkUpsert = toolNamed(tools, 'luker_rpg_extract_link_upsert');
-    expect(linkUpsert.function.parameters.properties.links.items.properties.direction.description).toMatch(/outgoing/i);
+    expect(linkUpsert.function.parameters.properties.links.items.properties.direction.type).toBe('string');
+    expect(linkUpsert.function.parameters.properties.links.items.properties.direction.enum).toEqual(['outgoing', 'incoming', 'bidirectional']);
 });
 
 test('allowLinks false drops the link face', () => {

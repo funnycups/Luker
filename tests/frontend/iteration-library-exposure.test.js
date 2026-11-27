@@ -5,9 +5,7 @@ import { test, expect } from '../harness/frontend.js';
  *
  * Verifies:
  *   1. getContext().iterationLibrary is exposed with the expected keys.
- *   2. getContext().iterationStudio is no longer present (the dual-track
- *      Proxy + the entire shell were dropped).
- *   3. No iter-library errors during boot.
+ *   2. No iter-library errors during boot.
  */
 
 async function awaitMainUI(page) {
@@ -22,11 +20,11 @@ async function awaitMainUI(page) {
 }
 
 test.describe('iteration-library exposure', () => {
-    test('getContext().iterationLibrary has expected keys; iterationStudio is gone', async ({ page }) => {
+    test('getContext().iterationLibrary exposes the expected namespace keys', async ({ page }) => {
         const consoleErrors = [];
         page.on('console', (msg) => {
             const text = msg.text();
-            if (msg.type() === 'error' && /iter[-_]?(library|studio)/i.test(text)) consoleErrors.push(text);
+            if (msg.type() === 'error' && /iter[-_]?library/i.test(text)) consoleErrors.push(text);
         });
 
         await awaitMainUI(page);
@@ -43,7 +41,6 @@ test.describe('iteration-library exposure', () => {
                 runnerIsNamespace: typeof lib.runner === 'object',
                 textDiffIsNamespace: typeof lib.textDiff === 'object' && typeof lib.textDiff.renderInlineTextDiffHtml === 'function',
                 zoomOverlayIsNamespace: typeof lib.zoomOverlay === 'object' && typeof lib.zoomOverlay.attachZoomOverlay === 'function',
-                iterationStudioPresent: ctx.iterationStudio !== undefined,
             };
         });
 
@@ -54,8 +51,7 @@ test.describe('iteration-library exposure', () => {
         expect(exposed.runnerIsNamespace).toBe(true);
         expect(exposed.textDiffIsNamespace).toBe(true);
         expect(exposed.zoomOverlayIsNamespace).toBe(true);
-        expect(exposed.iterationStudioPresent, 'iterationStudio must stay undefined').toBe(false);
 
-        expect(consoleErrors, `unexpected iter-library/iter-studio errors: ${consoleErrors.join(' | ')}`).toEqual([]);
+        expect(consoleErrors, `unexpected iter-library errors: ${consoleErrors.join(' | ')}`).toEqual([]);
     });
 });

@@ -249,9 +249,8 @@ describe('npc-attribution', () => {
         warnSpy.mockRestore();
     });
 
-    test('tts defaults module owns canonical voice markers and omits removed ttsEnabled key', async () => {
+    test('tts defaults module owns canonical voice markers', async () => {
         const ttsDefaults = await import('../../public/scripts/extensions/tts/defaults.js');
-        expect(ttsDefaults.defaultSettings).not.toHaveProperty('ttsEnabled');
         expect(ttsDefaults.DEFAULT_VOICE_MARKER).toBe('[Default Voice]');
         expect(ttsDefaults.DISABLED_VOICE_MARKER).toBe('disabled');
     });

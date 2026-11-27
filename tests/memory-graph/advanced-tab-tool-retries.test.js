@@ -5,9 +5,56 @@
  */
 
 import { describe, test, expect, beforeAll } from '@jest/globals';
-import './_mocks/main-module-stack.js';
+import {
+    createExtensionRegistry,
+    installBrowserModuleContext,
+    installDomReadyJQuery,
+    loadStateErrorsApi,
+} from '../util/browser-module-context.js';
 import { normalizeAdvancedSettings } from '../../public/scripts/extensions/memory-graph/config-iteration/advanced-settings.js';
 import { TECHNICAL_FIELDS } from '../../public/scripts/extensions/memory-graph/lens/settings/settings-model.js';
+
+installDomReadyJQuery();
+globalThis.window = globalThis.window || globalThis;
+globalThis.document = globalThis.document || {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+};
+globalThis.toastr = {
+    info: () => null,
+    success: () => null,
+    warning: () => null,
+    error: () => null,
+    clear: () => {},
+};
+
+const stateErrors = await loadStateErrorsApi();
+const extensionRegistry = createExtensionRegistry();
+installBrowserModuleContext({
+    constants: {
+        promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+        promptTypes: { NONE: 0, IN_PROMPT: 1, IN_CHAT: 2 },
+        wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        unset: Symbol('UNSET_VALUE'),
+    },
+    resolveChatStateTarget: () => ({ is_group: false, avatar_url: 'avatar.png', file_name: 'chat-0' }),
+    saveSettings: async () => ({ ok: true, status: 'saved' }),
+    saveSettingsDebounced: () => {},
+    extensionSettings: { memory_graph: {} },
+    download: () => {},
+    getFileText: () => Promise.resolve(''),
+    getStringHash: () => '',
+    worldInfoEntry: { template: {}, setGlobalSelection: async () => false },
+    stateErrors,
+    regex: { getScripts: () => [], saveScripts: () => {} },
+    getExtensionApi: extensionRegistry.getExtensionApi,
+    registerExtensionApi: extensionRegistry.registerExtensionApi,
+    translate: (s) => String(s ?? ''),
+    addLocaleData: () => {},
+    getCurrentLocale: () => 'en-US',
+});
 
 describe('memory-graph advanced settings tool-call retries', () => {
     let saveMemoryAdvancedSettings;

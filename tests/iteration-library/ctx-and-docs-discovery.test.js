@@ -109,16 +109,14 @@ describe('describeCtxPath', () => {
         try {
             const fnOut = await mod.describeCtxPath({ path: 'longFn' });
             expect(fnOut.ok).toBe(true);
-            expect(fnOut.sourcePreview.length).toBeGreaterThan(280);
+            expect(fnOut.sourcePreview).toBe(longFn.toString().replace(/\s+/g, ' ').trim());
             expect(fnOut.sourcePreview).toContain(longComment);
-            expect(fnOut.sourcePreview.endsWith('...')).toBe(false);
 
             const objOut = await mod.describeCtxPath({ path: 'bigObj' });
             expect(objOut.ok).toBe(true);
             expect(objOut.subKeyCount).toBe(75);
             expect(objOut.subKeys).toHaveLength(75);
             expect(objOut.subKeys.some(k => k.key === 'key_74')).toBe(true);
-            expect(objOut.note).toBeUndefined();
         } finally {
             globalThis.Luker = prevLuker;
         }

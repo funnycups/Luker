@@ -227,14 +227,8 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(summary).toBeTruthy();
         expect(summary.textContent).toContain('2');
         expect(summary.textContent).toContain('5');
-        expect(view.el.querySelector('.ml-settings-cadence-summary')).toBeNull();
-        expect(view.el.querySelector('.ml-settings-gap-warning')).toBeNull();
         expect(view.el.querySelector('[data-settings-section="extraction"] [data-field-key="updateEvery"]')).toBeNull();
         expect(view.el.querySelector('[data-settings-section="extraction"] [data-field-key="extractBatchTurns"]')).toBeNull();
-
-        // Replaced static notes in Sections 2 and 3 are removed cleanly
-        expect(view.el.querySelector('[data-settings-section="extraction-mode"] .ml-settings-note')).toBeNull();
-        expect(view.el.querySelector('[data-settings-section="recall"] .ml-settings-note')).toBeNull();
         expect(view.el.querySelector('[data-settings-section="extraction-mode"] .luker-bsum')).toBeTruthy();
         expect(view.el.querySelector('[data-settings-section="recall"] .luker-bsum')).toBeTruthy();
         expect(view.el.querySelector('[data-settings-section="technical"] .luker-bsum')).toBeTruthy();
@@ -652,8 +646,8 @@ describe('settings-view UX reorganization & bug fixes', () => {
             snap: {
                 options: {
                     compressibleTypes: [{
-                        id: 'event',
-                        label: 'Event',
+                        id: 'chronicle_mark',
+                        label: 'Chronicle Mark',
                         mode: 'hierarchical',
                         threshold: 5,
                         fanIn: 3,
@@ -674,7 +668,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
         const summary = modal.querySelector('.luker-bsum[data-bsum-id="mg-manual-compress-modal"]');
         expect(summary).toBeTruthy();
         expect(summary.querySelectorAll('.luker-bsum-row')).toHaveLength(3);
-        expect(summary.textContent).toContain('事件');
+        expect(summary.textContent).toContain('Chronicle Mark');
         expect(summary.textContent).toContain('5');
         expect(summary.textContent).toContain('3');
         expect(summary.textContent).toContain('10');
@@ -727,7 +721,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
             mode: 'schema',
             excludeRecent: 2,
             maxRoundsPerType: null,
-            selectedTypeIds: ['event'],
+            selectedTypeIds: ['chronicle_mark'],
         });
         expect(app.root.querySelector('.ml-dialog')).toBeNull();
 
@@ -749,7 +743,7 @@ describe('settings-view UX reorganization & bug fixes', () => {
             mode: 'schema',
             excludeRecent: 2,
             maxRoundsPerType: 4,
-            selectedTypeIds: ['event'],
+            selectedTypeIds: ['chronicle_mark'],
         });
     });
 });

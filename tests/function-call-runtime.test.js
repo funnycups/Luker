@@ -112,9 +112,9 @@ describe('resolveFunctionCallMode', () => {
         expect(resolveFunctionCallMode({ requestedMode: 'prompt_xml', plainTextEnabled: true })).toBe('prompt_xml');
     });
 
-    test('unknown mode strings (including removed alias) fall back to auto behavior', () => {
-        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: false })).toBe('native');
-        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: true })).toBe('prompt_xml');
+    test('unknown mode strings fall back to auto behavior', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'unknown_mode', plainTextEnabled: false })).toBe('native');
+        expect(resolveFunctionCallMode({ requestedMode: 'unknown_mode', plainTextEnabled: true })).toBe('prompt_xml');
     });
 
     test('missing/empty requestedMode behaves like "auto"', () => {
