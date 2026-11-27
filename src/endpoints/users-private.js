@@ -1909,7 +1909,7 @@ function enqueueUserRecordWrite(handle, mutator) {
         const userRecord = await storage.getItem(toKey(handle));
         return await mutator(userRecord);
     });
-    const tracked = run.finally(() => {
+    const tracked = run.catch(() => undefined).finally(() => {
         if (USER_RECORD_WRITE_QUEUES.get(handle) === tracked) {
             USER_RECORD_WRITE_QUEUES.delete(handle);
         }
