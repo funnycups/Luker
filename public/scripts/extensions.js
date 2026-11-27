@@ -12,6 +12,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './lib/state-errors.js';
 import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
+import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './util/concurrent-map.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
 import {
     formatHttpErrorHint,
@@ -540,28 +541,16 @@ export function getExtensionManifest(name) {
  */
 async function getManifests(names) {
     const obj = {};
-    const promises = [];
-
-    for (const name of names) {
-        const promise = new Promise((resolve, reject) => {
-            fetch(`/scripts/extensions/${name}/manifest.json`).then(async response => {
-                if (response.ok) {
-                    const json = await response.json();
-                    obj[name] = json;
-                    resolve();
-                } else {
-                    reject();
-                }
-            }).catch(err => {
-                reject();
-                console.log('Could not load manifest.json for ' + name, err);
-            });
-        });
-
-        promises.push(promise);
-    }
-
-    await Promise.allSettled(promises);
+    await mapWithConcurrency(names, BULK_RESOURCE_READ_CONCURRENCY, async (name) => {
+        try {
+            const response = await fetch(`/scripts/extensions/${name}/manifest.json`);
+            if (response.ok) {
+                obj[name] = await response.json();
+            }
+        } catch (err) {
+            console.log('Could not load manifest.json for ' + name, err);
+        }
+    }, { abortOnError: false });
     return obj;
 }
 
@@ -2312,11 +2301,15 @@ export async function getCharacterStateBatch(avatar, namespaces) {
     }
 
     try {
-        const payloads = await Promise.all(cleaned.map((namespace) =>
-            readStateEnvelope('/api/characters/state/get', {
+        const payloads = await mapWithConcurrency(
+            cleaned,
+            BULK_RESOURCE_READ_CONCURRENCY,
+            (namespace, _index, signal) => readStateEnvelope('/api/characters/state/get', {
                 avatar: safeAvatar,
                 namespace,
-            })));
+            }, { signal }),
+            { abortOnError: true },
+        );
         const results = new Map();
         for (let index = 0; index < cleaned.length; index += 1) {
             const payload = payloads[index];
@@ -2649,10 +2642,14 @@ export async function getGlobalStateBatch(namespaces) {
     }
 
     try {
-        const payloads = await Promise.all(cleaned.map((namespace) =>
-            readStateEnvelope('/api/state/get', {
+        const payloads = await mapWithConcurrency(
+            cleaned,
+            BULK_RESOURCE_READ_CONCURRENCY,
+            (namespace, _index, signal) => readStateEnvelope('/api/state/get', {
                 namespace,
-            })));
+            }, { signal }),
+            { abortOnError: true },
+        );
         const results = new Map();
         for (let index = 0; index < cleaned.length; index += 1) {
             const payload = payloads[index];

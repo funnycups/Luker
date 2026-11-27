@@ -345,4 +345,52 @@ describe('world-info-cache-coordinator saveWorldInfo cache rollback and delete f
         expect(editNames).toEqual(['QueueBlockerBook']);
         expect(worldInfoCache.has('BookDeletedWhileQueued')).toBe(false);
     });
+
+    test('loadWorldInfoBatch bounds concurrency and resolves single-book waiters independently of slow siblings', async () => {
+        let releaseSlow;
+        const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
+        let inFlight = 0;
+        let maxInFlight = 0;
+        const readCalls = [];
+
+        const batchCache = new StructuredCloneMap({ cloneOnGet: true, cloneOnSet: true });
+        const batchCoordinator = createWorldInfoPersistenceCoordinator({
+            worldInfoCache: batchCache,
+            readWorldInfoDocument: async (name) => {
+                readCalls.push(name);
+                inFlight += 1;
+                maxInFlight = Math.max(maxInFlight, inFlight);
+                try {
+                    if (name === 'SlowBook') {
+                        await slowGate;
+                    } else {
+                        await new Promise((resolve) => setTimeout(resolve, 1));
+                    }
+                    return { entries: { 0: { uid: 0, content: name } } };
+                } finally {
+                    inFlight -= 1;
+                }
+            },
+            debounce: (fn) => fn,
+        });
+
+        const batchPromise = batchCoordinator.loadWorldInfoBatch(['FastBook', 'SlowBook']);
+        const singleFastPromise = batchCoordinator.loadWorldInfo('FastBook');
+
+        const fastResult = await singleFastPromise;
+        expect(fastResult).toEqual({ entries: { 0: { uid: 0, content: 'FastBook' } } });
+        expect(readCalls.filter((name) => name === 'FastBook')).toHaveLength(1);
+
+        releaseSlow();
+        const batchResult = await batchPromise;
+        expect(batchResult.get('SlowBook')).toEqual({ entries: { 0: { uid: 0, content: 'SlowBook' } } });
+
+        const manyNames = Array.from({ length: 80 }, (_, index) => `BulkBook_${index}`);
+        inFlight = 0;
+        maxInFlight = 0;
+        const manyResults = await batchCoordinator.loadWorldInfoBatch(manyNames);
+        expect(manyResults.size).toBe(80);
+        expect(maxInFlight).toBeGreaterThan(1);
+        expect(maxInFlight).toBeLessThanOrEqual(64);
+    });
 });

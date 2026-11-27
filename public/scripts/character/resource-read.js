@@ -6,6 +6,7 @@ import {
     readResourceText,
 } from '../resource-read.js';
 import { applyPatch } from '../util/fast-json-patch.js';
+import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from '../util/concurrent-map.js';
 
 function resourceError(code, resource, detail, extra = {}) {
     const error = new Error(detail || code);
@@ -66,12 +67,24 @@ export async function loadCharacterResource(avatar, { signal } = {}) {
     }
 
     const values = new Map();
-    await Promise.all(fields.map(async (field) => {
+    await mapWithConcurrency(fields, BULK_RESOURCE_READ_CONCURRENCY, async (field, _index, itemSignal) => {
         if (typeof field?.path !== 'string' || typeof field?.etag !== 'string') {
             throw resourceError('invalid_resource', directoryUrl, 'Character field entry is invalid.');
         }
         const url = fieldUrl(account, avatar, field.path);
-        const result = await readResourceText(url, { signal });
+        let result;
+        try {
+            result = await readResourceText(url, { signal: itemSignal });
+        } catch (error) {
+            if (error?.status === 404) {
+                throw resourceError('read_conflict', url, 'Character field disappeared after the directory was read.', {
+                    path: field.path,
+                    expected: field.etag,
+                    actual: null,
+                });
+            }
+            throw error;
+        }
         if (result.etag !== field.etag) {
             throw resourceError('read_conflict', url, 'Character field validator does not match the directory.', {
                 path: field.path,
@@ -80,7 +93,7 @@ export async function loadCharacterResource(avatar, { signal } = {}) {
             });
         }
         values.set(field.path, result.text);
-    }));
+    }, { signal, abortOnError: true });
 
     const raw = rawLayout.map((part) => {
         if (typeof part === 'string') return part;

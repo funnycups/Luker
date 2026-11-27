@@ -241,6 +241,7 @@ import { downloadFromServer } from './scripts/luker-download.js';
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/lib/state-errors.js';
 import { invalidateStateResources, normalizeStateNamespace, readStateEnvelope } from './scripts/state-resource.js';
+import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './scripts/util/concurrent-map.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -13593,13 +13594,18 @@ export async function getChatStateBatch(namespaces, options = {}) {
 
     let payloads;
     try {
-        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/chats/state/get', {
-            is_group: target.is_group ? 'true' : 'false',
-            id: target.id,
-            avatar_url: target.avatar_url,
-            file_name: target.file_name,
-            namespace,
-        })));
+        payloads = await mapWithConcurrency(
+            need,
+            BULK_RESOURCE_READ_CONCURRENCY,
+            (namespace, _index, signal) => readStateEnvelope('/api/chats/state/get', {
+                is_group: target.is_group ? 'true' : 'false',
+                id: target.id,
+                avatar_url: target.avatar_url,
+                file_name: target.file_name,
+                namespace,
+            }, { signal }),
+            { abortOnError: true },
+        );
     } catch (error) {
         if (error?.status) {
             return { ok: false, results: new Map(),
@@ -13920,11 +13926,16 @@ export async function getPresetStateBatch(namespaces, options = {}) {
 
     let payloads;
     try {
-        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/presets/state/get', {
-            apiId: target.apiId,
-            name: target.name,
-            namespace,
-        })));
+        payloads = await mapWithConcurrency(
+            need,
+            BULK_RESOURCE_READ_CONCURRENCY,
+            (namespace, _index, signal) => readStateEnvelope('/api/presets/state/get', {
+                apiId: target.apiId,
+                name: target.name,
+                namespace,
+            }, { signal }),
+            { abortOnError: true },
+        );
     } catch (error) {
         if (error?.status) {
             return { ok: false, results: new Map(),

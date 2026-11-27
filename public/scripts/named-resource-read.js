@@ -1,4 +1,5 @@
 import { invalidateResourceReadsByPrefix, readResourceJson, resourceQuery } from './resource-read.js';
+import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from './util/concurrent-map.js';
 import { t } from './i18n.js';
 
 const NAMED_DOC_ROUTES = Object.freeze({
@@ -23,12 +24,12 @@ function warnInvalidResource(label, error) {
     toastr.warning(t`Skipped unreadable ${label}.`, t`Warning`, { preventDuplicates: true });
 }
 
-async function readNamedEntries(bucket, names, { signal } = {}) {
+async function readNamedEntries(bucket, names, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
     const route = namedRoute(bucket);
-    return Promise.all(names.map(async (name) => {
+    return mapWithConcurrency(names, concurrency, async (name, _index, itemSignal) => {
         try {
-            const documentQuery = await resourceQuery({ name });
-            const result = await readResourceJson(`${route}/get?${documentQuery}`, { signal });
+            const documentQuery = await resourceQuery({ name }, { signal: itemSignal });
+            const result = await readResourceJson(`${route}/get?${documentQuery}`, { signal: itemSignal });
             return { name, doc: result.value };
         } catch (error) {
             if (error?.status === 404) {
@@ -40,7 +41,7 @@ async function readNamedEntries(bucket, names, { signal } = {}) {
             }
             throw error;
         }
-    }));
+    }, { signal, abortOnError: true });
 }
 
 async function listNamedDocuments(bucket, { signal } = {}) {
@@ -80,25 +81,25 @@ export async function readPresetDocument(apiId, name, { signal } = {}) {
     return value;
 }
 
-export async function loadNamedDocumentEntries(bucket, { signal } = {}) {
+export async function loadNamedDocumentEntries(bucket, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
     let names = await listNamedDocuments(bucket, { signal });
-    let entries = await readNamedEntries(bucket, names, { signal });
+    let entries = await readNamedEntries(bucket, names, { signal, concurrency });
     if (entries.some(entry => entry?.missing)) {
         names = await listNamedDocuments(bucket, { signal });
-        entries = await readNamedEntries(bucket, names, { signal });
+        entries = await readNamedEntries(bucket, names, { signal, concurrency });
         assertNoMissing(entries);
     }
     return withoutMissing(entries);
 }
 
-export async function loadNamedDocumentCollection(bucket, { signal } = {}) {
-    return stampNamedDocuments(await loadNamedDocumentEntries(bucket, { signal }));
+export async function loadNamedDocumentCollection(bucket, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
+    return stampNamedDocuments(await loadNamedDocumentEntries(bucket, { signal, concurrency }));
 }
 
-async function readPresetEntries(apiId, names, { signal } = {}) {
-    return Promise.all(names.map(async (name) => {
+async function readPresetEntries(apiId, names, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
+    return mapWithConcurrency(names, concurrency, async (name, _index, itemSignal) => {
         try {
-            return { name, doc: await readPresetDocument(apiId, name, { signal }) };
+            return { name, doc: await readPresetDocument(apiId, name, { signal: itemSignal }) };
         } catch (error) {
             if (error?.status === 404) {
                 return { name, missing: true };
@@ -109,15 +110,15 @@ async function readPresetEntries(apiId, names, { signal } = {}) {
             }
             throw error;
         }
-    }));
+    }, { signal, abortOnError: true });
 }
 
-export async function loadPresetDocumentEntries(apiId, { signal } = {}) {
+export async function loadPresetDocumentEntries(apiId, { signal, concurrency = BULK_RESOURCE_READ_CONCURRENCY } = {}) {
     let names = await listPresetDocuments(apiId, { signal });
-    let entries = await readPresetEntries(apiId, names, { signal });
+    let entries = await readPresetEntries(apiId, names, { signal, concurrency });
     if (entries.some(entry => entry?.missing)) {
         names = await listPresetDocuments(apiId, { signal });
-        entries = await readPresetEntries(apiId, names, { signal });
+        entries = await readPresetEntries(apiId, names, { signal, concurrency });
         assertNoMissing(entries);
     }
     return withoutMissing(entries);
@@ -179,43 +180,85 @@ export function stampNamedDocuments(entries) {
     });
 }
 
-export async function loadPresetResources({ selected = {}, complete = false, skipNames = {}, signal } = {}) {
-    const byApi = {};
-    await Promise.all(PRESET_API_IDS.map(async (apiId) => {
-        const selectedName = selected?.[apiId];
-        const skipped = new Set(Array.isArray(skipNames?.[apiId]) ? skipNames[apiId] : []);
-        const readEntries = async (names) => Promise.all(names.map(async (name) => {
-            if ((!complete && name !== selectedName) || skipped.has(name)) {
-                return { name, body: null };
-            }
+export async function loadPresetResources({
+    selected = {},
+    complete = false,
+    skipNames = {},
+    signal,
+    concurrency = BULK_RESOURCE_READ_CONCURRENCY,
+} = {}) {
+    const skippedByApi = new Map(
+        PRESET_API_IDS.map((apiId) => [apiId, new Set(Array.isArray(skipNames?.[apiId]) ? skipNames[apiId] : [])]),
+    );
+
+    const fetchEntriesForApis = async (apiIds, namesByApi) => {
+        const entriesByApi = new Map();
+        const tasks = [];
+        for (const apiId of apiIds) {
+            const selectedName = selected?.[apiId];
+            const skipped = skippedByApi.get(apiId);
+            const names = namesByApi.get(apiId) || [];
+            const entries = names.map((name, index) => {
+                if ((!complete && name !== selectedName) || skipped.has(name)) {
+                    return { name, body: null };
+                }
+                tasks.push({ apiId, index, name });
+                return null;
+            });
+            entriesByApi.set(apiId, entries);
+        }
+
+        await mapWithConcurrency(tasks, concurrency, async (task, _index, itemSignal) => {
+            const { apiId, index, name } = task;
+            const entries = entriesByApi.get(apiId);
             try {
-                const document = await readPresetDocument(apiId, name, { signal });
-                return { name, body: JSON.stringify(document) };
+                const document = await readPresetDocument(apiId, name, { signal: itemSignal });
+                entries[index] = { name, body: JSON.stringify(document) };
             } catch (error) {
                 if (error?.status === 404) {
-                    return { name, missing: true };
+                    entries[index] = { name, missing: true };
+                    return;
                 }
                 if (isInvalidResource(error)) {
                     warnInvalidResource(`preset ${apiId}/${name}`, error);
-                    return null;
+                    entries[index] = null;
+                    return;
                 }
                 throw error;
             }
-        }));
+        }, { signal, abortOnError: true });
 
-        let names = await listPresetDocuments(apiId, { signal });
-        let entries = await readEntries(names);
-        if (entries.some(entry => entry?.missing)) {
-            names = await listPresetDocuments(apiId, { signal });
-            entries = await readEntries(names);
-            assertNoMissing(entries);
+        return entriesByApi;
+    };
+
+    const namesByApi = new Map();
+    await mapWithConcurrency(PRESET_API_IDS, concurrency, async (apiId, _index, itemSignal) => {
+        namesByApi.set(apiId, await listPresetDocuments(apiId, { signal: itemSignal }));
+    }, { signal, abortOnError: true });
+
+    const entriesByApi = await fetchEntriesForApis(PRESET_API_IDS, namesByApi);
+    const missingApis = PRESET_API_IDS.filter(apiId => entriesByApi.get(apiId).some(entry => entry?.missing));
+    if (missingApis.length > 0) {
+        const retryNamesByApi = new Map();
+        await mapWithConcurrency(missingApis, concurrency, async (apiId, _index, itemSignal) => {
+            retryNamesByApi.set(apiId, await listPresetDocuments(apiId, { signal: itemSignal }));
+        }, { signal, abortOnError: true });
+        const retriedByApi = await fetchEntriesForApis(missingApis, retryNamesByApi);
+        for (const apiId of missingApis) {
+            const retriedEntries = retriedByApi.get(apiId);
+            assertNoMissing(retriedEntries);
+            entriesByApi.set(apiId, retriedEntries);
         }
-        const valid = withoutMissing(entries);
+    }
+
+    const byApi = {};
+    for (const apiId of PRESET_API_IDS) {
+        const valid = withoutMissing(entriesByApi.get(apiId));
         byApi[apiId] = {
             names: valid.map(entry => entry.name),
             bodies: valid.map(entry => entry.body),
         };
-    }));
+    }
 
     return {
         novelai_settings: byApi.novel.bodies,

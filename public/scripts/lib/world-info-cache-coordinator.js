@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { BULK_RESOURCE_READ_CONCURRENCY, mapWithConcurrency } from '../util/concurrent-map.js';
+
 /**
  * Pure persistence and cache-rollback coordinator for World Info books,
  * extracted from `public/scripts/world-info.js`.
@@ -326,7 +328,7 @@ export function createWorldInfoPersistenceCoordinator({
 
             if (worldInfoRequestCache.has(name)) {
                 awaitedRequests.push(worldInfoRequestCache.get(name).then((data) => {
-                    results.set(name, data);
+                    results.set(name, data && isPlainObject(data) ? cloneAsJsonWire(data) : data);
                 }));
                 continue;
             }
@@ -338,40 +340,76 @@ export function createWorldInfoPersistenceCoordinator({
             const requestGenerationByName = new Map(
                 pendingNames.map((name) => [name, getWorldInfoRequestGeneration(name)]),
             );
-            const batchPromise = (async () => {
-                const batchResults = new Map();
-                await Promise.all(pendingNames.map(async (name) => {
-                    let data = null;
-                    try {
-                        data = await readWorldInfoDocument(name);
-                    } catch (error) {
-                        if (error?.code === 'http_error' && error.status === 404) {
-                            data = { entries: {} };
-                        } else {
-                            console.warn(`Failed to load World Info ${name}`, error);
-                            onLoadError(name, error);
-                        }
-                    }
-                    if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
-                        cacheWorldInfoData(name, data);
-                        data = cloneAsJsonWire(data);
-                    }
-                    batchResults.set(name, data);
-                }));
-                return batchResults;
-            })();
-
+            const deferredByName = new Map();
             for (const name of pendingNames) {
-                worldInfoRequestCache.set(name, batchPromise.then((batchResults) => batchResults.get(name) ?? null));
+                let resolve;
+                let reject;
+                const promise = new Promise((res, rej) => {
+                    resolve = res;
+                    reject = rej;
+                });
+                promise.catch(() => {});
+                deferredByName.set(name, { promise, resolve, reject, settled: false });
+                worldInfoRequestCache.set(name, promise);
             }
 
+            const batchResults = new Map();
+            let batchError = null;
             try {
-                const batchResults = await batchPromise;
+                await mapWithConcurrency(pendingNames, BULK_RESOURCE_READ_CONCURRENCY, async (name) => {
+                    const deferred = deferredByName.get(name);
+                    let data = null;
+                    try {
+                        try {
+                            data = await readWorldInfoDocument(name);
+                        } catch (error) {
+                            if (error?.code === 'http_error' && error.status === 404) {
+                                data = { entries: {} };
+                            } else {
+                                console.warn(`Failed to load World Info ${name}`, error);
+                                onLoadError(name, error);
+                            }
+                        }
+                        if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
+                            cacheWorldInfoData(name, data);
+                            data = cloneAsJsonWire(data);
+                        }
+                        batchResults.set(name, data);
+                        if (worldInfoRequestCache.get(name) === deferred.promise) {
+                            worldInfoRequestCache.delete(name);
+                        }
+                        deferred.settled = true;
+                        deferred.resolve(data);
+                    } catch (error) {
+                        if (worldInfoRequestCache.get(name) === deferred.promise) {
+                            worldInfoRequestCache.delete(name);
+                        }
+                        deferred.settled = true;
+                        deferred.reject(error);
+                        throw error;
+                    }
+                }, { abortOnError: false });
+
                 for (const name of pendingNames) {
                     results.set(name, batchResults.get(name) ?? null);
                 }
+            } catch (error) {
+                batchError = error;
+                throw error;
             } finally {
-                pendingNames.forEach((name) => worldInfoRequestCache.delete(name));
+                for (const [name, deferred] of deferredByName) {
+                    if (worldInfoRequestCache.get(name) === deferred.promise) {
+                        worldInfoRequestCache.delete(name);
+                    }
+                    if (!deferred.settled) {
+                        deferred.settled = true;
+                        if (batchError) {
+                            deferred.reject(batchError);
+                        } else {
+                            deferred.resolve(null);
+                        }
+                    }
+                }
             }
         }
 
