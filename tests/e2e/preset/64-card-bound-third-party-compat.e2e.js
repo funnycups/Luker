@@ -227,11 +227,12 @@ test.describe('#64 — card-bound preset resolves via upstream third-party idiom
         expect(withoutGhost.presetsLength, 'presets array must shrink to non-synth length after ghost is deselected').toBe(withGhost.presetsLength - 1);
     });
 
-    test('same-name collision with a global preset yields to the global entry', async ({ page }) => {
-        // If a global preset already exists with the same name as the
-        // card slot, the synth must NOT shadow it — the global entry's
-        // array index continues to work through the normal write path
-        // (savePreset/updateList), which the collision-yield preserves.
+    test('same-name collision with a global preset exposes active card-bound body and restores global body on switch', async ({ page }) => {
+        // When a global preset shares the same name as the active card-bound
+        // preset, getPresetList() must expose the active card-bound body at
+        // that name slot (never the inactive global preset), while keeping the
+        // raw global store intact and restoring the global body once the user
+        // switches to the global preset.
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, CHAR_NAME);
 
@@ -240,51 +241,62 @@ test.describe('#64 — card-bound preset resolves via upstream third-party idiom
             return opt && opt.getAttribute('data-luker-char-bound') === '1';
         }, { timeout: 15_000 });
 
-        // Create a global preset with the SAME name as the card slot,
-        // via the same API path a user's "save as" would use.
-        // (This produces a real global preset entry — no shortcut).
+        // Create a global preset with the SAME name as the active card slot,
+        // keeping the card-bound ghost selected (select: false).
         const created = await page.evaluate(async ({ collideName }) => {
             const { getPresetManager } = await import('/scripts/preset-manager.js');
             const pm = getPresetManager('openai');
-            // Grab the current card body as the seed for the global.
             const currentBody = pm.getCompletionPresetByName(pm.getSelectedPresetName());
             const globalBody = JSON.parse(JSON.stringify(currentBody || {}));
-            globalBody.temperature = 0.99; // different value to distinguish
+            globalBody.temperature = 0.99; // distinct from card-bound temperature
             globalBody.extensions = globalBody.extensions || {};
             globalBody.extensions.tavern_helper = { scripts: [{ name: 'GlobalDifferent', code: 'return "global"' }] };
-            await pm.savePreset(collideName, globalBody, { skipUpdate: false });
+            await pm.savePreset(collideName, globalBody, { skipUpdate: false, select: false });
+
+            const raw = pm.getPresetListRaw();
+            const rawIdx = raw.preset_names[collideName];
+            const list = pm.getPresetList();
+            const activeIdx = list.preset_names[collideName];
+            const selectedValue = pm.getSelectedPreset();
+            return {
+                stillCardBound: document.querySelector('#settings_preset_openai option:checked')?.getAttribute('data-luker-char-bound') === '1',
+                rawTemp: raw.presets[rawIdx]?.temperature,
+                rawScriptName: raw.presets[rawIdx]?.extensions?.tavern_helper?.scripts?.[0]?.name,
+                activeTemp: list.presets[activeIdx]?.temperature,
+                activeScriptName: list.presets[activeIdx]?.extensions?.tavern_helper?.scripts?.[0]?.name,
+                bySelectedIdxTemp: list.presets[Number(selectedValue)]?.temperature,
+            };
+        }, { collideName: CARD_PRESET_NAME });
+
+        expect(created.stillCardBound, 'card-bound ghost must stay selected when creating colliding global preset with select: false').toBe(true);
+        expect(created.rawTemp, 'raw global preset store keeps the global preset intact').toBe(0.99);
+        expect(created.rawScriptName).toBe('GlobalDifferent');
+        expect(created.activeTemp, 'active card-bound preset must shadow the colliding global slot in getPresetList()').toBe(CARD_TEMP);
+        expect(created.activeScriptName).toBe(SENTINEL_SCRIPT.name);
+        expect(created.bySelectedIdxTemp).toBe(CARD_TEMP);
+
+        // Switching the dropdown to the global option exposes the global body.
+        const afterSwitchToGlobal = await page.evaluate(async ({ collideName }) => {
+            const { getPresetManager } = await import('/scripts/preset-manager.js');
+            const pm = getPresetManager('openai');
+            const raw = pm.getPresetListRaw();
+            const globalOptionValue = String(raw.preset_names[collideName]);
+            const sel = document.querySelector('#settings_preset_openai');
+            sel.value = globalOptionValue;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
             const list = pm.getPresetList();
             const idx = list.preset_names[collideName];
             return {
-                globalIdx: idx,
-                globalTemp: list.presets[idx]?.temperature,
-                globalScriptName: list.presets[idx]?.extensions?.tavern_helper?.scripts?.[0]?.name,
+                isCardBound: document.querySelector('#settings_preset_openai option:checked')?.getAttribute('data-luker-char-bound') === '1',
+                temp: list.presets[idx]?.temperature,
+                scriptName: list.presets[idx]?.extensions?.tavern_helper?.scripts?.[0]?.name,
             };
         }, { collideName: CARD_PRESET_NAME });
 
-        // Global entry should now dominate the name-lookup (per the
-        // documented yield-to-global semantics in getPresetList).
-        expect(created.globalTemp, 'test setup: global preset saved with distinct temperature').toBe(0.99);
-        expect(created.globalScriptName).toBe('GlobalDifferent');
-
-        const resolved = await page.evaluate(async ({ collideName }) => {
-            const { getPresetManager } = await import('/scripts/preset-manager.js');
-            const pm = getPresetManager('openai');
-            const list = pm.getPresetList();
-            const namedIdx = list.preset_names?.[collideName];
-            const body = Number.isInteger(namedIdx) ? list.presets[namedIdx] : undefined;
-            return {
-                namedIdx,
-                temp: body?.temperature,
-                scriptName: body?.extensions?.tavern_helper?.scripts?.[0]?.name,
-            };
-        }, { collideName: CARD_PRESET_NAME });
-
-        // Yield-to-global: name lookup returns the global body, not the
-        // synth. The card-bound writes still happen through the ghost's
-        // own path (writePresetExtensionField → sync), so the collision
-        // does not break card-body persistence.
-        expect(resolved.temp, 'name-lookup with collision must yield to the global entry').toBe(0.99);
-        expect(resolved.scriptName).toBe('GlobalDifferent');
+        expect(afterSwitchToGlobal.isCardBound).toBe(false);
+        expect(afterSwitchToGlobal.temp, 'switching to the global preset must expose the global body').toBe(0.99);
+        expect(afterSwitchToGlobal.scriptName).toBe('GlobalDifferent');
     });
 });

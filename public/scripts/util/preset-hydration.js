@@ -151,3 +151,42 @@ export function hydrateOrderedPresetEntries({
 
     return { names, bodies };
 }
+
+/**
+ * Synthesizes the public `getPresetList()` view for an active card-bound
+ * preset without mutating the underlying raw preset collections.
+ *
+ * When the active card-bound preset shares a name with a global preset, the
+ * active card-bound body shadows that slot (whether the global slot is null or
+ * already hydrated) so callers always read the currently active preset body
+ * consistently before and after background preload.
+ *
+ * @param {{ presets: any[], preset_names: Record<string, number>, settings: object }} raw
+ * @param {{ name?: string, body?: object } | null | undefined} ghost
+ * @returns {{ presets: any[], preset_names: Record<string, number>, settings: object }}
+ */
+export function synthesizeCardBoundPresetList(raw, ghost) {
+    if (!ghost?.name || !ghost?.body || !raw?.preset_names || !Array.isArray(raw?.presets)) {
+        return raw;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(raw.preset_names, ghost.name)) {
+        const existingIndex = raw.preset_names[ghost.name];
+        if (Number.isInteger(existingIndex) && existingIndex >= 0 && existingIndex < raw.presets.length) {
+            const nextPresets = [...raw.presets];
+            nextPresets[existingIndex] = ghost.body;
+            return {
+                presets: nextPresets,
+                preset_names: { ...raw.preset_names },
+                settings: raw.settings,
+            };
+        }
+    }
+
+    const synthIndex = raw.presets.length;
+    return {
+        presets: [...raw.presets, ghost.body],
+        preset_names: { ...raw.preset_names, [ghost.name]: synthIndex },
+        settings: raw.settings,
+    };
+}

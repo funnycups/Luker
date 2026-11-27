@@ -5,6 +5,7 @@ import {
     hydrateOrderedPresetEntries,
     listHydratedIndexedPresetNames,
     listHydratedOrderedPresetNames,
+    synthesizeCardBoundPresetList,
 } from '../../public/scripts/util/preset-hydration.js';
 
 describe('preset hydration helpers', () => {
@@ -120,5 +121,48 @@ describe('preset hydration helpers', () => {
         expect(completed.bodies[0]).toEqual({ temp: 0.1 });
         expect(completed.bodies[1]).toBe(editedSelected);
         expect(completed.bodies[2]).toBe(createdOrdered);
+    });
+
+    test('synthesizeCardBoundPresetList appends a non-colliding ghost without mutating raw arrays', () => {
+        const globalBody = { temperature: 0.7 };
+        const raw = {
+            presets: [globalBody],
+            preset_names: { Default: 0 },
+            settings: { temperature: 0.5 },
+        };
+        const ghostBody = { temperature: 0.42 };
+
+        const synthesized = synthesizeCardBoundPresetList(raw, { name: 'CardOnly', body: ghostBody });
+
+        expect(synthesized.preset_names).toEqual({ Default: 0, CardOnly: 1 });
+        expect(synthesized.presets[0]).toBe(globalBody);
+        expect(synthesized.presets[1]).toBe(ghostBody);
+        expect(raw.presets).toEqual([globalBody]);
+        expect(raw.preset_names).toEqual({ Default: 0 });
+    });
+
+    test('synthesizeCardBoundPresetList prefers active card-bound ghost over both null and hydrated colliding global slots', () => {
+        const ghostBody = { temperature: 0.35, source: 'card' };
+
+        const unhydratedRaw = {
+            presets: [null, { temperature: 0.7 }],
+            preset_names: { SharedName: 0, Default: 1 },
+            settings: {},
+        };
+        const withNullSlot = synthesizeCardBoundPresetList(unhydratedRaw, { name: 'SharedName', body: ghostBody });
+        expect(withNullSlot.preset_names).toEqual({ SharedName: 0, Default: 1 });
+        expect(withNullSlot.presets[0]).toBe(ghostBody);
+        expect(unhydratedRaw.presets[0]).toBeNull();
+
+        const globalBody = { temperature: 0.99, source: 'global' };
+        const hydratedRaw = {
+            presets: [globalBody, { temperature: 0.7 }],
+            preset_names: { SharedName: 0, Default: 1 },
+            settings: {},
+        };
+        const withHydratedSlot = synthesizeCardBoundPresetList(hydratedRaw, { name: 'SharedName', body: ghostBody });
+        expect(withHydratedSlot.preset_names).toEqual({ SharedName: 0, Default: 1 });
+        expect(withHydratedSlot.presets[0]).toBe(ghostBody);
+        expect(hydratedRaw.presets[0]).toBe(globalBody);
     });
 });

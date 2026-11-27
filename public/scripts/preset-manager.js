@@ -34,6 +34,7 @@ import { createPresetLineage } from './character/preset-mutation.js';
 import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
 import { readPresetDocument } from './named-resource-read.js';
+import { synthesizeCardBoundPresetList } from './util/preset-hydration.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
 import { reasoning_templates } from './reasoning.js';
@@ -852,9 +853,9 @@ class PresetManager {
      * The selected ghost body is the live object exposed by
      * `getPresetList()`, so identity is the reliable signal for "this is the
      * active card-bound preset". A detached body under the same name is
-     * treated as the global path, which preserves the documented
-     * yield-to-global collision behavior and makes `savePreset(name, copy)`
-     * usable for creating a global preset with that name. Non-selected card
+     * treated as the global path, which makes `savePreset(name, copy)`
+     * usable for creating or updating a global preset with that name even when
+     * an active card-bound preset shares the name. Non-selected card
      * slots also stay on the global path; promoting a slot to the global
      * library is a legitimate operation, so a name alone cannot imply a card
      * write.
@@ -898,7 +899,7 @@ class PresetManager {
      * it, the body is written to the character card instead of the global
      * preset library. Passing the live body from `getPresetList()` (or
      * omitting `settings`) targets the card; a detached body targets the
-     * global path, which preserves same-name collision semantics.
+     * global path.
      *
      * @param {string} name Name of the preset to save
      * @param {object} [settings] Settings to save as the preset. If not provided, uses the current preset settings.
@@ -1080,17 +1081,14 @@ class PresetManager {
      *
      * Semantics:
      *   - Only applies to `openai` — no other API has ghost options.
-     *   - Same-name collision (a global preset already carries this
-     *     name) yields to the global entry so writes going through
-     *     the global `updateList` / `savePreset` path still target
-     *     the same array slot. Card-bound writes go through
-     *     `savePreset` (live-body identity) or
-     *     `writePresetExtensionField` → card sync at
-     *     `syncCharacterBoundOpenAIPresetExtensionField`, so this
-     *     bias is safe. Third-party consumers that read the
-     *     collided global body will see the source they bound
-     *     from — acceptable because card-body edits stay in sync
-     *     with the global via existing iter-studio propagation.
+     *   - Same-name collision (a global preset already carries this name)
+     *     always prefers the active card-bound `ghost.body` at that index
+     *     in the returned shallow copy, whether the global slot is `null`
+     *     or already hydrated. Callers reading the active preset therefore
+     *     receive the active card-bound preset consistently before and
+     *     after background preload, while internal global writers keep
+     *     using `getPresetListRaw()` and detached `savePreset(name, copy)`
+     *     still targets the global preset store.
      *   - Returned `presets` array and `preset_names` object are
      *     fresh shallow copies (only when synthesis occurs) so adding
      *     or replacing entries cannot mutate the upstream
@@ -1105,15 +1103,7 @@ class PresetManager {
         const resolvedApi = api === undefined ? this.apiId : api;
 
         if (resolvedApi === 'openai') {
-            const ghost = getActiveCardBoundGhostSnapshot();
-            if (ghost?.name && ghost?.body && raw.preset_names && !(ghost.name in raw.preset_names)) {
-                const synthIndex = raw.presets.length;
-                return {
-                    presets: [...raw.presets, ghost.body],
-                    preset_names: { ...raw.preset_names, [ghost.name]: synthIndex },
-                    settings: raw.settings,
-                };
-            }
+            return synthesizeCardBoundPresetList(raw, getActiveCardBoundGhostSnapshot());
         }
 
         return raw;
