@@ -4,15 +4,10 @@
 import { createPluginI18n } from '../../lib/plugin-i18n.js';
 
 const ZH_CN = {
-    'A character editor dialog is already open for this character.': '此角色的编辑器对话框已打开。',
     'Character Editor Assistant': '角色卡编辑助手',
     'Open Editor': '打开编辑器',
     'Workbench is unavailable.': '工作台当前不可用。',
-    'Regenerate aborted': '重新生成已中止',
-    'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
     'Edit': '编辑',
-    'Edit and regenerate from here': '编辑并从此处重新生成',
-    'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
     'Merge in editor': '在编辑器中合并',
     'Cancel': '取消',
     'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台里打开新旧对比，让 AI 把你先前的手工修改迁移到新世界书。当你有想保留的手动修改时选它。',
@@ -45,7 +40,7 @@ const ZH_CN = {
     'Imported world book is already absent: ${0}.': '已导入的世界书“${0}”已经不存在。',
     'Deletion outcome unknown for imported world book: ${0}. Reload the world book list before retrying cleanup.': '无法确认已导入的世界书“${0}”的删除结果。请重新加载世界书列表后重试清理。',
     '(no human-readable changes detected)': '（未检测到可读差异）',
-    'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你现在处于"替换角色卡之后"的迭代流程。用户刚刚把角色卡更新为新版本。你的工作是帮用户把旧版本（prev，用户之前一直在用的）和新版本（next，刚导入的）做调和。但本轮不要动角色卡或世界书。',
+    'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你现在处于「替换角色卡之后」的迭代流程。用户刚刚把角色卡更新为新版本。你的工作是帮用户把旧版本（prev，用户之前一直在用的）和新版本（next，刚导入的）做调和。但本轮不要动角色卡或世界书。',
     'Direction convention used throughout this seed message and the diffs below:': '本条消息及下方差异中使用的方向约定：',
     '- `prev` / "previous" / 旧 = the version the user was actually using until just now. May contain edits, additions, and refinements the user made by hand.': '- `prev` / "previous" / 旧 = 用户在替换之前一直在使用的版本，可能包含用户手工添加、修改、打磨过的内容。',
     '- `next` / "current" / 新 = the version that was just imported. Treat this as the new baseline.': '- `next` / "current" / 新 = 刚刚导入的新版本，作为新的基线。',
@@ -58,7 +53,7 @@ const ZH_CN = {
     '- Migrate prev-only curated content into next.': '- 把 prev-only 的 curate 内容迁移到 next。',
     '- Keep next\'s genuine improvements.': '- 保留 next 带来的实际改进。',
     '- On conflicts, prefer next unless prev is obviously hand-curated and richer.': '- 冲突时优先采用 next，除非 prev 明显是手工打磨过且更丰富的版本。',
-    '- Never dump prev wholesale into next — that defeats the point of accepting a new version.': '- 不要把 prev 整体灌入 next ——那会让"接受新版本"这件事失去意义。',
+    '- Never dump prev wholesale into next — that defeats the point of accepting a new version.': '- 不要把 prev 整体灌入 next ——那会让「接受新版本」这件事失去意义。',
     'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示词预设',
     'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 预设',
     'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
@@ -77,33 +72,14 @@ const ZH_CN = {
     'Load failed: ${0}': '加载失败：${0}',
     'Before': '修改前',
     'After': '修改后',
-    'Line diff': '逐行差异',
-    'Reorder ${0}': '重排 ${0}',
-    '"${0}": [${1}] → [${2}]': '「${0}」：[${1}] → [${2}]',
-    '[${0}] → [${1}]': '[${0}] → [${1}]',
-    'Insert into ${0}': '向 ${0} 插入',
-    '+ "${0}" (${1})': '+ 「${0}」（${1}）',
-    '+ (${0})': '+ （${0}）',
-    'Remove from ${0}': '从 ${0} 移除',
-    '− "${0}" (at [${1}])': '− 「${0}」（位于 [${1}]）',
-    '− at [${0}]': '− 位于 [${0}]',
-    'after ${0}': '在 ${0} 之后',
-    'before ${0}': '在 ${0} 之前',
-    'at end': '在末尾',
-    'Expand diff': '放大查看',
-    'Close expanded diff': '关闭放大视图',
     'Entry UID': '条目 UID',
     '(empty)': '（空）',
     'Regenerate': '重新生成',
     '(Current preset)': '（当前提示词预设）',
     '(Current API config)': '（当前 API 配置）',
     '(missing)': '（缺失）',
-    'Search entries...': '搜索条目...',
-    'Page ${0} / ${1}': '第 ${0} / ${1} 页',
     'Prev': '上一页',
     'Next': '下一页',
-    '${0} matches': '匹配 ${0} 项',
-    'No entries match this search.': '没有匹配的条目。',
     // CardApp Studio
     'CardApp Studio': 'CardApp Studio',
     'No character selected or character has no avatar.': '未选择角色或角色没有头像。',
@@ -153,27 +129,6 @@ const ZH_CN = {
     'Session deleted': '会话已删除',
     'Delete failed: ${0}': '删除失败：${0}',
     // Patch-storage conflict UI (shared keys; each extension owns its locale table).
-    'Cannot undo this change: the preset has been modified elsewhere.':
-        '无法回退此次修改：预设的相关内容已经发生改变。',
-    'Cannot undo this change: the memory graph schema has been modified elsewhere.':
-        '无法回退此次修改：记忆图的相关内容已经发生改变。',
-    'Cannot undo this change: the character card has been modified elsewhere.':
-        '无法回退此次修改：角色卡的相关内容已经发生改变。',
-    'Cannot undo this change: the world book has been modified elsewhere.':
-        '无法回退此次修改：世界书的相关内容已经发生改变。',
-    'Cannot undo this change: the profile has been modified elsewhere.':
-        '无法回退此次修改：配置文件的相关内容已经发生改变。',
-    'Cannot undo this change: the skills have been modified elsewhere.':
-        '无法回退此次修改：技能的相关内容已经发生改变。',
-    'Cannot show details for this change: related content has been modified.':
-        '无法显示此步的修改详情：相关内容已经发生改变。',
-    'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
-        '无法继续在此次会话中修改：基础内容已变化，请新建会话。',
-    'Discard this step anyway': '仍然丢弃此步',
-    'Export change details': '导出修改详情',
-    'This change was saved by an older version and cannot be applied after a reload. Discard this step and request the change again.':
-        '此修改由旧版本保存，重新加载后无法应用。请丢弃此步并重新请求修改。',
-    'View raw record': '查看原始记录',
     // CardApp Studio session-write toasts — reason-aware surfaces from
     // formatSaveSessionsError (studio.js).
     'Failed to save CardApp Studio session (invalid request).': '保存 CardApp Studio 会话失败（请求无效）。',
@@ -186,11 +141,9 @@ const ZH_CN = {
     'Failed to save CardApp Studio session (storage corrupted, reload chat).': '保存 CardApp Studio 会话失败（存储已损坏，请重新加载聊天）。',
     'Failed to save CardApp Studio session (disk write failed).': '保存 CardApp Studio 会话失败（磁盘写入失败）。',
     'Failed to save CardApp Studio session.': '保存 CardApp Studio 会话失败。',
-    'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已恢复为独立界面。已清空过渡迭代版的会话——磁盘上的文件保持不变。',
     'Import example': '导入示例',
     'Re-import example': '重新导入示例',
     'Derive from an existing preset': '从现有预设派生',
-    'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改这些配置所用的 AI 在工作台 → 设置中选择。',
     'Fill in the prompt or reset it to the default.': '请填写提示词或重置为默认值。',
     'CardApp Studio AI': 'CardApp Studio AI',
     'Character Editor Assistant behavior summary': '角色卡编辑助手行为摘要',
@@ -199,15 +152,10 @@ const ZH_CN = {
 };
 
 const ZH_TW = {
-    'A character editor dialog is already open for this character.': '此角色的編輯器對話框已開啟。',
     'Character Editor Assistant': '角色卡編輯助手',
     'Open Editor': '開啟編輯器',
     'Workbench is unavailable.': '工作台目前無法使用。',
-    'Regenerate aborted': '重新產生已中止',
-    'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',
     'Edit': '編輯',
-    'Edit and regenerate from here': '編輯並從此處重新產生',
-    'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
     'Merge in editor': '在編輯器中合併',
     'Cancel': '取消',
     'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台裡開啟新舊對比，讓 AI 把你先前的手工修改遷移到新世界書。當你有想保留的手動修改時選它。',
@@ -267,33 +215,14 @@ const ZH_TW = {
     'Load failed: ${0}': '載入失敗：${0}',
     'Before': '修改前',
     'After': '修改後',
-    'Line diff': '逐行差異',
-    'Reorder ${0}': '重排 ${0}',
-    '"${0}": [${1}] → [${2}]': '「${0}」：[${1}] → [${2}]',
-    '[${0}] → [${1}]': '[${0}] → [${1}]',
-    'Insert into ${0}': '向 ${0} 插入',
-    '+ "${0}" (${1})': '+ 「${0}」（${1}）',
-    '+ (${0})': '+ （${0}）',
-    'Remove from ${0}': '從 ${0} 移除',
-    '− "${0}" (at [${1}])': '− 「${0}」（位於 [${1}]）',
-    '− at [${0}]': '− 位於 [${0}]',
-    'after ${0}': '在 ${0} 之後',
-    'before ${0}': '在 ${0} 之前',
-    'at end': '在末尾',
-    'Expand diff': '放大查看',
-    'Close expanded diff': '關閉放大視圖',
     'Entry UID': '條目 UID',
     '(empty)': '（空）',
     'Regenerate': '重新生成',
     '(Current preset)': '（目前提示詞預設）',
     '(Current API config)': '（目前 API 配置）',
     '(missing)': '（缺失）',
-    'Search entries...': '搜索條目...',
-    'Page ${0} / ${1}': '第 ${0} / ${1} 頁',
     'Prev': '上一頁',
     'Next': '下一頁',
-    '${0} matches': '匹配 ${0} 項',
-    'No entries match this search.': '沒有匹配的條目。',
     // CardApp Studio
     'CardApp Studio': 'CardApp Studio',
     'No character selected or character has no avatar.': '未選擇角色或角色沒有頭像。',
@@ -343,27 +272,6 @@ const ZH_TW = {
     'Session deleted': '會話已刪除',
     'Delete failed: ${0}': '刪除失敗：${0}',
     // Patch-storage conflict UI (shared keys).
-    'Cannot undo this change: the preset has been modified elsewhere.':
-        '無法回退此次修改：預設的相關內容已經發生改變。',
-    'Cannot undo this change: the memory graph schema has been modified elsewhere.':
-        '無法回退此次修改：記憶圖的相關內容已經發生改變。',
-    'Cannot undo this change: the character card has been modified elsewhere.':
-        '無法回退此次修改：角色卡的相關內容已經發生改變。',
-    'Cannot undo this change: the world book has been modified elsewhere.':
-        '無法回退此次修改：世界書的相關內容已經發生改變。',
-    'Cannot undo this change: the profile has been modified elsewhere.':
-        '無法回退此次修改：設定檔的相關內容已經發生改變。',
-    'Cannot undo this change: the skills have been modified elsewhere.':
-        '無法回退此次修改：技能的相關內容已經發生改變。',
-    'Cannot show details for this change: related content has been modified.':
-        '無法顯示此步的修改詳情：相關內容已經發生改變。',
-    'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
-        '無法繼續在此次會話中修改：基礎內容已變化，請新建會話。',
-    'Discard this step anyway': '仍然丟棄此步',
-    'Export change details': '匯出修改詳情',
-    'This change was saved by an older version and cannot be applied after a reload. Discard this step and request the change again.':
-        '此修改由舊版本儲存，重新載入後無法套用。請丟棄此步並重新請求修改。',
-    'View raw record': '檢視原始記錄',
     // CardApp Studio session-write toasts — reason-aware surfaces from
     // formatSaveSessionsError (studio.js).
     'Failed to save CardApp Studio session (invalid request).': '儲存 CardApp Studio 會話失敗（請求無效）。',
@@ -376,11 +284,9 @@ const ZH_TW = {
     'Failed to save CardApp Studio session (storage corrupted, reload chat).': '儲存 CardApp Studio 會話失敗（儲存已損毀，請重新載入聊天）。',
     'Failed to save CardApp Studio session (disk write failed).': '儲存 CardApp Studio 會話失敗（磁碟寫入失敗）。',
     'Failed to save CardApp Studio session.': '儲存 CardApp Studio 會話失敗。',
-    'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已還原為獨立介面。已清空過渡迭代版的會話——磁碟上的檔案保持不變。',
     'Import example': '匯入示例',
     'Re-import example': '重新匯入示例',
     'Derive from an existing preset': '從現有預設派生',
-    'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改這些設定所用的 AI 在工作台 → 設定中選擇。',
     'Fill in the prompt or reset it to the default.': '請填寫提示詞或重設為預設值。',
     'CardApp Studio AI': 'CardApp Studio AI',
     'Character Editor Assistant behavior summary': '角色卡編輯助手行為摘要',

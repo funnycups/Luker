@@ -107,7 +107,7 @@ export async function promptEmbedUnembeddedPresetsForCharacterApply({
     const presetManager = context.getPresetManager?.('openai');
     const addPreset = context?.character?.presets?.add;
     if (typeof addPreset !== 'function') {
-        notifyError(i18n('Character-bound preset API is unavailable; cannot embed.'));
+        notifyError(i18n('Character-bound preset API is unavailable, cannot embed.'));
         // Fall through and let the caller persist the profile; the
         // orchestrator profile write is independent of the preset embed
         // step and preserving that behavior avoids surprising the user
@@ -120,7 +120,7 @@ export async function promptEmbedUnembeddedPresetsForCharacterApply({
     for (const entry of unembedded) {
         const body = presetManager?.getStoredPreset?.(entry.name);
         if (!body) {
-            notifyError(i18nFormat('Local preset "${0}" not found; skipped.', entry.name));
+            notifyError(i18nFormat('Local preset "${0}" not found, skipped.', entry.name));
             continue;
         }
         await addPreset(activeCharacter, entry.name, body);

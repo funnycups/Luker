@@ -777,7 +777,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
                         .replace('${1}', formatScopeLabel(targetScope, t)),
                     context.POPUP_TYPE.CONFIRM,
                     '',
-                    { okButton: t('Replace'), cancelButton: t('Skip') },
+                    { okButton: t('Replace skill'), cancelButton: t('Skip') },
                 );
                 conflictStrategies[it.name] = isAffirmative(ok) ? 'replace' : 'skip';
             }

@@ -138,7 +138,7 @@ export function buildImportTableHtml(previewItems, t, esc) {
                     <td class="luker_skill_import_status luker_skill_import_status_diff">${esc(t('Different (choose)'))}</td>
                     <td class="luker_skill_import_action">
                         <label><input type="radio" name="${radioGroup}" value="skip" checked data-skill-import-radio="${safeName}"> ${esc(t('Skip'))}</label>
-                        <label><input type="radio" name="${radioGroup}" value="replace" data-skill-import-radio="${safeName}"> ${esc(t('Replace'))}</label>
+                        <label><input type="radio" name="${radioGroup}" value="replace" data-skill-import-radio="${safeName}"> ${esc(t('Replace skill'))}</label>
                     </td>
                 </tr>
             `;

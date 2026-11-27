@@ -40,7 +40,7 @@ function buildPopupHtml(initial, t) {
     </div>
 
     <label class="luker_orch_ct_field">
-        <div class="luker_orch_ct_label">${esc(t('Tool name (a-z, A-Z, 0-9, _; max 64)'))}</div>
+        <div class="luker_orch_ct_label">${esc(t('Tool name (a-z, A-Z, 0-9, _, max 64)'))}</div>
         <input type="text" class="text_pole" data-orch-ct-name value="${esc(v.name || '')}">
     </label>
 

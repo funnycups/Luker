@@ -70,7 +70,7 @@ const REGISTRY = [
     textField('recallFinalizeSystemPrompt', 'recall', 'Recall Selection Prompt', 'Second-stage LLM recall prompt that picks the final node set.', DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
     intField('recallMaxIterations', 'recall', 'Recall max iterations', 'Maximum number of tool rounds for LLM recall.', 3, { min: 2, max: 6 }),
     intField('recallQueryMessages', 'recall', 'Recall query recent assistant turns', 'Number of recent assistant turns used to build the recall query.', 2, { min: 0, max: 64 }),
-    intField('persistentInjectionMaxSeqDistance', 'recall', 'Persistent injection recency horizon (assistant turns; 0 = no limit)', 'Recency horizon for always-injected nodes in assistant turns; 0 means no limit.', 0, { min: 0 }),
+    intField('persistentInjectionMaxSeqDistance', 'recall', 'Persistent injection recency horizon (assistant turns, 0 = no limit)', 'Recency horizon for always-injected nodes in assistant turns; 0 means no limit.', 0, { min: 0 }),
     intField('llmVisibleRecentMessages', 'recall', 'Visible recent message layers for generation (0 = disabled)', 'Number of recent message layers visible to the generation model; 0 disables hiding.', 5, { min: 0, max: 200 }),
     boolField('recallIncludeWorldInfo', 'recall', 'Include world info in recall requests', 'Attach resolved world info to LLM recall requests.', true),
 

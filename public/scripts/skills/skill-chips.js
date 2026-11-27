@@ -214,9 +214,9 @@ function renderChipHtml(chip) {
     } else if (kind === 'inherit') {
         title = t('Inherit mode default visible skills. Click x to remove.');
     } else if (kind === 'visible') {
-        title = t('Visible to this agent. Click to deny; x to remove.');
+        title = t('Visible to this agent. Click to deny, or x to remove.');
     } else {
-        title = t('Denied for this agent. Click to mark visible; x to remove.');
+        title = t('Denied for this agent. Click to mark visible, or x to remove.');
     }
     const escName = escapeHtml(name);
     const escLabel = escapeHtml(displayLabel);
