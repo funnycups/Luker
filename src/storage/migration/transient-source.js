@@ -53,6 +53,16 @@ import { RestoreDumpInvalidError } from '../errors.js';
  * }} opts
  * @returns {Promise<TransientSource>}
  */
+async function removeScratchRoot(scratchRoot) {
+    try {
+        await fsPromises.rm(scratchRoot, { recursive: true, force: true });
+    } catch (rmErr) {
+        if (rmErr?.code !== 'ENOENT') {
+            console.error(`[transient-source] Failed to remove scratch directory "${scratchRoot}":`, rmErr);
+        }
+    }
+}
+
 export async function materializeTransientSource(engineMeta, zipPath, opts) {
     const kind = engineMeta?.engineKind;
     if (!kind) {
@@ -79,7 +89,7 @@ export async function materializeTransientSource(engineMeta, zipPath, opts) {
         if (kind === 'mysql') return await buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
         return await buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCreds });
     } catch (err) {
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+        await removeScratchRoot(scratchRoot);
         throw err;
     }
 }
@@ -116,6 +126,29 @@ function ensureScratchDirs(scratchDirs) {
 // fs source: extract every fs-tree entry from the ZIP into scratchRoot.
 // --------------------------------------------------------------------------
 
+async function runCleanupSteps(contextLabel, steps) {
+    const errors = [];
+    for (const { label, run } of steps) {
+        try {
+            await run();
+        } catch (err) {
+            console.error(`[transient-source] ${contextLabel} ${label} failed:`, err);
+            errors.push(`${label}: ${err?.message || String(err)}`);
+        }
+    }
+    if (errors.length > 0) {
+        throw new Error(`${contextLabel} cleanup failed (${errors.join('; ')})`);
+    }
+}
+
+async function removeScratchDir(scratchRoot) {
+    try {
+        await fsPromises.rm(scratchRoot, { recursive: true, force: true });
+    } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
+    }
+}
+
 async function buildFsTransient({ scratchRoot, scratchHandle, zipPath }) {
     const scratchDirs = buildScratchDirs(scratchRoot);
     ensureScratchDirs(scratchDirs);
@@ -140,8 +173,10 @@ async function buildFsTransient({ scratchRoot, scratchHandle, zipPath }) {
         async cleanup() {
             if (cleanedUp) return;
             cleanedUp = true;
-            try { await engine.close(); } catch { /* fs engine close is a no-op */ }
-            await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => { /* best-effort */ });
+            await runCleanupSteps('fs transient', [
+                { label: 'engine.close', run: () => engine.close() },
+                { label: 'remove scratchRoot', run: () => removeScratchDir(scratchRoot) },
+            ]);
         },
     };
 }
@@ -158,19 +193,14 @@ async function buildSqliteTransient({ scratchRoot, scratchHandle, zipPath }) {
     // The .sqlite file is the engine's home — write it AT scratchRoot
     // (sqlite-engine looks for luker-storage.sqlite under dirs.root).
     const dumpDest = path.join(scratchRoot, 'luker-storage.sqlite');
-    try {
-        const dumpFound = await extractEngineDumpToFile(zipPath, dumpDest);
-        if (!dumpFound) {
-            throw new RestoreDumpInvalidError(`sqlite backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
-        }
-        await assertValidSqliteFile(dumpDest);
-        // The SqliteEngine queries `WHERE handle = ?` with scratchHandle, and
-        // the dump's rows still carry the source's original handle.
-        rewriteSqliteHandle(dumpDest, scratchHandle);
-    } catch (err) {
-        await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
-        throw err;
+    const dumpFound = await extractEngineDumpToFile(zipPath, dumpDest);
+    if (!dumpFound) {
+        throw new RestoreDumpInvalidError(`sqlite backup ZIP is missing ${ENGINE_DUMP_ENTRY}`);
     }
+    await assertValidSqliteFile(dumpDest);
+    // The SqliteEngine queries `WHERE handle = ?` with scratchHandle, and
+    // the dump's rows still carry the source's original handle.
+    rewriteSqliteHandle(dumpDest, scratchHandle);
 
     const engine = new SqliteEngine({
         directoriesByHandle: (h) => {
@@ -189,8 +219,10 @@ async function buildSqliteTransient({ scratchRoot, scratchHandle, zipPath }) {
         async cleanup() {
             if (cleanedUp) return;
             cleanedUp = true;
-            try { engine.close(); } catch { /* engine may already be closed */ }
-            await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => { /* best-effort */ });
+            await runCleanupSteps('sqlite transient', [
+                { label: 'engine.close', run: () => engine.close() },
+                { label: 'remove scratchRoot', run: () => removeScratchDir(scratchRoot) },
+            ]);
         },
     };
 }
@@ -229,12 +261,12 @@ async function buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratc
         await engine.restoreUser(scratchHandle, dumpStream);
     } catch (err) {
         if (dumpStream && !dumpStream.destroyed) {
-            try { dumpStream.destroy(); } catch { /* best-effort */ }
+            try { dumpStream.destroy(); } catch (destroyErr) { console.error('[transient-source] mysql dumpStream.destroy failed:', destroyErr); }
         }
         if (restoreStarted) {
-            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+            try { await engine.deleteUser(scratchHandle); } catch (delErr) { console.error('[transient-source] mysql rollback deleteUser failed:', delErr); }
         }
-        try { await engine.close(); } catch { /* best-effort */ }
+        try { await engine.close(); } catch (closeErr) { console.error('[transient-source] mysql rollback engine.close failed:', closeErr); }
         throw err;
     }
 
@@ -246,9 +278,11 @@ async function buildMysqlTransient({ scratchRoot, scratchHandle, zipPath, scratc
         async cleanup() {
             if (cleanedUp) return;
             cleanedUp = true;
-            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
-            try { await engine.close(); } catch { /* best-effort */ }
-            await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+            await runCleanupSteps('mysql transient', [
+                { label: 'engine.deleteUser', run: () => engine.deleteUser(scratchHandle) },
+                { label: 'engine.close', run: () => engine.close() },
+                { label: 'remove scratchRoot', run: () => removeScratchDir(scratchRoot) },
+            ]);
         },
     };
 }
@@ -286,12 +320,12 @@ async function buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCr
         await engine.restoreUser(scratchHandle, dumpStream);
     } catch (err) {
         if (dumpStream && !dumpStream.destroyed) {
-            try { dumpStream.destroy(); } catch { /* best-effort */ }
+            try { dumpStream.destroy(); } catch (destroyErr) { console.error('[transient-source] postgres dumpStream.destroy failed:', destroyErr); }
         }
         if (restoreStarted) {
-            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
+            try { await engine.deleteUser(scratchHandle); } catch (delErr) { console.error('[transient-source] postgres rollback deleteUser failed:', delErr); }
         }
-        try { await engine.close(); } catch { /* best-effort */ }
+        try { await engine.close(); } catch (closeErr) { console.error('[transient-source] postgres rollback engine.close failed:', closeErr); }
         throw err;
     }
 
@@ -303,9 +337,11 @@ async function buildPgTransient({ scratchRoot, scratchHandle, zipPath, scratchCr
         async cleanup() {
             if (cleanedUp) return;
             cleanedUp = true;
-            try { await engine.deleteUser(scratchHandle); } catch { /* best-effort */ }
-            try { await engine.close(); } catch { /* best-effort */ }
-            await fsPromises.rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+            await runCleanupSteps('postgres transient', [
+                { label: 'engine.deleteUser', run: () => engine.deleteUser(scratchHandle) },
+                { label: 'engine.close', run: () => engine.close() },
+                { label: 'remove scratchRoot', run: () => removeScratchDir(scratchRoot) },
+            ]);
         },
     };
 }

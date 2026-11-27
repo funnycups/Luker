@@ -379,7 +379,9 @@ export class MysqlEngine {
                         try {
                             await conn.query('SET SESSION sql_mode = ?', [mode]);
                             modeRestored = true;
-                        } catch { /* the connection is destroyed below */ }
+                        } catch (sqlModeErr) {
+                            logEngineError(this.kind, 'restore-user-sql-mode', handle, sqlModeErr);
+                        }
                     }
                 }
             } catch (err) {
