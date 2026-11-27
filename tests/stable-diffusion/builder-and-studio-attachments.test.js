@@ -234,4 +234,66 @@ describe('SD Character Builder and Studio image attachments', () => {
         expect(files.has('/user/images/_ai_attachments/st_1.png')).toBe(false);
         expect(files.has(forkedPath)).toBe(true);
     });
+
+    test('studio store logs console.error when attachment cleanup returns per-file failures or throws', async () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        let failDeleteWithHttp = false;
+        globalThis.fetch = jest.fn(async (url) => {
+            if (url === '/api/images/delete-batch') {
+                if (failDeleteWithHttp) {
+                    return { ok: false, status: 500, statusText: 'Internal Server Error', text: async () => 'disk error' };
+                }
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        deleted: [],
+                        missing: [],
+                        failed: [{ path: '/user/images/_ai_attachments/st_err.png', error: 'EACCES' }],
+                    }),
+                };
+            }
+            throw new Error(`Unexpected fetch ${url}`);
+        });
+
+        const state = new Map();
+        const context = {
+            getRequestHeaders: () => ({}),
+            getGlobalState: async (ns) => ({ ok: true, state: state.has(ns) ? JSON.parse(JSON.stringify(state.get(ns))) : null }),
+            updateGlobalState: async (ns, updater) => {
+                const cur = state.has(ns) ? JSON.parse(JSON.stringify(state.get(ns))) : null;
+                const next = await updater(cur);
+                if (next === null || next === undefined) return { ok: true, state: cur };
+                state.set(ns, JSON.parse(JSON.stringify(next)));
+                return { ok: true, state: JSON.parse(JSON.stringify(next)) };
+            },
+        };
+
+        const store = createStudioSessionStore(context);
+        const s1 = createStudioSession({ presetId: 'p1' });
+        appendStudioUserMessage(s1, 'hello', {
+            attachments: [{ path: '/user/images/_ai_attachments/st_err.png', name: 'err.png' }],
+            now: 100,
+        });
+        await store.saveSession(s1);
+        await store.deleteSession(s1.id);
+        expect(errorSpy).toHaveBeenCalledWith(
+            '[sd/studio-store] Failed to clean up session attachments:',
+            [{ path: '/user/images/_ai_attachments/st_err.png', error: 'EACCES' }],
+        );
+
+        failDeleteWithHttp = true;
+        const s2 = createStudioSession({ presetId: 'p1' });
+        appendStudioUserMessage(s2, 'hello', {
+            attachments: [{ path: '/user/images/_ai_attachments/st_err2.png', name: 'err2.png' }],
+            now: 101,
+        });
+        await store.saveSession(s2);
+        await store.deleteSession(s2.id);
+        expect(errorSpy).toHaveBeenCalledWith(
+            '[sd/studio-store] Failed to clean up session attachments:',
+            expect.any(Error),
+        );
+        errorSpy.mockRestore();
+    });
 });

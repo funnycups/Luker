@@ -389,7 +389,14 @@ export function createStudioSessionStore(context) {
                 return await this.saveSession(forked, now);
             } catch (err) {
                 if (copyMap.size > 0 && typeof globalThis.fetch === 'function') {
-                    await deleteChatAttachments(context, [...copyMap.values()]).catch(() => {});
+                    try {
+                        const cleanup = await deleteChatAttachments(context, [...copyMap.values()]);
+                        if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                            console.error('[sd/studio-store] Failed to roll back copied attachments:', cleanup.failed);
+                        }
+                    } catch (cleanupErr) {
+                        console.error('[sd/studio-store] Failed to roll back copied attachments:', cleanupErr);
+                    }
                 }
                 throw err;
             }
@@ -423,9 +430,14 @@ export function createStudioSessionStore(context) {
                 throw new Error(`Failed to delete studio session "${target}": ${res?.hint || res?.reason || 'unknown error'}`);
             }
             if (deleted && attachmentPaths.length > 0 && typeof globalThis.fetch === 'function') {
-                await deleteChatAttachments(context, attachmentPaths).catch(err => {
-                    console.warn('[sd/studio-store] Failed to clean up session attachments:', err);
-                });
+                try {
+                    const cleanup = await deleteChatAttachments(context, attachmentPaths);
+                    if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                        console.error('[sd/studio-store] Failed to clean up session attachments:', cleanup.failed);
+                    }
+                } catch (err) {
+                    console.error('[sd/studio-store] Failed to clean up session attachments:', err);
+                }
             }
             return deleted;
         },

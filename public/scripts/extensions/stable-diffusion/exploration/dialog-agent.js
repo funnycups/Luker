@@ -213,9 +213,6 @@ export async function runCharacterBuilderTurn({
         if (typeof media?.preview === 'function' && isStagedTempImagePath(imagePath)) {
             return media.preview(imagePath);
         }
-        if (typeof media?.preview === 'function') {
-            return media.preview(imagePath);
-        }
         return loadManagedImageDataUrl(imagePath, {
             context,
             signal: abortSignal,

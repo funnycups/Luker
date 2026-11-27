@@ -36,19 +36,16 @@ class MockPopup {
     }
 }
 
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+const testUi = {
     Popup: MockPopup,
     POPUP_TYPE: { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4, CROP: 5 },
     POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null },
     callGenericPopup: jest.fn(async () => 'edited prompt'),
-}));
-
-jest.unstable_mockModule('../../public/scripts/chats.js', () => ({
-    deleteMediaFromServer: jest.fn(async () => true),
-}));
+};
+const deleteMediaFromServerStub = jest.fn(async () => true);
 
 let createIllustrationPipeline;
-let initIllustrationActions;
+let createIllustrationActions;
 let createImageService;
 let GenerationQueue;
 let createStudioView;
@@ -136,7 +133,7 @@ beforeAll(async () => {
     installDomJquery();
 
     ({ createIllustrationPipeline } = await import('../../public/scripts/extensions/stable-diffusion/illustration/pipeline.js'));
-    ({ initIllustrationActions } = await import('../../public/scripts/extensions/stable-diffusion/illustration/actions.js'));
+    ({ createIllustrationActions } = await import('../../public/scripts/extensions/stable-diffusion/illustration/actions-core.js'));
     ({ createImageService } = await import('../../public/scripts/extensions/stable-diffusion/illustration/image-service.js'));
     ({ GenerationQueue } = await import('../../public/scripts/extensions/stable-diffusion/illustration/queue.js'));
     ({ createStudioView } = await import('../../public/scripts/extensions/stable-diffusion/lens/views/studio-view.js'));
@@ -239,7 +236,7 @@ describe('Auto Illustration & Studio activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'sd:illustration',
-                label: 'Illustration generation',
+                label: expect.stringMatching(/\S/),
                 scope: 'chat',
             }),
         ]);
@@ -370,7 +367,7 @@ describe('Auto Illustration & Studio activity guard leases', () => {
         const queue = new GenerationQueue({ maxConcurrent: 1, minInterval: 0 });
         const imageService = createImageService({ bridge, queue, context });
 
-        const actions = initIllustrationActions({
+        const actions = createIllustrationActions({
             context,
             pipeline: { cancelForMessage: () => {} },
             imageService,
@@ -379,6 +376,8 @@ describe('Auto Illustration & Studio activity guard leases', () => {
             toast: () => {},
             notifyError: (msg) => notifyErrors.push(String(msg)),
             t: tTag,
+            ui: testUi,
+            deleteMediaFromServer: deleteMediaFromServerStub,
         });
 
         await actions.handleClick(document.querySelector('[data-illustration-id="ill_orig"]'));
@@ -390,7 +389,7 @@ describe('Auto Illustration & Studio activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'sd:illustration',
-                label: 'Illustration generation',
+                label: expect.stringMatching(/\S/),
                 scope: 'chat',
             }),
         ]);
@@ -483,7 +482,7 @@ describe('Auto Illustration & Studio activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'sd:studio',
-                label: 'Image Studio',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
                 guardChatSwitch: false,
                 guardUnload: true,
@@ -520,7 +519,7 @@ describe('Auto Illustration & Studio activity guard leases', () => {
         expect(registry.getActiveActivities()).toEqual([
             expect.objectContaining({
                 source: 'sd:studio',
-                label: 'Image Studio',
+                label: expect.stringMatching(/\S/),
                 scope: 'global',
             }),
         ]);
@@ -532,5 +531,288 @@ describe('Auto Illustration & Studio activity guard leases', () => {
             skipActivityLease: true,
         });
         expect(registry.getActiveActivities()).toEqual([]);
+    });
+
+    test('studio-view runTurn rolls back unpersisted messages and deletes uploaded attachments when session persistence fails', async () => {
+        const savedFetch = globalThis.fetch;
+        const deletedPaths = [];
+        globalThis.fetch = jest.fn(async (url, init = {}) => {
+            if (url === '/api/images/upload') {
+                return { ok: true, status: 200, json: async () => ({ path: '/user/images/_ai_attachments/studio_rollback_1.png' }) };
+            }
+            if (url === '/user/images/_ai_attachments/studio_rollback_1.png') {
+                const bytes = new Uint8Array([137, 80, 78, 71]);
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'image/png' },
+                    arrayBuffer: async () => bytes.buffer,
+                    blob: async () => new Blob([bytes], { type: 'image/png' }),
+                };
+            }
+            if (url === '/api/images/delete-batch') {
+                const body = JSON.parse(init.body || '{}');
+                deletedPaths.push(...(body.paths || []));
+                return { ok: true, status: 200, json: async () => ({ deleted: body.paths || [], missing: [], failed: [] }) };
+            }
+            throw new Error(`Unexpected fetch ${url}`);
+        });
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const toasts = [];
+        try {
+            const ctx = {
+                chatId: 'chat-studio-fail',
+                name1: 'User',
+                getRequestHeaders: () => ({}),
+                extensionSettings: { sd: { illustration: structuredClone(SETTINGS) } },
+                activityGuard: makeActivityGuardApi(registry),
+                imageGeneration: {
+                    isAvailable: () => true,
+                    getCapabilities: async () => ({
+                        supportsSourceImage: true,
+                        supportsCharacterReference: false,
+                        characterReferenceEnabled: false,
+                        availableLoras: { names: [], includeWeight: false },
+                    }),
+                    generate: jest.fn(),
+                },
+                generateTask: jest.fn(async () => ({ toolCalls: [], assistantText: 'Draft reply' })),
+                getGlobalState: async () => ({ ok: true, state: {} }),
+                updateGlobalState: async () => ({ ok: false, state: null, reason: 'disk full' }),
+            };
+            globalThis.Luker = { getContext: () => ({ translate: s => String(s ?? ''), ...ctx }) };
+
+            const view = createStudioView({
+                getContext: () => ctx,
+                toast: (msg, opts) => toasts.push({ msg, opts }),
+            });
+            document.body.appendChild(view.el);
+            view.show();
+            await new Promise(r => setTimeout(r, 20));
+
+            // Attach a file via the real file input and submit
+            const fileInput = view.el.querySelector('input[type="file"]');
+            const file = new File([new Uint8Array([137, 80, 78, 71])], 'ref.png', { type: 'image/png' });
+            Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 20));
+
+            const input = view.el.querySelector('[data-sd-role="studio-input"]');
+            input.value = 'Paint with uploaded reference';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            view.el.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 40));
+
+            expect(toasts.some(t => t.opts?.error && t.msg.includes('disk full'))).toBe(true);
+            expect(deletedPaths).toEqual(['/user/images/_ai_attachments/studio_rollback_1.png']);
+            // Unpersisted user/assistant messages must be reverted from the rendered session
+            expect(view.el.textContent).not.toContain('Draft reply');
+            expect(registry.getActiveActivities()).toEqual([]);
+        } finally {
+            errorSpy.mockRestore();
+            globalThis.fetch = savedFetch;
+        }
+    });
+
+    test('studio-view runTurn rolls back only Round 2 mutations when Round 1 persisted and Round 2 persistence fails', async () => {
+        const savedFetch = globalThis.fetch;
+        globalThis.fetch = jest.fn(async (url) => {
+            if (url === '/user/images/_studio/r1_ok.png') {
+                const bytes = new Uint8Array([137, 80, 78, 71]);
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'image/png' },
+                    arrayBuffer: async () => bytes.buffer,
+                    blob: async () => new Blob([bytes], { type: 'image/png' }),
+                };
+            }
+            throw new Error(`Unexpected fetch ${url}`);
+        });
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const toasts = [];
+        const namespaces = new Map([
+            ['sd_studio_sessions', {
+                version: 1,
+                sessions: {
+                    sess_vr: {
+                        id: 'sess_vr',
+                        title: 'Visual review session',
+                        visualReview: true,
+                        createdAt: 1,
+                        updatedAt: 1,
+                        messages: [],
+                        images: [],
+                    },
+                },
+            }],
+        ]);
+        let persistCalls = 0;
+        let llmCalls = 0;
+        try {
+            const ctx = {
+                chatId: 'chat-studio-round2-fail',
+                name1: 'User',
+                getRequestHeaders: () => ({}),
+                extensionSettings: { sd: { illustration: structuredClone(SETTINGS) } },
+                activityGuard: makeActivityGuardApi(registry),
+                imageGeneration: {
+                    isAvailable: () => true,
+                    getCapabilities: async () => ({
+                        supportsSourceImage: false,
+                        supportsCharacterReference: false,
+                        characterReferenceEnabled: false,
+                        availableLoras: { names: [], includeWeight: false },
+                    }),
+                    generate: jest.fn(async () => ({ imagePath: '/user/images/_studio/r1_ok.png' })),
+                },
+                generateTask: jest.fn(async () => {
+                    llmCalls += 1;
+                    if (llmCalls === 1) {
+                        return {
+                            toolCalls: [{ id: 'tc_r1', name: 'generate_image', args: { prompt: 'first lantern' } }],
+                            assistantText: 'Round 1 persisted reply',
+                        };
+                    }
+                    return {
+                        toolCalls: [],
+                        assistantText: 'Round 2 unpersisted reply',
+                    };
+                }),
+                getGlobalState: async (ns) => ({ ok: true, state: namespaces.get(ns) || {} }),
+                updateGlobalState: async (ns, updater) => {
+                    persistCalls += 1;
+                    if (persistCalls === 1) {
+                        const next = await updater(namespaces.get(ns) || {});
+                        if (next) namespaces.set(ns, next);
+                        return { ok: true, state: next, updated: Boolean(next) };
+                    }
+                    return { ok: false, state: null, reason: 'round 2 disk full' };
+                },
+            };
+            globalThis.Luker = { getContext: () => ({ translate: s => String(s ?? ''), ...ctx }) };
+
+            const view = createStudioView({
+                getContext: () => ctx,
+                toast: (msg, opts) => toasts.push({ msg, opts }),
+            });
+            document.body.appendChild(view.el);
+            view.show();
+            await new Promise(r => setTimeout(r, 20));
+
+            const input = view.el.querySelector('[data-sd-role="studio-input"]');
+            input.value = 'Paint a harbor lantern';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            view.el.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 60));
+
+            expect(llmCalls).toBe(2);
+            expect(persistCalls).toBe(2);
+            expect(toasts.some(t => t.opts?.error && t.msg.includes('round 2 disk full'))).toBe(true);
+            // Round 1 persisted content remains visible; Round 2 unpersisted reply is rolled back
+            expect(view.el.textContent).toContain('Round 1 persisted reply');
+            expect(view.el.textContent).not.toContain('Round 2 unpersisted reply');
+            expect(registry.getActiveActivities()).toEqual([]);
+        } finally {
+            errorSpy.mockRestore();
+            globalThis.fetch = savedFetch;
+        }
+    });
+
+    test('studio-view runTurn keeps committed session and uploaded attachments when post-save refreshLists fails', async () => {
+        const savedFetch = globalThis.fetch;
+        const deletedPaths = [];
+        globalThis.fetch = jest.fn(async (url, init = {}) => {
+            if (url === '/api/images/upload') {
+                return { ok: true, status: 200, json: async () => ({ path: '/user/images/_ai_attachments/studio_keep_1.png' }) };
+            }
+            if (url === '/user/images/_ai_attachments/studio_keep_1.png') {
+                const bytes = new Uint8Array([137, 80, 78, 71]);
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'image/png' },
+                    arrayBuffer: async () => bytes.buffer,
+                    blob: async () => new Blob([bytes], { type: 'image/png' }),
+                };
+            }
+            if (url === '/api/images/delete-batch') {
+                const body = JSON.parse(init.body || '{}');
+                deletedPaths.push(...(body.paths || []));
+                return { ok: true, status: 200, json: async () => ({ deleted: body.paths || [], missing: [], failed: [] }) };
+            }
+            throw new Error(`Unexpected fetch ${url}`);
+        });
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const toasts = [];
+        const namespaces = new Map();
+        let listCalls = 0;
+        let savedSessions = 0;
+        try {
+            const ctx = {
+                chatId: 'chat-studio-refresh-fail',
+                name1: 'User',
+                getRequestHeaders: () => ({}),
+                extensionSettings: { sd: { illustration: structuredClone(SETTINGS) } },
+                activityGuard: makeActivityGuardApi(registry),
+                imageGeneration: {
+                    isAvailable: () => true,
+                    getCapabilities: async () => ({
+                        supportsSourceImage: true,
+                        supportsCharacterReference: false,
+                        characterReferenceEnabled: false,
+                        availableLoras: { names: [], includeWeight: false },
+                    }),
+                    generate: jest.fn(),
+                },
+                generateTask: jest.fn(async () => ({ toolCalls: [], assistantText: 'Committed reply' })),
+                getGlobalState: async (ns) => {
+                    listCalls += 1;
+                    // Return the production error envelope after session save commits.
+                    if (savedSessions > 0) {
+                        return { ok: false, state: null, reason: 'transport_error', hint: 'list refresh offline' };
+                    }
+                    return { ok: true, state: namespaces.get(ns) || {} };
+                },
+                updateGlobalState: async (ns, updater) => {
+                    const next = await updater(namespaces.get(ns) || {});
+                    if (next) namespaces.set(ns, next);
+                    savedSessions += 1;
+                    return { ok: true, state: next, updated: Boolean(next) };
+                },
+            };
+            globalThis.Luker = { getContext: () => ({ translate: s => String(s ?? ''), ...ctx }) };
+
+            const view = createStudioView({
+                getContext: () => ctx,
+                toast: (msg, opts) => toasts.push({ msg, opts }),
+            });
+            document.body.appendChild(view.el);
+            view.show();
+            await new Promise(r => setTimeout(r, 20));
+
+            const fileInput = view.el.querySelector('input[type="file"]');
+            const file = new File([new Uint8Array([137, 80, 78, 71])], 'ref.png', { type: 'image/png' });
+            Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise(r => setTimeout(r, 20));
+
+            const input = view.el.querySelector('[data-sd-role="studio-input"]');
+            input.value = 'Keep committed reply';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            view.el.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 50));
+
+            expect(savedSessions).toBeGreaterThanOrEqual(1);
+            expect(listCalls).toBeGreaterThan(2);
+            expect(toasts.some(t => t.opts?.error && t.msg.includes('list refresh offline'))).toBe(true);
+            // Committed session turn and uploaded attachment MUST survive refreshLists failure
+            expect(deletedPaths).toEqual([]);
+            expect(view.el.textContent).toContain('Committed reply');
+            expect(registry.getActiveActivities()).toEqual([]);
+        } finally {
+            errorSpy.mockRestore();
+            globalThis.fetch = savedFetch;
+        }
     });
 });

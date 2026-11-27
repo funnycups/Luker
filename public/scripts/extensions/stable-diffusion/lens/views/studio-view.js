@@ -201,7 +201,7 @@ export function createStudioView(app) {
         paint();
     }
 
-    async function persistCurrentSession(target = session) {
+    async function saveCurrentSession(target = session) {
         const ctx = getCtx();
         if (!target || typeof ctx?.updateGlobalState !== 'function') return;
         if (target.messages.length === 0 && target.images.length === 0) {
@@ -211,6 +211,10 @@ export function createStudioView(app) {
         if (session?.id === target.id) {
             target.updatedAt = saved.updatedAt;
         }
+    }
+
+    async function persistCurrentSession(target = session) {
+        await saveCurrentSession(target);
         await refreshLists();
     }
 
@@ -492,12 +496,48 @@ export function createStudioView(app) {
         }
 
         const turnSession = session;
+        let checkpointMessageCount = turnSession.messages.length;
+        let checkpointImageCount = turnSession.images.length;
+        let checkpointTitle = turnSession.title;
+        let checkpointUpdatedAt = turnSession.updatedAt;
+        let checkpointSelectedImageId = selectedImageId;
         busy = true;
         abortController = new AbortController();
         paint();
 
         let appendedUserMessage = false;
+        let persistedThisTurn = false;
         let uploadedAttachmentPaths = [];
+        const advancePersistCheckpoint = () => {
+            persistedThisTurn = true;
+            checkpointMessageCount = turnSession.messages.length;
+            checkpointImageCount = turnSession.images.length;
+            checkpointTitle = turnSession.title;
+            checkpointUpdatedAt = turnSession.updatedAt;
+            if (session === turnSession) {
+                checkpointSelectedImageId = selectedImageId;
+            }
+        };
+        const refreshListsAfterCommit = async () => {
+            try {
+                await refreshLists();
+            } catch (refreshErr) {
+                console.error('[sd/studio-view] Failed to refresh studio lists after saving session:', refreshErr);
+                app.toast(`${i18n('Studio request failed')}: ${String(refreshErr?.message || refreshErr)}`, { error: true });
+            }
+        };
+        const persistTurnSessionOrThrow = async () => {
+            try {
+                await saveCurrentSession(turnSession);
+            } catch (persistErr) {
+                if (persistErr && typeof persistErr === 'object') {
+                    persistErr.__studioPersistFailed = true;
+                }
+                throw persistErr;
+            }
+            advancePersistCheckpoint();
+            await refreshListsAfterCommit();
+        };
         await runWithStudioActivity(ctx, async () => {
             try {
                 const imageBackend = resolveImageBackend();
@@ -690,7 +730,7 @@ export function createStudioView(app) {
                         }
                     }
 
-                    await persistCurrentSession(turnSession);
+                    await persistTurnSessionOrThrow();
                     if (session === turnSession) {
                         paint();
                     }
@@ -700,15 +740,46 @@ export function createStudioView(app) {
                     }
                 }
 
-                await persistCurrentSession(turnSession);
+                await persistTurnSessionOrThrow();
             } catch (err) {
                 if (!abortController?.signal?.aborted) {
                     app.toast(`${i18n('Studio request failed')}: ${String(err?.message || err)}`, { error: true });
                 }
-                if (appendedUserMessage) {
-                    await persistCurrentSession(turnSession);
-                } else if (uploadedAttachmentPaths.length > 0) {
-                    await deleteChatAttachments(ctx, uploadedAttachmentPaths).catch(() => {});
+                let persistFailed = Boolean(err?.__studioPersistFailed);
+                if (appendedUserMessage && !persistFailed) {
+                    try {
+                        await saveCurrentSession(turnSession);
+                        advancePersistCheckpoint();
+                    } catch (persistErr) {
+                        persistFailed = true;
+                        console.error('[sd/studio-view] Failed to persist studio session after turn error:', persistErr);
+                        app.toast(`${i18n('Studio request failed')}: ${String(persistErr?.message || persistErr)}`, { error: true });
+                    }
+                    if (!persistFailed) {
+                        await refreshListsAfterCommit();
+                    }
+                }
+                if (appendedUserMessage && (persistFailed || !persistedThisTurn)) {
+                    turnSession.messages.length = checkpointMessageCount;
+                    turnSession.images.length = checkpointImageCount;
+                    turnSession.title = checkpointTitle;
+                    turnSession.updatedAt = checkpointUpdatedAt;
+                    if (session === turnSession) {
+                        selectedImageId = checkpointSelectedImageId;
+                        if (!persistedThisTurn) {
+                            draftInput = rawText;
+                        }
+                    }
+                }
+                if (!persistedThisTurn && uploadedAttachmentPaths.length > 0) {
+                    try {
+                        const cleanup = await deleteChatAttachments(ctx, uploadedAttachmentPaths);
+                        if (Array.isArray(cleanup?.failed) && cleanup.failed.length > 0) {
+                            console.error('[sd/studio-view] Failed to roll back uploaded attachments:', cleanup.failed);
+                        }
+                    } catch (cleanupErr) {
+                        console.error('[sd/studio-view] Failed to roll back uploaded attachments:', cleanupErr);
+                    }
                 }
             } finally {
                 busy = false;
