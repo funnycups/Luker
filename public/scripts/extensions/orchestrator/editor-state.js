@@ -26,7 +26,6 @@ import {
     ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
-    ORCH_NODE_TYPE_REVIEW,
     ORCH_NODE_TYPE_WORKER,
     createDefaultDirectorProfile,
     defaultLoopProfile,
@@ -45,11 +44,9 @@ import { canonicalStringify } from './canonical-stringify.js';
 import {
     createPresetDraft,
     resolveStoredIdReference,
-    sanitizePresetMap,
     toEditablePresetMap,
     toEditableSpec,
 } from './editable-spec.js';
-import { sanitizeSpec } from './spec-schema.js';
 import {
     ensureAgendaEditorIntegrity,
     sanitizeAgendaWorkingProfile,
@@ -151,116 +148,6 @@ export function createNewStage(editor) {
             userPromptTemplate: '',
         }],
     };
-}
-
-function buildBestEffortSpecFromAgendaAgents(agents, finalAgentId) {
-    const normalizedAgents = sanitizePresetMap(agents);
-    const agentIds = Object.keys(normalizedAgents);
-    const fallbackFinalAgentId = agentIds[0] || 'finalizer';
-    const resolvedFinalAgentId = normalizedAgents[finalAgentId]
-        ? String(finalAgentId)
-        : fallbackFinalAgentId;
-    const nonFinalAgentIds = agentIds.filter(id => id !== resolvedFinalAgentId);
-    const distillerId = nonFinalAgentIds.find(id => {
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId === 'distiller' || normalizedId.includes('distill');
-    }) || null;
-    const reviewAgentIds = nonFinalAgentIds.filter(id => {
-        if (id === distillerId) {
-            return false;
-        }
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId === 'critic'
-            || normalizedId.includes('critic')
-            || normalizedId.includes('review')
-            || normalizedId.includes('audit');
-    });
-    const remainingWorkerIds = nonFinalAgentIds.filter(id => id !== distillerId && !reviewAgentIds.includes(id));
-    const groundingAgentIds = remainingWorkerIds.filter(id => {
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId.includes('lore')
-            || normalizedId.includes('ground')
-            || normalizedId.includes('constraint')
-            || normalizedId.includes('recall')
-            || normalizedId.includes('memory');
-    });
-    const reasoningAgentIds = remainingWorkerIds.filter(id => {
-        if (groundingAgentIds.includes(id)) {
-            return false;
-        }
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId.includes('plan')
-            || normalizedId.includes('scene')
-            || normalizedId.includes('progress')
-            || normalizedId.includes('writer')
-            || normalizedId.includes('draft');
-    });
-    const supportAgentIds = remainingWorkerIds.filter(id => !groundingAgentIds.includes(id) && !reasoningAgentIds.includes(id));
-    const stages = [];
-
-    if (distillerId) {
-        stages.push({
-            id: 'distill',
-            mode: 'serial',
-            nodes: [distillerId],
-        });
-    }
-
-    if (groundingAgentIds.length > 0) {
-        stages.push({
-            id: 'grounding',
-            mode: groundingAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: groundingAgentIds,
-        });
-    }
-
-    if (reasoningAgentIds.length > 0) {
-        stages.push({
-            id: 'reason',
-            mode: reasoningAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: reasoningAgentIds,
-        });
-    }
-
-    if (supportAgentIds.length > 0) {
-        stages.push({
-            id: 'workers',
-            mode: supportAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: supportAgentIds,
-        });
-    }
-
-    if (reviewAgentIds.length > 0) {
-        stages.push({
-            id: 'review',
-            mode: reviewAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: reviewAgentIds.map(id => ({
-                id,
-                preset: id,
-                type: ORCH_NODE_TYPE_REVIEW,
-            })),
-        });
-    }
-
-    stages.push({
-        id: 'finalize',
-        mode: 'serial',
-        nodes: [resolvedFinalAgentId],
-    });
-
-    return sanitizeSpec({ stages });
-}
-
-export function copyAgendaAgentsIntoSpecEditor(agendaEditor, specEditor) {
-    ensureAgendaEditorIntegrity(agendaEditor);
-    ensureEditorIntegrity(specEditor);
-    const copiedPresets = sanitizePresetMap(agendaEditor.agents);
-    const fallbackFinalAgentId = Object.keys(copiedPresets)[0] || 'finalizer';
-    const resolvedFinalAgentId = resolveStoredIdReference(copiedPresets, agendaEditor.finalAgentId);
-    const finalAgentId = copiedPresets[resolvedFinalAgentId] ? resolvedFinalAgentId : fallbackFinalAgentId;
-    specEditor.presets = copiedPresets;
-    specEditor.spec = buildBestEffortSpecFromAgendaAgents(copiedPresets, finalAgentId);
-    ensureEditorIntegrity(specEditor);
 }
 
 /**

@@ -46,7 +46,6 @@
  */
 
 const extension_settings = Luker.getContext().extensionSettings;
-import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     getOpenAIPresetNames,
     renderConnectionProfileOptions as renderSharedConnectionProfileOptions,
@@ -140,7 +139,7 @@ export function renderOpenAIPresetOptions(context, selectedName = '', emptyLabel
 }
 
 export function getConnectionProfiles() {
-    return getChatCompletionConnectionProfiles();
+    return Luker.getContext().connectionProfiles.list();
 }
 
 export function sanitizeConnectionProfileName(value = '') {

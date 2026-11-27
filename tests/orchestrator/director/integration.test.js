@@ -95,7 +95,7 @@ describe('director integration — scripted main agent', () => {
         handle.setText('placeholder');
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 3, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -147,7 +147,7 @@ describe('director integration — scripted main agent', () => {
         handle.setText('placeholder');
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 3, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -191,7 +191,7 @@ describe('director integration — scripted main agent', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 5, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -239,14 +239,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'critic', description: 'd', systemPrompt: 's' }],
-                    maxRounds: 10,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'critic', description: 'd', systemPrompt: 's' }],
+                maxRounds: 10,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -322,14 +320,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'critic', description: 'crit', systemPrompt: 'be a critic' }],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'critic', description: 'crit', systemPrompt: 'be a critic' }],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -416,17 +412,15 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [
-                        { id: 'critic', description: 'd', systemPrompt: 's' },
-                        { id: 'planner', description: 'd', systemPrompt: 's' },
-                    ],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [
+                    { id: 'critic', description: 'd', systemPrompt: 's' },
+                    { id: 'planner', description: 'd', systemPrompt: 's' },
+                ],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -487,7 +481,7 @@ describe('director integration — scripted main agent', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 5, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -543,7 +537,7 @@ describe('director integration — scripted main agent', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 10, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 10, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -593,7 +587,7 @@ describe('director integration — scripted main agent', () => {
 
         await expect(runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 10, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 10, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -636,7 +630,7 @@ describe('director integration — scripted main agent', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 4, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 4, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -705,15 +699,13 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'critic', description: 'a critic', systemPrompt: 'be a critic' }],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    // Enable the chat tool so the sub-agent can use it.
-                    tools: { chat: { read_range: true } },
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'critic', description: 'a critic', systemPrompt: 'be a critic' }],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                // Enable the chat tool so the sub-agent can use it.
+                tools: { chat: { read_range: true } },
             },
             eventData: ev,
             deps: {
@@ -778,7 +770,7 @@ describe('director integration — scripted main agent', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 5, tools: {}  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -832,14 +824,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'critic', description: 'c', systemPrompt: 'c' }],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'critic', description: 'c', systemPrompt: 'c' }],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -911,14 +901,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'slow', description: '', systemPrompt: 's' }],
-                    maxRounds: 6,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'slow', description: '', systemPrompt: 's' }],
+                maxRounds: 6,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -987,17 +975,15 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [
-                        { id: 'curator', description: 'cur', systemPrompt: 'You are a curator.' },
-                        { id: 'brainstormer', description: 'b', systemPrompt: 'You are a brainstormer.' },
-                    ],
-                    maxRounds: 8,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [
+                    { id: 'curator', description: 'cur', systemPrompt: 'You are a curator.' },
+                    { id: 'brainstormer', description: 'b', systemPrompt: 'You are a brainstormer.' },
+                ],
+                maxRounds: 8,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -1063,14 +1049,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],
-                    maxRounds: 4,
-                    maxConcurrentSubagents: 3,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],
+                maxRounds: 4,
+                maxConcurrentSubagents: 3,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -1141,14 +1125,12 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 's1', description: '', systemPrompt: 'sub one' }],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 1,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 's1', description: '', systemPrompt: 'sub one' }],
+                maxRounds: 5,
+                maxConcurrentSubagents: 1,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -1210,17 +1192,15 @@ describe('director integration — scripted main agent', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [
-                        { id: 'A', description: '', systemPrompt: 'sub A' },
-                        { id: 'B', description: '', systemPrompt: 'sub B' },
-                    ],
-                    maxRounds: 4,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [
+                    { id: 'A', description: '', systemPrompt: 'sub A' },
+                    { id: 'B', description: '', systemPrompt: 'sub B' },
+                ],
+                maxRounds: 4,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -1288,7 +1268,7 @@ describe('director integration — scripted main agent', () => {
         handle.setText('placeholder');
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: { note: { open: true } } } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 3, tools: { note: { open: true } }  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -1348,7 +1328,7 @@ describe('director integration — scripted main agent', () => {
         handle.setText('placeholder');
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: { custom: { memory_keyword_search: true } } } },
+            profile: { mode: 'director',  mainAgent: {}, subAgents: [], maxRounds: 3, tools: { custom: { memory_keyword_search: true } }  },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,

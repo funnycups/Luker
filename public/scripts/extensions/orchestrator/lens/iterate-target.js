@@ -805,8 +805,9 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const c = resolveCtx();
             const settings = getOrchSettings();
             const owner = target._profileTarget;
-            const prof = readTargetProfile(c, settings, owner);
-            const container = getCustomToolContainer(prof, owner.mode);
+            const effectiveOwner = resolveLiveProfileOwner(c, settings, owner);
+            const prof = readTargetProfile(c, settings, effectiveOwner);
+            const container = getCustomToolContainer(prof, effectiveOwner.mode);
             const tools = Array.isArray(container?.customTools) ? container.customTools : [];
             return { name: target?.name || '', tool: tools.find(t => String(t?.name || '') === String(target?.name || '')) || null };
         },
@@ -815,15 +816,35 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const c = resolveCtx();
             const settings = getOrchSettings();
             const owner = target._profileTarget;
-            const prof = readTargetProfile(c, settings, owner);
-            const flagBucket = getCustomToolFlagBucket(prof, owner.mode);
-            const container = getCustomToolContainer(prof, owner.mode);
+            const effectiveOwner = resolveLiveProfileOwner(c, settings, owner);
+            const prof = readTargetProfile(c, settings, effectiveOwner);
+            const flagBucket = getCustomToolFlagBucket(prof, effectiveOwner.mode);
+            const container = getCustomToolContainer(prof, effectiveOwner.mode);
             commitApprovedCustomToolProposal(container, flagBucket, target._op);
             resanitizeProfileCustomTools(container);
-            await persistProfileToScope(c, settings, owner, prof);
+            await persistProfileToScope(c, settings, effectiveOwner, prof);
+            if (effectiveOwner.scope === 'character' && !owner.hasOverride) {
+                owner.hasOverride = true;
+                owner.presetId = destinationPresetId(effectiveOwner);
+            }
         },
         describe: (target) => String(target?.name || 'custom-tool'),
     };
+
+    function resolveLiveProfileOwner(ctx, settings, owner) {
+        if (owner?.scope === 'character' && !owner.hasOverride) {
+            const destId = destinationPresetId(owner);
+            const ext = deps.getCharacterExtensionDataByAvatar?.(ctx, owner.avatar);
+            const isActivated = ext?.activePresetIds?.[owner.mode] === destId;
+            const existing = isActivated
+                ? deps.getPreset?.(settings, owner.mode, 'character', destId, { context: ctx, avatar: owner.avatar })
+                : null;
+            if (existing) {
+                return { ...owner, hasOverride: true, presetId: destId };
+            }
+        }
+        return owner;
+    }
 
     async function persistProfileToScope(ctx, settings, target, profile) {
         const { mode, scope, avatar } = target;
@@ -1387,9 +1408,17 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
 
             const owner = { ...meta, mode: m, scope: sc, avatar };
-            const readDisk = () => readTargetProfile(c, settings, owner);
+            const destId = destinationPresetId(owner);
+            const createdCardOverride = sc === 'character' && !owner.hasOverride;
+            const prevCardExt = sc === 'character'
+                ? clone(deps.getCharacterExtensionDataByAvatar?.(c, avatar) || null)
+                : null;
+            const hadPriorSlot = Boolean(prevCardExt?.presetLibraries?.[m]?.[destId]);
+            const prevCardSlot = hadPriorSlot ? clone(prevCardExt.presetLibraries[m][destId]) : null;
+            const hadPriorActiveId = Boolean(prevCardExt?.activePresetIds && Object.prototype.hasOwnProperty.call(prevCardExt.activePresetIds, m));
+            const prevActiveId = hadPriorActiveId ? prevCardExt.activePresetIds[m] : undefined;
 
-            const beforeDisk = readDisk();
+            const beforeDisk = readTargetProfile(c, settings, owner);
             const ops = fieldPlan(orchUnits(base, m), orchUnits(next, m), keys);
             const merged = mergeOps(orchUnits(beforeDisk, m), ops);
             const applied = [...merged.write, ...merged.already].map(op => op.key);
@@ -1401,6 +1430,10 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
             if (sc === 'character') blankSeedKeys.delete(`${m}:${avatar}`);
 
+            const postOwner = createdCardOverride
+                ? { ...owner, hasOverride: true, presetId: destId }
+                : owner;
+
             return {
                 applied,
                 skipped: merged.skipped,
@@ -1408,11 +1441,28 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 async undo() {
                     if (!merged.write.length) return;
                     checkAvatar();
-                    const nowDisk = readDisk();
+                    const nowDisk = readTargetProfile(c, settings, postOwner);
                     const back = mergeOps(orchUnits(nowDisk, m), reverseOps(merged.write));
+                    if (createdCardOverride && back.skipped.length === 0) {
+                        const idx = deps.getCharacterIndexByAvatar?.(c, avatar) ?? -1;
+                        if (idx < 0) throw new SourceError('no-character', i18n('No character selected.'));
+                        const ext = clone(deps.getCharacterExtensionDataByAvatar?.(c, avatar) || {});
+                        if (ext.presetLibraries?.[m]) {
+                            if (hadPriorSlot) ext.presetLibraries[m][destId] = clone(prevCardSlot);
+                            else delete ext.presetLibraries[m][destId];
+                        }
+                        if (ext.activePresetIds) {
+                            if (hadPriorActiveId) ext.activePresetIds[m] = prevActiveId;
+                            else delete ext.activePresetIds[m];
+                        }
+                        const ok = await deps.persistOrchestratorCharacterExtension?.(c, idx, ext);
+                        if (!ok) throw new SourceError('write-failed', i18n('Failed to persist character override.'));
+                        (deps.refreshUiStateFromHost ?? deps.initializeUiState)?.(c);
+                        return;
+                    }
                     if (back.write.length) {
                         const revertedDoc = applyOrchOps(nowDisk, back.write, m);
-                        await persistProfileToScope(c, settings, owner, revertedDoc);
+                        await persistProfileToScope(c, settings, postOwner, revertedDoc);
                     }
                     if (back.skipped.length) throw conflictsLeftAlone(back.skipped.length);
                 },

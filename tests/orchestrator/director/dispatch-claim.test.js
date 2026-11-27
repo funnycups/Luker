@@ -51,7 +51,7 @@ describe('handleDirectorDispatch — claim policy', () => {
         for (const type of ['quiet', 'impersonate']) {
             const ev = makeEvent({ type });
             await handleDirectorDispatch(ev, {
-                profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+                profile: { mode: 'director', mainAgent: {}, subAgents: [] },
                 chat: [{ mes: '', extra: { reasoning: '' }, is_user: false }],
                 emit: jest.fn(),
                 acquirePlaceholderMessageId: stubAcquirer,
@@ -69,7 +69,7 @@ describe('handleDirectorDispatch — claim policy', () => {
             await handle.commit();
         });
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat,
             emit: jest.fn(async () => {}),
             acquirePlaceholderMessageId: stubAcquirer,
@@ -86,7 +86,7 @@ describe('handleDirectorDispatch — claim policy', () => {
         const notifyError = jest.fn();
         const runMainLoop = jest.fn(async () => { throw new Error('backend 500'); });
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat: [{ mes: '', extra: { reasoning: '' }, is_user: false }],
             emit: jest.fn(async () => {}),
             acquirePlaceholderMessageId: stubAcquirer,
@@ -116,7 +116,7 @@ describe('handleDirectorDispatch — claim policy', () => {
         // surfacing whatever made it through plus the error message.
         const runMainLoop = jest.fn(async () => { throw new Error('blew up'); });
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat,
             emit: jest.fn(async () => {}),
             acquirePlaceholderMessageId: stubAcquirer,
@@ -168,7 +168,7 @@ describe('handleDirectorDispatch — claim policy', () => {
             throw err;
         });
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat,
             emit: jest.fn(async () => {}),
             acquirePlaceholderMessageId: stubAcquirer,
@@ -185,7 +185,7 @@ describe('handleDirectorDispatch — claim policy', () => {
         // (rather than crash by passing undefined to createMessageEditorHandle).
         const ev = makeEvent();
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat: [{ mes: '', extra: { reasoning: '' }, is_user: false }],
             emit: jest.fn(),
             // no acquirePlaceholderMessageId
@@ -197,7 +197,7 @@ describe('handleDirectorDispatch — claim policy', () => {
     test('does not claim when acquirer returns an invalid id', async () => {
         const ev = makeEvent();
         await handleDirectorDispatch(ev, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [] } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [] },
             chat: [{ mes: '', extra: { reasoning: '' }, is_user: false }],
             emit: jest.fn(),
             acquirePlaceholderMessageId: () => -1,

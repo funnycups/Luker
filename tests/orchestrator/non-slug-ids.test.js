@@ -21,57 +21,6 @@ globalThis.Luker = {
     }),
 };
 
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
-});
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: {},
-    getContext: () => ({}),
-    writeExtensionField: async () => {},
-    UNSET_VALUE: Symbol('unset'),
-}));
-jest.unstable_mockModule('../../public/script.js', () => ({
-    saveSettingsDebounced: () => {},
-    saveSettings: async () => {},
-    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
-    extension_prompt_types: { IN_PROMPT: 0, IN_CHAT: 1 },
-    substituteParams: (s) => s,
-    chat_metadata: {},
-    this_chid: 0,
-    characters: [],
-    getRequestHeaders: () => ({}),
-    saveCharacterDebounced: () => {},
-    menu_type: '',
-    eventSource: { on: () => {}, off: () => {}, emit: () => {} },
-    event_types: {},
-    getExtensionPromptByName: () => '',
-    saveMetadata: async () => {},
-    getCurrentChatId: () => '',
-    create_save: {},
-    name1: '',
-    buildObjectPatchOperations: () => [],
-    buildObjectPatchOperationsAsync: async () => [],
-    requestAsyncDiffForNextSettingsSave: () => {},
-    getOneCharacter: () => null,
-    select_selected_character: () => {},
-    user_avatar: '',
-    processDroppedFiles: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    world_info_position: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
-    wi_anchor_position: {},
-}));
-jest.unstable_mockModule('../../public/scripts/utils.js', () => ({}));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
-    addLocaleData: () => {},
-    translate: (s) => String(s ?? ''),
-    t: (s) => String(s ?? ''),
-}));
-
 let getActivePreset;
 let createIterationEditorFromWorkingProfile;
 let sanitizePresetMap;
@@ -581,7 +530,7 @@ describe('agent and preset references resolve against stored ids', () => {
     });
 
     test('copying agenda agents into a spec editor keeps a padded final agent', async () => {
-        const { copyAgendaAgentsIntoSpecEditor } = await import('../../public/scripts/extensions/orchestrator/editor-state.js');
+        const { copyAgendaAgentsIntoSpecEditor } = await import('../../public/scripts/extensions/orchestrator/preset-io.js');
         const agendaEditor = { agents: { lookout: {}, [PADDED]: { systemPrompt: 'Keep the night watch.' } }, finalAgentId: PADDED };
         const specEditor = { spec: null, presets: {} };
         copyAgendaAgentsIntoSpecEditor(agendaEditor, specEditor);

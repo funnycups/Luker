@@ -1,4 +1,4 @@
-import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
 import yaml from 'yaml';
 
 const __extensionSettings = {
@@ -20,83 +20,44 @@ globalThis.Luker = {
         },
         lib: { yaml },
         extensionSettings: __extensionSettings,
+        connectionProfiles: { list: () => [] },
+        skills: { list: async () => [] },
         stopGeneration: () => {},
     }),
 };
-
-jest.unstable_mockModule('../../public/lib.js', () => ({
-    Popper: {},
-    lodash: {},
-    yaml,
-    default: {},
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
-    extension_settings: __extensionSettings,
-    getContext: () => ({}),
-    writeExtensionField: () => {},
-    UNSET_VALUE: Symbol('unset'),
-}));
-
-jest.unstable_mockModule('../../public/script.js', () => ({
-    saveSettingsDebounced: () => {},
-    saveSettings: async () => {},
-    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
-    extension_prompt_types: { IN_PROMPT: 0, IN_CHAT: 1 },
-    substituteParams: (s) => s,
-    chat_metadata: {},
-    this_chid: 0,
-    characters: [],
-    getRequestHeaders: () => ({}),
-}));
-
-jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
-    world_info_position: { before: 0, after: 1 },
-    wi_anchor_position: {},
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
-    getChatCompletionConnectionProfiles: () => [],
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/skill-resolution.js', () => ({
-    buildSkillRuntimeContext: () => ({}),
-    resolveAgentVisibleSkills: async () => [],
-    buildAvailableSkillsBlock: () => '',
-    invalidateSkillInventory: () => {},
-}));
 
 const plannerCalls = [];
 const agentCalls = [];
 const plannerResponses = [];
 const agentResponses = [];
 
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/tool-calling.js', () => ({
-    appendStandardToolRoundMessages: () => {},
-    requestToolCallsWithRetry: async (_ctx, _settings, opts) => {
-        agentCalls.push(opts);
-        if (agentResponses.length === 0) {
-            throw new Error('Agent LLM stub exhausted');
-        }
-        return agentResponses.shift();
-    },
-    requestToolCallWithRetry: async (_ctx, _settings, opts) => {
-        if (opts?.functionName === 'luker_orch_planner_step') {
+let callSeq = 0;
+function makeGenerateTaskStub() {
+    return async (opts) => {
+        const requiredName = opts?.functionCallOptions?.requiredFunctionName || opts?.toolChoice?.function?.name || '';
+        callSeq += 1;
+        if (requiredName === 'luker_orch_planner_step') {
             plannerCalls.push(opts);
             if (plannerResponses.length === 0) {
                 throw new Error('Planner LLM stub exhausted');
             }
-            return plannerResponses.shift();
+            return {
+                toolCalls: [{ id: `tc_plan_${callSeq}`, name: requiredName, args: plannerResponses.shift() }],
+            };
         }
         agentCalls.push(opts);
         if (agentResponses.length === 0) {
-            throw new Error('Agent result LLM stub exhausted');
+            throw new Error('Agent LLM stub exhausted');
         }
-        return agentResponses.shift();
-    },
-    serializeToolResultContent: (r) => JSON.stringify(r),
-    makeRuntimeToolCallId: () => `tc_${Math.random().toString(36).slice(2, 10)}`,
-}));
+        const next = agentResponses.shift();
+        if (Array.isArray(next?.toolCalls)) {
+            return next;
+        }
+        return {
+            toolCalls: [{ id: `tc_agent_${callSeq}`, name: requiredName || 'luker_orch_submit_result', args: next }],
+        };
+    };
+}
 
 let resolveAgendaLimits;
 let buildAgendaSharedContextText;
@@ -128,16 +89,9 @@ beforeEach(() => {
 });
 
 describe('agenda-runtime profile limits resolution and enforcement', () => {
-    test('resolveAgendaLimits prefers profile.limits over legacy global settings and falls back only when omitted or invalid', () => {
-        const legacySettings = {
-            agendaPlannerMaxRounds: 6,
-            agendaMaxConcurrentAgents: 3,
-            agendaMaxTotalRuns: 24,
-        };
-
+    test('resolveAgendaLimits uses profile.limits and falls back to canonical defaults when omitted or invalid', () => {
         expect(resolveAgendaLimits(
             { limits: { plannerMaxRounds: 2, maxConcurrentAgents: 1, maxTotalRuns: 5 } },
-            legacySettings,
         )).toEqual({
             plannerMaxRounds: 2,
             maxConcurrentAgents: 1,
@@ -146,7 +100,6 @@ describe('agenda-runtime profile limits resolution and enforcement', () => {
 
         expect(resolveAgendaLimits(
             { limits: { maxConcurrentAgents: 1 } },
-            legacySettings,
         )).toEqual({
             plannerMaxRounds: 6,
             maxConcurrentAgents: 1,
@@ -155,14 +108,13 @@ describe('agenda-runtime profile limits resolution and enforcement', () => {
 
         expect(resolveAgendaLimits(
             { limits: { plannerMaxRounds: 0, maxConcurrentAgents: -2, maxTotalRuns: Number.NaN } },
-            legacySettings,
         )).toEqual({
             plannerMaxRounds: 6,
             maxConcurrentAgents: 3,
             maxTotalRuns: 24,
         });
 
-        expect(resolveAgendaLimits(null, {})).toEqual({
+        expect(resolveAgendaLimits(null)).toEqual({
             plannerMaxRounds: 6,
             maxConcurrentAgents: 3,
             maxTotalRuns: 24,
@@ -271,7 +223,11 @@ describe('agenda-runtime profile limits resolution and enforcement', () => {
             { text: 'final guidance capsule' },
         );
 
-        const context = { chat: [{ is_user: true, mes: 'Go.' }], chatId: 'agenda-limits-chat' };
+        const context = {
+            chat: [{ is_user: true, mes: 'Go.' }],
+            chatId: 'agenda-limits-chat',
+            generateTask: makeGenerateTaskStub(),
+        };
         const payload = { type: 'normal', signal: new AbortController().signal };
 
         const result = await runAgendaOrchestration(context, payload, context.chat, profile);

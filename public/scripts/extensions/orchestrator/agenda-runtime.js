@@ -35,8 +35,8 @@
  *     spec mode.
  *
  * Limits read at runtime:
- *   - `plannerMaxRounds` — clamped against `getAgendaPlannerMaxRounds`
- *     and the per-profile limit.
+ *   - `plannerMaxRounds` — per-profile planner round limit (defaulting to
+ *     `DEFAULT_AGENDA_PLANNER_MAX_ROUNDS`).
  *   - `maxConcurrentAgents` — caps `dispatches.length` per round.
  *   - `maxTotalRuns` — caps total agent runs across all rounds.
  */
@@ -60,9 +60,9 @@ import {
 } from './agent-resolution.js';
 import {
     buildAgendaAvailableAgentsText,
-    getAgendaMaxConcurrentAgents,
-    getAgendaMaxTotalRuns,
-    getAgendaPlannerMaxRounds,
+    DEFAULT_AGENDA_MAX_CONCURRENT_AGENTS,
+    DEFAULT_AGENDA_MAX_TOTAL_RUNS,
+    DEFAULT_AGENDA_PLANNER_MAX_ROUNDS,
 } from './agenda-profile.js';
 import {
     createAgendaPlannerDraft,
@@ -422,23 +422,22 @@ function upsertAgendaTodo(state, nextTodo) {
 }
 
 /**
- * Resolve effective Agenda runtime limits from `profile.limits` with legacy
- * global settings fallback when omitted or invalid.
+ * Resolve effective Agenda runtime limits from `profile.limits` with canonical
+ * defaults when omitted or invalid.
  *
  * @param {object|null} profile
- * @param {object|null} settings
  * @returns {{ plannerMaxRounds: number, maxConcurrentAgents: number, maxTotalRuns: number }}
  */
-export function resolveAgendaLimits(profile = null, settings = extension_settings[MODULE_NAME]) {
+export function resolveAgendaLimits(profile = null) {
     const limits = profile?.limits && typeof profile.limits === 'object' ? profile.limits : {};
     const pickPositiveInt = (candidate, fallback) => {
         const n = Math.floor(Number(candidate));
         return Number.isFinite(n) && n >= 1 ? n : fallback;
     };
     return {
-        plannerMaxRounds: pickPositiveInt(limits.plannerMaxRounds, getAgendaPlannerMaxRounds(settings)),
-        maxConcurrentAgents: pickPositiveInt(limits.maxConcurrentAgents, getAgendaMaxConcurrentAgents(settings)),
-        maxTotalRuns: pickPositiveInt(limits.maxTotalRuns, getAgendaMaxTotalRuns(settings)),
+        plannerMaxRounds: pickPositiveInt(limits.plannerMaxRounds, DEFAULT_AGENDA_PLANNER_MAX_ROUNDS),
+        maxConcurrentAgents: pickPositiveInt(limits.maxConcurrentAgents, DEFAULT_AGENDA_MAX_CONCURRENT_AGENTS),
+        maxTotalRuns: pickPositiveInt(limits.maxTotalRuns, DEFAULT_AGENDA_MAX_TOTAL_RUNS),
     };
 }
 

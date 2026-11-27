@@ -127,20 +127,6 @@ function resolveAgentPromptPresetName(settings, agentConfig) {
 const SUPPORTED_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
 /**
- * Resolve the director configuration object from either the post-flatten
- * profile shape or the legacy `{ mode, director: {...} }` wrapper.
- *
- * @param {object|null|undefined} profile
- * @returns {object}
- */
-function resolveDirectorConfig(profile) {
-    const safeProfile = profile && typeof profile === 'object' ? profile : {};
-    return safeProfile.director && typeof safeProfile.director === 'object'
-        ? safeProfile.director
-        : safeProfile;
-}
-
-/**
  * Event subscriber entry point. Inspects the active profile and, when
  * appropriate, claims the takeover handle for director mode.
  *
@@ -193,7 +179,7 @@ export async function handleDirectorDispatch(eventData, deps) {
     // (script.js takeover branch) subscribes to setOnUpdate and is
     // responsible for mirroring text/reasoning back into chat[slot]
     // plus repainting the DOM. Tests install their own adapter.
-    const director = resolveDirectorConfig(profile);
+    const director = profile && typeof profile === 'object' ? profile : {};
     const discardOnAbort = Boolean(director.discardOnAbort);
     const slot = chat && Number.isInteger(messageId) ? chat[messageId] : null;
     const createMessageEditorHandle = getCreateMessageEditorHandle();
@@ -392,11 +378,7 @@ import { readOpenNotes as readOpenNotesFromContextForNotesImpl, renderOpenNotesB
  * legitimate way to exit; `maxRounds` is just the upper bound.
  */
 export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
-    // Profile shape post-flatten: top-level mainAgent / subAgents / limits.
-    // Legacy callers may still pass `{ mode, director: {...} }`; auto-detect
-    // so both shapes round-trip cleanly during the migration window.
-    const safeProfile = profile && typeof profile === 'object' ? profile : {};
-    const director = resolveDirectorConfig(safeProfile);
+    const director = profile && typeof profile === 'object' ? profile : {};
     const discardOnAbort = Boolean(director.discardOnAbort);
     const limits = {
         maxRounds: Number(director.maxRounds) > 0 ? Number(director.maxRounds) : 40,
@@ -420,7 +402,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // schemas + per-call executeLoopTool ctx) and every sub-agent
     // dispatch (via createSubagentDispatcher's deps bag, which forwards
     // it into the sub-agent's tool schemas + ctx the same way).
-    const customToolRegistry = buildPerRunCustomToolRegistry(safeProfile, deps?.trace, deps?.recordTraceEvent);
+    const customToolRegistry = buildPerRunCustomToolRegistry(director, deps?.trace, deps?.recordTraceEvent);
 
     const toolSchemas = buildMainAgentToolSchemas({
         subAgents: director.subAgents || [],

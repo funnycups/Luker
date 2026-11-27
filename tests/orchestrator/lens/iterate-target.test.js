@@ -806,4 +806,95 @@ describe('orchestrator/lens/iterate-target.js', () => {
         // Non-edited unit must come from global base, NOT stale inactive card preset.
         expect(persistedExt.presetLibraries.spec.default.presets.synthesizer.systemPrompt).toBe('Global synth');
     });
+
+    test('undo reverts a newly created character card override cleanly', async () => {
+        const h = makeHarness({ mode: 'spec', hasCharOverride: false });
+        const loaded = await h.target.load('character', h.ctx);
+        expect(loaded.target.hasOverride).toBe(false);
+
+        const edited = clone(loaded.live);
+        edited.presets.distiller.systemPrompt = 'First card override prompt';
+        const outcome = await h.target.commit(loaded.target, loaded.live, edited, ['preset:distiller']);
+
+        expect(h.ctx.characters[0].data.extensions.orchestrator.presetLibraries.spec.default.presets.distiller.systemPrompt).toBe('First card override prompt');
+        expect(h.ctx.characters[0].data.extensions.orchestrator.activePresetIds.spec).toBe('default');
+
+        await outcome.undo();
+        expect(h.ctx.characters[0].data.extensions.orchestrator.presetLibraries.spec.default).toBeUndefined();
+        expect(h.ctx.characters[0].data.extensions.orchestrator.activePresetIds.spec).toBeUndefined();
+    });
+
+    test('applying multiple custom-tool proposals onto a card without a prior override preserves all tools', async () => {
+        const h = makeHarness({ mode: 'loop', hasCharOverride: false });
+        const loaded = await h.target.load('character', h.ctx);
+        const tools = await h.target.tools(loaded.live, 'character', h.ctx);
+        const bus = createIterateBus({ proposalKinds: h.target.proposalKinds });
+
+        let round = 0;
+        const result = await runIterateTurn({
+            messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'add two custom tools' }],
+            live: loaded.live,
+            tools,
+            bus,
+            isRead: h.target.isRead,
+            runRead: h.target.runRead,
+            runEdit: h.target.runEdit,
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        calls: [
+                            {
+                                id: 't_a',
+                                name: 'luker_orch_set_custom_tool',
+                                args: {
+                                    name: 'tool_alpha',
+                                    description: 'Alpha',
+                                    mode: 'read',
+                                    parameters: { type: 'object', properties: {} },
+                                    body: 'return { a: 1 };',
+                                },
+                            },
+                            {
+                                id: 't_b',
+                                name: 'luker_orch_set_custom_tool',
+                                args: {
+                                    name: 'tool_beta',
+                                    description: 'Beta',
+                                    mode: 'read',
+                                    parameters: { type: 'object', properties: {} },
+                                    body: 'return { b: 2 };',
+                                },
+                            },
+                        ],
+                    };
+                }
+                return { text: 'Added both tools.', calls: [] };
+            },
+        });
+        expect(result.failed).toEqual([]);
+        const changes = buildTurnChanges({
+            base: loaded.live,
+            ai: result.live,
+            units: h.target.units,
+            bus: result.bus,
+            proposalIds: result.proposalIds,
+            kindAdapters: h.target.proposalKinds,
+        });
+        await commitTurnBatch({
+            target: h.target,
+            targetRef: loaded.target,
+            base: loaded.live,
+            ai: result.live,
+            keys: changes.map(c => c.key),
+            bus: result.bus,
+            proposalIds: result.proposalIds,
+            kindAdapters: h.target.proposalKinds,
+        });
+
+        const persisted = h.ctx.characters[0].data.extensions.orchestrator.presetLibraries.loop.default;
+        const names = (persisted.customTools || []).map(t => t.name).sort();
+        expect(names).toEqual(['tool_alpha', 'tool_beta']);
+    });
 });

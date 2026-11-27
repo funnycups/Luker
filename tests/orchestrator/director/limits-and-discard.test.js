@@ -219,7 +219,7 @@ describe('director runtime — discardOnAbort enforcement', () => {
 
         await runMainAgentLoop({
             handle: handleDiscard,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, discardOnAbort: true, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 3, discardOnAbort: true, tools: {} },
             eventData: { type: 'normal', abortSignal: acTrue.signal },
             deps: {
                 generateTaskStreamForMainAgent: jest.fn(),
@@ -245,7 +245,7 @@ describe('director runtime — discardOnAbort enforcement', () => {
 
         await runMainAgentLoop({
             handle: handleAbort,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, discardOnAbort: false, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 3, discardOnAbort: false, tools: {} },
             eventData: { type: 'normal', abortSignal: acFalse.signal },
             deps: {
                 generateTaskStreamForMainAgent: jest.fn(),
@@ -264,7 +264,7 @@ describe('director runtime — discardOnAbort enforcement', () => {
     });
 
     test('handleDirectorDispatch discards partial message on user abort when discardOnAbort is true (signal abort + thrown AbortError)', async () => {
-        // Case 1: signal abort fires during runMainLoop (legacy nested profile shape)
+        // Case 1: signal abort fires during runMainLoop
         const ac1 = new AbortController();
         const ev1 = {
             type: 'normal',
@@ -275,7 +275,7 @@ describe('director runtime — discardOnAbort enforcement', () => {
         };
         const chat1 = [{ mes: 'before', extra: { reasoning: 'beforeR' }, is_user: false }];
         await handleDirectorDispatch(ev1, {
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], discardOnAbort: true } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], discardOnAbort: true },
             chat: chat1,
             acquirePlaceholderMessageId: () => 0,
             runMainLoop: async ({ handle }) => {

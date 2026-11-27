@@ -68,7 +68,7 @@ describe('director abort discipline — main-agent tool loop', () => {
         try {
             await runMainAgentLoop({
                 handle,
-                profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+                profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
                 eventData: ev,
                 deps: {
                     generateTaskStreamForMainAgent: fakeStream,
@@ -117,7 +117,7 @@ describe('director abort discipline — main-agent tool loop', () => {
         try {
             await runMainAgentLoop({
                 handle,
-                profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+                profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
                 eventData: ev,
                 deps: {
                     generateTaskStreamForMainAgent: fakeStream,
@@ -171,7 +171,7 @@ describe('director abort discipline — long-running tools race the signal', () 
         try {
             await runMainAgentLoop({
                 handle,
-                profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+                profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
                 eventData: ev,
                 deps: {
                     generateTaskStreamForMainAgent: fakeStream,

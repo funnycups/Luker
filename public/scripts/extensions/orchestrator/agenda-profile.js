@@ -9,17 +9,14 @@
  *
  * This module owns:
  *
- *   1. The runtime budget readers (`getAgendaPlannerMaxRounds`,
- *      `getAgendaMaxConcurrentAgents`, `getAgendaMaxTotalRuns`) that
- *      pin global defaults at runtime; bounds match the limits the
- *      sanitizer enforces.
+ *   1. The default runtime budget constants (`DEFAULT_AGENDA_PLANNER_MAX_ROUNDS`,
+ *      `DEFAULT_AGENDA_MAX_CONCURRENT_AGENTS`, `DEFAULT_AGENDA_MAX_TOTAL_RUNS`).
  *   2. The available-agents prompt block builder
  *      (`buildAgendaAvailableAgentsText`) used by the planner prompt.
  *   3. `sanitizeAgendaWorkingProfile` — the canonical normalizer. Coerces
  *      planner / agents / finalAgentId / limits into the runtime shape,
  *      clones over `defaultAgendaAgents.finalizer` when no agents are
- *      defined, and clamps each limit to the same bounds the budget
- *      readers enforce.
+ *      defined, and normalizes each limit to its bounded range.
  *   4. `cloneAgendaWorkingProfileFromEditor` — bridges the editor shape into a runtime profile.
  *   5. `buildAgendaProfileForRuntime` — wraps a sanitized profile in the
  *      runtime envelope (`{ source: 'agenda', mode: ORCH_EXECUTION_MODE_AGENDA, … }`)
@@ -29,7 +26,6 @@
  *      the editor-only fields (`avatar`, `enabled`).
  */
 
-const extension_settings = Luker.getContext().extensionSettings;
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     defaultAgendaAgents,
@@ -45,19 +41,9 @@ import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
 import { sanitizeLorebookFilter } from './lorebook-filter.js';
 
-const MODULE_NAME = 'orchestrator';
-
-export function getAgendaPlannerMaxRounds(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.floor(Number(source?.agendaPlannerMaxRounds) || 6));
-}
-
-export function getAgendaMaxConcurrentAgents(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.floor(Number(source?.agendaMaxConcurrentAgents) || 3));
-}
-
-export function getAgendaMaxTotalRuns(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.floor(Number(source?.agendaMaxTotalRuns) || 24));
-}
+export const DEFAULT_AGENDA_PLANNER_MAX_ROUNDS = 6;
+export const DEFAULT_AGENDA_MAX_CONCURRENT_AGENTS = 3;
+export const DEFAULT_AGENDA_MAX_TOTAL_RUNS = 24;
 
 export function buildAgendaAvailableAgentsText(profile = {}) {
     const agents = profile?.agents && typeof profile.agents === 'object' ? profile.agents : {};

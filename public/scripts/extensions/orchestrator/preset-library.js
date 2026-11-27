@@ -557,68 +557,6 @@ export function writePresetByName(settings, mode, scope, name, payload, { contex
     };
 }
 
-/**
- * Resolve the global target preset id to write into for an iter-studio
- * "save to global" action. When the session was opened from a character
- * scope, prefer the global preset whose `name` matches the character's
- * active preset name — the user's mental model is "save this work to the
- * same-named preset", not "overwrite whatever happens to be global's
- * currently-active slot (almost always 'default')". Character-scope
- * sessions with no source name (cards that never customized the preset
- * name) and global-scope sessions both fall through to the original
- * writeActivePreset path.
- *
- * Returns {sourceName, applyWrite}: applyWrite(payload) performs the write
- * and returns the standard {ok, hint?, reason?, ambiguous?, created?,
- * candidateIds?, presetId?} envelope. Toast wording is the caller's job.
- */
-export function resolveSaveToGlobalWriter(context, settings, mode, session) {
-    const sourceScope = String(session?.scope || 'global');
-    if (sourceScope !== 'character') {
-        return {
-            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
-            sourceName: '',
-        };
-    }
-    const avatar = String(context?.characters?.[context?.characterId]?.avatar || '');
-    if (!avatar) {
-        return {
-            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
-            sourceName: '',
-        };
-    }
-    const charActiveId = getActivePresetId(settings, mode, { scope: 'character', context, avatar });
-    const charActive = charActiveId
-        ? getPreset(settings, mode, 'character', charActiveId, { context, avatar })
-        : null;
-    const sourceName = String(charActive?.name || '').trim();
-    if (!sourceName) {
-        return {
-            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
-            sourceName: '',
-        };
-    }
-    return {
-        applyWrite: (payload) => writePresetByName(settings, mode, 'global', sourceName, payload),
-        sourceName,
-    };
-}
-
-/**
- * Commit a spec-mode iteration session's working profile to the global
- * library. Builds the persisted spec payload and writes it through the
- * save target `resolveSaveToGlobalWriter` picks. Returns the write
- * envelope plus the source preset name used for the toast wording.
- */
-export function commitSpecIterationSessionToGlobal(context, settings, session) {
-    const payload = {
-        spec: sanitizeSpec(session?.workingProfile?.spec),
-        presets: sanitizePresetMap(session?.workingProfile?.presets),
-    };
-    const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_SPEC, session);
-    return { writeResult: applyWrite(payload), sourceName };
-}
-
 export function allModes() {
     return [...ALL_MODES];
 }

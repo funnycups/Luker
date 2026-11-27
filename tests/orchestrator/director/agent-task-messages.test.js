@@ -176,12 +176,10 @@ describe('runMainAgentLoop injects ## Open Notes into the main agent system prom
 
         const profile = {
             mode: 'director',
-            director: {
-                mainAgent: { systemPrompt: 'You are the main director.' },
-                subAgents: [],
-                maxRounds: 3,
-                tools: { finalize: true },
-            },
+            mainAgent: { systemPrompt: 'You are the main director.' },
+            subAgents: [],
+            maxRounds: 3,
+            tools: { finalize: true },
         };
         const ev = {
             type: 'normal',
@@ -248,12 +246,10 @@ describe('runMainAgentLoop injects ## Open Notes into the main agent system prom
 
         const profile = {
             mode: 'director',
-            director: {
-                mainAgent: { systemPrompt: 'You are the main director.' },
-                subAgents: [],
-                maxRounds: 3,
-                tools: { finalize: true },
-            },
+            mainAgent: { systemPrompt: 'You are the main director.' },
+            subAgents: [],
+            maxRounds: 3,
+            tools: { finalize: true },
         };
         const ev = {
             type: 'normal',
