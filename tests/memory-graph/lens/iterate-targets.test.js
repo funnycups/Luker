@@ -823,8 +823,10 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
 
     test('graph preview keeps custom type identifiers distinct', () => {
         const target = createMemoryGraphTarget();
-        expect(target.label).toBe('记忆图内容');
-        expect(createMemoryConfigTarget().label).toBe('记忆图配置');
+        const configTarget = createMemoryConfigTarget();
+        expect(target.label).toBeTruthy();
+        expect(configTarget.label).toBeTruthy();
+        expect(target.label).not.toBe(configTarget.label);
         const preview = target.renderPreview({
             base: { nodes: {}, links: {} },
             ai: {

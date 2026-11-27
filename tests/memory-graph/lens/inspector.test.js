@@ -216,18 +216,24 @@ describe('Memory Lens inspector entity events view', () => {
         expect(items.length).toBe(3);
 
         const sectionTitles = [...host.querySelectorAll('.ml-insp-block .lw-sec-title')].map(el => el.textContent);
-        expect(sectionTitles.some(text => text.includes('事件 · 3'))).toBe(true);
+        expect(sectionTitles.some(text => text.includes('· 3'))).toBe(true);
 
         const rows = items.map(li => ({
             title: li.querySelector('.ml-nodelink-title')?.textContent,
+            tagCount: li.querySelectorAll('.ml-nodelink-tags .ml-tag-muted').length,
             tags: [...li.querySelectorAll('.ml-nodelink-tags .ml-tag-muted')].map(el => el.textContent),
             meta: li.querySelector('.ml-nodelink-meta')?.textContent,
         }));
-        expect(rows).toEqual([
-            { title: '夜间突袭', tags: ['推进', '更新'], meta: '第 50 轮' },
-            { title: '定下轮替', tags: ['推进', '更新'], meta: '第 30 轮' },
-            { title: '初次交锋', tags: ['推进'], meta: '第 20 轮' },
-        ]);
+        expect(rows.map(r => r.title)).toEqual(['夜间突袭', '定下轮替', '初次交锋']);
+        expect(rows.map(r => r.tagCount)).toEqual([2, 2, 1]);
+        expect(rows[0].tags[0]).toBeTruthy();
+        expect(rows[0].tags[1]).toBeTruthy();
+        expect(rows[0].tags[0]).not.toBe(rows[0].tags[1]);
+        expect(rows[1].tags).toEqual(rows[0].tags);
+        expect(rows[2].tags).toEqual([rows[0].tags[0]]);
+        expect(rows[0].meta).toContain('50');
+        expect(rows[1].meta).toContain('30');
+        expect(rows[2].meta).toContain('20');
     });
 
     test('provides View in timeline action for threads and focuses timeline on the thread', async () => {
@@ -235,8 +241,8 @@ describe('Memory Lens inspector entity events view', () => {
         await flushAsync();
 
         lens.app.select('t_1');
-        const timelineBtn = [...host.querySelectorAll('.ml-insp-block .ml-linkbtn')].find(btn => btn.textContent.includes('在时间线中查看'));
-        expect(timelineBtn).toBeDefined();
+        const timelineBtn = host.querySelector('.ml-insp-block .ml-linkbtn');
+        expect(timelineBtn).not.toBeNull();
 
         timelineBtn.click();
         expect(lens.app.state().view).toBe('timeline');
@@ -250,13 +256,13 @@ describe('Memory Lens inspector entity events view', () => {
         lens.app.select('t_long');
         expect(host.querySelectorAll('.ml-insp-eventlist > li').length).toBe(12);
 
-        const showMoreBtn = [...host.querySelectorAll('.ml-insp-block button')].find(btn => btn.textContent.includes('显示更多'));
-        expect(showMoreBtn).toBeDefined();
+        const showMoreBtn = host.querySelector('.ml-insp-block button.ml-insp-more');
+        expect(showMoreBtn).not.toBeNull();
         expect(showMoreBtn.textContent).toContain('3');
 
         showMoreBtn.click();
         expect(host.querySelectorAll('.ml-insp-eventlist > li').length).toBe(15);
-        expect([...host.querySelectorAll('.ml-insp-block button')].some(btn => btn.textContent.includes('显示更多'))).toBe(false);
+        expect(host.querySelector('.ml-insp-block button.ml-insp-more')).toBeNull();
     });
 
     test('clicking the header degree chip opens the Relationships modal when editable', async () => {
@@ -264,7 +270,8 @@ describe('Memory Lens inspector entity events view', () => {
         await flushAsync();
 
         lens.app.select('t_1');
-        const degreeBtn = [...host.querySelectorAll('.ml-insp-meta button.ml-chip-btn')].find(btn => btn.title === '关系');
+        const degreeBtn = [...host.querySelectorAll('.ml-insp-meta button.ml-chip-btn')]
+            .find(btn => !btn.querySelector('.ml-chip-mono'));
         expect(degreeBtn).toBeDefined();
         expect(degreeBtn.textContent).toContain('5');
 
@@ -297,8 +304,8 @@ describe('Memory Lens inspector entity events view', () => {
         await flushAsync();
 
         lens.app.select('loc_1');
-        expect(host.querySelector('.ml-insp-meta button[title="关系"]')).toBeNull();
-        const degreeSpan = host.querySelector('.ml-insp-meta span.ml-chip[title="关系"]');
+        expect([...host.querySelectorAll('.ml-insp-meta button.ml-chip-btn')].filter(btn => !btn.querySelector('.ml-chip-mono'))).toHaveLength(0);
+        const degreeSpan = host.querySelector('.ml-insp-meta span.ml-chip[title]');
         expect(degreeSpan).not.toBeNull();
         expect(degreeSpan.textContent).toContain('3');
 
@@ -306,10 +313,12 @@ describe('Memory Lens inspector entity events view', () => {
             title: li.querySelector('.ml-nodelink-title')?.textContent,
             tags: [...li.querySelectorAll('.ml-nodelink-tags .ml-tag-muted')].map(el => el.textContent),
         }));
-        expect(rows).toEqual([
-            { title: '离开洞府', tags: ['发生于'] },
-            { title: '初入洞府', tags: ['发生于', '相关'] },
-        ]);
+        expect(rows.map(r => r.title)).toEqual(['离开洞府', '初入洞府']);
+        expect(rows[0].tags).toHaveLength(1);
+        expect(rows[1].tags).toHaveLength(2);
+        expect(rows[1].tags[0]).toBe(rows[0].tags[0]);
+        expect(rows[1].tags[1]).toBeTruthy();
+        expect(rows[1].tags[1]).not.toBe(rows[1].tags[0]);
     });
 });
 

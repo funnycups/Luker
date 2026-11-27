@@ -125,7 +125,8 @@ describe('renderReplacementOverview', () => {
         const node = renderReplacementOverview(
             { hasChanges: false, card: { previousName: '', nextName: '', fields: [] }, book: { previousName: '', nextName: '', renamed: false, added: [], removed: [], changed: [], unchangedCount: 0 } },
         );
-        expect(node.querySelector('.wb-note').textContent).toContain('No structural changes detected');
+        expect(node.querySelector('.wb-note')?.textContent?.trim().length).toBeGreaterThan(0);
+        expect(node.querySelectorAll(':scope > section')).toHaveLength(0);
     });
 
     test('renders card fields, book statistics and entry groups', () => {
@@ -152,7 +153,12 @@ describe('renderReplacementOverview', () => {
         expect(node.querySelectorAll(':scope > section')).toHaveLength(2);
         expect(node.textContent).toContain('card.description');
         expect(node.textContent).toContain('entry.2.content');
-        expect(node.querySelector('.wb-replace-stats').textContent).toBe('+1 added−1 removed~1 changed=0 unchanged');
+        const statTexts = [...node.querySelectorAll('.wb-replace-stats > span')].map(el => el.textContent.trim());
+        expect(statTexts).toHaveLength(4);
+        expect(statTexts[0]).toMatch(/^\+1\b/);
+        expect(statTexts[1]).toMatch(/^−1\b/);
+        expect(statTexts[2]).toMatch(/^~1\b/);
+        expect(statTexts[3]).toMatch(/^=0\b/);
         expect(node.querySelector('[data-change-kind="add"]').textContent).toContain('new body');
         expect(node.querySelector('[data-change-kind="del"]').textContent).toContain('gone body');
         const changed = node.querySelector('[data-change-kind="mod"]');

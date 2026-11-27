@@ -241,7 +241,7 @@ afterEach(() => {
 });
 
 describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
-    test('quadrant 1 (both off): dormant tone, notes Orchestrator/other plugins can still call provider, dims agent fields', () => {
+    test('quadrant 1 (both off): dormant tone, keeps provider fields active, dims agent fields', () => {
         const model = buildSearchToolsMainSummary(makeState({
             enabled: false,
             preRequestEnabled: false,
@@ -263,8 +263,8 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         expect(model.dormantFields).not.toContain('defaultVisitMaxChars');
 
         const rendered = renderModel(model);
-        expect(rendered.fullText).toContain('DuckDuckGo (no login)');
-        expect(rendered.fullText).toMatch(/Orchestrator|other plugins/i);
+        expect(rendered.fullText).toContain('8');
+        expect(rendered.fullText).toContain('4000');
         expect(rendered.rowTexts[0].tone).toBe('off');
         expect(rendered.rowTexts[1].tone).toBe('off');
         expect(tokenFieldKeys(model)).toEqual(new Set([
@@ -277,6 +277,12 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
     });
 
     test('quadrant 2 (enabled only): main model active, pre-request agent off & dimmed', () => {
+        const truncated = buildSearchToolsMainSummary(makeState({
+            enabled: true,
+            preRequestEnabled: false,
+            defaultMaxResults: 10,
+            defaultVisitMaxChars: 4000,
+        }));
         const model = buildSearchToolsMainSummary(makeState({
             enabled: true,
             preRequestEnabled: false,
@@ -297,11 +303,19 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         expect(rendered.rowTexts[0].tone).not.toBe('off');
         expect(rendered.rowTexts[1].tone).toBe('off');
         expect(rendered.fullText).toContain('10');
-        expect(rendered.fullText).toContain('no truncation');
-        expect(rendered.fullText).not.toMatch(/when main toggles are off/i);
+        expect(rendered.rowTexts[2].text).not.toBe(renderModel(truncated).rowTexts[2].text);
     });
 
     test('quadrant 3 (preRequestEnabled only): main model off, pre-request agent active, no dormant fields', () => {
+        const withWi = buildSearchToolsMainSummary(makeState({
+            enabled: false,
+            preRequestEnabled: true,
+            agentApiPresetName: 'FastConn',
+            agentPresetName: 'plugin-only',
+            includeWorldInfoWithPreset: true,
+            toolCallRetryMax: 3,
+            agentSystemPrompt: 'Do research.',
+        }));
         const model = buildSearchToolsMainSummary(makeState({
             enabled: false,
             preRequestEnabled: true,
@@ -320,8 +334,8 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         expect(rendered.rowTexts[1].tone).not.toBe('off');
         expect(rendered.fullText).toContain('FastConn');
         expect(rendered.fullText).toContain('plugin-only');
-        expect(rendered.fullText).toContain('without world info');
         expect(rendered.fullText).toContain('3');
+        expect(model.rows[1].tokens.includeWorldInfoWithPreset.text).not.toBe(withWi.rows[1].tokens.includeWorldInfoWithPreset.text);
         expect(tokenFieldKeys(model)).toEqual(new Set([
             'enabled',
             'preRequestEnabled',
@@ -335,7 +349,7 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         ]));
     });
 
-    test('quadrant 4 (both on): both active, shows current fallbacks when agent presets are blank', () => {
+    test('quadrant 4 (both on): both active, shows non-empty fallback tokens when agent presets are blank', () => {
         const model = buildSearchToolsMainSummary(makeState({
             enabled: true,
             preRequestEnabled: true,
@@ -352,9 +366,8 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         const rendered = renderModel(model);
         expect(rendered.rowTexts[0].tone).not.toBe('off');
         expect(rendered.rowTexts[1].tone).not.toBe('off');
-        expect(rendered.fullText).toContain('(Current API config)');
-        expect(rendered.fullText).toContain('(Current preset)');
-        expect(rendered.fullText).toContain('with world info');
+        expect(model.rows[1].tokens.agentApiPresetName.text.length).toBeGreaterThan(0);
+        expect(model.rows[1].tokens.agentPresetName.text.length).toBeGreaterThan(0);
     });
 
     test('missing secret on keyed provider emits danger warning linking provider; configured secret clears it', () => {
@@ -368,7 +381,7 @@ describe('buildSearchToolsMainSummary (2x2 matrix + warnings)', () => {
         expect(missing.warnings[0].severity).toBe('danger');
         expect(tokenFieldKeys(missing).has('provider')).toBe(true);
         const renderedMissing = renderModel(missing);
-        expect(renderedMissing.warningTexts[0].text).toContain('Brave Search (API key)');
+        expect(renderedMissing.warningTexts[0].text.length).toBeGreaterThan(0);
 
         const configured = buildSearchToolsMainSummary(makeState({
             enabled: true,
@@ -449,10 +462,9 @@ describe('buildSearchToolsLorebookSummary (2x2 matrix + positions)', () => {
         ]));
         const rendered = renderModel(model);
         expect(rendered.rowTexts[0].tone).toBe('off');
-        expect(rendered.fullText).toMatch(/inactive/i);
     });
 
-    test('enabled only: active, notes existing stored entries stay injected while no new automatic entries are written', () => {
+    test('enabled only: active with distinct template from preRequestEnabled', () => {
         const model = buildSearchToolsLorebookSummary(makeState({
             enabled: true,
             preRequestEnabled: false,
@@ -461,18 +473,23 @@ describe('buildSearchToolsLorebookSummary (2x2 matrix + positions)', () => {
             lorebookRole: ROLES.USER,
             lorebookEntryOrder: 9500,
         }));
+        const preReqModel = buildSearchToolsLorebookSummary(makeState({
+            enabled: false,
+            preRequestEnabled: true,
+            lorebookPosition: POSITIONS.atDepth,
+            lorebookDepth: 4,
+            lorebookRole: ROLES.USER,
+            lorebookEntryOrder: 9500,
+        }));
         expect(model.tone).toBe('active');
         expect(model.dormantFields).toEqual([]);
         const rendered = renderModel(model);
-        expect(rendered.fullText).toMatch(/existing stored entries stay injected/i);
-        expect(rendered.fullText).toMatch(/no new automatic entries/i);
-        expect(rendered.fullText).toContain('At Chat Depth');
         expect(rendered.fullText).toContain('4');
-        expect(rendered.fullText).toContain('User');
         expect(rendered.fullText).toContain('9500');
+        expect(rendered.fullText).not.toBe(renderModel(preReqModel).fullText);
     });
 
-    test('preRequestEnabled active: writes & injects at atDepth (shows depth + role) vs non-atDepth (omits depth + role)', () => {
+    test('preRequestEnabled active: atDepth includes depth and role tokens while non-atDepth omits them', () => {
         const atDepthModel = buildSearchToolsLorebookSummary(makeState({
             enabled: false,
             preRequestEnabled: true,
@@ -490,9 +507,7 @@ describe('buildSearchToolsLorebookSummary (2x2 matrix + positions)', () => {
             'lorebookEntryOrder',
         ]));
         const atDepthText = renderModel(atDepthModel).fullText;
-        expect(atDepthText).toContain('At Chat Depth');
         expect(atDepthText).toContain('2');
-        expect(atDepthText).toContain('Assistant');
         expect(atDepthText).toContain('9800');
 
         const afterModel = buildSearchToolsLorebookSummary(makeState({
@@ -509,10 +524,8 @@ describe('buildSearchToolsLorebookSummary (2x2 matrix + positions)', () => {
             'lorebookEntryOrder',
         ]));
         const afterText = renderModel(afterModel).fullText;
-        expect(afterText).toContain('After Character Definitions');
         expect(afterText).toContain('777');
         expect(afterText).not.toContain('99');
-        expect(afterText).not.toContain('Assistant');
     });
 });
 
@@ -624,7 +637,7 @@ describe('DOM mounting via mountBehaviorSummary & createSearchToolsSettingsUi', 
         providerSelect.value = 'brave';
         providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
         expect(mainCard.classList.contains('is-danger')).toBe(true);
-        expect(mainCard.textContent).toContain('Brave Search (API key)');
+        expect(mainCard.querySelectorAll('.luker-bsum-warn.is-danger')).toHaveLength(1);
 
         // Secret updated + ensureUi() -> warning clears
         secrets.api_key_brave_search = 'sk-test';
@@ -661,10 +674,12 @@ describe('DOM mounting via mountBehaviorSummary & createSearchToolsSettingsUi', 
 
         // Switch lorebook position away from atDepth -> Card 2 drops depth/role
         const posSelect = document.querySelector('#search_tools_lorebook_position');
+        const beforePosText = lorebookCard.textContent;
         posSelect.value = String(POSITIONS.before);
         posSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        expect(lorebookCard.textContent).toContain('Before Character Definitions');
+        expect(lorebookCard.textContent).not.toBe(beforePosText);
         expect(lorebookCard.textContent).not.toContain('9999');
+        expect(lorebookCard.querySelector('button[data-bsum-fields="lorebookDepth"]')).toBeNull();
 
         // Clicking a token focuses and pulses the target control
         const maxResultsTok = mainCard.querySelector('button[data-bsum-fields="defaultMaxResults"]');

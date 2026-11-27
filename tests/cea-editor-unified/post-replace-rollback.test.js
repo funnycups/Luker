@@ -175,7 +175,10 @@ describe('CEA post-replace merge action & Workbench routing', () => {
         expect(call.page).toBe('ai');
         expect(call.ws).toBe('card');
         expect(call.scope).toBe('character');
-        expect(call.seedPrompt).toContain('Field changed: `description`');
+        expect(typeof call.seedPrompt).toBe('string');
+        expect(call.seedPrompt.length).toBeGreaterThan(0);
+        expect(call.seedPrompt).toContain('Prev desc');
+        expect(call.seedPrompt).toContain('Next desc');
         expect(call.hideSeedFromUi).toBe(true);
         expect(call.autoSend).toBe(true);
         expect(typeof call.onCancelWithoutApply).toBe('function');

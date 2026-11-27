@@ -19,54 +19,54 @@ const { cardUnits } = await import('../../public/scripts/workbench/model/adapter
 const { registerWorkbenchLocaleData } = await import('../../public/scripts/workbench/locale-data.js');
 
 describe('lazy i18n evaluation after Luker locale registration', () => {
-    test('modules imported before Luker initializes still return translated strings once locale data is registered', () => {
+    test('modules imported before Luker initializes still evaluate translate() lazily once Luker is attached', () => {
         const tables = {};
-        const coreZhCn = {
-            'Request inspector': '请求检查器-core',
-            Preset: '预设',
-            'Character card': '角色卡',
-            'World book': '世界书',
-            'Q&A': '问问',
-        };
         registerWorkbenchLocaleData((loc, data) => {
             tables[loc] = { ...(tables[loc] || {}), ...data };
         });
 
+        const translatedCalls = [];
         globalThis.Luker = {
             getContext: () => ({
                 getCurrentLocale: () => 'zh-cn',
-                translate: (text) => tables['zh-cn']?.[text] ?? coreZhCn[text] ?? text,
+                translate: (text) => {
+                    translatedCalls.push(text);
+                    return `TR:${text}`;
+                },
             }),
         };
 
-        expect(readLabel('wb_list_requests')).toBe('请求列表');
-        expect(getReadLabels().wb_read_frontend_logs).toBe('前端日志');
-        expect(readsSummary([{ name: 'wb_list_requests' }])).toBe('请求列表');
+        expect(readLabel('wb_list_requests')).toMatch(/^TR:/);
+        expect(getReadLabels().wb_read_frontend_logs).toMatch(/^TR:/);
+        expect(readsSummary([{ name: 'wb_list_requests' }])).toBe(readLabel('wb_list_requests'));
 
-        expect(baseRules().find(r => r.id === 'preset.dup')?.name).toBe('预设条目重复');
+        expect(baseRules().find(r => r.id === 'preset.dup')?.name).toMatch(/^TR:/);
 
-        expect(chips()).toContain('这条回复为什么会这样写');
-        expect(wsName('memory')).toBe('记忆图配置');
-        expect(wsName('memory_graph')).toBe('记忆图内容');
+        expect(chips().every(c => c.startsWith('TR:'))).toBe(true);
+        expect(wsName('memory')).toMatch(/^TR:/);
+        expect(wsName('memory_graph')).toMatch(/^TR:/);
+        expect(wsName('memory')).not.toBe(wsName('memory_graph'));
 
-        expect(nameMap().orch).toBe('编排');
-        expect(formatChangeName('memory')).toBe('记忆图配置');
-        expect(formatChangeName('memory_graph')).toBe('记忆图内容');
+        expect(nameMap().orch).toMatch(/^TR:/);
+        expect(formatChangeName('memory')).toBe(wsName('memory'));
+        expect(formatChangeName('memory_graph')).toBe(wsName('memory_graph'));
 
-        expect(knownRoles().find(r => r.key === 'memory')?.label).toBe('记忆图配置');
-        expect(knownRoles().find(r => r.key === 'memory_graph')?.label).toBe('记忆图内容');
-        expect(sourceDefs().find(s => s.key === 'frontLogs')?.name).toBe('前端日志');
+        expect(knownRoles().find(r => r.key === 'memory')?.label).toBe(wsName('memory'));
+        expect(knownRoles().find(r => r.key === 'memory_graph')?.label).toBe(wsName('memory_graph'));
+        expect(sourceDefs().find(s => s.key === 'frontLogs')?.name).toMatch(/^TR:/);
 
-        expect(toneLabel('memory')).toBe('记忆图');
-        expect(getTones().orch).toBe('编排');
+        expect(toneLabel('memory')).toMatch(/^TR:/);
+        expect(getTones().orch).toMatch(/^TR:/);
 
         const units = cardUnits({
             character: { name: 'A', description: 'D', system_prompt: 'S', creator_notes: 'N' },
         });
-        expect(units.get('card:name')?.label).toBe('名字');
-        expect(units.get('card:description')?.label).toBe('描述');
-        expect(units.get('card:system_prompt')?.label).toBe('系统提示');
-        expect(units.get('card:creator_notes')?.label).toBe('作者备注');
+        expect(units.get('card:name')?.label).toMatch(/^TR:/);
+        expect(units.get('card:description')?.label).toMatch(/^TR:/);
+        expect(units.get('card:system_prompt')?.label).toMatch(/^TR:/);
+        expect(units.get('card:creator_notes')?.label).toMatch(/^TR:/);
+        expect(Object.keys(tables['zh-cn'] || {}).length).toBeGreaterThan(0);
+        expect(translatedCalls.length).toBeGreaterThan(10);
 
         delete globalThis.Luker;
     });

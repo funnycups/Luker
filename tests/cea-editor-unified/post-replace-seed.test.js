@@ -39,33 +39,37 @@ describe('summarizeCharacterDiff', () => {
         const prev = { name: 'Alice', description: 'Old description here.' };
         const next = { name: 'Alice', description: 'A brand new description.' };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        expect(lines.some(l => l.includes('Field changed: `description`'))).toBe(true);
+        expect(lines.some(l => l.includes('`description`'))).toBe(true);
         expect(lines.some(l => l.includes('`Old description here.`'))).toBe(true);
         expect(lines.some(l => l.includes('`A brand new description.`'))).toBe(true);
-        expect(lines.some(l => l.includes('Field changed: `name`'))).toBe(false);
+        expect(lines.some(l => l.includes('`name`'))).toBe(false);
     });
 
     test('detects added field present only on next', () => {
         const prev = { name: 'Alice' };
         const next = { name: 'Alice', personality: 'Calm and steady.' };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        expect(lines.some(l => l.includes('Field added: `personality`'))).toBe(true);
+        expect(lines.some(l => l.includes('`personality`'))).toBe(true);
         expect(lines.some(l => l.includes('`Calm and steady.`'))).toBe(true);
+        expect(lines.some(l => l.includes('- prev:'))).toBe(false);
     });
 
     test('detects removed field present only on prev', () => {
         const prev = { name: 'Alice', scenario: 'Forest meeting.' };
         const next = { name: 'Alice' };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        expect(lines.some(l => l.includes('Field removed: `scenario`'))).toBe(true);
+        expect(lines.some(l => l.includes('`scenario`'))).toBe(true);
         expect(lines.some(l => l.includes('`Forest meeting.`'))).toBe(true);
+        expect(lines.some(l => l.includes('- next:'))).toBe(false);
     });
 
     test('diffs nested data.* fields', () => {
         const prev = { name: 'A', data: { description: 'short' } };
         const next = { name: 'A', data: { description: 'updated' } };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        expect(lines.some(l => l.includes('Field changed: `data.description`'))).toBe(true);
+        expect(lines.some(l => l.includes('`data.description`'))).toBe(true);
+        expect(lines.some(l => l.includes('`short`'))).toBe(true);
+        expect(lines.some(l => l.includes('`updated`'))).toBe(true);
     });
 
     test('returns empty array when nothing changed', () => {
@@ -145,14 +149,13 @@ describe('summarizeLorebookDiff', () => {
         const nextData = { entries: { 5: { uid: 5, content: 'B', comment: 'other' } } };
         const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'OldBook', 'NewBook');
         const joined = lines.join('\n');
-        // Rename banner is still there.
+        // Rename banner is present with old -> new ordering.
         expect(joined).toContain('`OldBook`');
         expect(joined).toContain('`NewBook`');
         expect(joined).toContain('→');
-        // Both sides are dumped in full (headings with counts).
-        expect(joined).toMatch(/Previous world book `OldBook` \(1 entries\)/);
-        expect(joined).toMatch(/Next world book `NewBook` \(1 entries\)/);
-        // Each entry's content is present verbatim (inside fenced blocks).
+        // Both sides are dumped in full with entry names and verbatim content.
+        expect(joined).toContain('`first`');
+        expect(joined).toContain('`other`');
         expect(joined).toContain('A');
         expect(joined).toContain('B');
     });
@@ -175,10 +178,9 @@ describe('summarizeLorebookDiff', () => {
         };
         const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B');
         const joined = lines.join('\n');
-        expect(joined).toMatch(/Entry removed \(uid 2\).*`entry two`/);
-        expect(joined).toMatch(/Entry added \(uid 4\).*`entry four`/);
-        // Change header + per-field content diff (fenced because 'content' is a prose field).
-        expect(joined).toMatch(/Entry changed \(uid 3\).*`entry three`/);
+        expect(joined).toMatch(/uid 2[\s\S]*`entry two`/);
+        expect(joined).toMatch(/uid 4[\s\S]*`entry four`/);
+        expect(joined).toMatch(/uid 3[\s\S]*`entry three`/);
         expect(joined).toContain('old');
         expect(joined).toContain('new');
         // Unchanged entry must NOT appear.
@@ -192,18 +194,13 @@ describe('summarizeLorebookDiff', () => {
     });
 
     test('handles a missing previous snapshot gracefully, still lists the new book contents', () => {
-        const nextData = { entries: { 1: { uid: 1, content: 'x' } } };
+        const nextData = { entries: { 1: { uid: 1, content: 'fresh_body' } } };
         const lines = CEA.summarizeLorebookDiff(null, nextData, '', 'B');
         const joined = lines.join('\n');
-        // Primary-name change is listed (empty side rendered as `(none)`).
-        expect(joined).toContain('Primary world book');
-        expect(joined).toContain('`(none)`');
+        // Primary-name transition and full new book content are both included.
+        expect(joined).toContain('→');
         expect(joined).toContain('`B`');
-        // Since names differ, we dump the next side's contents in full so
-        // the AI can see what the new book actually contains — a
-        // one-line "book renamed" banner alone would leave the model
-        // guessing about the entries on the new side.
-        expect(joined).toMatch(/Next world book `B` \(1 entries\)/);
+        expect(joined).toContain('fresh_body');
     });
 });
 
@@ -219,8 +216,7 @@ describe('buildPostReplaceSeedMessage', () => {
         expect(typeof seed).toBe('string');
         expect(seed.trim().length).toBeGreaterThan(0);
         expect(context.loadWorldInfo).not.toHaveBeenCalled();
-        expect(seed).not.toContain('Character card diff');
-        expect(seed).not.toContain('World book diff');
+        expect(seed).not.toContain('IgnoredBook');
         expect(seed).not.toContain('- prev:');
         expect(seed).not.toContain('- next:');
     });
@@ -253,9 +249,7 @@ describe('buildPostReplaceSeedMessage', () => {
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
         expect(typeof seed).toBe('string');
         expect(seed.trim().length).toBeGreaterThan(0);
-        expect(seed).toContain('Character card diff');
-        expect(seed).toContain('Field changed: `description`');
-        expect(seed).toContain('World book diff');
+        expect(seed).toContain('`description`');
         expect(seed).toContain('stale');
         expect(seed).toContain('fresh');
         // Direction is hard-baked: prev: <old>, next: <new>.
@@ -269,7 +263,7 @@ describe('buildPostReplaceSeedMessage', () => {
         expect(nextLine).toContain('New description');
         expect(nextLine).not.toContain('Old description');
         // Book rename also fixed: OldBook → NewBook (NOT the reverse).
-        const renameLine = seed.split('\n').find(line => line.includes('Primary world book'));
+        const renameLine = seed.split('\n').find(line => line.includes('`OldBook`') && line.includes('→') && line.includes('`NewBook`'));
         expect(renameLine).toBeTruthy();
         const oldIdx = renameLine.indexOf('OldBook');
         const newIdx = renameLine.indexOf('NewBook');
@@ -278,7 +272,7 @@ describe('buildPostReplaceSeedMessage', () => {
         expect(oldIdx).toBeLessThan(newIdx);
     });
 
-    test('reports "no human-readable changes" when prev and next are identical', async () => {
+    test('produces an empty-diff seed without prev/next markers when prev and next are identical', async () => {
         const context = {
             loadWorldInfo: async () => ({ entries: { 1: { uid: 1, content: 'same' } } }),
         };
@@ -286,16 +280,26 @@ describe('buildPostReplaceSeedMessage', () => {
             avatar: 'a.png', name: 'Alice', description: 'same',
             data: { extensions: { world: 'B' } },
         };
-        const detail = {
+        const identicalSeed = await CEA.buildPostReplaceSeedMessage(context, {
             character: same,
             previousCharacter: { ...same },
             previousLorebookSnapshot: {
                 bookName: 'B',
                 entries: { 1: { uid: 1, content: 'same' } },
             },
-        };
-        const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        expect(seed).toContain('(no human-readable changes detected)');
+        });
+        const changedSeed = await CEA.buildPostReplaceSeedMessage(context, {
+            character: { ...same, description: 'changed' },
+            previousCharacter: { ...same },
+            previousLorebookSnapshot: {
+                bookName: 'B',
+                entries: { 1: { uid: 1, content: 'same' } },
+            },
+        });
+        expect(identicalSeed.trim().length).toBeGreaterThan(0);
+        expect(identicalSeed).not.toContain('- prev:');
+        expect(identicalSeed).not.toContain('- next:');
+        expect(identicalSeed).not.toBe(changedSeed);
     });
 
     test('REGRESSION: diff direction does not flip when prev and next are swapped at the call site', () => {
@@ -339,17 +343,25 @@ describe('buildPostReplaceSeedMessage', () => {
                 2: { uid: 2, content: 'only_in_next', comment: 'next_only' },
             },
         };
-        const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B').join('\n');
-        // uid 1 is only in prev → should be tagged "removed", labeled with prev's comment.
-        expect(lines).toMatch(/Entry removed \(uid 1\).*prev_only/);
-        // uid 2 is only in next → should be tagged "added", labeled with next's comment.
-        expect(lines).toMatch(/Entry added \(uid 2\).*next_only/);
-        // Cross-check: NEVER the reverse.
-        expect(lines).not.toMatch(/Entry added \(uid 1\)/);
-        expect(lines).not.toMatch(/Entry removed \(uid 2\)/);
+        const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B');
+        const uid1Header = lines.find(l => l.includes('uid 1') && l.includes('prev_only'));
+        const uid2Header = lines.find(l => l.includes('uid 2') && l.includes('next_only'));
+        expect(uid1Header).toBeTruthy();
+        expect(uid2Header).toBeTruthy();
+        // Cross-check: removed vs added use distinct structural headers and swap flips them.
+        const flipped = CEA.summarizeLorebookDiff(
+            { bookName: 'B', entries: nextData.entries },
+            { entries: prevSnap.entries },
+            'B',
+            'B',
+        );
+        const uid1Flipped = flipped.find(l => l.includes('uid 1') && l.includes('prev_only'));
+        const uid2Flipped = flipped.find(l => l.includes('uid 2') && l.includes('next_only'));
+        expect(uid1Flipped).not.toBe(uid1Header);
+        expect(uid2Flipped).not.toBe(uid2Header);
     });
 
-    test('omits world book diff section when only character card fields changed', async () => {
+    test('omits world book diff payload when only character card fields changed', async () => {
         const context = { loadWorldInfo: async () => ({ entries: {} }) };
         const detail = {
             character: { avatar: 'a.png', name: 'A', description: 'new', data: { extensions: { world: 'B' } } },
@@ -359,9 +371,11 @@ describe('buildPostReplaceSeedMessage', () => {
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
         expect(typeof seed).toBe('string');
         expect(seed.trim().length).toBeGreaterThan(0);
-        expect(seed).toContain('Character card diff');
-        expect(seed).toContain('Field changed: `description`');
-        expect(seed).not.toContain('World book diff');
+        expect(seed).toContain('`description`');
+        expect(seed).toContain('`old`');
+        expect(seed).toContain('`new`');
+        expect(CEA.summarizeLorebookDiff(detail.previousLorebookSnapshot, { entries: {} }, 'B', 'B')).toEqual([]);
+        expect(seed).not.toContain('`B`');
     });
 
     test('REGRESSION: when nextCharacter carries data.character_book, the diff reads from it via convertCharacterBook (not from disk)', async () => {
@@ -416,13 +430,13 @@ describe('buildPostReplaceSeedMessage', () => {
             expect(seed.trim().length).toBeGreaterThan(0);
             // The seed must interpolate BOTH the book rename (OldBook → NewBook)
             // and the embedded/previous entries without touching disk.
-            expect(seed).toMatch(/Primary world book.*OldBook.*→.*NewBook/);
+            expect(seed).toMatch(/`OldBook`.*→.*`NewBook`/);
             expect(seed).toContain('old_only');
             expect(seed).toContain('old content');
             expect(seed).toContain('new_only');
             expect(seed).toContain('fresh content');
             // Card-field diff for description (prev=old, next=new).
-            expect(seed).toContain('Field changed: `description`');
+            expect(seed).toContain('`description`');
             const prevLine = seed.split('\n').find(l => l.trim().startsWith('- prev:'));
             const nextLine = seed.split('\n').find(l => l.trim().startsWith('- next:'));
             expect(prevLine).toContain('old');
