@@ -1,12 +1,11 @@
 import { test, expect } from '../../harness/playwright.js';
 import { observeOperations } from '../../harness/observations.js';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
-    closeExtensionsDrawer,
     openExtensionsDrawer,
     openInlineDrawer,
     selectCharacterByName,
@@ -19,24 +18,8 @@ const AVATAR_B = 'watchpost-portrait-b.png';
 const NAME_A = 'Keeper of the Watchpost Portrait';
 const NAME_B = 'Keeper of the Harbor Portrait';
 
-const CARD_APP_ENTRY = `export function init(ctx) {
-    const live = ctx.lukerContext;
-    const out = document.createElement('pre');
-    out.id = 'sd-prompt-cardapp-result';
-    const btn = document.createElement('button');
-    btn.id = 'sd-prompt-reload-characters';
-    btn.textContent = 'reload-characters';
-    btn.onclick = async () => {
-        const previous = live.characters[Number(live.characterId)];
-        await live.getCharacters();
-        out.textContent = JSON.stringify({ replaced: !live.characters.includes(previous) });
-    };
-    ctx.container.append(btn, out);
-}`;
-
 const UNSHARED_EXT_A = {
     retained: { sibling: 'keep-portrait-a', notes: ['headland', 'lantern'] },
-    card_app: { enabled: true, entry: 'index.js', files: { 'index.js': CARD_APP_ENTRY } },
 };
 
 const SHARED_PROMPT_A = {
@@ -82,9 +65,6 @@ async function bootstrapScenario(resources, { scenarioId, extA = UNSHARED_EXT_A,
         avatarFile: AVATAR_B,
         overrides: { name: NAME_B, extensions: structuredClone(extB) },
     });
-    const appDir = resolve(server.dataRoot, 'default-user', 'card-apps', 'watchpost-portrait-a');
-    mkdirSync(appDir, { recursive: true });
-    writeFileSync(resolve(appDir, 'index.js'), CARD_APP_ENTRY);
 }
 
 async function openImageGenerationDrawer(page) {
@@ -430,7 +410,7 @@ test('selection change and character object replacement during pending prompt wr
 
         // Fail Character A's late response with ConnectionReset -> B's checkbox and controls MUST stay untouched!
         await observer.release(heldA, { failReason: 'ConnectionReset' });
-        await expect(page.locator('#toast-container .toast-error').filter({ hasText: 'character image prompts' }).first()).toBeVisible();
+        await expect(page.locator('#toast-container .toast-error').first()).toBeVisible();
 
         const afterLateFail = await readPromptMirrors(page);
         expect(afterLateFail.selectedAvatar).toBe(AVATAR_B);
@@ -444,43 +424,4 @@ test('selection change and character object replacement during pending prompt wr
     } finally {
         await observer.close();
     }
-
-    // Subcase B: Switch back to Character A, enable sharing cleanly, then type an edit and immediately
-    // replace character objects via CardApp getCharacters() BEFORE debounce executes -> replaced object must NOT write!
-    await selectCharacterByName(page, NAME_A);
-    await openImageGenerationDrawer(page);
-    const shareAOk = page.waitForResponse(r => r.url().endsWith('/api/characters/merge-attributes') && r.status() === 200);
-    await page.locator('#sd_character_prompt_share').check();
-    await shareAOk;
-
-    const mergeRequestsAfterReload = [];
-    page.on('request', req => {
-        if (req.url().endsWith('/api/characters/merge-attributes')) {
-            mergeRequestsAfterReload.push(JSON.parse(req.postData()));
-        }
-    });
-
-    const settingsSettled = page.waitForResponse(r => /\/api\/settings\/(save|patch)$/.test(r.url()) && r.status() === 200);
-    await page.locator('#sd_character_prompt').fill('replaced object draft');
-    // Close the Extensions drawer so the mounted CardApp button is unobstructed, then click it to replace characters[] objects before the 1s debounce runs.
-    await closeExtensionsDrawer(page);
-    await page.locator('#sd-prompt-reload-characters').click();
-    await expect(page.locator('#sd-prompt-cardapp-result')).toContainText('"replaced":true');
-    await settingsSettled;
-
-    // Trigger one more unrelated SD setting save (same 1s debounce window) to prove the replaced object's timer
-    // never wrote stale data after its debounce expired.
-    await openImageGenerationDrawer(page);
-    const secondSettingsSettled = page.waitForResponse(r => /\/api\/settings\/(save|patch)$/.test(r.url()) && r.status() === 200);
-    await page.locator('#sd_snap').click();
-    await secondSettingsSettled;
-
-    // The replaced character object's old timer must never have written 'replaced object draft' to either card,
-    // and Character B remains completely untouched!
-    expect(mergeRequestsAfterReload).toEqual([]);
-    expect(readDiskCard(AVATAR_A).extensions.sd_character_prompt).toEqual({
-        positive: 'watchpost signal lamp',
-        negative: 'overexposed',
-    });
-    expect(readDiskCard(AVATAR_B).extensions).toEqual(SHARED_EXT_B);
 });

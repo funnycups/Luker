@@ -8,37 +8,13 @@ import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { awaitMainUI, reloadAndAwait, selectCharacterByName } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt } from '../_lib/ui-iter-studio.js';
+import { closeWorkbench, openWorkbench } from '../_lib/ui-workbench.js';
 import { globalStatePath, normalizeIterStudioSettings, readGlobalWorkbenchBodies, sessionBodyNamespace } from './_helpers.js';
 
 const AVATAR = 'config-source-watch.png';
 const NAME = 'Keeper of the Configuration Watch';
 const OTHER_AVATAR = 'config-other-watch.png';
 const OTHER_NAME = 'Keeper of the Other Configuration Watch';
-const ENTRY = `import { persistCharacterAdvancedOverridePatch } from '/scripts/extensions/memory-graph/character-overrides.js';
-export function init(ctx) {
-    const live = ctx.lukerContext;
-    const output = document.createElement('pre'); output.id = 'mg-save-outcome';
-    const add = (name, run) => {
-        const button = document.createElement('button'); button.id = 'mg-save-' + name; button.textContent = name;
-        button.onclick = async () => {
-            output.textContent = 'pending';
-            try { output.textContent = JSON.stringify({value:await run()}); }
-            catch(error) { output.textContent = JSON.stringify({error:error.message}); }
-        };
-        ctx.container.append(button);
-    };
-    add('parallel', () => Promise.all([
-        persistCharacterAdvancedOverridePatch(live, ${JSON.stringify(AVATAR)}, {set:{extractContextTurns:9}}),
-        persistCharacterAdvancedOverridePatch(live, ${JSON.stringify(AVATAR)}, {set:{recallMaxIterations:5}}),
-    ]));
-    add('single', () => persistCharacterAdvancedOverridePatch(live, ${JSON.stringify(AVATAR)}, {set:{extractContextTurns:9}}));
-    ctx.addEventListener(document, 'keydown', async event => {
-        if (!event.altKey || !event.shiftKey || event.code !== 'KeyB') return;
-        event.preventDefault();
-        await live.selectCharacterById(live.characters.findIndex(character => character.avatar === ${JSON.stringify(OTHER_AVATAR)}));
-    });
-    ctx.container.append(output);
-}`;
 
 let server, mock;
 const settingsFile = () => resolve(server.dataRoot, 'default-user', 'settings.json');
@@ -57,7 +33,7 @@ function blockFile(filename) {
 
 async function selectSource(page) {
     await selectCharacterByName(page, NAME);
-    await expect(page.locator('#mg-save-single')).toBeVisible();
+    await expect(page.locator('#character_name_pole')).toHaveValue(NAME);
 }
 
 async function stageSettings(page, { autoApply = false, waitForSettle = true } = {}) {
@@ -70,12 +46,13 @@ async function approve(page) {
     await proposal(page).locator('.wb-chg-foot button.is-primary').click();
 }
 
-async function switchToOther(page) {
-    await page.keyboard.press('Alt+Shift+b');
-    await expect.poll(() => page.evaluate(() => {
-        const context = window.Luker.getContext();
-        return context.characters[context.characterId]?.avatar;
-    })).toBe(OTHER_AVATAR);
+async function switchToOther(page, { reopenWorkbench = false } = {}) {
+    await closeWorkbench(page);
+    await selectCharacterByName(page, OTHER_NAME);
+    await expect(page.locator('#character_name_pole')).toHaveValue(OTHER_NAME);
+    if (reopenWorkbench) {
+        await openWorkbench(page);
+    }
 }
 
 test.beforeEach(async ({ resources }) => {
@@ -86,37 +63,18 @@ test.beforeEach(async ({ resources }) => {
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     normalizeIterStudioSettings(server.dataRoot);
     for (const [avatar, name] of [[AVATAR, NAME], [OTHER_AVATAR, OTHER_NAME]]) {
-        writeEmbeddedCharacter({ dataRoot: server.dataRoot, avatarFile: avatar, overrides: { name, extensions: {
-            memory_graph: { retained: 'namespace' },
-            card_app: { enabled: true, entry: 'index.js', files: { 'index.js': ENTRY } },
-        } } });
-        const application = resolve(server.dataRoot, 'default-user', 'card-apps', avatar.replace(/\.png$/, ''));
-        mkdirSync(application, { recursive: true });
-        writeFileSync(resolve(application, 'index.js'), ENTRY);
+        writeEmbeddedCharacter({
+            dataRoot: server.dataRoot,
+            avatarFile: avatar,
+            overrides: {
+                name,
+                extensions: { memory_graph: { retained: 'namespace' } },
+            },
+        });
     }
 });
 
 test.afterEach(async () => { await mock?.stop(); });
-
-test('concurrent sparse configuration writes preserve acknowledged sibling fields', async ({ page }) => {
-    await awaitMainUI(page, server.baseURL);
-    await selectSource(page);
-    await page.locator('#mg-save-parallel').click();
-    await expect(page.locator('#mg-save-outcome')).toHaveText('{"value":[true,true]}');
-    expect(namespace(AVATAR)).toEqual({ retained: 'namespace', advancedOverride: { extractContextTurns: 9, recallMaxIterations: 5, promptDefaultsInitialized: true } });
-});
-
-test('a sparse configuration write returns the actual failed HTTP acknowledgement', async ({ page }) => {
-    await awaitMainUI(page, server.baseURL);
-    await selectSource(page);
-    const before = readFileSync(cardFile(AVATAR));
-    const original = blockFile(cardFile(AVATAR));
-    await page.locator('#mg-save-single').click();
-    await expect(page.locator('#mg-save-outcome')).toHaveText('{"value":false}');
-    expect(readFileSync(original)).toEqual(before);
-    expect(await page.evaluate(avatar => window.Luker.getContext().characters.find(character => character.avatar === avatar).data.extensions.memory_graph, AVATAR))
-        .toEqual({ retained: 'namespace' });
-});
 
 test('a refused character configuration commit retains its pending review and reports the failed acknowledgement', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
@@ -187,7 +145,7 @@ test('configuration rollback retains the approved character identity after selec
     await approve(page);
     await expect(proposal(page)).toHaveClass(/is-applied/);
     const otherBefore = readFileSync(cardFile(OTHER_AVATAR));
-    await switchToOther(page);
+    await switchToOther(page, { reopenWorkbench: true });
     await workbench(page).locator('.wb-rail .wb-tab', {
         has: page.locator('.wb-tab-label', { hasText: /^Change history$/ }),
     }).click();

@@ -8,7 +8,28 @@
  * such as `schemaOverride`.
  */
 
-import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { createExtensionFieldWriter } from '../../public/scripts/lib/extension-field-writer.js';
+
+function setByPath(obj, path, value) {
+    const keys = path.split('.');
+    let cursor = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (!cursor[keys[i]] || typeof cursor[keys[i]] !== 'object') cursor[keys[i]] = {};
+        cursor = cursor[keys[i]];
+    }
+    cursor[keys[keys.length - 1]] = value;
+}
+
+function deleteByPath(obj, path) {
+    const keys = path.split('.');
+    let cursor = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (!cursor[keys[i]] || typeof cursor[keys[i]] !== 'object') return;
+        cursor = cursor[keys[i]];
+    }
+    delete cursor[keys[keys.length - 1]];
+}
 
 globalThis.Luker = {
     getContext: () => ({}),
@@ -262,5 +283,82 @@ describe('persistCharacterAdvancedOverride', () => {
         for (const [key, value] of Object.entries(defaults)) {
             expect(normalized[key]).toBe(value);
         }
+    });
+});
+
+describe('persistCharacterAdvancedOverridePatch with real extension-field writer', () => {
+    let origFetch;
+
+    beforeEach(() => {
+        origFetch = globalThis.fetch;
+        jest.spyOn(console, 'info').mockImplementation(() => {});
+        jest.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+        jest.restoreAllMocks();
+    });
+
+    function makeRealWriterContext() {
+        const card = {
+            avatar: 'watch.png',
+            name: 'Watch',
+            data: { extensions: { memory_graph: { retained: 'namespace' } } },
+        };
+        card.json_data = JSON.stringify({ data: structuredClone(card.data) });
+        const ctx = {
+            characters: [card],
+            characterId: 0,
+            menuType: 'edit',
+        };
+        const writer = createExtensionFieldWriter({
+            getContext: () => ctx,
+            getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+            cloneAsJsonWire: v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))),
+            setValueByPath: setByPath,
+            deleteValueByPath: deleteByPath,
+        });
+        ctx.writeExtensionField = writer.writeExtensionField;
+        return { ctx, card };
+    }
+
+    test('concurrent sparse configuration writes preserve acknowledged sibling fields', async () => {
+        const { ctx, card } = makeRealWriterContext();
+        const bodies = [];
+        globalThis.fetch = jest.fn(async (_url, init) => {
+            bodies.push(JSON.parse(init.body));
+            return { ok: true, status: 200, statusText: 'OK' };
+        });
+
+        const results = await Promise.all([
+            persistCharacterAdvancedOverridePatch(ctx, 'watch.png', { set: { extractContextTurns: 9 } }),
+            persistCharacterAdvancedOverridePatch(ctx, 'watch.png', { set: { recallMaxIterations: 5 } }),
+        ]);
+
+        expect(results).toEqual([true, true]);
+        expect(bodies).toHaveLength(2);
+        const expected = {
+            retained: 'namespace',
+            advancedOverride: {
+                extractContextTurns: 9,
+                recallMaxIterations: 5,
+                promptDefaultsInitialized: true,
+            },
+        };
+        expect(bodies[1].data.extensions.memory_graph).toEqual(expected);
+        expect(card.data.extensions.memory_graph).toEqual(expected);
+        expect(JSON.parse(card.json_data).data.extensions.memory_graph).toEqual(expected);
+    });
+
+    test('a sparse configuration write returns false and preserves live state on HTTP failure', async () => {
+        const { ctx, card } = makeRealWriterContext();
+        globalThis.fetch = jest.fn(async () => ({ ok: false, status: 500, statusText: 'Internal Server Error' }));
+
+        const ok = await persistCharacterAdvancedOverridePatch(ctx, 'watch.png', { set: { extractContextTurns: 9 } });
+
+        expect(ok).toBe(false);
+        expect(card.data.extensions.memory_graph).toEqual({ retained: 'namespace' });
+        expect(JSON.parse(card.json_data).data.extensions.memory_graph).toEqual({ retained: 'namespace' });
     });
 });

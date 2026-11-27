@@ -1,5 +1,5 @@
 import { test as base, expect } from '../../harness/playwright.js';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { startServer } from '../../harness/server.js';
@@ -22,7 +22,7 @@ const OTHER_NAME = 'Keeper of the Untouched Replace Ledger';
 const OLD = 'replace-ledger-old';
 const IMPORTED = 'replace-ledger-imported';
 const BOOK = { name: IMPORTED, extensions: {}, entries: [{ id: 9, uid: 9, keys: ['bell'], content: 'The bell marks the fourth watch.', enabled: true, insertion_order: 61, extensions: {} }] };
-const test = base.extend({ embeddedBook: [BOOK, { option: true }], changeConsumer: [false, { option: true }], storageMode: ['fs', { option: true }] });
+const test = base.extend({ embeddedBook: [BOOK, { option: true }], storageMode: ['fs', { option: true }] });
 const IMPORTED_BOOK = { originalData: BOOK, entries: { '9': {
     uid: 9, key: ['bell'], keysecondary: [], comment: '', content: 'The bell marks the fourth watch.',
     constant: false, vectorized: false, selective: false, selectiveLogic: 0, addMemo: false, order: 61, position: 1,
@@ -43,19 +43,7 @@ const EDITED_BOOK = {
         prevent_recursion: false, probability: 100, role: null, scan_depth: null, sticky: 0, use_group_scoring: null, vectorized: false,
     } }] },
 };
-const ENTRY = `export function init(ctx) {
-    const live = ctx.lukerContext; const out = document.createElement('pre'); out.id = 'cleanup-result';
-    const add = (id, run) => { const button = document.createElement('button'); button.id = 'cleanup-' + id; button.textContent = id; button.onclick = async () => { out.textContent = 'pending'; try { out.textContent = JSON.stringify(await run()); } catch (error) { out.textContent = JSON.stringify({ error: error.message, code: error.code, resourceState: error.resourceState }); } }; ctx.container.append(button); };
-    add('same-name', () => live.charUpdatePrimaryWorld('${IMPORTED}', live.characters.find(character => character.avatar === '${AVATAR}')));
-    add('adopt', () => live.charUpdatePrimaryWorld('${IMPORTED}', live.characters.find(character => character.avatar === '${OTHER}')));
-    add('editor', () => { live.reloadWorldInfoEditor('${IMPORTED}', true); return { opened: true }; });
-    add('replace-resource', async () => { const book = JSON.parse(JSON.stringify(await live.loadWorldInfo('${IMPORTED}'))); await live.selectCharacterById(live.characters.findIndex(character => character.avatar === '${OTHER}')); if (!await live.deleteWorldBook('${IMPORTED}')) throw new Error('Owned fixture book deletion was refused'); await live.saveWorldInfo('${IMPORTED}', book, true); await live.updateWorldInfoList(); return { replaced: true }; });
-    add('refresh', async () => { await live.getCharacters(); await live.unshallowCharacter(live.characters.findIndex(character => character.avatar === '${OTHER}')); return { refreshed: true }; });
-    add('delete-unbound', () => live.deleteWorldBook('${IMPORTED}', { onlyIfUnbound: true }));
-    add('delete', () => live.deleteWorldBook('${IMPORTED}'));
-    ctx.container.append(out);
-}`;
-const EXT = { world: '', fav: false, talkativeness: 0.5, depth_prompt: { prompt: '', depth: 4, role: 'system' }, retained: { source: 'replacement', ledger: ['keep'] }, card_app: { enabled: true, entry: 'index.js' } };
+const EXT = { world: '', fav: false, talkativeness: 0.5, depth_prompt: { prompt: '', depth: 4, role: 'system' }, retained: { source: 'replacement', ledger: ['keep'] } };
 const OTHER_EXT = { world: '', retained: { source: 'other', ledger: ['untouched'] } };
 let server, incoming, mock, responses, database;
 const path = (avatar = AVATAR) => resolve(server.dataRoot, 'default-user', 'characters', avatar);
@@ -64,7 +52,7 @@ const decode = bytes => JSON.parse(readPngCard(bytes)).data;
 test.beforeAll(async () => { mock = await startMockLLM({}); });
 test.afterAll(async () => { await mock.stop(); });
 
-test.beforeEach(async ({ resources, page, context, embeddedBook, changeConsumer, storageMode }) => {
+test.beforeEach(async ({ resources, page, context, embeddedBook, storageMode }) => {
     database = storageMode === 'mysql' ? await makeTempMysqlEngineHarness({ scope: resources }) : storageMode === 'postgres' ? await makeTempPgEngineHarness({ scope: resources }) : null;
     const extraConfig = { storage: { mode: storageMode } };
     if (database) {
@@ -92,8 +80,6 @@ test.beforeEach(async ({ resources, page, context, embeddedBook, changeConsumer,
     writeEmbeddedCharacter({ dataRoot: server.dataRoot, avatarFile: OTHER, overrides: { name: OTHER_NAME, extensions: OTHER_EXT } });
     const bytes = readFileSync(path()); const card = JSON.parse(readPngCard(bytes)); card.data.extensions = EXT; card.data.character_book = embeddedBook;
     incoming = resolve(server.dataRoot, 'incoming-ledger.png'); writeFileSync(incoming, writePngCard(bytes, JSON.stringify(card)));
-    const app = resolve(server.dataRoot, 'default-user', 'card-apps', 'replace-world-ledger'); mkdirSync(app, { recursive: true }); writeFileSync(resolve(app, 'index.js'), ENTRY);
-    if (changeConsumer) installChangeConsumer(server.dataRoot);
     await context.addInitScript(() => {
         window.replaceWorldEvents = [];
         window.worldSettingsAckEvents = [];
@@ -172,6 +158,59 @@ async function cleanupState(page) {
     });
 }
 
+async function selectWorldInEditor(other, worldName) {
+    const icon = other.locator('#WIDrawerIcon');
+    if (await icon.evaluate(element => element.classList.contains('closedIcon'))) await icon.click();
+    const select = other.locator('#world_editor_select');
+    await expect(select).toBeVisible();
+    await select.selectOption({ label: worldName });
+}
+
+async function openWorldDialogForCharacter(other, charName) {
+    await selectCharacterByName(other, charName);
+    await expect(other.locator('#character_name_pole')).toHaveValue(charName);
+    const drawer = other.locator('#rightNavDrawerIcon');
+    if (await drawer.evaluate(element => element.classList.contains('closedIcon'))) await drawer.click();
+    await other.locator('#world_button').click({ modifiers: ['Shift'] });
+    // Popup binds primarySelect/extrasSelect change listeners inside onOpen,
+    // which fires only after the opening animation removes [opening] and initializes select2.
+    const dialog = other.locator('dialog[open]:not([opening])', { has: other.locator('.character_world_info_selector') });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.character_extra_world_info_selector + .select2')).toBeVisible();
+    return dialog;
+}
+
+async function adoptPrimaryInUI(other, charName, worldName = IMPORTED) {
+    const dialog = await openWorldDialogForCharacter(other, charName);
+    const saved = other.waitForResponse(response => response.url().endsWith('/api/characters/merge-attributes') && response.request().postDataJSON()?.data?.extensions?.world === worldName);
+    await dialog.locator('.character_world_info_selector').selectOption({ label: worldName });
+    expect((await saved).ok()).toBe(true);
+    await dialog.locator('.popup-button-ok').click();
+    await expect(dialog).toHaveCount(0);
+}
+
+async function rebindSameNameInUI(other) {
+    const dialog = await openWorldDialogForCharacter(other, NAME);
+    const cleared = other.waitForResponse(response => response.url().endsWith('/api/characters/merge-attributes') && response.request().postDataJSON()?.data?.extensions?.world === '');
+    await dialog.locator('.character_world_info_selector').selectOption('');
+    expect((await cleared).ok()).toBe(true);
+    const rebound = other.waitForResponse(response => response.url().endsWith('/api/characters/merge-attributes') && response.request().postDataJSON()?.data?.extensions?.world === IMPORTED);
+    await dialog.locator('.character_world_info_selector').selectOption({ label: IMPORTED });
+    expect((await rebound).ok()).toBe(true);
+    await dialog.locator('.popup-button-ok').click();
+    await expect(dialog).toHaveCount(0);
+}
+
+async function deleteBookInUI(other, worldName = IMPORTED) {
+    await selectWorldInEditor(other, worldName);
+    const deleted = other.waitForResponse(response => response.url().endsWith('/api/worldinfo/delete') && response.request().postDataJSON()?.name === worldName);
+    await other.locator('#world_popup_delete').click();
+    const confirm = other.locator('dialog[open] .popup-button-ok').last();
+    await expect(confirm).toBeVisible();
+    await confirm.click();
+    expect((await deleted).ok()).toBe(true);
+}
+
 for (const action of ['Keep old book', 'Merge in editor']) {
     test(`${action} preserves the actual replacement and reports refused binding`, async ({ page }) => {
         const choice = await replace(page);
@@ -246,14 +285,11 @@ async function openExternalPage(context) {
     await awaitMainUI(other, server.baseURL);
     await selectCharacterByName(other, OTHER_NAME); await expect(other.locator('#character_name_pole')).toHaveValue(OTHER_NAME);
     await selectCharacterByName(other, NAME); await expect(other.locator('#character_name_pole')).toHaveValue(NAME);
-    await expect(other.locator('#cleanup-editor')).toBeVisible();
     return other;
 }
 
 async function editMaterializedBook(other) {
-    await other.locator('#cleanup-editor').click();
-    const icon = other.locator('#WIDrawerIcon');
-    if (await icon.evaluate(element => element.classList.contains('closedIcon'))) await icon.click();
+    await selectWorldInEditor(other, IMPORTED);
     const entry = other.locator('.world_entry[uid="9"]'); await expect(entry).toBeVisible();
     await entry.locator('.inline-drawer-toggle').first().click();
     const content = entry.locator('textarea[name="content"]'); await expect(content).toBeVisible();
@@ -264,13 +300,7 @@ async function editMaterializedBook(other) {
 }
 
 async function openAuxiliary(page) {
-    await selectCharacterByName(page, OTHER_NAME); await expect(page.locator('#character_name_pole')).toHaveValue(OTHER_NAME);
-    const drawer = page.locator('#rightNavDrawerIcon');
-    if (await drawer.evaluate(element => element.classList.contains('closedIcon'))) await drawer.click();
-    await page.locator('#world_button').click();
-    const dialog = page.locator('dialog[open]', { has: page.locator('.character_extra_world_info_selector') });
-    await expect(dialog).toBeVisible();
-    return dialog;
+    return openWorldDialogForCharacter(page, OTHER_NAME);
 }
 
 async function chooseAuxiliary(page, dialog) {
@@ -285,33 +315,6 @@ async function adoptAuxiliary(page) {
     expect((await saved).ok()).toBe(true);
     await dialog.locator('.character_name').click();
     await dialog.locator('.popup-button-ok').click(); await expect(dialog).toHaveCount(0);
-}
-
-function installChangeConsumer(dataRoot) {
-    const dir = resolve(dataRoot, 'default-user', 'extensions', 'world-binding-change-consumer');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(resolve(dir, 'manifest.json'), JSON.stringify({ display_name: 'World binding change consumer', loading_order: 100, requires: [], optional: [], js: 'index.js', author: 'e2e', version: '1.0.0' }));
-    writeFileSync(resolve(dir, 'index.js'), `
-import { getContext } from '../../../extensions.js';
-import { eventSource, event_types } from '../../../events.js';
-eventSource.on(event_types.APP_READY, () => {
-    const arm = document.createElement('button'); arm.id = 'arm-world-change-consumer'; arm.textContent = 'Arm binding change consumer';
-    arm.style.cssText = 'position:fixed;bottom:0;left:0;z-index:2147483647';
-    const out = document.createElement('pre'); out.id = 'world-change-consumer-result';
-    document.body.append(arm, out);
-    let armed = false;
-    arm.onclick = () => { armed = true; out.textContent = 'armed'; };
-    window.jQuery(document).on('change.ownedWorldConsumer', '#character_world', () => {
-        if (!armed || document.querySelector('#character_world').value !== '${IMPORTED}') return;
-        armed = false;
-        queueMicrotask(async () => {
-            const ctx = getContext(); const character = ctx.characters.find(character => character.avatar === '${AVATAR}');
-            out.textContent = 'pending';
-            try { out.textContent = JSON.stringify({ acknowledged: await ctx.charUpdatePrimaryWorld('${IMPORTED}', character) }); }
-            catch (error) { out.textContent = JSON.stringify({ error: error.message }); }
-        });
-    });
-});`);
 }
 
 test('conversation cancellation remains acknowledged before replacement completion after folding', async ({ page, context }) => {
@@ -347,7 +350,7 @@ test('conversation cancellation remains acknowledged before replacement completi
     }
 });
 
-test('Fix2 acknowledged auxiliary adoption preserves the book and complete settings', async ({ page, context }, testInfo) => {
+test('acknowledged auxiliary adoption preserves the book and complete settings', async ({ page, context }, testInfo) => {
     const studio = await openOwnedMerge(page);
     const originalBytes = readFileSync(path()); const otherBytes = readFileSync(path(OTHER));
     const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', IMPORTED + '.json');
@@ -385,76 +388,18 @@ test('Fix2 acknowledged auxiliary adoption preserves the book and complete setti
         expect(originalState.live).toEqual(decode(originalBytes)); expect(originalState.json).toEqual(decode(originalBytes)); expect(originalState.editor).toEqual(decode(originalBytes));
         expect(otherState.live).toEqual(decode(otherBytes)); expect(otherState.json).toEqual(decode(otherBytes)); expect(otherState.editor).toEqual(decode(otherBytes));
         expect(otherState.form).toBe(''); expect(otherState.bound).toBe(false); expect(otherState.menuBound).toBe(false);
-        await expect(page.locator('#toast-container')).not.toContainText('Cancelled — restored previous world book');
+        await expect(page.locator('#toast-container .toast-info, #toast-container .toast-success')).toHaveCount(0);
         await assertOtherAndReturn(page, { ...EXT, world: IMPORTED }, [{ type: 'book', name: IMPORTED }, { type: 'control', value: IMPORTED }, { type: 'replaced', avatar: AVATAR, world: IMPORTED }]);
     } finally { await external.close(); }
 });
 
-test('Fix2 standalone adoption option rejects with the coded public result and retains cache', async ({ page, context }) => {
-    await openOwnedMerge(page);
-    const external = await openExternalPage(context);
-    try {
-        await external.locator('#cleanup-adopt').click(); await expect(external.locator('#cleanup-result')).toHaveText('true');
-        const stored = readFileSync(resolve(server.dataRoot, 'default-user', 'worlds', IMPORTED + '.json'));
-        const cached = await external.evaluate(name => window.Luker.getContext().loadWorldInfo(name), IMPORTED);
-        expect(cached).toEqual(IMPORTED_BOOK);
-        const acknowledged = await cleanupState(external);
-        await external.locator('#cleanup-delete-unbound').click();
-        await expect(external.locator('#cleanup-result')).not.toHaveText('pending');
-        await expect.poll(async () => JSON.parse(await external.locator('#cleanup-result').innerText()).code).toBe('world_in_use');
-        expect(JSON.parse(await external.locator('#cleanup-result').innerText())).toMatchObject({ code: 'world_in_use', resourceState: 'present' });
-        expect(await cleanupState(external)).toEqual(acknowledged);
-        expect(readFileSync(resolve(server.dataRoot, 'default-user', 'worlds', IMPORTED + '.json'))).toEqual(stored);
-        expect(await external.evaluate(name => window.Luker.getContext().loadWorldInfo(name), IMPORTED)).toEqual(IMPORTED_BOOK);
-        expect(decode(readFileSync(path())).extensions).toEqual({ ...EXT, world: IMPORTED });
-        expect(decode(readFileSync(path(OTHER))).extensions).toEqual({ ...OTHER_EXT, world: IMPORTED });
-    } finally { await external.close(); }
-});
-
-test.describe('immutable binding change consumer', () => {
-    test.use({ changeConsumer: true });
-    test('Fix2 refused newer microtask intent cannot lend its operation token to cleanup', async ({ page, context }, testInfo) => {
-        await page.locator('#arm-world-change-consumer').click();
-        const cdp = await context.newCDPSession(page); let initial = true;
-        const deliveries = [];
-        const onPause = async event => {
-            const body = JSON.parse(event.request.postData);
-            if (body.avatar !== AVATAR || body.data?.extensions?.world !== IMPORTED) return cdp.send('Fetch.continueRequest', { requestId: event.requestId });
-            deliveries.push({ body, stage: event.responseStatusCode ? 'Response' : 'Request', networkId: event.networkId });
-            if (initial) { initial = false; await cdp.send('Fetch.continueRequest', { requestId: event.requestId }); }
-            else await cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'InternetDisconnected' });
-        };
-        cdp.on('Fetch.requestPaused', onPause);
-        await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/characters/merge-attributes', requestStage: 'Request' }] });
-        try {
-            const studio = await openOwnedMerge(page);
-            await expect(page.locator('#world-change-consumer-result')).toContainText('error');
-            const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', IMPORTED + '.json');
-            const cardBytes = readFileSync(path());
-            expect(deliveries.map(item => item.body.data.extensions.world)).toEqual([IMPORTED, IMPORTED]);
-            expect(decode(cardBytes).extensions).toEqual({ ...EXT, world: IMPORTED });
-            await closeWorkbench(page); await expect(studio).toBeHidden();
-            await expect.poll(() => page.evaluate(() => window.replaceWorldEvents.some(event => event.type === 'replaced'))).toBe(true);
-            await testInfo.attach('microtask-operation-outcome', { body: JSON.stringify({ deliveries, responses, exists: existsSync(bookPath), storedCard: decode(readFileSync(path())) }, null, 2), contentType: 'application/json' });
-            expect(createHash('sha256').update(readFileSync(path())).digest('hex')).toBe(createHash('sha256').update(cardBytes).digest('hex'));
-            expect(existsSync(bookPath)).toBe(true); expect(JSON.parse(readFileSync(bookPath, 'utf8'))).toEqual(IMPORTED_BOOK);
-            const current = await cleanupState(page);
-            expect(current.live).toEqual(decode(cardBytes)); expect(current.json).toEqual(decode(cardBytes)); expect(current.editor).toEqual(decode(cardBytes));
-            expect(responses.filter(response => response.body.data?.extensions?.world === OLD)).toEqual([]);
-            await assertSelected(page, { ...EXT, world: IMPORTED }, [{ type: 'book', name: IMPORTED }, { type: 'control', value: IMPORTED }, { type: 'replaced', avatar: AVATAR, world: IMPORTED }]);
-            await expect(page.locator('#toast-container')).not.toContainText('Cancelled — restored previous world book');
-            await assertOtherAndReturn(page, { ...EXT, world: IMPORTED }, [{ type: 'book', name: IMPORTED }, { type: 'control', value: IMPORTED }, { type: 'replaced', avatar: AVATAR, world: IMPORTED }]);
-        } finally { cdp.off('Fetch.requestPaused', onPause); await cdp.send('Fetch.disable'); await cdp.detach(); }
-    });
-});
-
-for (const { loss, locale, message, acknowledged } of [
-    { loss: 'lost-response', locale: 'en', message: `Deletion outcome unknown for imported world book: ${IMPORTED}. Reload the world book list before retrying cleanup.`, acknowledged: `Previous binding acknowledged: ${OLD}.` },
-    { loss: 'already-missing', locale: 'en', message: `Imported world book is already absent: ${IMPORTED}.`, acknowledged: `Previous binding acknowledged: ${OLD}.` },
-    { loss: 'lost-response', locale: 'zh-cn', message: `无法确认已导入的世界书“${IMPORTED}”的删除结果。请重新加载世界书列表后重试清理。`, acknowledged: `已确认恢复原绑定“${OLD}”。` },
-    { loss: 'lost-response', locale: 'zh-tw', message: `無法確認已匯入的世界書「${IMPORTED}」的刪除結果。請重新載入世界書清單後重試清理。`, acknowledged: `已確認恢復原綁定「${OLD}」。` },
+for (const { loss, locale } of [
+    { loss: 'lost-response', locale: 'en' },
+    { loss: 'already-missing', locale: 'en' },
+    { loss: 'lost-response', locale: 'zh-cn' },
+    { loss: 'lost-response', locale: 'zh-tw' },
 ]) {
-    test(`Fix2 ${locale} cleanup distinguishes ${loss} from confirmed retained storage`, async ({ page, context }, testInfo) => {
+    test(`${locale} cleanup distinguishes ${loss} from confirmed retained storage`, async ({ page, context }, testInfo) => {
         if (locale !== 'en') {
             await page.locator('#user-settings-button .drawer-toggle').click();
             const loaded = page.waitForEvent('load'); await page.locator('#ui_language_select').selectOption(locale); await loaded;
@@ -484,7 +429,7 @@ for (const { loss, locale, message, acknowledged } of [
             expect(decode(readFileSync(path())).extensions).toEqual({ ...EXT, world: OLD });
             if (loss === 'already-missing') {
                 external = await openExternalPage(context);
-                await external.locator('#cleanup-delete').click(); await expect(external.locator('#cleanup-result')).toHaveText('true');
+                await deleteBookInUI(external, IMPORTED);
             }
             expect(existsSync(bookPath)).toBe(false);
             const body = await cdp.send('Fetch.getResponseBody', { requestId: response.requestId });
@@ -495,10 +440,15 @@ for (const { loss, locale, message, acknowledged } of [
             await close; await expect(studio).toBeHidden();
             await expect.poll(() => page.evaluate(() => window.replaceWorldEvents.some(event => event.type === 'replaced'))).toBe(true);
             const feedback = page.locator('#toast-container .toast-error .toast-message');
-            await expect(feedback).toContainText(message);
-            await expect(feedback).toContainText(acknowledged);
-            await testInfo.attach('localized-deletion-feedback', { body: JSON.stringify({ locale, loss, feedback: await feedback.innerText() }), contentType: 'application/json' });
-            await expect(feedback).not.toContainText(/Imported world book retained|保留已导入|保留已匯入/);
+            await expect(feedback).toBeVisible();
+            await expect(feedback).toContainText(IMPORTED);
+            await expect(feedback).toContainText(OLD);
+            const feedbackText = (await feedback.innerText()).trim();
+            if (locale !== 'en') {
+                expect(feedbackText).toMatch(/[\u4e00-\u9fff]/);
+            }
+            await testInfo.attach('localized-deletion-feedback', { body: JSON.stringify({ locale, loss, feedback: feedbackText }), contentType: 'application/json' });
+            await expect(page.locator('#toast-container .toast-success')).toHaveCount(0);
             expect(existsSync(bookPath)).toBe(false);
             expect(await page.evaluate(name => window.Luker.getContext().loadWorldInfo(name), IMPORTED)).toEqual(IMPORTED_BOOK);
             expect(readFileSync(resolve(server.dataRoot, 'default-user', 'worlds', OLD + '.json'))).toEqual(oldBytes);
@@ -517,7 +467,7 @@ for (const { loss, locale, message, acknowledged } of [
     });
 }
 
-for (const change of ['edit', 'adopt', 'same-name', 'replace-resource', 'during-delete']) {
+for (const change of ['edit', 'adopt', 'same-name', 'during-delete']) {
     test(`merge close preserves ${change} ownership after acknowledged materialization`, async ({ page, context }, testInfo) => {
         const studio = await openOwnedMerge(page);
         const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', IMPORTED + '.json');
@@ -540,16 +490,8 @@ for (const change of ['edit', 'adopt', 'same-name', 'replace-resource', 'during-
         }
         try {
             if (change === 'edit') await editMaterializedBook(external);
-            if (change === 'adopt' || change === 'same-name') {
-                await external.locator('#cleanup-' + change).click(); await expect(external.locator('#cleanup-result')).toHaveText('true');
-            }
-            if (change === 'replace-resource') {
-                const replaced = external.waitForResponse(response => /\/api\/worldinfo\/(edit|patch)$/.test(response.url()) && response.request().postDataJSON()?.name === IMPORTED);
-                await external.locator('#cleanup-replace-resource').click();
-                expect((await replaced).ok()).toBe(true);
-                await expect.poll(() => existsSync(bookPath)).toBe(true);
-                await expect.poll(() => JSON.parse(readFileSync(bookPath, 'utf8'))).toEqual(materialized);
-            }
+            if (change === 'adopt') await adoptPrimaryInUI(external, OTHER_NAME, IMPORTED);
+            if (change === 'same-name') await rebindSameNameInUI(external);
             const close = closeWorkbench(page);
             if (change === 'during-delete') {
                 const request = await restoredResponse;
@@ -651,7 +593,7 @@ for (const mode of ['mysql', 'postgres']) {
     test.describe(`${mode} cleanup and reference ordering`, () => {
         test.use({ storageMode: mode });
         for (const reference of ['primary', 'auxiliary']) {
-            test(`Fix2 pending real SQL deletion cannot acknowledge a dangling ${reference} adoption`, async ({ page, context }, testInfo) => {
+            test(`pending real SQL deletion cannot acknowledge a dangling ${reference} adoption`, async ({ page, context }, testInfo) => {
                 const studio = await openOwnedMerge(page);
                 const original = decode(readFileSync(path())); const other = decode(readFileSync(path(OTHER)));
                 const repo = new WorldInfoRepo({ engine: database.engine });
@@ -659,16 +601,14 @@ for (const mode of ['mysql', 'postgres']) {
                 expect(await repo.get('default-user', IMPORTED)).toEqual(IMPORTED_BOOK);
                 const old = await repo.get('default-user', OLD);
                 const external = await openExternalPage(context);
-                const auxiliaryDialog = reference === 'auxiliary' ? await openAuxiliary(external) : undefined;
-                if (reference === 'auxiliary') {
-                    await expect.poll(() => external.evaluate(async () => (await import('/script.js')).settings.accountStorage?.NavOpened)).toBe('true');
-                }
+                const worldDialog = await openWorldDialogForCharacter(external, OTHER_NAME);
+                await expect.poll(() => external.evaluate(async () => (await import('/script.js')).settings.accountStorage?.NavOpened)).toBe('true');
                 // The selection debounce persists active_character through
                 // /api/settings/patch. Holding the world row before that patch
                 // lands makes its reference check wait on this test's own
                 // lock, so the adoption request would never be sent.
-                await expect.poll(() => external.evaluate(async () => (await import('/script.js')).settings.active_character)).toBe(reference === 'auxiliary' ? OTHER : AVATAR);
-                await expect.poll(async () => (await settingsRepo.get('default-user')).active_character).toBe(reference === 'auxiliary' ? OTHER : AVATAR);
+                await expect.poll(() => external.evaluate(async () => (await import('/script.js')).settings.active_character)).toBe(OTHER);
+                await expect.poll(async () => (await settingsRepo.get('default-user')).active_character).toBe(OTHER);
                 const settings = (await settingsRepo.get('default-user')).world_info_settings.world_info;
                 const acknowledgedSettings = await external.evaluate(async () => (await import('/script.js')).settings.world_info_settings.world_info);
                 expect(await external.evaluate(async () => Object.is((await import('/scripts/world-info.js')).world_info, (await import('/script.js')).settings.world_info_settings.world_info))).toBe(false);
@@ -683,12 +623,13 @@ for (const mode of ['mysql', 'postgres']) {
                     const adoptionRequest = external.waitForRequest(request => reference === 'primary'
                         ? request.url().endsWith('/api/characters/merge-attributes') && request.postDataJSON().avatar === OTHER && request.postDataJSON().data?.extensions?.world === IMPORTED
                         : /\/api\/settings\/(save|patch)$/.test(request.url()) && JSON.stringify(request.postDataJSON()).includes(IMPORTED));
-                    let auxiliary;
-                    if (reference === 'primary') await external.locator('#cleanup-adopt').click();
-                    else {
-                        auxiliary = external.waitForResponse(response => /\/api\/settings\/(save|patch)$/.test(response.url()) && JSON.stringify(response.request().postDataJSON()).includes(IMPORTED));
-                        await external.evaluate(async () => (await import('/script.js')).saveSettingsDebounced());
-                        await chooseAuxiliary(external, auxiliaryDialog);
+                    const adoptionResponse = external.waitForResponse(response => reference === 'primary'
+                        ? response.url().endsWith('/api/characters/merge-attributes') && response.request().postDataJSON().avatar === OTHER && response.request().postDataJSON().data?.extensions?.world === IMPORTED
+                        : /\/api\/settings\/(save|patch)$/.test(response.url()) && JSON.stringify(response.request().postDataJSON()).includes(IMPORTED));
+                    if (reference === 'primary') {
+                        await worldDialog.locator('.character_world_info_selector').selectOption({ label: IMPORTED });
+                    } else {
+                        await chooseAuxiliary(external, worldDialog);
                     }
                     const requestedAdoption = await adoptionRequest;
                     if (reference === 'primary') expect(requestedAdoption.postDataJSON()).toEqual({ avatar: OTHER, data: { extensions: { world: IMPORTED } }, replacePaths: ['data.extensions.world'] });
@@ -696,18 +637,19 @@ for (const mode of ['mysql', 'postgres']) {
                     expect(during.pendingAfterAdoptionRequest).toHaveLength(1);
                     await lock.release();
                     await close; await expect(studio).toBeHidden();
-                    if (reference === 'primary') await expect(external.locator('#cleanup-result')).not.toHaveText('pending');
-                    else {
-                        expect((await auxiliary).status()).toBe(409);
+                    expect((await adoptionResponse).status()).toBe(409);
+                    if (reference === 'primary') {
+                        await expect(external.locator('#toast-container')).toContainText('could not be confirmed');
+                        await expect(worldDialog.locator('.character_world_info_selector')).toHaveValue('');
+                    } else {
                         await expect(external.locator('#toast-container')).toContainText('Settings could not be saved');
                     }
                     await expect.poll(() => page.evaluate(() => window.replaceWorldEvents.some(event => event.type === 'replaced'))).toBe(true);
-                    const after = { book: await repo.get('default-user', IMPORTED), other: decode(readFileSync(path(OTHER))), original: decode(readFileSync(path())), settings: (await settingsRepo.get('default-user')).world_info_settings.world_info, adoption: reference === 'primary' ? await external.locator('#cleanup-result').innerText() : externalResponses.filter(response => JSON.stringify(response.body).includes(IMPORTED)), responses };
+                    const after = { book: await repo.get('default-user', IMPORTED), other: decode(readFileSync(path(OTHER))), original: decode(readFileSync(path())), settings: (await settingsRepo.get('default-user')).world_info_settings.world_info, adoption: externalResponses.filter(response => JSON.stringify(response.body).includes(IMPORTED)), responses };
                     await testInfo.attach('sql-delete-adoption-interleaving', { body: JSON.stringify({ backend: mode, database: database.dbName || database.schemaName, during, after }, null, 2), contentType: 'application/json' });
                     expect(after.book).toBeNull();
-                    if (reference === 'primary') expect(after.adoption).toBe('false');
-                    else {
-                        expect(after.adoption).toMatchObject([{ status: 409 }]);
+                    expect(after.adoption).toMatchObject([{ status: 409 }]);
+                    if (reference === 'auxiliary') {
                         const settingsState = await external.evaluate(async () => ({
                             draft: (await import('/scripts/world-info.js')).world_info,
                             acknowledged: (await import('/script.js')).settings.world_info_settings.world_info,

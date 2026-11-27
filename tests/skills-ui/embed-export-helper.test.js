@@ -150,3 +150,66 @@ describe('embed-export-helper — pure helpers', () => {
         expect(target.extensions.luker.embedded_skills_source).toBe(payload);
     });
 });
+
+describe('maybeAttachSkillsToOrchPresetExport', () => {
+    const FRESH = '---\nname: fresh-watch\ndescription: Keep the archive watch.\n---\nRecord the current bell.\n';
+    const STALE = {
+        version: 1,
+        items: [{ bundleFormat: 'inline-files-v1', name: 'old-watch', files: [{ path: 'SKILL.md', encoding: 'utf8', content: 'Old archive notes.' }] }],
+    };
+    const makeSource = () => ({
+        format: 'PORTABLE_PROFILE_V4',
+        mode: 'loop',
+        name: 'Archive watch',
+        profile: { system_prompt: 'Keep the archive watch.', skills: { visible: ['fresh-watch'], deny: [] } },
+        extensions: { luker: { embedded_skills_source: structuredClone(STALE), keep: 'archive' } },
+    });
+
+    for (const withOrchApi of [true, false]) {
+        test(`strips stale skills on Skip and attaches current skills on Include (orchestratorApi=${withOrchApi})`, async () => {
+            const { maybeAttachSkillsToOrchPresetExport } = await import('../../public/scripts/skills/embed-export-hook.js');
+            const scope = { kind: 'orch-preset', mode: 'loop', name: 'Archive watch' };
+            const packed = {
+                version: 1,
+                items: [{ bundleFormat: 'inline-files-v1', name: 'fresh-watch', files: [{ path: 'SKILL.md', encoding: 'utf8', content: FRESH }] }],
+            };
+
+            const buildCtx = (popupResult) => ({
+                POPUP_TYPE: { CONFIRM: 2 },
+                callGenericPopup: jest.fn(async () => popupResult),
+                getExtensionApi: (id) => {
+                    if (!withOrchApi || id !== 'orchestrator') return undefined;
+                    return {
+                        collectResolvedSkillsForOrchPreset: jest.fn(async () => new Map([
+                            ['orch-preset:loop:Archive watch', { scope, names: ['fresh-watch'] }],
+                        ])),
+                    };
+                },
+                skills: {
+                    list: jest.fn(async () => [{ name: 'fresh-watch', scope }]),
+                    packForEmbed: jest.fn(async () => structuredClone(packed)),
+                },
+            });
+
+            // Skip strips stale embedded_skills_source while retaining sibling extensions.
+            const skipPayload = makeSource();
+            const skipAttached = await maybeAttachSkillsToOrchPresetExport({
+                context: buildCtx(0),
+                payload: skipPayload,
+            });
+            expect(skipAttached).toBe(false);
+            expect(skipPayload.extensions.luker.embedded_skills_source).toBeUndefined();
+            expect(skipPayload.extensions.luker.keep).toBe('archive');
+
+            // Include attaches fresh packed skills and preserves sibling extensions.
+            const includePayload = makeSource();
+            const includeAttached = await maybeAttachSkillsToOrchPresetExport({
+                context: buildCtx(1),
+                payload: includePayload,
+            });
+            expect(includeAttached).toBe(true);
+            expect(includePayload.extensions.luker.embedded_skills_source).toEqual(packed);
+            expect(includePayload.extensions.luker.keep).toBe('archive');
+        });
+    }
+});
