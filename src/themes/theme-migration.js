@@ -137,6 +137,22 @@ async function runMigrationForHandle(handle) {
     const namedDocRepo = getNamedDocRepo();
     const settingsRepo = getSettingsRepo();
 
+    // Read settings first so a corrupt settings document aborts cleanly before
+    // any shadowed user theme is renamed or deleted, leaving the regular
+    // settings endpoints to surface 422 without stranding pu.theme pointers.
+    let settingsRead;
+    try {
+        settingsRead = await settingsRepo.read(handle);
+    } catch (err) {
+        if (err instanceof SyntaxError) {
+            return false;
+        }
+        throw err;
+    }
+    if (settingsRead.exists && !settingsRead.valid) {
+        return false;
+    }
+
     /** @type {Set<string> | null} */
     let existingNames = null;
     const getExistingNames = async () => {
@@ -149,10 +165,17 @@ async function runMigrationForHandle(handle) {
     /** @type {Map<string, string>} */
     const renamedThemes = new Map();
 
+    let hadCorruptShadowedTheme = false;
+
     // 1. Clean up or preserve user-stored theme docs that shadow built-in names.
     for (const builtinName of listBuiltinThemeNames()) {
         const readResult = await namedDocRepo.read(handle, 'themes', builtinName);
-        if (!readResult.exists || !readResult.valid || readResult.value == null) {
+        if (!readResult.exists) {
+            continue;
+        }
+        if (!readResult.valid || readResult.value == null) {
+            console.error(`[theme-migration] Corrupt user theme "${builtinName}" for handle "${handle}": ${readResult.detail || 'invalid JSON'}`);
+            hadCorruptShadowedTheme = true;
             continue;
         }
         const userDoc = readResult.value;
@@ -173,15 +196,9 @@ async function runMigrationForHandle(handle) {
 
     // 2. Strip legacy power_user.custom_css / power_user.palettes from settings.json,
     //    preserving any unsaved custom CSS as an independent user theme.
-    let settingsDoc;
-    try {
-        settingsDoc = await settingsRepo.get(handle);
-    } catch {
-        // Leave corrupt settings untouched so the regular settings endpoints surface 422.
-        return;
-    }
+    const settingsDoc = settingsRead.exists ? settingsRead.value : null;
     if (!isPlainObject(settingsDoc) || !isPlainObject(settingsDoc.power_user)) {
-        return;
+        return !hadCorruptShadowedTheme;
     }
 
     const pu = settingsDoc.power_user;
@@ -204,13 +221,26 @@ async function runMigrationForHandle(handle) {
 
         if (hasCustomCssPayload || hasCustomPalettesPayload) {
             const activeBuiltinDoc = isBuiltinThemeName(activeName) ? getBuiltinTheme(activeName) : null;
-            const activeUserDoc = (!activeBuiltinDoc && activeName)
-                ? await namedDocRepo.get(handle, 'themes', activeName)
-                : null;
+            let activeUserDoc = null;
+            if (!activeBuiltinDoc && activeName) {
+                const activeUserRead = await namedDocRepo.read(handle, 'themes', activeName);
+                if (activeUserRead.exists && !activeUserRead.valid) {
+                    if (settingsChanged) {
+                        await settingsRepo.save(handle, settingsDoc);
+                    }
+                    return false;
+                }
+                activeUserDoc = activeUserRead.exists && isPlainObject(activeUserRead.value)
+                    ? activeUserRead.value
+                    : null;
+            }
             const activeDoc = activeUserDoc || activeBuiltinDoc || null;
 
+            const currentBuiltinStylesheet = activeBuiltinDoc?.builtin_stylesheet
+                ? getBuiltinThemeStylesheetText(activeBuiltinDoc)
+                : '';
             const isUnmodifiedBuiltinLens = Boolean(activeBuiltinDoc?.builtin_stylesheet)
-                && isLegacyShippedLensCss(legacyCss);
+                && (isLegacyShippedLensCss(legacyCss) || (Boolean(currentBuiltinStylesheet) && legacyCss === currentBuiltinStylesheet));
             const alreadySavedInActiveUserTheme = isPlainObject(activeUserDoc)
                 && String(activeUserDoc.custom_css || '') === legacyCss;
             const hasUnsavedCss = hasCustomCssPayload && !isUnmodifiedBuiltinLens && !alreadySavedInActiveUserTheme;
@@ -226,7 +256,7 @@ async function runMigrationForHandle(handle) {
                 const effectiveCss = hasCustomCssPayload && !isUnmodifiedBuiltinLens
                     ? legacyCss
                     : (activeBuiltinDoc?.builtin_stylesheet
-                        ? getBuiltinThemeStylesheetText(activeBuiltinDoc)
+                        ? currentBuiltinStylesheet
                         : String(baseDoc.custom_css || ''));
                 const migratedTheme = buildMigratedThemeDoc(newName, baseDoc, pu, effectiveCss, legacyPalettes);
                 await namedDocRepo.save(handle, 'themes', newName, migratedTheme);
@@ -242,6 +272,7 @@ async function runMigrationForHandle(handle) {
     if (settingsChanged) {
         await settingsRepo.save(handle, settingsDoc);
     }
+    return !hadCorruptShadowedTheme;
 }
 
 /**
@@ -263,8 +294,10 @@ export async function ensureLegacyThemesMigrated(handle) {
     let task = inFlight.get(handle);
     if (!task) {
         task = runMigrationForHandle(handle)
-            .then(() => {
-                migrated.add(handle);
+            .then((completed) => {
+                if (completed) {
+                    migrated.add(handle);
+                }
             })
             .finally(() => {
                 inFlight.delete(handle);
@@ -309,7 +342,7 @@ export async function migrateLegacyThemesForAllUsers(directoriesList) {
         try {
             await ensureLegacyThemesMigrated(handle);
         } catch (err) {
-            console.warn(`Legacy theme migration failed for user "${handle}":`, err);
+            console.error(`Legacy theme migration failed for user "${handle}":`, err);
         }
     }
 }

@@ -9,6 +9,7 @@ import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../storage/harness/endp
 import { router as themesRouter } from '../../src/endpoints/themes.js';
 import { router as settingsRouter } from '../../src/endpoints/settings.js';
 import { getNamedDocRepo, getSettingsRepo } from '../../src/storage/index.js';
+import { createThemeManager } from '../../public/scripts/theme-manager.js';
 import {
     getBuiltinTheme,
     getBuiltinThemeStylesheetText,
@@ -355,7 +356,7 @@ describe.each(ENDPOINT_HARNESSES)('Theme API built-in hosting, patch, and legacy
         expect(migrated.custom_css).toBe(LENS_CSS);
     });
 
-    test('POST /api/themes/delete and GET /api/themes/get reject unsafe repository names with HTTP 400', async () => {
+    test('POST /api/themes/delete rejects unsafe repository names with HTTP 400 and GET /api/themes/get returns 404', async () => {
         await request(harness.server)
             .post('/api/themes/delete')
             .send({ name: '../escape' })
@@ -364,21 +365,60 @@ describe.each(ENDPOINT_HARNESSES)('Theme API built-in hosting, patch, and legacy
         await request(harness.server)
             .get('/api/themes/get')
             .query({ name: '../escape' })
-            .expect(400);
+            .expect(404);
+    });
+
+    test('POST /api/themes/patch returns 422 on corrupt theme JSON instead of 404', async () => {
+        if (mode === 'fs') {
+            fs.writeFileSync(path.join(harness.dirs.themes, 'BrokenTheme.json'), '{invalid-json', 'utf8');
+        } else if (mode === 'sqlite') {
+            harness.engine._dbFor(harness.handle)
+                .prepare('INSERT INTO named_docs (handle, bucket, name, doc, updated_at) VALUES (?, ?, ?, ?, ?)')
+                .run(harness.handle, 'themes', 'BrokenTheme', '{invalid-json', Date.now());
+        } else {
+            return;
+        }
+
+        const res = await request(harness.server)
+            .post('/api/themes/patch')
+            .send({ name: 'BrokenTheme', patch: { custom_css: 'body{}' } })
+            .expect(422);
+        expect(res.body.code).toBe('invalid_resource');
+    });
+
+    test('migration leaves shadowed themes intact and does not poison memoized cache when settings JSON is corrupt', async () => {
+        if (mode !== 'fs' && mode !== 'sqlite') {
+            return;
+        }
+        const builtinLens = getBuiltinTheme('Lens');
+        const modifiedLens = { ...builtinLens, custom_css: `${LENS_CSS}\n/* custom */` };
+        delete modifiedLens.builtin;
+        delete modifiedLens.builtin_stylesheet;
+        await getNamedDocRepo().save(harness.handle, 'themes', 'Lens', modifiedLens);
+        if (mode === 'fs') {
+            fs.writeFileSync(path.join(harness.dirs.root, 'settings.json'), '{corrupt-settings', 'utf8');
+        } else {
+            harness.engine._dbFor(harness.handle)
+                .prepare('INSERT OR REPLACE INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)')
+                .run(harness.handle, '{corrupt-settings', Date.now());
+        }
+
+        await ensureLegacyThemesMigrated(harness.handle);
+        // Shadowed theme must NOT have been deleted while settings was unreadable
+        expect(await getNamedDocRepo().get(harness.handle, 'themes', 'Lens')).not.toBeNull();
+
+        // Repair settings and re-run without manual invalidation: migration must run and complete
+        await getSettingsRepo().save(harness.handle, {
+            power_user: { theme: 'Lens', custom_css: `${LENS_CSS}\n/* custom */` },
+        });
+        await ensureLegacyThemesMigrated(harness.handle);
+        expect(await getNamedDocRepo().get(harness.handle, 'themes', 'Lens')).toBeNull();
+        const repaired = await getSettingsRepo().get(harness.handle);
+        expect(repaired.power_user.theme).toBe('Lens (Custom)');
     });
 });
 
 describe('Client theme-manager proxy, lazy loading, stylesheet order, and independent derivation', () => {
-    let createThemeManager;
-
-    beforeEach(async () => {
-        jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
-            invalidateThemeResourceReads: jest.fn(),
-            readThemeDocument: jest.fn(async () => null),
-        }));
-        ({ createThemeManager } = await import('../../public/scripts/theme-manager.js'));
-    });
-
     test('lazy-loads unselected themes on demand, proxies custom_css/palettes with auto Theme API writeback, and omits them from JSON', async () => {
         const fakeDoc = createFakeDocument();
         const readTheme = jest.fn(async (name) => {
@@ -462,6 +502,45 @@ describe('Client theme-manager proxy, lazy loading, stylesheet order, and indepe
         await manager.flushPendingPatch();
         expect(patchTheme).toHaveBeenCalledTimes(1);
         expect(patchTheme).toHaveBeenCalledWith('ExternalA', { custom_css: 'body { color: green; }' });
+    });
+
+    test('mountBuiltinStylesheet rejects on link error and flushPendingPatch rolls back cache on failure', async () => {
+        const fakeDoc = createFakeDocument();
+        const patchTheme = jest.fn(async () => {
+            throw new Error('server 500');
+        });
+        const onPatchError = jest.fn();
+        const onStylesheetLoaded = jest.fn();
+        const onCustomCssApplied = jest.fn();
+        const manager = createThemeManager({
+            patchTheme,
+            invalidateReads: jest.fn(),
+            onPatchError,
+            onStylesheetLoaded,
+            onCustomCssApplied,
+            patchDelayMs: 50,
+            getDocument: () => fakeDoc,
+        });
+
+        const mountPromise = manager.mountBuiltinStylesheet('css/themes/broken.css');
+        const link = fakeDoc.getElementById('builtin-theme-style');
+        expect(link).not.toBeNull();
+        link.dispatchEvent('error');
+        await expect(mountPromise).rejects.toThrow('Failed to load built-in theme stylesheet');
+        expect(fakeDoc.getElementById('builtin-theme-style')).toBeNull();
+        expect(onStylesheetLoaded).not.toHaveBeenCalled();
+
+        const powerUser = { theme: 'Editable' };
+        manager.installPowerUserProxies(powerUser);
+        manager.setActiveTheme({ name: 'Editable', custom_css: 'body { color: white; }' });
+        powerUser.custom_css = 'body { color: red; }';
+        expect(powerUser.custom_css).toBe('body { color: red; }');
+
+        await expect(manager.flushPendingPatch()).rejects.toThrow('server 500');
+        expect(onPatchError).toHaveBeenCalledTimes(1);
+        expect(powerUser.custom_css).toBe('body { color: white; }');
+        expect(manager.getCachedTheme('Editable').custom_css).toBe('body { color: white; }');
+        expect(onCustomCssApplied).toHaveBeenLastCalledWith('body { color: white; }');
     });
 
     test('deriving produces completely independent copies for both built-in and non-built-in themes', async () => {

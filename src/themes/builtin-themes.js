@@ -98,22 +98,24 @@ function loadRegistry() {
             .sort((a, b) => a.localeCompare(b));
         for (const file of files) {
             const fullPath = path.join(BUILTIN_THEMES_DIR, file);
+            const raw = fs.readFileSync(fullPath, 'utf8');
+            let parsed;
             try {
-                const raw = fs.readFileSync(fullPath, 'utf8');
-                const parsed = JSON.parse(raw);
-                if (!isPlainObject(parsed)) continue;
-                const name = typeof parsed.name === 'string' && parsed.name.trim()
-                    ? parsed.name.trim()
-                    : path.parse(file).name;
-                const doc = { ...parsed, name, builtin: true };
-                if (doc.builtin_stylesheet !== undefined && !isValidBuiltinStylesheetPath(doc.builtin_stylesheet)) {
-                    console.warn(`Ignoring invalid builtin_stylesheet "${doc.builtin_stylesheet}" in built-in theme "${name}"`);
-                    delete doc.builtin_stylesheet;
-                }
-                byName.set(name, doc);
+                parsed = JSON.parse(raw);
             } catch (err) {
-                console.warn(`Failed to load built-in theme ${file}:`, err);
+                throw new Error(`Invalid built-in theme JSON at ${fullPath}: ${err.message}`, { cause: err });
             }
+            if (!isPlainObject(parsed)) {
+                throw new Error(`Built-in theme ${fullPath} must contain a JSON object`);
+            }
+            const name = typeof parsed.name === 'string' && parsed.name.trim()
+                ? parsed.name.trim()
+                : path.parse(file).name;
+            const doc = { ...parsed, name, builtin: true };
+            if (doc.builtin_stylesheet !== undefined && !isValidBuiltinStylesheetPath(doc.builtin_stylesheet)) {
+                throw new Error(`Invalid builtin_stylesheet "${doc.builtin_stylesheet}" in built-in theme "${name}" (${fullPath})`);
+            }
+            byName.set(name, doc);
         }
     }
     const sortedNames = [...byName.keys()].sort((a, b) => a.localeCompare(b));
@@ -124,10 +126,6 @@ function loadRegistry() {
 // Warm the built-in theme registry at module load so single-document reads never
 // trigger directory scans on request paths.
 loadRegistry();
-
-export function resetBuiltinThemesCacheForTests() {
-    cachedRegistry = null;
-}
 
 export function listBuiltinThemeNames() {
     return [...loadRegistry().sortedNames];
@@ -155,13 +153,13 @@ export function listBuiltinThemes() {
 
 export function getBuiltinThemeStylesheetText(themeDoc) {
     const relPath = themeDoc?.builtin_stylesheet;
-    if (!isValidBuiltinStylesheetPath(relPath)) {
+    if (relPath === undefined || relPath === null || relPath === '') {
         return '';
+    }
+    if (!isValidBuiltinStylesheetPath(relPath)) {
+        throw new Error(`Invalid built-in theme stylesheet path "${relPath}"`);
     }
     const fullPath = path.resolve(PUBLIC_DIR, relPath);
-    if (!fs.existsSync(fullPath)) {
-        return '';
-    }
     return fs.readFileSync(fullPath, 'utf8');
 }
 

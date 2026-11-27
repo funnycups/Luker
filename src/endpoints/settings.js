@@ -193,18 +193,19 @@ async function loadThemesForSettings(handle, { includeContents = true, selectedT
     }
     const sortedNames = [...allNames].sort((a, b) => a.localeCompare(b));
     let selectedDoc = null;
-    if (typeof selectedThemeName === 'string' && selectedThemeName) {
+    if (typeof selectedThemeName === 'string' && selectedThemeName && allNames.has(selectedThemeName)) {
         if (isBuiltinThemeName(selectedThemeName)) {
             selectedDoc = getBuiltinTheme(selectedThemeName);
         } else {
-            const raw = await getNamedDocRepo().get(handle, 'themes', selectedThemeName);
+            const readResult = await getNamedDocRepo().read(handle, 'themes', selectedThemeName);
+            const raw = readResult.exists && readResult.valid ? readResult.value : null;
             if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
                 selectedDoc = typeof raw.name === 'string' && raw.name ? raw : { ...raw, name: selectedThemeName };
             }
         }
     }
     return sortedNames.map((name) => {
-        if (selectedDoc && selectedDoc.name === name) {
+        if (selectedDoc && name === selectedThemeName) {
             return selectedDoc;
         }
         return { name, builtin: builtinNames.has(name), _summary: true };

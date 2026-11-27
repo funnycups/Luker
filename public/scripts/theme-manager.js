@@ -56,6 +56,7 @@ export function createThemeManager({
     onPalettesApplied = null,
     onBuiltinWriteBlocked = null,
     onStylesheetLoaded = null,
+    onPatchError = null,
     patchDelayMs = 300,
     getDocument = () => (typeof document !== 'undefined' ? document : null),
 } = {}) {
@@ -70,10 +71,12 @@ export function createThemeManager({
     let detachedCustomCss = '';
     let detachedPalettes = null;
 
-    /** @type {{ name: string, patch: Record<string, any>, timer: any } | null} */
+    /** @type {{ name: string, patch: Record<string, any>, prev: Record<string, { had: boolean, value: any }>, timer: any } | null} */
     let pendingPatch = null;
     /** @type {Promise<void>} */
     let patchChain = Promise.resolve();
+    /** @type {Promise<void> | null} */
+    let inFlightPatch = null;
 
     function upsertDirectoryEntry(name, builtin) {
         if (typeof name !== 'string' || !name) return;
@@ -207,44 +210,85 @@ export function createThemeManager({
         invalidateReads();
     }
 
+    function rollbackFailedPatch(batch) {
+        const cached = docCache.get(batch.name);
+        if (cached && isPlainObject(cached)) {
+            for (const [key, prev] of Object.entries(batch.prev)) {
+                const pendingValue = batch.patch[key];
+                const currentMatchesFailed = pendingValue === null
+                    ? cached[key] === undefined
+                    : JSON.stringify(cached[key]) === JSON.stringify(pendingValue);
+                if (!currentMatchesFailed) continue;
+                if (prev.had) {
+                    cached[key] = cloneJson(prev.value);
+                } else {
+                    delete cached[key];
+                }
+                if (activeThemeDoc && activeThemeDoc.name === batch.name) {
+                    if (key === 'custom_css') {
+                        onCustomCssApplied?.(typeof cached.custom_css === 'string' ? cached.custom_css : '');
+                    } else if (key === 'palettes') {
+                        onPalettesApplied?.(batch.name, normalizePalettes(cached.palettes));
+                    }
+                }
+            }
+        }
+        invalidateReads();
+    }
+
     function flushPendingPatch() {
         if (pendingPatch) {
             const batch = pendingPatch;
             clearTimeout(batch.timer);
             pendingPatch = null;
             if (typeof patchTheme === 'function' && !isBuiltin(batch.name)) {
-                patchChain = patchChain.then(async () => {
+                const attempt = patchChain.then(async () => {
                     try {
                         await patchTheme(batch.name, batch.patch);
                         invalidateReads();
                     } catch (error) {
+                        rollbackFailedPatch(batch);
                         console.error(`Failed to persist theme "${batch.name}" patch:`, error);
+                        onPatchError?.(error, batch.name, batch.patch);
+                        throw error;
                     }
                 });
+                inFlightPatch = attempt;
+                patchChain = attempt.then(
+                    () => { if (inFlightPatch === attempt) inFlightPatch = null; },
+                    () => { if (inFlightPatch === attempt) inFlightPatch = null; },
+                );
+                return attempt;
             }
         }
-        return patchChain;
+        return inFlightPatch ?? patchChain;
     }
 
-    function queuePatch(themeName, fields) {
+    function queuePatch(themeName, fields, prevFields) {
         if (typeof patchTheme !== 'function' || !themeName || isBuiltin(themeName)) {
             return;
         }
         if (pendingPatch && pendingPatch.name !== themeName) {
-            void flushPendingPatch();
+            void flushPendingPatch().catch(() => {});
         }
         if (!pendingPatch) {
             pendingPatch = {
                 name: themeName,
                 patch: { ...fields },
+                prev: { ...prevFields },
                 timer: null,
             };
         } else {
+            for (const [key, snap] of Object.entries(prevFields)) {
+                if (!Object.prototype.hasOwnProperty.call(pendingPatch.prev, key)) {
+                    pendingPatch.prev[key] = snap;
+                }
+            }
             Object.assign(pendingPatch.patch, fields);
             clearTimeout(pendingPatch.timer);
         }
         pendingPatch.timer = setTimeout(() => {
-            void flushPendingPatch();
+            void flushPendingPatch().catch(() => {});
         }, patchDelayMs);
     }
 
@@ -274,12 +318,18 @@ export function createThemeManager({
                         }
                         return;
                     }
-                    const prevCss = typeof activeThemeDoc.custom_css === 'string' ? activeThemeDoc.custom_css : '';
+                    const hadPrevCss = Object.prototype.hasOwnProperty.call(activeThemeDoc, 'custom_css');
+                    const prevRawCss = activeThemeDoc.custom_css;
+                    const prevCss = typeof prevRawCss === 'string' ? prevRawCss : '';
                     activeThemeDoc.custom_css = nextCss;
                     docCache.set(activeThemeDoc.name, activeThemeDoc);
                     onCustomCssApplied?.(nextCss);
                     if (prevCss !== nextCss) {
-                        queuePatch(activeThemeDoc.name, { custom_css: nextCss });
+                        queuePatch(
+                            activeThemeDoc.name,
+                            { custom_css: nextCss },
+                            { custom_css: { had: hadPrevCss, value: prevRawCss } },
+                        );
                     }
                     return;
                 }
@@ -308,6 +358,8 @@ export function createThemeManager({
                         }
                         return;
                     }
+                    const hadPrevPalettes = Object.prototype.hasOwnProperty.call(activeThemeDoc, 'palettes');
+                    const prevRawPalettes = hadPrevPalettes ? cloneJson(activeThemeDoc.palettes) : undefined;
                     const prevStr = JSON.stringify(normalizePalettes(activeThemeDoc.palettes));
                     const nextStr = JSON.stringify(nextPalettes);
                     if (nextPalettes) {
@@ -318,7 +370,11 @@ export function createThemeManager({
                     docCache.set(activeThemeDoc.name, activeThemeDoc);
                     onPalettesApplied?.(activeThemeDoc.name, nextPalettes);
                     if (prevStr !== nextStr) {
-                        queuePatch(activeThemeDoc.name, { palettes: nextPalettes ?? null });
+                        queuePatch(
+                            activeThemeDoc.name,
+                            { palettes: nextPalettes ?? null },
+                            { palettes: { had: hadPrevPalettes, value: prevRawPalettes } },
+                        );
                     }
                     return;
                 }
@@ -377,17 +433,19 @@ export function createThemeManager({
         link.setAttribute('type', 'text/css');
         link.setAttribute('href', stylesheetPath);
 
-        const loadPromise = new Promise((resolve) => {
+        const loadPromise = new Promise((resolve, reject) => {
             if (typeof link.addEventListener !== 'function') {
                 resolve();
                 return;
             }
-            const finish = () => {
+            link.addEventListener('load', () => {
                 onStylesheetLoaded?.(stylesheetPath);
                 resolve();
-            };
-            link.addEventListener('load', finish, { once: true });
-            link.addEventListener('error', finish, { once: true });
+            }, { once: true });
+            link.addEventListener('error', () => {
+                link.remove();
+                reject(new Error(`Failed to load built-in theme stylesheet "${stylesheetPath}"`));
+            }, { once: true });
         });
 
         if (customStyle) {

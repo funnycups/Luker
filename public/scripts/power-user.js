@@ -441,6 +441,9 @@ const themeManager = createThemeManager({
         syncThemeChromeColors();
         syncIosSystemBarsColor();
     },
+    onPatchError: (error) => {
+        toastr.error(String(error?.message || error), t`Theme could not be saved`);
+    },
 });
 
 themeManager.installPowerUserProxies(power_user);
@@ -2339,8 +2342,8 @@ async function applyTheme(name) {
         const activeTheme = themeManager.getActiveTheme();
         try {
             await themeManager.mountBuiltinStylesheet(activeTheme?.builtin ? activeTheme.builtin_stylesheet : '');
-        } catch {
-            // Best-effort stylesheet restore when a theme load fails.
+        } catch (restoreErr) {
+            console.error('Failed to restore active built-in theme stylesheet:', restoreErr);
         }
     };
     let theme;
@@ -3688,26 +3691,35 @@ async function deleteTheme() {
 
     themeManager.removeDeletedTheme(themeName);
     const remainingNames = themeManager.listThemeNames();
-    power_user.theme = remainingNames[0] || '';
+    const nextThemeName = remainingNames[0] || '';
+    power_user.theme = nextThemeName;
     renderThemeSelectOptions(power_user.theme);
     let fallbackApplied = false;
+    let fallbackError = null;
     if (power_user.theme) {
         try {
             fallbackApplied = await applyTheme(power_user.theme);
         } catch (err) {
+            fallbackError = err;
             console.error('Failed to apply fallback theme after deletion:', err);
         }
     }
     if (!fallbackApplied && (!power_user.theme || !themeManager.getActiveTheme())) {
-        power_user.theme = '';
-        renderThemeSelectOptions('');
+        if (!fallbackError) {
+            power_user.theme = '';
+            renderThemeSelectOptions('');
+        }
         await themeManager.mountBuiltinStylesheet('');
         applyCustomCSS();
         syncThemePalettes('', null);
         syncThemeChromeColors();
     }
     saveSettingsDebounced();
-    toastr.success(t`Theme deleted.`);
+    if (fallbackError) {
+        toastr.error(String(fallbackError?.message || fallbackError), t`Failed to apply theme.`);
+    } else {
+        toastr.success(t`Theme deleted.`);
+    }
 }
 
 /**
@@ -4955,8 +4967,18 @@ jQuery(() => {
             toastr.error(String(err?.message || err), t`Failed to apply theme.`);
         });
     });
-    $('#ui-preset-update-button').on('click', () => void updateTheme());
-    $('#ui-preset-delete-button').on('click', () => void deleteTheme());
+    $('#ui-preset-update-button').on('click', () => {
+        void updateTheme().catch((err) => {
+            console.error('Failed to update theme:', err);
+            toastr.error(String(err?.message || err), t`Theme could not be saved`);
+        });
+    });
+    $('#ui-preset-delete-button').on('click', () => {
+        void deleteTheme().catch((err) => {
+            console.error('Failed to delete theme:', err);
+            toastr.error(String(err?.message || err), t`Failed to delete theme. Check the console for more information.`);
+        });
+    });
     $('#movingui-preset-save-button').on('click', saveMovingUI);
 
     $('#never_resize_avatars').on('input', function () {

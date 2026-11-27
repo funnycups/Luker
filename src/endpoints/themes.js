@@ -62,7 +62,6 @@ router.get('/get', async (request, response) => {
         }
         const handle = request.user.profile.handle;
         await ensureLegacyThemesMigrated(handle);
-        assertSafeRepoName(name, 'Theme name');
         const result = await getNamedDocRepo().read(handle, 'themes', name);
         if (!result.exists) {
             return sendResourceReadError(response, {
@@ -86,14 +85,6 @@ router.get('/get', async (request, response) => {
             cacheEntry: result.cacheEntry,
         });
     } catch (error) {
-        if (error instanceof InvalidArgumentError) {
-            return sendResourceReadError(response, {
-                code: 'invalid_args',
-                resource: `themes:${name}`,
-                detail: error.message,
-                status: 400,
-            });
-        }
         console.error('Error reading themes document:', error);
         return sendResourceReadError(response, {
             code: 'read_failed',
@@ -155,10 +146,17 @@ router.post('/patch', async (request, response) => {
     try {
         const handle = request.user.profile.handle;
         const repo = getNamedDocRepo();
-        const existing = await repo.get(handle, 'themes', safeName);
-        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+        const readResult = await repo.read(handle, 'themes', safeName);
+        if (!readResult.exists) {
             return response.status(404).send({ error: 'Theme not found.', code: 'not_found' });
         }
+        if (!readResult.valid || !readResult.value || typeof readResult.value !== 'object' || Array.isArray(readResult.value)) {
+            return response.status(422).send({
+                error: readResult.detail || 'Theme document is not valid JSON.',
+                code: 'invalid_resource',
+            });
+        }
+        const existing = readResult.value;
         const sanitizedPatch = stripInternalThemeFields(patch);
         delete sanitizedPatch.name;
         const updated = { ...stripInternalThemeFields(existing) };
