@@ -10,7 +10,6 @@ import {
     closeRightNavDrawer,
     closeTopDrawer,
     openTopDrawer,
-    openUserSettingsDrawer,
     selectCharacterByName,
     sendMessageAndAwaitReply,
 } from '../_lib/page.js';
@@ -148,13 +147,13 @@ async function configureEveryTurnExtractionViaUI(page) {
     await closeWorkbench(page);
 }
 
-test.describe('activity-guard: settings cleanup', () => {
+test.describe('activity-guard: Layer 2 context exposure', () => {
     let server, mock;
 
     test.beforeAll(async ({ workerResources }, testInfo) => {
         const scope = await workerResources.scenario(testInfo.file);
         mock = await startMockLLM({ scriptedReplies: ['*Seraphina marks the harbor chart.*'] });
-        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-settings' });
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-context-exposure' });
         await seedStandardDataRoot(server.dataRoot, mock.baseURL);
     });
 
@@ -162,15 +161,46 @@ test.describe('activity-guard: settings cleanup', () => {
         await mock?.stop();
     });
 
-    test('User Settings drawer omits #before_unload_guard_mode', async ({ page }) => {
+    test('exposes identical frozen 7-method activityGuard on getContext() and window.lukerContext', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await openUserSettingsDrawer(page);
 
-        await expect(page.locator('#user-settings-block')).toBeVisible();
-        await expect(page.locator('#confirm_message_delete')).toBeAttached();
-        await expect(page.locator('#before_unload_guard_mode')).toHaveCount(0);
+        const result = await page.evaluate(() => {
+            const stCtx = window.SillyTavern?.getContext?.();
+            const lukerCtx = window.lukerContext;
+            const guard = stCtx?.activityGuard;
+            const sameObject = Boolean(guard) && guard === lukerCtx?.activityGuard;
+            const frozen = Boolean(guard) && Object.isFrozen(guard);
+            const keys = guard ? Object.keys(guard).sort() : [];
+            const allFunctions = keys.every(k => typeof guard[k] === 'function');
+            const hasInternalCancel = guard ? ('cancelChatSwitchActivities' in guard) : true;
+            const initialActiveCount = guard ? guard.list().length : -1;
 
-        await closeTopDrawer(page, 'user-settings-button');
+            return {
+                sameObject,
+                frozen,
+                keys,
+                allFunctions,
+                hasInternalCancel,
+                initialActiveCount,
+            };
+        });
+
+        expect(result).toEqual({
+            sameObject: true,
+            frozen: true,
+            keys: [
+                'acquire',
+                'hasChatSwitchGuard',
+                'hasKeepAliveHold',
+                'hasUnloadGuard',
+                'list',
+                'run',
+                'subscribe',
+            ],
+            allFunctions: true,
+            hasInternalCancel: false,
+            initialActiveCount: 0,
+        });
     });
 });
 

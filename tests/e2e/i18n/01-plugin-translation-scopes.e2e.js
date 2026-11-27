@@ -352,6 +352,8 @@ test.describe('i18n — zh-cn translations per plugin configuration', () => {
         const { mock, server } = await bootServer(resources, 'i18n-all-plugins');
         try {
             await awaitMainUI(page, server.baseURL);
+            const hasScopedI18nApi = await page.evaluate(() => typeof window.Luker?.getContext?.()?.createScopedI18n === 'function');
+            expect(hasScopedI18nApi).toBe(true);
             await setIterationPlugins(page, server.baseURL, ITERATION_PLUGINS);
             await switchToZhCn(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');

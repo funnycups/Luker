@@ -50,10 +50,10 @@ test('ctx.iterationLibrary exposes exactly the documented members', async ({ pag
     expect(s.frozen).toBe(true);
     expect(s.sameAsLayer2).toBe(true);
     expect(s.top).toEqual(sorted(['applyEdits', 'inverseEdit', 'registerOp', 'BUILT_IN_OPS', 'showConflictResolution', 'render', 'runner', 'textDiff', 'zoomOverlay', 'ui', 'tools', 'proposalBus', 'bindIterWorkspaceResizer']));
-    expect(s.render).toEqual(sorted(['_resetMarkdownCacheForTests', 'ensureMarkdownDeps', 'renderMessageMarkdown']));
+    expect(s.render).toEqual(sorted(['ensureMarkdownDeps', 'renderMessageMarkdown']));
     expect(s.runner).toEqual(sorted(['abortUtils', 'buildExecutionToolCalls', 'buildPendingToolResults', 'buildPersistentToolCallsFromRawCalls', 'buildPersistentToolHistoryMessages', 'collectIterToolCallIds', 'createPersistentToolTurnMessage', 'makeAiIterationMessageId', 'requestToolCallsWithRetry']));
     expect(s.abortUtils).toEqual(sorted(['createAbortError', 'isAbortError', 'isAbortSignalLike', 'isStrictAbortError', 'linkAbortSignals', 'raceAbortSignal', 'throwIfAborted']));
-    expect(s.textDiff).toEqual(sorted(['STYLESHEET_HREF', 'STYLESHEET_ID', '_testOnly_refreshNarrowViewport', 'ensureStylesheetInjected', 'formatDiffValue', 'renderInlineTextDiffElement', 'renderInlineTextDiffHtml', 'sanitizeDiffPlaceholderValue']));
+    expect(s.textDiff).toEqual(sorted(['STYLESHEET_HREF', 'STYLESHEET_ID', 'ensureStylesheetInjected', 'formatDiffValue', 'renderInlineTextDiffElement', 'renderInlineTextDiffHtml', 'sanitizeDiffPlaceholderValue']));
     expect(s.zoomOverlay).toEqual(['attachZoomOverlay', 'openExpandedDiff']);
     expect(s.ui).toEqual(['diff', 'ensureUiStylesheetInjected', 'message']);
     expect(s.uiMessage).toEqual(['bindChainBrokenBanner', 'renderMessageCard']);

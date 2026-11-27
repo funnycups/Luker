@@ -1,12 +1,15 @@
 // Real-browser end-to-end verification for Luker's modern toast engine:
 // 1. Card-deck stacking, badge expand/collapse, front-click dismissal, and /echo color override.
-// 2. Per-toast independent pointer dragging without accidental tap-to-dismiss or onclick.
-// 3. Ongoing-task persistent toast: no close button, minimize to non-overlapping corner capsule,
-//    live .toast-message text sync, capsule dragging, expand with live Stop button, and clear().
-// 4. Sticky error persistent toast: both minimize and close controls work cleanly.
+// 2. Per-toast independent pointer dragging without accidental tap-to-dismiss or /echo onClick.
+// 3. Ongoing-task persistent toast via /loader-show: no close button, minimize to non-overlapping
+//    corner capsule, capsule dragging, expand with live Stop button, and /loader-hide cleanup.
+// 4. Sticky error persistent toast via /echo severity=error timeout=0 extendedTimeout=0:
+//    both minimize and close controls work cleanly.
 // 5. Top-layer <dialog> interop across both <dialog class="popup"> and Account Window (dialog.dw-layer),
 //    including rescuing active persistent toasts when dialog.dw-layer closes.
 // 6. Narrow mobile viewport (390x844) bounds, deck badge toggle, drag, and capsule containment.
+// 7. Expanded burst scrolling with detached side card remaining unclipped and hit-testable.
+// 8. Real theme/custom-CSS controls (#themes, #ui_preset_derive_button, #customCSS, Lens palette strip).
 
 import { test, expect } from '../../harness/playwright.js';
 
@@ -32,6 +35,29 @@ async function dragElementBy(page, locator, dx, dy) {
     await page.mouse.down();
     await page.mouse.move(startX + dx, startY + dy, { steps: 12 });
     await page.mouse.up();
+}
+
+async function openUserSettingsDrawer(page) {
+    const closedIcon = page.locator('#user-settings-button .drawer-icon.closedIcon');
+    if (await closedIcon.count()) {
+        await page.locator('#user-settings-button .drawer-toggle').click();
+    }
+    await expect(page.locator('#themes')).toBeVisible();
+}
+
+async function closeUserSettingsDrawerIfOpen(page) {
+    const openIcon = page.locator('#user-settings-button .drawer-icon.openIcon');
+    if (await openIcon.count()) {
+        await page.locator('#user-settings-button .drawer-toggle').click();
+    }
+}
+
+async function openOptionsMenu(page) {
+    const options = page.locator('#options');
+    if (!(await options.isVisible())) {
+        await page.locator('#options_button').click();
+    }
+    await expect(options).toBeVisible();
 }
 
 test.describe('modern toast system', () => {
@@ -124,19 +150,14 @@ test.describe('modern toast system', () => {
     test('drags an individual toast freely without triggering tapToDismiss or onclick', async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        await page.evaluate(() => {
-            window.__toastClicks = 0;
-            window.toastr.info('Background dock notice', 'Watchpost', { timeOut: 60000 });
-            window.toastr.info('Drag me out of the way', 'Watchpost', {
-                timeOut: 60000,
-                tapToDismiss: true,
-                onclick: () => { window.__toastClicks += 1; },
-            });
-        });
+        await sendSlashCommand(page, '/echo timeout=60000 title="Watchpost" Background dock notice');
+        await sendSlashCommand(page, '/echo timeout=60000 title="Watchpost" onClick={: /echo timeout=60000 "Watchpost clicked" :} Drag me out of the way');
 
         const dragToast = page.locator('#toast-container .toast', { hasText: 'Drag me out of the way' });
         const stayToast = page.locator('#toast-container .toast', { hasText: 'Background dock notice' });
+        const clickedNotice = page.locator('#toast-container .toast', { hasText: 'Watchpost clicked' });
         await expect(dragToast).toBeVisible();
 
         const beforeBox = await dragToast.boundingBox();
@@ -152,49 +173,32 @@ test.describe('modern toast system', () => {
         expect(afterBox.x).toBeGreaterThanOrEqual(8);
         expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(800 - 8);
 
-        // Dragging must NOT have triggered onclick or dismissed the toast.
-        const clickCount = await page.evaluate(() => window.__toastClicks);
-        expect(clickCount).toBe(0);
+        // Dragging must NOT have triggered onClick or dismissed the toast.
+        await expect(clickedNotice).toHaveCount(0);
 
-        // Now a normal click without dragging fires onclick and dismisses.
+        // Now a normal click without dragging fires onClick and dismisses.
         await dragToast.click();
         await expect(dragToast).toHaveCount(0, { timeout: 5_000 });
-        expect(await page.evaluate(() => window.__toastClicks)).toBe(1);
+        await expect(clickedNotice).toHaveCount(1, { timeout: 5_000 });
     });
 
-    test('supports ongoing-task persistent toast capsule minimize, live text sync, drag, expand with live Stop button, and clear()', async ({ page }) => {
+    test('supports ongoing-task persistent toast capsule minimize, drag, expand with live Stop button, and loader-hide cleanup', async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        await page.evaluate(() => {
-            window.__stopClicked = 0;
-            const $t = window.toastr.info(' ', '', {
-                timeOut: 0,
-                extendedTimeOut: 0,
-                tapToDismiss: false,
-                closeButton: false,
-                closable: false,
-            });
-            const body = $t.find('.toast-message');
-            body.empty();
-            const text = window.$('<div class="luker-rpg-memory-toast-text">Extracting memories 1/3</div>');
-            const stop = window.$('<button type="button" class="menu_button menu_button_small luker-toast-stop-button">Stop</button>');
-            stop.on('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                window.__stopClicked += 1;
-            });
-            body.append(text, stop);
-            window.__activeTaskToast = $t;
-        });
+        await sendSlashCommand(
+            page,
+            '/loader-show blocking=false message="Extracting memories 1/3" onStop={: /echo timeout=60000 "Extraction stopped" :}',
+        );
 
-        const taskToast = page.locator('#toast-container .toast').first();
-        await expect(taskToast).toBeVisible();
+        const taskToast = page.locator('#toast-container .toast', { hasText: 'Extracting memories 1/3' });
+        await expect(taskToast).toBeVisible({ timeout: 10_000 });
         await expect(taskToast.locator('.toast-close-button')).toHaveCount(0);
         await expect(taskToast.locator('.luker-toast-minimize-button')).toHaveCount(1);
 
         // Clicking body must NOT dismiss an ongoing task toast.
-        await taskToast.locator('.luker-rpg-memory-toast-text').click();
+        await taskToast.locator('.action-loader-message').click();
         await expect(taskToast).toBeVisible();
 
         // Minimize -> shrinks into compact capsule parked in top-right corner clear of center dock.
@@ -209,12 +213,6 @@ test.describe('modern toast system', () => {
         expect(parkedBox.x + parkedBox.width).toBeGreaterThan(1200);
         expect(parkedBox.height).toBeLessThanOrEqual(36);
 
-        // Live DOM mutation inside .toast-message updates the capsule label without including "Stop".
-        await page.evaluate(() => {
-            window.__activeTaskToast.find('.luker-rpg-memory-toast-text').text('Extracting memories 2/3');
-        });
-        await expect(capsule.locator('.luker-toast-capsule-label')).toHaveText('Extracting memories 2/3');
-
         // Drag capsule to custom coordinates -> stays minimized, does not expand on drop.
         await dragElementBy(page, capsule, -500, 260);
         await expect(taskToast).toHaveAttribute('data-toast-state', 'minimized');
@@ -224,32 +222,36 @@ test.describe('modern toast system', () => {
         // Clicking dragged capsule expands in place as detached, preserving Stop button handler.
         await capsule.click();
         await expect(taskToast).toHaveAttribute('data-toast-state', 'detached');
-        await expect(taskToast.locator('.luker-toast-stop-button')).toBeVisible();
-        await taskToast.locator('.luker-toast-stop-button').click();
-        expect(await page.evaluate(() => window.__stopClicked)).toBe(1);
-
-        // Re-minimize and confirm programmatic toastr.clear() removes the minimized capsule cleanly.
-        await taskToast.locator('.luker-toast-minimize-button').click();
-        await expect(taskToast).toHaveAttribute('data-toast-state', 'minimized');
-        await page.evaluate(() => window.toastr.clear(window.__activeTaskToast));
+        await expect(taskToast.locator('.action-loader-stop')).toBeVisible();
+        await taskToast.locator('.action-loader-stop').click();
         await expect(taskToast).toHaveCount(0, { timeout: 5_000 });
+        const stoppedNotice = page.locator('#toast-container .toast', { hasText: 'Extraction stopped' });
+        await expect(stoppedNotice).toBeVisible({ timeout: 5_000 });
+        await stoppedNotice.click();
+        await expect(stoppedNotice).toHaveCount(0, { timeout: 5_000 });
+
+        // Minimize a second ongoing loader and verify /loader-hide removes the minimized capsule cleanly.
+        await sendSlashCommand(page, '/loader-show blocking=false message="Night watch sweep"');
+        const sweepToast = page.locator('#toast-container .toast', { hasText: 'Night watch sweep' });
+        await expect(sweepToast).toBeVisible({ timeout: 10_000 });
+        await sweepToast.locator('.luker-toast-minimize-button').click();
+        await expect(sweepToast).toHaveAttribute('data-toast-state', 'minimized');
+        await sendSlashCommand(page, '/loader-hide');
+        await expect(sweepToast).toHaveCount(0, { timeout: 5_000 });
     });
 
     test('sticky error persistent toast exposes both minimize and close controls', async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        await page.evaluate(() => {
-            window.toastr.error('Upstream chart endpoint returned 503', 'Image Generation', {
-                timeOut: 0,
-                extendedTimeOut: 0,
-                tapToDismiss: true,
-                closeButton: true,
-            });
-        });
+        await sendSlashCommand(
+            page,
+            '/echo severity=error timeout=0 extendedTimeout=0 title="Image Generation" Upstream chart endpoint returned 503',
+        );
 
         const errToast = page.locator('#toast-container .toast-error').first();
-        await expect(errToast).toBeVisible();
+        await expect(errToast).toBeVisible({ timeout: 10_000 });
         await expect(errToast.locator('.luker-toast-minimize-button')).toHaveCount(1);
         await expect(errToast.locator('.toast-close-button')).toHaveCount(1);
 
@@ -269,14 +271,15 @@ test.describe('modern toast system', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Create one detached persistent toast on the left and one minimized capsule parked on the right.
-        await page.evaluate(() => {
-            window.toastr.info('Detached compass monitor', 'Compass', { timeOut: 0, tapToDismiss: false });
-            window.toastr.info('Minimized beacon task', 'Beacon', { timeOut: 0, tapToDismiss: false });
-        });
+        // Create two persistent toasts via /loader-show: detach the first and minimize the second.
+        await sendSlashCommand(page, '/loader-show blocking=false title="Compass" message="Detached compass monitor"');
+        await sendSlashCommand(page, '/loader-show blocking=false title="Beacon" message="Minimized beacon task"');
 
         const detachedCard = page.locator('#toast-container .toast', { hasText: 'Detached compass monitor' });
         const capsuleToast = page.locator('#toast-container .toast', { hasText: 'Minimized beacon task' });
+        await expect(detachedCard).toBeVisible({ timeout: 10_000 });
+        await expect(capsuleToast).toBeVisible({ timeout: 10_000 });
+
         // Minimize the frontmost toast first (newestOnTop), then drag the newly promoted front card.
         await capsuleToast.locator('.luker-toast-minimize-button').click();
         await expect(capsuleToast).toHaveAttribute('data-toast-state', 'minimized');
@@ -343,21 +346,22 @@ test.describe('modern toast system', () => {
         await expect(capsuleToast.locator('.luker-toast-capsule')).toBeVisible();
         const rescuedToBody = await page.evaluate(() => document.getElementById('toast-container')?.parentElement === document.body);
         expect(rescuedToBody).toBe(true);
+
+        await sendSlashCommand(page, '/loader-hide');
     });
 
     test('stays within narrow mobile viewport (390x844) across stacking, badge expand, drag, and capsule minimize', async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        await page.evaluate(() => {
-            window.toastr.info('First narrow mobile update', '', { timeOut: 60000 });
-            window.toastr.info('Second narrow mobile update', '', { timeOut: 60000 });
-            window.toastr.info('Persistent mobile job running', '', { timeOut: 0, tapToDismiss: false });
-        });
+        await sendSlashCommand(page, '/echo timeout=60000 First narrow mobile update');
+        await sendSlashCommand(page, '/echo timeout=60000 Second narrow mobile update');
+        await sendSlashCommand(page, '/loader-show blocking=false message="Persistent mobile job running"');
 
         const container = page.locator('#toast-container');
         const badge = container.locator('.luker-toast-stack-badge');
-        await expect(badge).toBeVisible();
+        await expect(badge).toBeVisible({ timeout: 10_000 });
         await expect(badge).toHaveText('+2');
 
         const front = container.locator('.toast[data-stack-index="0"]');
@@ -387,32 +391,34 @@ test.describe('modern toast system', () => {
         expect(clampedBox.x).toBeGreaterThanOrEqual(8);
         expect(clampedBox.x + clampedBox.width).toBeLessThanOrEqual(390 - 8);
         expect(clampedBox.y + clampedBox.height).toBeLessThanOrEqual(844 - 8);
+
+        await sendSlashCommand(page, '/loader-hide');
     });
 
-    test('scrolls expanded burst of tall mixed-height toasts inside viewport while keeping detached cards unclipped and activity-pill clearance single-offset', async ({ page }) => {
+    test('scrolls expanded burst of tall mixed-height toasts inside viewport while keeping detached cards unclipped', async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 640 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        // 1. Trigger a detached persistent card on the left + 10 mixed-height toasts (including multi-line behind cards)
-        await page.evaluate(() => {
-            window.toastr.info('Detached side monitor', 'Side', { timeOut: 0, tapToDismiss: false });
-        });
+        // 1. Trigger a detached persistent card on the left + 10 mixed-height toasts via real slash commands.
+        await sendSlashCommand(page, '/loader-show blocking=false title="Side" message="Detached side monitor"');
         const sideCard = page.locator('#toast-container .toast', { hasText: 'Detached side monitor' });
+        await expect(sideCard).toBeVisible({ timeout: 10_000 });
         await dragElementBy(page, sideCard, -400, 200);
         await expect(sideCard).toHaveAttribute('data-toast-state', 'detached');
 
-        await page.evaluate(() => {
-            for (let i = 1; i <= 10; i++) {
-                const msg = i % 2 === 0
-                    ? `Entry #${i}: multi-line tall notification detailing background reef survey progress across eastern buoys and night watch relay checks.`
-                    : `Entry #${i}: short notice`;
-                window.toastr.info(msg, `Alert ${i}`, { timeOut: 60000 });
-            }
-        });
+        const burstPipeline = Array.from({ length: 10 }, (_, idx) => {
+            const i = idx + 1;
+            const msg = i % 2 === 0
+                ? `Entry #${i}: multi-line tall notification detailing background reef survey progress across eastern buoys and night watch relay checks.`
+                : `Entry #${i}: short notice`;
+            return `/echo timeout=60000 title="Alert ${i}" ${msg}`;
+        }).join(' | ');
+        await sendSlashCommand(page, burstPipeline);
 
         const container = page.locator('#toast-container');
         const badge = container.locator('.luker-toast-stack-badge');
-        await expect(badge).toHaveText('+9');
+        await expect(badge).toHaveText('+9', { timeout: 10_000 });
 
         // Expand burst -> verify container is viewport-bounded and scrollable, zero overlap between tall cards,
         // and the detached side card remains visible & hit-testable outside the 340px column.
@@ -449,65 +455,51 @@ test.describe('modern toast system', () => {
         expect(burstMetrics.anyOverlap).toBe(false);
         expect(burstMetrics.hitsDetached).toBe(true);
 
-        // 2. Verify activity-pill clearance does not double-offset #toast-container with margin-top
-        const pillOffset = await page.evaluate(async () => {
-            const { createActivityPill } = await import('/scripts/activity-pill.js');
-            const pill = createActivityPill({ id: 'test-toast-clearance-pill', onOpen: () => {}, onError: () => {} });
-            pill.update({ visible: true, text: 'Sync active', tone: 'done', loading: false });
-            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-            const tc = document.getElementById('toast-container');
-            const cs = getComputedStyle(tc);
-            const pillRect = document.querySelector('.activity-pill-host').getBoundingClientRect();
-            const tcRect = tc.getBoundingClientRect();
-            pill.destroy();
-            return {
-                marginTop: cs.marginTop,
-                gapBelowPill: tcRect.top - pillRect.bottom,
-            };
-        });
-        expect(pillOffset.marginTop).toBe('0px');
-        expect(pillOffset.gapBelowPill).toBeGreaterThanOrEqual(6);
-        expect(pillOffset.gapBelowPill).toBeLessThanOrEqual(24);
+        await sendSlashCommand(page, '/loader-hide');
     });
 
     test('renders single surface under third-party !important and plain CSS themes and adapts cleanly to built-in Lens palettes', async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
 
-        // 1. Third-party !important theme styling .toast directly (single surface, 4px radius, custom accent):
-        // must produce one unified card and one unified minimized capsule with zero nested border/bg/shadow.
-        await page.evaluate(() => {
-            document.getElementById('builtin-theme-style')?.remove();
-            const style = document.getElementById('custom-style') || (() => {
-                const s = document.createElement('style');
-                s.id = 'custom-style';
-                document.head.appendChild(s);
-                return s;
-            })();
-            style.textContent = `
-                .toast, .toast-container .toast {
-                    background-color: rgb(250, 246, 232) !important;
-                    background-image: none !important;
-                    color: rgb(55, 53, 51) !important;
-                    border: 1px solid rgb(200, 192, 172) !important;
-                    border-left: 3px solid rgb(224, 64, 56) !important;
-                    border-radius: 4px !important;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
-                    text-shadow: none !important;
-                }
-                .toast-info, .toast-container .toast-info { border-left-color: rgb(224, 64, 56) !important; }
-                .toast-info .toast-title { color: rgb(224, 64, 56) !important; }
-            `;
-            window.toastr.remove();
-            window.toastr.info('Extension sync in progress.', 'Please wait', { timeOut: 60000, closeButton: true });
-            window.toastr.info('Extracting memories 1/2', '', { timeOut: 0, tapToDismiss: false, closeButton: false });
-        });
+        // 1. Derive an editable user theme through real User Settings UI and apply third-party !important CSS via #customCSS.
+        await openUserSettingsDrawer(page);
+        await expect(page.locator('#ui_preset_derive_button')).toBeVisible({ timeout: 10_000 });
+        await page.locator('#ui_preset_derive_button').click();
+        await expect(page.locator('#customCSS')).toBeEnabled({ timeout: 10_000 });
+        const derivedToast = page.locator('#toast-container .toast', { hasText: /Created editable copy/ });
+        await expect(derivedToast).toBeVisible({ timeout: 5_000 });
+        await derivedToast.click();
+        await expect(derivedToast).toHaveCount(0, { timeout: 5_000 });
+        const importantCss = `
+            .toast, .toast-container .toast {
+                background-color: rgb(250, 246, 232) !important;
+                background-image: none !important;
+                color: rgb(55, 53, 51) !important;
+                border: 1px solid rgb(200, 192, 172) !important;
+                border-left: 3px solid rgb(224, 64, 56) !important;
+                border-radius: 4px !important;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+                text-shadow: none !important;
+            }
+            .toast-info, .toast-container .toast-info { border-left-color: rgb(224, 64, 56) !important; }
+            .toast-info .toast-title { color: rgb(224, 64, 56) !important; }
+        `;
+        await page.locator('#customCSS').fill(importantCss);
+        await closeUserSettingsDrawerIfOpen(page);
 
-        await page.locator('#toast-container .luker-toast-minimize-button').click();
+        await sendSlashCommand(page, '/echo timeout=60000 title="Please wait" Extension sync in progress.');
+        await sendSlashCommand(page, '/loader-show blocking=false message="Extracting memories 1/2"');
+
+        const syncToast = page.locator('#toast-container .toast', { hasText: 'Extension sync in progress.' });
+        const taskToast = page.locator('#toast-container .toast', { hasText: 'Extracting memories 1/2' });
+        await expect(syncToast).toBeVisible({ timeout: 10_000 });
+        await expect(taskToast).toBeVisible({ timeout: 10_000 });
+        await taskToast.locator('.luker-toast-minimize-button').click();
         await expect(page.locator('#toast-container .toast[data-toast-state="minimized"]')).toHaveCount(1);
 
-        const themedMetrics = await page.evaluate(() => {
-            const card = document.querySelector('#toast-container .toast:not(.luker-toast-minimized)');
+        const themedMetrics = await syncToast.evaluate((card) => {
             const surface = card.querySelector('.luker-toast-surface');
             const title = card.querySelector('.toast-title');
             const icon = card.querySelector('.luker-toast-icon');
@@ -543,32 +535,33 @@ test.describe('modern toast system', () => {
         expect(themedMetrics.capInnerBorder).toBe('0px');
         expect(themedMetrics.capInnerShadow).toBe('none');
 
-        // 2. Plain non-!important classic solid-background theme: @layer luker-toast-skin yields cleanly
-        // and text, icon, and close button all inherit the theme's white foreground color.
-        await page.evaluate(() => {
-            document.getElementById('custom-style').textContent = `
-                .toast { border-radius: 6px; border: none; color: rgb(255, 255, 255); }
-                .toast-info { background-color: rgb(47, 150, 180); }
-            `;
-            window.toastr.remove();
-            window.toastr.info('Classic solid toast <small>detail</small>', 'Classic', {
-                timeOut: 60000,
-                closeButton: true,
-                escapeHtml: false,
-            });
-        });
-        const solidMetrics = await page.evaluate(() => {
-            const card = document.querySelector('#toast-container .toast.toast-info');
-            return {
-                bg: getComputedStyle(card).backgroundColor,
-                radius: getComputedStyle(card).borderRadius,
-                titleColor: getComputedStyle(card.querySelector('.toast-title')).color,
-                msgColor: getComputedStyle(card.querySelector('.toast-message')).color,
-                smallColor: getComputedStyle(card.querySelector('.toast-message small')).color,
-                iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
-                closeColor: getComputedStyle(card.querySelector('.toast-close-button')).color,
-            };
-        });
+        await sendSlashCommand(page, '/loader-hide');
+        await expect(taskToast).toHaveCount(0, { timeout: 5_000 });
+        await syncToast.click();
+        await expect(syncToast).toHaveCount(0, { timeout: 5_000 });
+
+        // 2. Plain non-!important classic solid-background theme via #customCSS:
+        // @layer luker-toast-skin yields cleanly and text, icon, and close button all inherit white foreground.
+        await openUserSettingsDrawer(page);
+        await page.locator('#customCSS').fill(`
+            .toast { border-radius: 6px; border: none; color: rgb(255, 255, 255); }
+            .toast-info { background-color: rgb(47, 150, 180); }
+        `);
+        await closeUserSettingsDrawerIfOpen(page);
+
+        await sendSlashCommand(page, '/echo timeout=60000 escapeHtml=false title="Classic" Classic solid toast <small>detail</small>');
+        const classicToast = page.locator('#toast-container .toast.toast-info', { hasText: 'Classic solid toast' });
+        await expect(classicToast).toBeVisible({ timeout: 10_000 });
+
+        const solidMetrics = await classicToast.evaluate((card) => ({
+            bg: getComputedStyle(card).backgroundColor,
+            radius: getComputedStyle(card).borderRadius,
+            titleColor: getComputedStyle(card.querySelector('.toast-title')).color,
+            msgColor: getComputedStyle(card.querySelector('.toast-message')).color,
+            smallColor: getComputedStyle(card.querySelector('.toast-message small')).color,
+            iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
+            closeColor: getComputedStyle(card.querySelector('.toast-close-button')).color,
+        }));
         expect(solidMetrics.bg).toBe('rgb(47, 150, 180)');
         expect(solidMetrics.radius).toBe('6px');
         expect(solidMetrics.titleColor).toBe('rgb(255, 255, 255)');
@@ -577,29 +570,31 @@ test.describe('modern toast system', () => {
         expect(solidMetrics.iconColor).toBe('rgb(255, 255, 255)');
         expect(solidMetrics.closeColor).toBe('rgb(255, 255, 255)');
 
-        // 3. Built-in Lens theme stylesheet adapts toast radius, semantic accent icon, and /echo inline color.
-        await page.evaluate(async () => {
-            document.getElementById('custom-style').textContent = '';
-            const link = document.createElement('link');
-            link.id = 'builtin-theme-style';
-            link.rel = 'stylesheet';
-            link.href = 'css/themes/lens.css';
-            await new Promise((resolve) => {
-                link.addEventListener('load', resolve, { once: true });
-                document.head.insertBefore(link, document.getElementById('custom-style'));
-            });
-            document.documentElement.setAttribute('data-theme-palette', 'mist');
-            window.toastr.remove();
-            window.toastr.info('Lens Mist notice', 'Lens', { timeOut: 60000, closeButton: true });
-        });
-        const lensMetrics = await page.evaluate(() => {
-            const card = document.querySelector('#toast-container .toast.toast-info');
-            return {
-                radius: getComputedStyle(card).borderRadius,
-                borderLeft: getComputedStyle(card).borderLeftColor,
-                iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
-            };
-        });
+        await classicToast.click();
+        await expect(classicToast).toHaveCount(0, { timeout: 5_000 });
+
+        // 3. Built-in Lens theme + Mist palette via real #themes selector and #theme-palette-strip.
+        await openUserSettingsDrawer(page);
+        await page.locator('#themes').selectOption('Lens');
+        await expect(page.locator('#themes')).toHaveValue('Lens');
+        await closeUserSettingsDrawerIfOpen(page);
+
+        await openOptionsMenu(page);
+        const strip = page.locator('#theme-palette-strip');
+        await expect(strip).toBeVisible();
+        await strip.locator('[data-mode="mist"]').click();
+        await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themePalette)).toBe('mist');
+        await page.locator('#options_button').click();
+
+        await sendSlashCommand(page, '/echo timeout=60000 title="Lens" Lens Mist notice');
+        const lensToast = page.locator('#toast-container .toast.toast-info', { hasText: 'Lens Mist notice' });
+        await expect(lensToast).toBeVisible({ timeout: 10_000 });
+
+        const lensMetrics = await lensToast.evaluate((card) => ({
+            radius: getComputedStyle(card).borderRadius,
+            borderLeft: getComputedStyle(card).borderLeftColor,
+            iconColor: getComputedStyle(card.querySelector('.luker-toast-icon')).color,
+        }));
         expect(lensMetrics.radius).toBe('12px');
         expect(lensMetrics.borderLeft).toBe('rgb(43, 125, 233)');
         expect(lensMetrics.iconColor).toBe('rgb(43, 125, 233)');

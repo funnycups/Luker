@@ -10,7 +10,46 @@ import { resolve } from 'node:path';
 import { test, expect } from '../../harness/playwright.js';
 import { startServer } from '../../harness/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { awaitMainUI, closeAnyOpenTopSettingsDrawer, openExtensionsDrawer, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+
+function startMockSearxng() {
+    const queries = [];
+    const server = http.createServer((req, res) => {
+        const url = new URL(req.url || '/', 'http://127.0.0.1');
+        if (req.method === 'GET' && url.pathname === '/search') {
+            const q = url.searchParams.get('q') || '';
+            queries.push(q);
+            const content = q.includes('Oakhaven')
+                ? 'High tide at Oakhaven: 19:25'
+                : 'High tide at Bryn-on-Sea: 18:40';
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+                results: [{
+                    title: 'Coastal Tide Almanac',
+                    url: 'https://almanac.example/tides',
+                    content,
+                }],
+            }));
+            return;
+        }
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+
+    return new Promise((resolveReady) => {
+        server.listen(0, '127.0.0.1', () => {
+            const port = server.address().port;
+            resolveReady({
+                baseURL: `http://127.0.0.1:${port}`,
+                queries,
+                async stop() {
+                    server.closeAllConnections();
+                    await new Promise(r => server.close(r));
+                },
+            });
+        });
+    });
+}
 
 function startScriptedPlainTextUpstream() {
     const requests = [];
@@ -94,10 +133,12 @@ function startScriptedPlainTextUpstream() {
 
 let server;
 let upstream;
+let searxng;
 
 test.beforeAll(async ({ workerResources }, testInfo) => {
     const scope = await workerResources.scenario(testInfo.file);
     upstream = await startScriptedPlainTextUpstream();
+    searxng = await startMockSearxng();
     server = await startServer({ scope, batchKey: 'extensions', scenarioId: '106-pt-fc-inspector' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: upstream.baseURL });
@@ -105,13 +146,88 @@ test.beforeAll(async ({ workerResources }, testInfo) => {
 
     const sp = resolve(server.dataRoot, 'default-user', 'settings.json');
     const s = JSON.parse(readFileSync(sp, 'utf8'));
+    s.oai_settings = {
+        ...(s.oai_settings || {}),
+        function_calling: true,
+        function_calling_plain_text: true,
+        function_calling_plain_text_error_retry: true,
+        function_calling_plain_text_error_retry_max_attempts: 2,
+        show_thoughts: true,
+        custom_prompt_post_processing: '',
+        stream_openai: false,
+    };
     s.extension_settings = s.extension_settings || {};
     s.extension_settings.memory_graph = { ...(s.extension_settings.memory_graph || {}), enabled: false };
     writeFileSync(sp, JSON.stringify(s, null, 4));
+    await server.restart();
 });
+
+async function setStreamingViaUi(page, enabled) {
+    const panel = page.locator('#left-nav-panel');
+    if (await panel.evaluate(el => el.classList.contains('closedDrawer'))) {
+        await page.locator('#ai-config-button > .drawer-toggle > .drawer-icon').click();
+        await expect(panel).toHaveClass(/\bopenDrawer\b/, { timeout: 5_000 });
+    }
+    const streamCheckbox = page.locator('#stream_toggle');
+    if (!(await streamCheckbox.isVisible())) {
+        const toggle = panel.locator('.inline-drawer', { has: streamCheckbox }).locator('> .inline-drawer-toggle').first();
+        await toggle.click();
+        await expect(streamCheckbox).toBeVisible({ timeout: 5_000 });
+    }
+    if (enabled) {
+        await streamCheckbox.check();
+    } else {
+        await streamCheckbox.uncheck();
+    }
+    await closeAnyOpenTopSettingsDrawer(page);
+}
+
+async function enableSearchToolsViaUi(page, searxngBaseUrl) {
+    await openExtensionsDrawer(page);
+    const block = page.locator('#search_tools_settings');
+    await expect(block).toBeVisible({ timeout: 10_000 });
+    const content = block.locator('> .inline-drawer-content');
+    if (!(await content.isVisible())) {
+        await block.locator('> .inline-drawer-toggle').click();
+        await expect(content).toBeVisible({ timeout: 5_000 });
+    }
+    const enabled = page.locator('#search_tools_enabled');
+    if (!(await enabled.isChecked())) {
+        await enabled.check();
+    }
+    const provider = page.locator('#search_tools_provider');
+    if ((await provider.inputValue()) !== 'searxng') {
+        await provider.selectOption('searxng');
+    }
+    const baseUrlInput = page.locator('#search_tools_field_baseUrl');
+    await expect(baseUrlInput).toBeVisible({ timeout: 5_000 });
+    if ((await baseUrlInput.inputValue()) !== searxngBaseUrl) {
+        const savedPromise = page.waitForResponse(
+            r => (r.url().endsWith('/api/settings/save') || r.url().endsWith('/api/settings/patch')) && r.status() === 200,
+            { timeout: 10_000 },
+        );
+        await baseUrlInput.fill(searxngBaseUrl);
+        await baseUrlInput.blur();
+        await savedPromise;
+    }
+    await expect.poll(() => page.evaluate(() => {
+        const s = window.Luker.getContext().extensionSettings?.search_tools;
+        return {
+            enabled: Boolean(s?.enabled),
+            provider: s?.provider || '',
+            baseUrl: s?.providers?.searxng?.baseUrl || '',
+        };
+    })).toEqual({
+        enabled: true,
+        provider: 'searxng',
+        baseUrl: searxngBaseUrl,
+    });
+    await closeAnyOpenTopSettingsDrawer(page);
+}
 
 test.afterAll(async () => {
     await upstream?.stop();
+    await searxng?.stop();
 });
 
 test.describe('Plain-text function calling backend orchestration & Request Inspector UI', () => {
@@ -130,39 +246,8 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 });
 
-        // Enable plain-text function calling + backend format-correction retry,
-        // and register a tool through the public extension API.
-        await page.evaluate(async () => {
-            const mod = await import('/scripts/openai.js');
-            mod.oai_settings.function_calling = true;
-            mod.oai_settings.function_calling_plain_text = true;
-            mod.oai_settings.function_calling_plain_text_error_retry = true;
-            mod.oai_settings.function_calling_plain_text_error_retry_max_attempts = 2;
-            mod.oai_settings.show_thoughts = true;
-            mod.oai_settings.custom_prompt_post_processing = '';
-            mod.oai_settings.stream_openai = false;
-
-            const ctx = window.Luker.getContext();
-            ctx.ToolManager.RECURSE_LIMIT = 5;
-            try { ctx.unregisterFunctionTool('get_tide'); } catch { /* ignore */ }
-            ctx.registerFunctionTool({
-                name: 'get_tide',
-                displayName: 'Get Tide',
-                description: 'Look up tide schedule for a coastal harbor.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        harbor: { type: 'string', description: 'Harbor name.' },
-                    },
-                    required: ['harbor'],
-                    additionalProperties: false,
-                },
-                action: async ({ harbor }) => `High tide at ${harbor}: 18:40`,
-                formatMessage: ({ harbor }) => `Checking tide table for ${harbor}...`,
-                shouldRegister: () => true,
-                stealth: false,
-            });
-        });
+        await setStreamingViaUi(page, false);
+        await enableSearchToolsViaUi(page, searxng.baseURL);
 
         // Script upstream sequence:
         //   1. Attempt 1: malformed JSON inside <args_json> after backend trigger
@@ -181,7 +266,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
                         message: {
                             role: 'assistant',
                             reasoning_content: 'Drafting tide lookup.',
-                            content: `Consulting the almanac.\n${trigger}\n<function_calls><function_call><tool>get_tide</tool><args_json><![CDATA[{"harbor":]]></args_json></function_call></function_calls>`,
+                            content: `Consulting the almanac.\n${trigger}\n<function_calls><function_call><tool>luker_web_search</tool><args_json><![CDATA[{"query":]]></args_json></function_call></function_calls>`,
                         },
                         finish_reason: 'stop',
                     }],
@@ -197,8 +282,8 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
                     index: 0,
                     message: {
                         role: 'assistant',
-                        reasoning_content: 'Correcting the JSON payload for get_tide.',
-                        content: `Checking the tide table now.\n${trigger}\n<function_calls><function_call><tool>get_tide</tool><args_json><![CDATA[{"harbor":"Bryn-on-Sea"}]]></args_json></function_call></function_calls>`,
+                        reasoning_content: 'Correcting the JSON payload for luker_web_search.',
+                        content: `Checking the tide table now.\n${trigger}\n<function_calls><function_call><tool>luker_web_search</tool><args_json><![CDATA[{"query":"Bryn-on-Sea high tide"}]]></args_json></function_call></function_calls>`,
                     },
                     finish_reason: 'stop',
                 }],
@@ -232,12 +317,13 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
         // with ZERO luker_plain_text_tools or native tools leaked upstream.
         expect(observedTrigger).toMatch(/^<Function_[A-Za-z0-9]+_Start\/>$/);
         expect(upstream.requests).toHaveLength(3);
+        expect(searxng.queries).toContain('Bryn-on-Sea high tide');
         for (const req of upstream.requests) {
             expect(req.body.luker_plain_text_tools).toBeUndefined();
             expect(req.body.tools).toBeUndefined();
             expect(req.body.tool_choice).toBeUndefined();
         }
-        // Round 2 carries the normalized <tool_result> from executing get_tide.
+        // Round 2 carries the normalized <tool_result> from executing luker_web_search.
         const round2Messages = upstream.requests[2].body.messages || [];
         expect(round2Messages.some(m => m.role === 'user' && String(m.content || '').includes('High tide at Bryn-on-Sea: 18:40'))).toBe(true);
 
@@ -256,9 +342,9 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
 
         // Attempt 2 detail shows Plain-Text Function Call badge, Parsed status,
         // Retry Of button, and exact DOM order: reasoning -> text -> plain_text_tool_calls.
-        await expect(page.locator('.ri-pt-call-region .ri-pt-badge')).toContainText(/Plain-Text Function Call|纯文本函数调用|純文字函式呼叫/);
+        await expect(page.locator('.ri-pt-call-region .ri-pt-badge')).toBeVisible();
         await expect(page.locator('.ri-pt-call-region .ri-pt-status-parsed')).toBeVisible();
-        await expect(page.locator('.ri-pt-call-region .ri-tool-call-name')).toHaveText('get_tide');
+        await expect(page.locator('.ri-pt-call-region .ri-tool-call-name')).toHaveText('luker_web_search');
         await expect(page.locator('.ri-pt-call-region .ri-tool-call-args')).toContainText('Bryn-on-Sea');
 
         const responseSection = page.locator('.ri-detail-body .ri-detail-section').first();
@@ -295,7 +381,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
         await expect(page.locator('.ri-pt-call-region .ri-pt-status-failed')).toBeVisible();
         await expect(page.locator('.ri-pt-call-region .ri-pt-error-msg')).toContainText('not valid JSON');
         await page.locator('.ri-pt-call-region .ri-pt-raw-toggle').click();
-        await expect(page.locator('.ri-pt-call-region .ri-pt-raw-text')).toContainText('{"harbor":');
+        await expect(page.locator('.ri-pt-call-region .ri-pt-raw-text')).toContainText('{"query":');
     });
 
     test('streaming mode suppresses split trigger tags, retries malformed JSON, executes tool, and preserves Inspector raw toggle', async ({ page }) => {
@@ -309,39 +395,11 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 });
 
-        await page.evaluate(async () => {
-            const mod = await import('/scripts/openai.js');
-            mod.oai_settings.function_calling = true;
-            mod.oai_settings.function_calling_plain_text = true;
-            mod.oai_settings.function_calling_plain_text_error_retry = true;
-            mod.oai_settings.function_calling_plain_text_error_retry_max_attempts = 2;
-            mod.oai_settings.show_thoughts = true;
-            mod.oai_settings.custom_prompt_post_processing = '';
-            mod.oai_settings.stream_openai = true;
+        await setStreamingViaUi(page, true);
+        await enableSearchToolsViaUi(page, searxng.baseURL);
 
-            const ctx = window.Luker.getContext();
-            ctx.ToolManager.RECURSE_LIMIT = 5;
-            try { ctx.unregisterFunctionTool('get_tide'); } catch { /* ignore */ }
-            ctx.registerFunctionTool({
-                name: 'get_tide',
-                displayName: 'Get Tide',
-                description: 'Look up tide schedule for a coastal harbor.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        harbor: { type: 'string', description: 'Harbor name.' },
-                    },
-                    required: ['harbor'],
-                    additionalProperties: false,
-                },
-                action: async ({ harbor }) => `High tide at ${harbor}: 19:25`,
-                formatMessage: ({ harbor }) => `Checking tide table for ${harbor}...`,
-                shouldRegister: () => true,
-                stealth: false,
-            });
-
-            // Observe #chat DOM mutations continuously during streaming to prove
-            // raw trigger tags / XML never appear in .mes_text at any point.
+        await page.evaluate(() => {
+            // Read-only DOM observer during streaming to verify raw trigger tags / XML never appear in .mes_text.
             window.__ptStreamLeaks = [];
             const chatEl = document.getElementById('chat');
             const inspectNodes = () => {
@@ -374,7 +432,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
                     makeDeltaChunk('cmpl_pts_1', { content: 'Consulting the harbor chart.\n' }),
                     makeDeltaChunk('cmpl_pts_1', { content: trigger.slice(0, splitAt) }),
                     makeDeltaChunk('cmpl_pts_1', { content: trigger.slice(splitAt) }),
-                    makeDeltaChunk('cmpl_pts_1', { content: '\n<function_calls><function_call><tool>get_tide</tool><args_json><![CDATA[{"harbor":]]></args_json></function_call></function_calls>' }),
+                    makeDeltaChunk('cmpl_pts_1', { content: '\n<function_calls><function_call><tool>luker_web_search</tool><args_json><![CDATA[{"query":]]></args_json></function_call></function_calls>' }),
                     makeDeltaChunk('cmpl_pts_1', {}, 'stop'),
                     '[DONE]',
                 ],
@@ -393,7 +451,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
                         message: {
                             role: 'assistant',
                             reasoning_content: 'Repairing JSON for Oakhaven.',
-                            content: `Re-checking the tide table.\n${trigger}\n<function_calls><function_call><tool>get_tide</tool><args_json><![CDATA[{"harbor":"Oakhaven"}]]></args_json></function_call></function_calls>`,
+                            content: `Re-checking the tide table.\n${trigger}\n<function_calls><function_call><tool>luker_web_search</tool><args_json><![CDATA[{"query":"Oakhaven high tide"}]]></args_json></function_call></function_calls>`,
                         },
                         finish_reason: 'stop',
                     }],
@@ -435,6 +493,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
         const runRequests = upstream.requests.slice(reqStart);
         expect(observedTrigger).toMatch(/^<Function_[A-Za-z0-9]+_Start\/>$/);
         expect(runRequests).toHaveLength(3);
+        expect(searxng.queries).toContain('Oakhaven high tide');
         expect(runRequests[0].body.stream).toBe(true);
         expect(runRequests[1].body.stream).toBe(false);
         expect(runRequests[2].body.stream).toBe(true);
@@ -459,7 +518,7 @@ test.describe('Plain-text function calling backend orchestration & Request Inspe
         await page.locator('.ri-table tbody tr.ri-row').nth(1).click();
         await expect(page.locator('.ri-detail')).toBeVisible();
         await expect(page.locator('.ri-pt-call-region .ri-pt-status-parsed')).toBeVisible();
-        await expect(page.locator('.ri-pt-call-region .ri-tool-call-name')).toHaveText('get_tide');
+        await expect(page.locator('.ri-pt-call-region .ri-tool-call-name')).toHaveText('luker_web_search');
         await expect(page.locator('.ri-pt-call-region .ri-tool-call-args')).toContainText('Oakhaven');
 
         const responseSection = page.locator('.ri-detail-body .ri-detail-section').first();

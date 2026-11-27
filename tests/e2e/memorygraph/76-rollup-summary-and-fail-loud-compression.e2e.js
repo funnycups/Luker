@@ -1,8 +1,8 @@
 // tests/e2e/memorygraph/76-rollup-summary-and-fail-loud-compression.e2e.js
 //
 // #76 — End-to-end verification of:
-//   1. Non-event rollup compression using strictly `luker_rpg_summary` (never
-//      `luker_rpg_summary_fields`) with leaf tableColumns serialized into the prompt.
+//   1. Non-event rollup compression using `luker_rpg_summary` with leaf
+//      tableColumns serialized into the prompt.
 //   2. Fail-loud Scheme A error propagation: when compression fails (empty summary
 //      with toolCallRetryMax: 0), an error toast surfaces, subsequent extraction
 //      batches stop immediately, and already-committed leaf batches remain
@@ -83,7 +83,6 @@ const EVENT_TOOL = 'luker_rpg_extract_event_create';
 const MOMENT_TOOL = 'luker_rpg_extract_moment_create';
 const DONE_TOOL = 'luker_rpg_extract_done';
 const SUMMARY_TOOL = 'luker_rpg_summary';
-const LEGACY_SUMMARY_FIELDS_TOOL = 'luker_rpg_summary_fields';
 
 function messageText(content) {
     if (typeof content === 'string') return content;
@@ -200,7 +199,7 @@ test.describe('#76 — non-event rollup summary and fail-loud compression', () =
 
         mock.scriptCompletion((req) => {
             const names = req.toolNames || [];
-            if (names.includes(SUMMARY_TOOL) || names.includes(LEGACY_SUMMARY_FIELDS_TOOL)) {
+            if (names.includes(SUMMARY_TOOL)) {
                 compressionCalls.push({
                     toolNames: names.slice(),
                     systemText: (req.systemPrompts || []).join('\n'),
@@ -377,7 +376,6 @@ test.describe('#76 — non-event rollup summary and fail-loud compression', () =
             .toEqual([1, 2]);
         expect(compressionCalls, 'exactly one compression call should have fired after batch 2').toHaveLength(1);
         expect(compressionCalls[0].toolNames).toEqual([SUMMARY_TOOL]);
-        expect(compressionCalls[0].toolNames).not.toContain(LEGACY_SUMMARY_FIELDS_TOOL);
         expect(compressionCalls[0].userText).toContain('"when"');
         expect(compressionCalls[0].userText).toContain('"detail"');
         expect(compressionCalls[0].userText).toContain('"meaning"');
@@ -407,7 +405,6 @@ test.describe('#76 — non-event rollup summary and fail-loud compression', () =
 
         expect(extractionCalls.map((c) => c.seq)).toEqual([1, 2, 3]);
         expect(compressionCalls[1].toolNames).toEqual([SUMMARY_TOOL]);
-        expect(compressionCalls[1].toolNames).not.toContain(LEGACY_SUMMARY_FIELDS_TOOL);
         expect(compressionCalls[1].userText).toContain('"when"');
         expect(compressionCalls[1].userText).toContain('"detail"');
         expect(compressionCalls[1].userText).toContain('"meaning"');

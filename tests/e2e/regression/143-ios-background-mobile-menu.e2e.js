@@ -106,7 +106,7 @@ test('WebKit mobile background menu stays visible without hover and folder menus
     await firstToggle.focus();
     await page.keyboard.press('Enter');
     await expect(firstCard).toHaveClass(/mobile-menu-open/);
-    await firstToggle.evaluate((el) => el.blur());
+    await firstToggle.blur();
     const states = await firstCard.evaluate((el) => ({
         hover: el.matches(':hover'),
         focusWithin: el.matches(':focus-within'),

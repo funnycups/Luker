@@ -76,6 +76,30 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash the Cartographer');
 
+        // 0. Verify live three-layer workbench platform API exposure on getContext() and lukerContext.
+        const wbApiShape = await page.evaluate(() => {
+            const ctx = window.SillyTavern.getContext();
+            const lukerCtx = window.lukerContext;
+            const expectedMethods = [
+                'registerWorkspace',
+                'registerIterateTarget',
+                'registerAskProvider',
+                'registerSuggestRuleProvider',
+                'open',
+                'saveSettingsChecked',
+                'getWorkspaces',
+                'getIterateTargets',
+                'getAskProviders',
+                'getSuggestRuleProviders',
+                'subscribe',
+            ];
+            return {
+                sameObject: Boolean(ctx.workbench) && lukerCtx.workbench === ctx.workbench,
+                missingMethods: expectedMethods.filter(m => typeof ctx.workbench?.[m] !== 'function'),
+            };
+        });
+        expect(wbApiShape).toEqual({ sameObject: true, missingMethods: [] });
+
         // 1. Entry points: pill, wand menu, Alt+W shortcut.
         await openWorkbench(page, { via: 'pill' });
         await closeWorkbench(page);
@@ -463,15 +487,18 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         expect(afterClose.topBarTop).toBe(0);
         expect(afterClose.topBarLeft).toBe(0);
 
-        // Regression: even when an external/theme element overflows horizontally, opening
+        // Regression: even when a theme custom-CSS element overflows horizontally, opening
         // Workbench on the rightmost Settings tab (normal and maximised) must scroll only
         // .wb-rail locally and never drift documentElement or #top-bar horizontally.
-        await page.evaluate(() => {
-            const wide = document.createElement('div');
-            wide.id = '__wb_drift_probe_wide';
-            wide.style.cssText = 'position:absolute; left:360px; top:120px; width:160px; height:24px; pointer-events:none;';
-            document.body.appendChild(wide);
-        });
+        await page.locator('#user-settings-button .drawer-toggle').click();
+        await expect(page.locator('#customCSS')).toBeVisible({ timeout: 5_000 });
+        if (await page.locator('#customCSS').isDisabled()) {
+            await page.locator('#ui_preset_derive_button').click();
+            await expect(page.locator('#customCSS')).toBeEnabled({ timeout: 5_000 });
+        }
+        const originalCustomCss = await page.locator('#customCSS').inputValue();
+        await page.locator('#customCSS').fill(`${originalCustomCss}\nbody::after { content: ''; position: absolute; left: 360px; top: 120px; width: 160px; height: 24px; pointer-events: none; }`);
+        await page.locator('#user-settings-button .drawer-toggle').click();
         const win2 = await openWorkbench(page, { via: 'wand' });
         await switchWorkbenchTab(page, 'settings');
         await win2.locator('.wb-ctl-max').click();
@@ -483,7 +510,6 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
             const rail = document.querySelector('.wbench .wb-rail');
             const winEl = document.querySelector('.wbench .wb-win');
             const topBar = document.getElementById('top-bar');
-            document.getElementById('__wb_drift_probe_wide')?.remove();
             return {
                 scrollX: window.scrollX,
                 scrollY: window.scrollY,
@@ -502,5 +528,8 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         expect(driftAfterSettingsReopen.winRight).toBeLessThanOrEqual(390);
         expect(driftAfterSettingsReopen.railScrollLeft).toBeGreaterThan(0);
         await closeWorkbench(page);
+        await page.locator('#user-settings-button .drawer-toggle').click();
+        await page.locator('#customCSS').fill(originalCustomCss);
+        await page.locator('#user-settings-button .drawer-toggle').click();
     });
 });

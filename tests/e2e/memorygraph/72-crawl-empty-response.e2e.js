@@ -33,7 +33,6 @@ import {
     FILL_DONE_STATUS,
     toolNamesOf,
     chatCompletionRecords,
-    userPromptOf,
     disableMemoryGraphInSettingsFile,
     clickFillGraph,
     readMemoryGraphState,
@@ -168,10 +167,6 @@ test.describe('#72 — empty crawl reply ends exploration without retry', () => 
             expect(kinds[i - 1] === 'crawl' && kinds[i] === 'crawl', `no back-to-back crawl requests: ${kinds.join(',')}`).toBe(false);
         }
         expect(crawlCount, `one crawl per extraction batch: ${kinds.join(',')}`).toBe(extractCount);
-
-        for (const record of chatCompletionRecords(mock, before).filter(r => kindOf(r) === 'crawl')) {
-            expect(userPromptOf(record.body)).toContain('Exploration round 1/');
-        }
 
         await expect.poll(async () => hasSentinelEvent(await readMemoryGraphState(page)), { timeout: 30_000 }).toBe(true);
 

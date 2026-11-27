@@ -146,7 +146,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
         await mock?.stop();
     });
 
-    test('applying another character draft does not acknowledge a replacement review', async ({ resources, page }) => {
+    test('switching to another character rolls back an unapplied replacement review and applying that character draft keeps it rolled back', async ({ resources, page }) => {
         await page.setViewportSize({ width: 1920, height: 1080 });
         const server = await startServer({ scope: resources, batchKey: 'character', scenarioId: 'replace-editor-cancel-owner' });
         markOnboarded({ dataRoot: server.dataRoot });
@@ -176,6 +176,8 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
         await clickCharacterCard(page, 'Seraphina');
         await dismissAnyPopup(page);
         await expect(page.locator('#character_name_pole')).toHaveValue('Seraphina');
+        await expect.poll(() => existsSync(newBook)).toBe(false);
+        await expect.poll(() => card().data.extensions.world).toBe(oldBook);
         const description = 'Seraphina records the relief watch in a blue tide ledger.';
         mock.scriptToolCall({ name: 'cea_set_card_field', arguments: { field: 'description', value: description } });
         mock.scriptReply('The relief watch description is ready.');
@@ -185,10 +187,9 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             const ctx = window.Luker.getContext();
             return ctx.characters[ctx.characterId].description;
         })).toBe(description);
-        expect(existsSync(newBook)).toBe(true);
         await win.locator('.wb-titlebar .is-close').click();
-        await expect.poll(() => existsSync(newBook)).toBe(false);
-        await expect.poll(() => card().data.extensions.world).toBe(oldBook);
+        expect(existsSync(newBook)).toBe(false);
+        expect(card().data.extensions.world).toBe(oldBook);
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         expect(existsSync(newBook)).toBe(false);

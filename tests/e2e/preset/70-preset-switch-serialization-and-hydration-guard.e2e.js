@@ -31,7 +31,48 @@ import {
 } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt, closeIterStudio } from '../_lib/ui-iter-studio.js';
-import { holdWorkbenchSnapshots } from '../_lib/workbench-snapshot-gate.js';
+
+async function holdWorkbenchSnapshotHttp(page) {
+    let signalRequested;
+    let signalRelease;
+    const requestedPromise = new Promise(resolve => { signalRequested = resolve; });
+    const releasePromise = new Promise(resolve => { signalRelease = resolve; });
+    const inFlight = new Set();
+    let captured = false;
+    let released = false;
+    const handler = async (route) => {
+        const url = new URL(route.request().url());
+        if (!released && url.searchParams.get('namespace') === 'sd_character_profiles') {
+            let done;
+            const pending = new Promise(resolve => { done = resolve; });
+            inFlight.add(pending);
+            try {
+                if (!captured) {
+                    captured = true;
+                    signalRequested();
+                }
+                await releasePromise;
+                await route.continue();
+            } finally {
+                inFlight.delete(pending);
+                done();
+            }
+            return;
+        }
+        await route.continue();
+    };
+    await page.route('**/api/state/get*', handler);
+    return {
+        requested: () => requestedPromise,
+        async release() {
+            if (released) return;
+            released = true;
+            signalRelease();
+            await Promise.all([...inFlight]);
+            await page.unroute('**/api/state/get*', handler);
+        },
+    };
+}
 import {
     normalizeIterStudioSettings,
     selectPresetByName,
@@ -137,7 +178,7 @@ test.describe('#70 — preset switch serialization & hydration guards', () => {
         const win = await openIterStudio(page, 'preset', { scope: 'preset' });
         await expect(win.locator('.wb-scope-seg')).toContainText(PRESET_ALPHA);
         await closeIterStudio(page);
-        const held = await holdWorkbenchSnapshots(page);
+        const held = await holdWorkbenchSnapshotHttp(page);
         const prompt = 'Inspect the currently selected beacon preset.';
         const readOwnership = () => page.evaluate(async ({ before, after, prompt }) => {
             const ctx = window.Luker.getContext();

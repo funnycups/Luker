@@ -129,18 +129,15 @@ test.describe('#101 — CEA editor read tools via the shared lorebook executor',
         await closeIterStudio(page);
     });
 
-    test('settings panel has no modification history block and drops the retired journal setting', async ({ page }) => {
+    test('settings panel persists edits and cleans up legacy maxJournalEntries on save', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'character_editor_assistant_settings');
 
         const panel = page.locator('#character_editor_assistant_settings');
         await expect(panel.locator('#cea_sync_llm_preset')).toBeVisible();
-        await expect(panel.locator('#cea_history')).toHaveCount(0);
-        await expect(panel.locator('#cea_refresh')).toHaveCount(0);
-        await expect(panel.locator('#cea_status')).toHaveCount(0);
 
-        // A real settings change persists the CEA block without the retired key.
+        // A real settings change persists the CEA block and drops legacy maxJournalEntries.
         const retries = panel.locator('#cea_tool_retries');
         await retries.fill('4');
         await retries.press('Tab');

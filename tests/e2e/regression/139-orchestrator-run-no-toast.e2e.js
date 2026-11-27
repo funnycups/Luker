@@ -1,6 +1,5 @@
 // #139 — Orchestrator spec / agenda / loop runs report progress through the
-// run panel only: no "Orchestrator running..." toast, and Stop in the panel
-// aborts the run.
+// run panel only without info toasts, and Stop in the panel aborts the run.
 //
 // REAL USER-GESTURE flow, per mode:
 //   1. In the orchestrator drawer: enable and pick the mode (shipped default
@@ -57,7 +56,7 @@ test.describe('#139 — orchestrator runs without the running toast', () => {
                 const panel = page.locator('.rpdock.rp-dock');
                 await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
                 await expect(panel.locator('.rp-status')).toHaveAttribute('data-status', 'running');
-                await expect(page.locator('#toast-container .toast', { hasText: /Orchestrator running/ })).toHaveCount(0);
+                await expect(page.locator('#toast-container .toast-info')).toHaveCount(0);
 
                 const stop = panel.locator('button.rp-dock-stop');
                 await stop.click();
@@ -66,7 +65,7 @@ test.describe('#139 — orchestrator runs without the running toast', () => {
                 hold = false;
             }
             await expect(page.locator('#chat .mes').last()).toContainText('wait for the tide', { timeout: 60_000 });
-            await expect(page.locator('#toast-container .toast', { hasText: /Orchestrator running/ })).toHaveCount(0);
+            await expect(page.locator('#toast-container .toast-info')).toHaveCount(0);
         });
     }
 });

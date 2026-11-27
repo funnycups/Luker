@@ -37,7 +37,6 @@ const AGENT_UPSERT = 'luker_search_agent_upsert_lorebook_entry';
 const AGENT_GET = 'luker_search_agent_get_lorebook_entries';
 const PANEL = '.rpdock.rp-dock';
 const SHARED_LOREBOOK = '__SEARCH_TOOLS__';
-const RUNNING_TOAST = /running/i;
 const MAIN_REPLY = '*Seraphina folds the chart and sets the lantern on the sill.* "The tide will tell us more than the glass will tonight. Stay a while."';
 
 let server, mock;
@@ -120,7 +119,7 @@ test.describe('search-tools program-driven agent', () => {
         const panel = page.locator(PANEL);
         await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
         // The run panel is the only running indicator.
-        await expect(page.locator('#toast-container .toast', { hasText: RUNNING_TOAST })).toHaveCount(0);
+        await expect(page.locator('#toast-container .toast-info')).toHaveCount(0);
 
         // Enlarge the dock so all rounds and their details are available.
         const enlargeBtn = panel.getByRole('button', { name: /^(Enlarge|放大)$/ });
@@ -188,7 +187,7 @@ test.describe('search-tools program-driven agent', () => {
 
             const panel = page.locator(PANEL);
             await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
-            await expect(page.locator('#toast-container .toast', { hasText: RUNNING_TOAST })).toHaveCount(0);
+            await expect(page.locator('#toast-container .toast-info')).toHaveCount(0);
             const stopButton = panel.locator('button.rp-dock-stop').first();
             await stopButton.waitFor({ state: 'visible', timeout: 30_000 });
             await stopButton.click();

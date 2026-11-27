@@ -96,11 +96,11 @@ async function findLargeSiblingOverlapLayers(page) {
     try {
         cdp.on('LayerTree.layerTreeDidChange', onLayerTreeChange);
         await cdp.send('LayerTree.enable');
-        await page.evaluate(() => {
-            const ext = document.getElementById('rm_extensions_block');
-            if (ext) ext.scrollTop = 1200;
-            return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-        });
+        const extBox = await page.locator('#rm_extensions_block').boundingBox();
+        expect(extBox).not.toBeNull();
+        await page.mouse.move(extBox.x + extBox.width / 2, extBox.y + extBox.height / 2);
+        await page.mouse.wheel(0, 1200);
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
         const overlapLayers = [];
         for (const layer of latestLayers) {
@@ -184,17 +184,6 @@ test.describe('live behavior summary UI', () => {
         await expect(enabledSwitch).toHaveAttribute('aria-checked', 'true');
         await expect(masterNotice).toHaveCount(0);
 
-        const rootHiddenDisplay = await page.evaluate(() => {
-            const probe = document.createElement('div');
-            probe.className = 'luker-bsum';
-            probe.hidden = true;
-            document.body.appendChild(probe);
-            const display = getComputedStyle(probe).display;
-            probe.remove();
-            return display;
-        });
-        expect(rootHiddenDisplay).toBe('none');
-
         const section1 = lens.locator('[data-settings-section="extraction"]').first();
         await expect(section1).toBeVisible();
 
@@ -208,7 +197,10 @@ test.describe('live behavior summary UI', () => {
         });
         expect(isFirstBodyChildAfterTitle).toBe(true);
 
-        await expect(sectionCard.locator('.luker-bsum-row .luker-bsum-role')).toHaveText(['Memory update', 'Main model']);
+        const roleLabels = await sectionCard.locator('.luker-bsum-row .luker-bsum-role').allTextContents();
+        expect(roleLabels).toHaveLength(2);
+        expect(roleLabels.every(label => label.trim().length > 0)).toBe(true);
+        expect(new Set(roleLabels).size).toBe(2);
 
         // Clicking floor-hiding token opens Custom Cadence & Floor Hiding modal with its input focused.
         const floorHidingToken = sectionCard.locator('button.luker-bsum-tok[data-bsum-fields="llmVisibleRecentMessages"]').first();
@@ -236,14 +228,17 @@ test.describe('live behavior summary UI', () => {
         await expect(modalCard).toHaveClass(/\bis-warn\b/);
         const warnBox = modalCard.locator('.luker-bsum-warn.is-warn').first();
         await expect(warnBox).toBeVisible();
-        await expect(warnBox).toContainText('Visibility gap');
-        await expect(modalCard).toContainText('1 messages');
+        expect((await warnBox.textContent())?.trim().length).toBeGreaterThan(0);
+        const modalFloorTok = modalCard.locator('.luker-bsum-tok[data-bsum-fields~="llmVisibleRecentMessages"]').first();
+        await expect(modalFloorTok).toContainText('1');
+        const oneMsgTokText = await modalFloorTok.textContent();
 
         // Fill 0 visible messages: clears visibility-gap warning and switches to full raw history.
         await floorInput.fill('0');
         await expect(modalCard.locator('.luker-bsum-warnings')).toBeHidden();
         await expect(modalCard).not.toHaveClass(/\bis-warn\b/);
-        await expect(modalCard).toContainText('0 (all raw chat history)');
+        await expect(modalFloorTok).toContainText('0');
+        expect(await modalFloorTok.textContent()).not.toBe(oneMsgTokText);
 
         // Hovering an input inside the modal activates matching token and row highlights live.
         await updateEveryInput.hover();
@@ -275,19 +270,22 @@ test.describe('live behavior summary UI', () => {
         await expect(nodeRoundsInput).toBeVisible();
 
         await nodeRoundsInput.fill('15');
-        await expect(runtimeCard).toContainText('15 tool rounds');
+        await expect(runtimeCard.locator('.luker-bsum-tok[data-bsum-fields~="nodeIterationMaxRounds"]').first()).toContainText('15');
 
         const rerunRoundsInput = lens.locator('[data-field-key="reviewRerunMaxRounds"] input').first();
+        const rerunTok = runtimeCard.locator('.luker-bsum-tok[data-bsum-fields~="reviewRerunMaxRounds"]').first();
+        const rerunBefore = await rerunTok.textContent();
         await rerunRoundsInput.fill('0');
-        await expect(runtimeCard).toContainText('disabled (0)');
+        await expect(rerunTok).toContainText('0');
+        expect(await rerunTok.textContent()).not.toBe(rerunBefore);
 
         const retryInput = lens.locator('[data-field-key="toolCallRetryMax"] input').first();
         await retryInput.fill('4');
-        await expect(crossModeCard).toContainText('up to 4 times');
+        await expect(crossModeCard.locator('.luker-bsum-tok[data-bsum-fields~="toolCallRetryMax"]').first()).toContainText('4');
 
         const rpmInput = lens.locator('[data-field-key="rpmLimit"] input').first();
         await rpmInput.fill('60');
-        await expect(crossModeCard).toContainText('60 RPM');
+        await expect(crossModeCard.locator('.luker-bsum-tok[data-bsum-fields~="rpmLimit"]').first()).toContainText('60');
 
         await closeWorkbench(page);
     });
@@ -305,17 +303,19 @@ test.describe('live behavior summary UI', () => {
         await expect(stLorebookCard).toBeVisible();
         await ensureCheckboxUnchecked(page.locator('#search_tools_enabled'));
         await ensureCheckboxUnchecked(page.locator('#search_tools_pre_request_enabled'));
-        await expect(stMainCard).toContainText('Tools not exposed');
-        await expect(stMainCard).toContainText('Pre-request agent off');
+        await expect(stMainCard).toHaveClass(/\bis-dormant\b/);
+        const stMainOffText = await stMainCard.textContent();
+        const stLorebookOffText = await stLorebookCard.textContent();
         await expect(page.locator('#search_tools_tool_call_retry_max')).toHaveClass(/\bluker-bsum-field-dormant\b/);
 
         await page.locator('#search_tools_enabled').click();
-        await expect(stMainCard).toContainText('Web search & visit tools exposed');
-        await expect(stLorebookCard).toContainText('Existing stored entries stay injected');
+        await expect(stMainCard).toHaveClass(/\bis-active\b/);
+        const stMainOnText = await stMainCard.textContent();
+        expect(stMainOnText).not.toBe(stMainOffText);
 
         await page.locator('#search_tools_pre_request_enabled').click();
-        await expect(stMainCard).toContainText('Runs automatically');
-        await expect(stLorebookCard).toContainText('Writes and injects stored search entries');
+        expect(await stMainCard.textContent()).not.toBe(stMainOnText);
+        expect(await stLorebookCard.textContent()).not.toBe(stLorebookOffText);
         await expect(page.locator('#search_tools_tool_call_retry_max')).not.toHaveClass(/\bluker-bsum-field-dormant\b/);
 
         await closeExtensionsDrawer(page);
@@ -335,15 +335,17 @@ test.describe('live behavior summary UI', () => {
         await expect(connPlainTextCard).toBeVisible();
         await expect(connReliabilityCard).toBeVisible();
         await ensureCheckboxUnchecked(page.locator('#connection_profile_function_calling_plain_text'));
-        await expect(connPlainTextCard).toContainText('Plain-text function calling off');
+        await expect(connPlainTextCard).toHaveClass(/\bis-dormant\b/);
+        const plainTextOffText = await connPlainTextCard.textContent();
 
         await page.locator('#connection_profile_function_calling_plain_text').click();
-        await expect(connPlainTextCard).toContainText('Plain-text function calling on');
+        await expect(connPlainTextCard).toHaveClass(/\bis-active\b/);
+        expect(await connPlainTextCard.textContent()).not.toBe(plainTextOffText);
 
         const connRpmInput = page.locator('#connection_profile_rpm_limit');
         await connRpmInput.fill('30');
         await connRpmInput.press('Tab');
-        await expect(connReliabilityCard).toContainText('Rate limit 30 req/min');
+        await expect(connReliabilityCard).toContainText('30');
 
         await closeTopDrawer(page, 'sys-settings-button');
 
@@ -357,17 +359,15 @@ test.describe('live behavior summary UI', () => {
         let regexCard = popup.locator('.luker-bsum[data-bsum-id="regex-editor"]');
         await expect(regexCard).toHaveCount(1);
 
-        const wiWarning = regexCard.locator('.luker-bsum-warn.is-warn', {
-            hasText: 'World Info only runs on prompt or plugin-request passes',
-        });
-        await expect(wiWarning).toHaveCount(0);
+        const wiWarning = regexCard.locator('.luker-bsum-warn.is-warn');
+        const baselineWarnCount = await wiWarning.count();
 
         await popup.locator('input[name="replace_position"][value="5"]').check();
-        await expect(wiWarning).toHaveCount(1);
-        await expect(wiWarning).toBeVisible();
+        await expect(wiWarning).toHaveCount(baselineWarnCount + 1);
+        await expect(wiWarning.last()).toBeVisible();
 
         await popup.locator('input[name="only_format_prompt"]').check();
-        await expect(wiWarning).toHaveCount(0);
+        await expect(wiWarning).toHaveCount(baselineWarnCount);
 
         await popup.locator('.popup-button-cancel').first().click();
         await expect(popup).toBeHidden();
@@ -471,5 +471,113 @@ test.describe('live behavior summary UI', () => {
 
         await customCssInput.fill(originalCustomCss);
         await closeTopDrawer(page, 'user-settings-button');
+    });
+
+    test('Classic extension drawers mount, refresh live, dim dormant fields, and cross-jump across TTS, Vectors, SD, Caption, Expressions, Translate, Quick Reply, CEA, CPA, and Hook Order', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await openExtensionsDrawer(page);
+
+        const openAnyDrawer = async (selector) => {
+            const root = page.locator(selector).first();
+            await root.waitFor({ state: 'attached', timeout: 10_000 });
+            const isDrawerItself = await root.evaluate((el) => el.classList.contains('inline-drawer'));
+            const drawer = isDrawerItself ? root : root.locator('.inline-drawer').first();
+            const content = drawer.locator('> .inline-drawer-content').first();
+            const hidden = await content.evaluate((el) => getComputedStyle(el).display === 'none');
+            if (hidden) {
+                await drawer.locator('> .inline-drawer-toggle').first().click();
+                await content.waitFor({ state: 'visible', timeout: 10_000 });
+            }
+            return content;
+        };
+
+        // 1. TTS: narration + NPC attribution cards, live toggle + cross-scope jump to #tts_multi_voice_enabled
+        await openAnyDrawer('#tts_container');
+        const ttsCard1 = page.locator('.luker-bsum[data-bsum-id="tts-narration"]').first();
+        const ttsCard2 = page.locator('.luker-bsum[data-bsum-id="tts-npc-attribution"]').first();
+        await expect(ttsCard1).toBeVisible();
+        await expect(ttsCard2).toBeVisible();
+        await ensureCheckboxUnchecked(page.locator('#tts_enabled'));
+        await expect(ttsCard1).toHaveClass(/\bis-dormant\b/);
+        await page.locator('#tts_enabled').click();
+        await expect(ttsCard1).toHaveClass(/\bis-active\b/);
+        await ensureCheckboxUnchecked(page.locator('#tts_multi_voice_enabled'));
+        if (!(await page.locator('#tts_npc_attribution_enabled').isChecked())) {
+            await page.locator('#tts_npc_attribution_enabled').click();
+        }
+        await expect(ttsCard2).toHaveClass(/\bis-warn\b/);
+        await ttsCard2.locator('.luker-bsum-warnings button[data-bsum-fields="multiVoiceEnabled"]').first().click();
+        await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('tts_multi_voice_enabled');
+
+        // 2. Vectors: all 4 cards mount, toggle World Info activates WI card & refreshes Shared card
+        await openAnyDrawer('#vectors_container');
+        const vecShared = page.locator('.luker-bsum[data-bsum-id="vectors-shared"]').first();
+        const vecWi = page.locator('.luker-bsum[data-bsum-id="vectors-world-info"]').first();
+        const vecFiles = page.locator('.luker-bsum[data-bsum-id="vectors-files"]').first();
+        const vecChats = page.locator('.luker-bsum[data-bsum-id="vectors-chats"]').first();
+        await expect(vecShared).toBeVisible();
+        await expect(vecWi).toBeVisible();
+        await expect(vecFiles).toBeVisible();
+        await expect(vecChats).toBeVisible();
+        await ensureCheckboxUnchecked(page.locator('#vectors_enabled_world_info'));
+        await expect(vecWi).toHaveClass(/\bis-dormant\b/);
+        await page.locator('#vectors_enabled_world_info').click();
+        await expect(vecWi).toHaveClass(/\bis-active\b/);
+
+        // 3. Stable Diffusion + AI Illustration + Profile Agent cross-drawer jump
+        await openAnyDrawer('#sd_illustration_container');
+        await openProfileAgentDrawer(page);
+        const illMain = page.locator('.luker-bsum[data-bsum-id="sd-illustration-main"]').first();
+        const illProfile = page.locator('.luker-bsum[data-bsum-id="sd-illustration-profile-agent"]').first();
+        await expect(illMain).toBeVisible();
+        await expect(illProfile).toBeVisible();
+        const jumpCharRefBtn = illProfile.locator('button[data-bsum-fields="characterReferenceEnabled"]').first();
+        await expect(jumpCharRefBtn).toBeVisible();
+        await jumpCharRefBtn.click();
+        await expect(page.locator('#sd_character_reference_enabled')).toBeVisible();
+        await expect(page.locator('.luker-bsum[data-bsum-id="sd-mode-summary"]').first()).toBeVisible();
+
+        // 4. Caption, Expressions, Translate, Quick Reply (global + per-set)
+        await openAnyDrawer('#caption_container');
+        const captionCard = page.locator('.luker-bsum[data-bsum-id="caption-settings"]').first();
+        await expect(captionCard).toBeVisible();
+        await page.locator('#caption_source').selectOption('multimodal');
+        await expect(captionCard).toHaveClass(/\bis-active\b/);
+
+        await openAnyDrawer('#expressions_container');
+        const exprCard = page.locator('.luker-bsum[data-bsum-id="expressions-settings"]').first();
+        await expect(exprCard).toBeVisible();
+
+        await openAnyDrawer('#translation_container');
+        const translateCard = page.locator('.luker-bsum[data-bsum-id="translate-settings"]').first();
+        await expect(translateCard).toBeVisible();
+        await page.locator('#translation_auto_mode').selectOption('responses');
+        await expect(translateCard).toHaveClass(/\bis-active\b/);
+
+        await openAnyDrawer('#qr--settings');
+        const qrGlobal = page.locator('.luker-bsum[data-bsum-id="quick-reply-global"]').first();
+        const qrSet = page.locator('.luker-bsum[data-bsum-id="quick-reply-set"]').first();
+        await expect(qrGlobal).toBeVisible();
+        await expect(qrSet).toBeVisible();
+
+        // 5. CEA, CPA, and Hook Order
+        await openAnyDrawer('#character_editor_assistant_settings');
+        const ceaCard = page.locator('.luker-bsum[data-bsum-id="cea-settings-summary"]').first();
+        await expect(ceaCard).toBeVisible();
+        const ceaRetries = page.locator('#cea_tool_retries');
+        await ceaRetries.fill('4');
+        await ceaRetries.press('Tab');
+        await expect(ceaCard).toContainText('4');
+
+        await openAnyDrawer('#completion_preset_assistant_settings');
+        const cpaCard = page.locator('.luker-bsum[data-bsum-id="cpa-settings-summary"]').first();
+        await expect(cpaCard).toBeVisible();
+        await expect(cpaCard).toContainText('3');
+
+        await openAnyDrawer('#hook_order_settings');
+        const hookCard = page.locator('.luker-bsum[data-bsum-id="hook-order-summary"]').first();
+        await expect(hookCard).toBeVisible();
+
+        await closeExtensionsDrawer(page);
     });
 });

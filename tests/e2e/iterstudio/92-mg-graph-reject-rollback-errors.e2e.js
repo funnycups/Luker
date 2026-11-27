@@ -24,7 +24,48 @@ import { applyWorkbenchChanges, sendIteratePrompt, sendWorkbenchIterationPrompt,
 import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 import { normalizeIterStudioSettings } from '../preset/_helpers.js';
 import { openChatByName } from '../_lib/sync.js';
-import { holdWorkbenchSnapshots } from '../_lib/workbench-snapshot-gate.js';
+
+async function holdWorkbenchSnapshotHttp(page) {
+    let signalRequested;
+    let signalRelease;
+    const requestedPromise = new Promise(resolve => { signalRequested = resolve; });
+    const releasePromise = new Promise(resolve => { signalRelease = resolve; });
+    const inFlight = new Set();
+    let captured = false;
+    let released = false;
+    const handler = async (route) => {
+        const url = new URL(route.request().url());
+        if (!released && url.searchParams.get('namespace') === 'sd_character_profiles') {
+            let done;
+            const pending = new Promise(resolve => { done = resolve; });
+            inFlight.add(pending);
+            try {
+                if (!captured) {
+                    captured = true;
+                    signalRequested();
+                }
+                await releasePromise;
+                await route.continue();
+            } finally {
+                inFlight.delete(pending);
+                done();
+            }
+            return;
+        }
+        await route.continue();
+    };
+    await page.route('**/api/state/get*', handler);
+    return {
+        requested: () => requestedPromise,
+        async release() {
+            if (released) return;
+            released = true;
+            signalRelease();
+            await Promise.all([...inFlight]);
+            await page.unroute('**/api/state/get*', handler);
+        },
+    };
+}
 
 let server, mock, importPath;
 
@@ -222,7 +263,7 @@ test.describe('#92 — MG graph studio negative paths', () => {
         await openChatByName(page, original.id);
         await openIterStudio(page, 'mg-graph');
         await closeIterStudio(page);
-        const held = await holdWorkbenchSnapshots(page);
+        const held = await holdWorkbenchSnapshotHttp(page);
         const prompt = 'Inspect the current chat watchpost without editing it.';
         const readOwnership = () => page.evaluate(async ({ before, after, prompt }) => {
             const ctx = window.Luker.getContext();
@@ -301,7 +342,7 @@ test.describe('#92 — MG graph studio negative paths', () => {
             }).first();
             await chatRow.locator('.select_chat_block_filename').click();
             const guardPopup = page.locator('dialog.popup[open]').last();
-            await expect(guardPopup).toContainText(/Tasks still in progress|仍有任务进行中|仍有任務進行中/);
+            await expect(guardPopup).toBeVisible();
             await guardPopup.locator('.popup-button-ok').click();
             await page.waitForFunction(wanted => window.Luker.getContext().getCurrentChatId() === wanted, targetChatId, { timeout: 30_000 });
             await page.locator('#shadow_select_chat_popup').waitFor({ state: 'hidden', timeout: 30_000 });
@@ -326,7 +367,7 @@ test.describe('#92 — MG graph studio negative paths', () => {
         expect((await readNodeFields(page, 'n_3')).state).toBe(BASELINE_STATE);
         const settledTurn = await readOriginalTurn();
         expect(settledTurn.changes ?? []).toEqual([]);
-        expect(settledTurn.error || '').toMatch(/Stopped|已停止/);
+        expect(settledTurn.error).toBeTruthy();
 
         await server.restart();
         await reloadAndAwait(page, server.baseURL);

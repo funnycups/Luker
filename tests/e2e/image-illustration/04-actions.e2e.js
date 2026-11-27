@@ -1,10 +1,12 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test, expect } from '../../harness/playwright.js';
 import { startServer } from '../../harness/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI, openExtensionsDrawer, openInlineDrawer, closeAnyOpenTopSettingsDrawer,
-    selectCharacterByName, sendMessageAndAwaitReply, swipeRightOnLatest,
+    selectCharacterByName, sendMessageAndAwaitReply, swipeRightOnLatest, connectViaApiDrawer,
 } from '../_lib/page.js';
 import { startSdWebUiMock } from '../_lib/sdMock.js';
 
@@ -51,6 +53,28 @@ test.beforeAll(async ({ workerResources }, testInfo) => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL, api: 'custom' });
+
+    const sp = resolve(server.dataRoot, 'default-user', 'settings.json');
+    const s = JSON.parse(readFileSync(sp, 'utf8'));
+    s.extension_settings = s.extension_settings || {};
+    s.extension_settings.sd = {
+        ...(s.extension_settings.sd || {}),
+        source: 'auto',
+        auto_url: sdMock.baseURL,
+        auto_auth: '',
+        model: 'mock-model',
+        sampler: 'DDIM',
+        scheduler: 'normal',
+        steps: 20,
+        scale: 7,
+        vae: '',
+        width: 64,
+        height: 64,
+        prompt_prefix: '',
+        negative_prompt: '',
+    };
+    writeFileSync(sp, JSON.stringify(s, null, 4));
+    await server.restart();
 });
 
 test.afterAll(async () => {
@@ -58,25 +82,25 @@ test.afterAll(async () => {
     await sdMock?.stop();
 });
 
-async function configureSd(page) {
-    await page.evaluate((baseURL) => {
-        const ctx = window.Luker.getContext();
-        const sd = ctx.extensionSettings.sd;
-        sd.source = 'auto';
-        sd.auto_url = baseURL;
-        sd.auto_auth = '';
-        sd.model = 'mock-model';
-        sd.sampler = 'DDIM';
-        sd.scheduler = 'normal';
-        sd.steps = 20;
-        sd.scale = 7;
-        sd.vae = '';
-        sd.width = 64;
-        sd.height = 64;
-        sd.prompt_prefix = '';
-        sd.negative_prompt = '';
-        ctx.saveSettingsDebounced();
-    }, sdMock.baseURL);
+async function configureSdSourceViaUi(page, { source, comfyType = null, img2imgEnabled = null } = {}) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'sd_container');
+    await page.locator('#sd_source').selectOption(source);
+    if (comfyType !== null) {
+        await page.locator('#sd_comfy_type').selectOption(comfyType);
+    }
+    if (typeof img2imgEnabled === 'boolean') {
+        const cb = page.locator('#sd_img2img_enabled');
+        if (img2imgEnabled) await cb.check();
+        else await cb.uncheck();
+    }
+    if (source === 'auto') {
+        await expect.poll(
+            () => page.locator('#sd_model option').count(),
+            { timeout: 10_000 },
+        ).toBeGreaterThan(0);
+    }
+    await closeAnyOpenTopSettingsDrawer(page);
 }
 
 async function latestMessageState(page) {
@@ -96,9 +120,8 @@ test.describe('illustration actions', () => {
     test('regenerates, edits, deletes and lists prompt history', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await connectViaApiDrawer(page);
         await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-        await configureSd(page);
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
@@ -249,9 +272,8 @@ test.describe('illustration actions', () => {
     test('a swipe during regeneration discards the stale image', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await connectViaApiDrawer(page);
         await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-        await configureSd(page);
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
@@ -267,7 +289,7 @@ test.describe('illustration actions', () => {
         }, null, { timeout: 60_000 });
 
         const txt2imgBefore = sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length;
-        sdMock.setTxt2imgDelayMs(2500);
+        sdMock.setTxt2imgDelayMs(4500);
         try {
             await page.locator('.mes_text img[data-illustration-id]').last().click();
             await page.locator('#sd_illustration_action_regenerate').click();
@@ -276,15 +298,16 @@ test.describe('illustration actions', () => {
                 { timeout: 10_000 },
             ).toBeGreaterThan(txt2imgBefore);
 
-            // The new swipe must not pick up the old swipe's auto illustration.
-            await page.evaluate(() => {
-                window.Luker.getContext().extensionSettings.sd.illustration.autoGenerate = false;
-            });
+            // Disable auto-generate through the real UI so the new swipe does not trigger a new illustration.
+            await openExtensionsDrawer(page);
+            await openInlineDrawer(page, 'sd_illustration_container');
+            await page.locator('#sd_illustration_auto_generate').uncheck();
+            await closeAnyOpenTopSettingsDrawer(page);
             await swipeRightOnLatest(page);
         } finally {
             sdMock.setTxt2imgDelayMs(0);
         }
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
 
         const state = await latestMessageState(page);
         expect(state.swipeId).toBe(1);
@@ -306,9 +329,8 @@ test.describe('illustration actions', () => {
     test('manual generation asks before replacing existing illustrations', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await connectViaApiDrawer(page);
         await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-        await configureSd(page);
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
@@ -318,10 +340,14 @@ test.describe('illustration actions', () => {
         await closeAnyOpenTopSettingsDrawer(page);
         await sendMessageAndAwaitReply(page, 'Show me the chart.');
 
-        const clickGenerate = () => page.evaluate(() => {
-            const messages = [...document.querySelectorAll('.mes:not([is_user="true"]):not([is_system="true"])')];
-            messages.at(-1)?.querySelector('.sd_illustration_gen')?.click();
-        });
+        const clickGenerate = async () => {
+            const lastAssistant = page.locator('.mes:not([is_user="true"]):not([is_system="true"])').last();
+            const genBtn = lastAssistant.locator('.sd_illustration_gen');
+            if (!(await genBtn.isVisible())) {
+                await lastAssistant.locator('.extraMesButtonsHint').click();
+            }
+            await genBtn.click();
+        };
 
         // First manual run replaces nothing, so no dialog appears.
         await clickGenerate();
@@ -356,16 +382,15 @@ test.describe('illustration actions', () => {
     test('concurrent regenerations in one message show activity pill progress, never interrupt each other, and open popup without fetching ComfyUI workflow', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await connectViaApiDrawer(page);
         await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-        await configureSd(page);
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
         await page.locator('#sd_illustration_max_concurrent').fill('2');
-        await page.locator('#sd_illustration_max_concurrent').dispatchEvent('input');
+        await page.locator('#sd_illustration_max_concurrent').press('Tab');
         await expect.poll(
             () => page.evaluate(() => window.Luker.getContext().extensionSettings.sd.illustration.maxConcurrentGenerations),
             { timeout: 5000 },
@@ -381,8 +406,8 @@ test.describe('illustration actions', () => {
         const initial = await latestMessageState(page);
         const [recA, recB] = initial.records;
 
-        // Let post-illustration debounced listeners (e.g. Workbench 400ms snapshot reload) settle while still on auto.
-        await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 600)));
+        // Switch image source to ComfyUI with img2img enabled through the real UI controls.
+        await configureSdSourceViaUi(page, { source: 'comfy', comfyType: 'standard', img2imgEnabled: true });
 
         // Verify clicking an illustration opens the popup from local settings without calling /api/sd/comfy/workflow.
         const workflowRequests = [];
@@ -391,13 +416,6 @@ test.describe('illustration actions', () => {
             await route.continue();
         };
         await page.route('**/api/sd/comfy/workflow', workflowRouteHandler);
-        await page.evaluate(() => {
-            const sd = window.Luker.getContext().extensionSettings.sd;
-            sd.source = 'comfy';
-            sd.comfy_type = 'standard';
-            sd.comfy_workflow = 'Default_Comfy_Workflow.json';
-            sd.img2img_enabled = true;
-        });
         await page.locator(`.mes_text img[data-illustration-id="${recA.id}"]`).click();
         await expect(page.locator('#sd_illustration_actions')).toBeVisible();
         await expect(page.locator('#sd_illustration_action_edit_from_image')).toBeVisible();
@@ -406,8 +424,8 @@ test.describe('illustration actions', () => {
         await expect(page.locator('#sd_illustration_actions')).toHaveCount(0, { timeout: 10_000 });
         await page.unroute('**/api/sd/comfy/workflow', workflowRouteHandler);
 
-        // Restore mock WebUI backend for regeneration
-        await configureSd(page);
+        // Restore mock WebUI backend through the real UI controls for regeneration.
+        await configureSdSourceViaUi(page, { source: 'auto' });
 
         sdMock.setTxt2imgDelayMs(1500);
         try {
@@ -418,7 +436,8 @@ test.describe('illustration actions', () => {
 
             const pill = page.locator('#luker-sd-run-panel-pill');
             await expect(pill).toBeVisible({ timeout: 5000 });
-            await expect(pill.locator('.activity-pill-label')).toContainText('Generating image');
+            await expect(pill).toHaveAttribute('data-tone', 'running');
+            await expect(pill.locator('.activity-pill-label')).not.toBeEmpty();
 
             // Immediately start regenerating the second image in the same message
             await page.locator(`.mes_text img[data-illustration-id="${recB.id}"]`).click();

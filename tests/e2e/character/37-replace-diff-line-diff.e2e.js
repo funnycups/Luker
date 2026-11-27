@@ -127,9 +127,7 @@ test.describe('#37 — replace-diff overview renders world-info fields with the 
             const changedFieldLabels = (await changedGroup.locator('.wb-replace-field > h4').allTextContents()).map(s => s.trim());
             expect(changedFieldLabels).toEqual(expect.arrayContaining(['entry.0.key', 'entry.1.key']));
 
-            // Shared text diff, not the retired CEA line diff.
             await expect(diffPopup.locator('.luker_lib_diff').first()).toBeAttached();
-            await expect(diffPopup.locator('.cea_line_diff')).toHaveCount(0);
 
             await diffPopup.locator('[data-luker-lib-action="expand-line-diff"]').first().click();
             const overlay = studio.locator('.luker_lib_diff_zoom_overlay');

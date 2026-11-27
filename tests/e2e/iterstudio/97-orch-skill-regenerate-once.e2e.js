@@ -175,7 +175,8 @@ test.describe('#97 — Orchestrator iter-studio regenerate rolls back the preset
 
         await expect.poll(chatRequestCount, { timeout: 30_000 }).toBeGreaterThan(requestsBeforeRegenerate);
         await expect(popup).toContainText(AFTER_REGENERATE, { timeout: 30_000 });
-        await expect(page.locator('#toast-container', { hasText: 'Regenerate aborted' })).toHaveCount(0);
+        await expect(page.locator('.wbench .wb-toast.is-error')).toHaveCount(0);
+        await expect(page.locator('#toast-container .toast-error')).toHaveCount(0);
 
         await expect.poll(() => readSpecPreset(server.dataRoot)?.presets?.[PRESET_ID] ?? null, { timeout: 15_000 }).toBeNull();
         expect(readSpecPreset(server.dataRoot)).toEqual(storedPreset);

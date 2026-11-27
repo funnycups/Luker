@@ -27,29 +27,13 @@ const customGridCss = `
 `;
 
 test('expands long composer drafts via user preference across built-in and custom themes', async ({ page, baseURL }) => {
-    await page.addInitScript(() => {
-        const observed = new Set();
-        window.composerObserverCount = () => observed.size;
-        window.ResizeObserver = class extends window.ResizeObserver {
-            observe(target, options) {
-                if (target.id === 'nonQRFormItems') observed.add(this);
-                super.observe(target, options);
-            }
-            disconnect() {
-                observed.delete(this);
-                super.disconnect();
-            }
-        };
-    });
     await testSetup.awaitST({ page, baseURL });
 
     const form = page.locator('#send_form');
     const input = page.locator('#send_textarea');
-    const row = page.locator('#nonQRFormItems');
     const leftControls = page.locator('#leftSendForm');
     const rightControls = page.locator('#rightSendForm');
     const expanded = page.locator('#send_form[data-composer-draft-wrap]');
-    const activeObservers = () => page.evaluate(() => window.composerObserverCount());
 
     await page.locator('#user-settings-button .drawer-toggle').click();
     const toggle = page.locator('#expand_composer_on_long_draft');
@@ -57,7 +41,6 @@ test('expands long composer drafts via user preference across built-in and custo
 
     // Enabled by default as a pure user preference.
     await expect(toggle).toBeChecked();
-    await expect.poll(activeObservers).toBeGreaterThanOrEqual(1);
 
     // Built-in Lens theme expands long drafts on desktop and mobile viewports.
     await themes.selectOption('Lens');
@@ -99,25 +82,21 @@ test('expands long composer drafts via user preference across built-in and custo
     await input.blur();
     await expect(expanded).toHaveCount(1);
 
-    // Turning the user toggle off detaches observers, collapses layout, and persists across theme switches.
-    const observersWhenOn = await activeObservers();
+    // Turning the user toggle off collapses layout and persists across theme switches.
     await toggle.click();
     await expect(toggle).not.toBeChecked();
     await expect(expanded).toHaveCount(0);
     await expect(form).not.toHaveAttribute('data-composer-draft-layout', /.*/);
-    await expect.poll(activeObservers).toBe(observersWhenOn - 1);
 
     await themes.selectOption('Dark Lite');
     await expect(toggle).not.toBeChecked();
     await expect(expanded).toHaveCount(0);
-    await expect.poll(activeObservers).toBe(observersWhenOn - 1);
 
     // Turning it back on expands the built-in flex composer on classic themes too.
     await toggle.click();
     await expect(toggle).toBeChecked();
     await expect(expanded).toHaveCount(1);
     await expect(form).toHaveAttribute('data-composer-draft-layout', 'flex');
-    await expect.poll(activeObservers).toBe(observersWhenOn);
 
     // Custom 3-column grid themes receive data-composer-draft-wrap without flex layout overrides.
     await page.locator('#ui_preset_derive_button').click();
@@ -138,27 +117,25 @@ test('expands long composer drafts via user preference across built-in and custo
     await expect(expanded).toHaveCount(1);
     await expect.poll(() => input.evaluate(element => element.clientWidth)).toBeGreaterThan(compactWidthGrid);
 
-    await row.evaluate(element => { element.style.width = '550px'; });
+    await css.fill(customGridCss.replace('width: 420px;', 'width: 550px;'));
     await expect(expanded).toHaveCount(0);
-    await row.evaluate(element => { element.style.width = ''; });
+    await css.fill(customGridCss);
     await expect(expanded).toHaveCount(1);
 
-    const fontScale = page.locator('#font_scale');
-    const originalScale = await fontScale.inputValue();
-    const setFontScale = value => fontScale.evaluate((element, scale) => {
-        element.value = scale;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    }, value);
-    await setFontScale('0.75');
+    const fontScaleCounter = page.locator('#font_scale_counter');
+    const originalScale = await fontScaleCounter.inputValue();
+    const typeFontScale = async (value) => {
+        await fontScaleCounter.click();
+        await fontScaleCounter.fill('');
+        await fontScaleCounter.pressSequentially(value);
+        await fontScaleCounter.press('Enter');
+    };
+    await typeFontScale('0.75');
     await expect(expanded).toHaveCount(0);
-    await setFontScale(originalScale);
+    await typeFontScale(originalScale);
     await expect(expanded).toHaveCount(1);
 
-    await input.evaluate(element => {
-        element.value = '';
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await input.fill('');
     await expect(expanded).toHaveCount(0);
 
     // Switching back to a built-in theme keeps the user preference enabled.

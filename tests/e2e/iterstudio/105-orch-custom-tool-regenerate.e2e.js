@@ -220,7 +220,8 @@ test('custom-tool author approval persists once and regenerate retains the irrev
     await answerAgain.click();
     await expect.poll(count).toBeGreaterThan(before);
     await expect(wbWin).toContainText('The tide ledger remains ready for the watch.');
-    await expect(page.locator('#toast-container', { hasText: 'Regenerate aborted' })).toHaveCount(0);
+    await expect(page.locator('.wbench .wb-toast.is-error')).toHaveCount(0);
+    await expect(page.locator('#toast-container .toast-error')).toHaveCount(0);
     expect(readOrchestrator().presetLibraries).toEqual(approved);
     await setOrchMode(page, 'loop');
     await expect.poll(() => readOrchAgentField(page, 'loop_agent')).toBe('Keep the unsent observations in the spare ledger.');

@@ -12,8 +12,29 @@ import storage from 'node-persist';
 
 import { startServer } from '../harness/server.js';
 import { markOnboarded } from './_lib/fixtures.js';
-import { awaitMainUI } from './_lib/page.js';
+import { awaitMainUI, closeAnyOpenTopSettingsDrawer, openTopDrawer } from './_lib/page.js';
+import { closeWorkbench, openWorkbench } from './_lib/ui-workbench.js';
 import { ANNOUNCEMENTS_STORAGE_KEY } from '../../src/announcements.js';
+
+async function configureZhCnAndLightThemeViaUi(page) {
+    // Select zh-cn via User Settings UI (the app writes localStorage and reloads).
+    await openTopDrawer(page, 'user-settings-button');
+    const reloaded = page.waitForEvent('load');
+    await page.locator('#ui_language_select').selectOption('zh-cn');
+    await reloaded;
+    await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-cn');
+    await closeAnyOpenTopSettingsDrawer(page);
+
+    // Toggle Workbench light theme via its titlebar theme button so the app persists workbench.prefs.v1.
+    const win = await openWorkbench(page, { via: 'wand' });
+    const wbLayer = page.locator('.wbench.lw-surface');
+    if ((await wbLayer.getAttribute('data-theme')) !== 'light') {
+        await win.locator('.wb-titlebar button.lw-ibtn').first().click();
+        await expect(wbLayer).toHaveAttribute('data-theme', 'light');
+    }
+    await closeWorkbench(page);
+}
 
 async function mutateUserStorage(dataRoot, mutator) {
     const store = storage.create({
@@ -40,6 +61,9 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         expect(await freshRes.json()).toEqual({ show: false });
         await expect(page.locator('.wn-backdrop')).toHaveCount(0);
 
+        // Configure zh-cn language and Workbench light theme through real UI controls before upgrade.
+        await configureZhCnAndLightThemeViaUi(page);
+
         // 2. Simulate upgrading from 2.9.0-rc.2 to current version on restart.
         await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
@@ -51,16 +75,14 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         });
         await server.restart();
 
-        await page.addInitScript(() => {
-            window.localStorage.setItem('language', 'zh-cn');
-            window.localStorage.setItem('workbench.prefs.v1', JSON.stringify({ theme: 'light' }));
-        });
         await awaitMainUI(page, server.baseURL);
 
         const backdrop = page.locator('.lw-dialog-backdrop.lw-surface.wn-backdrop');
         await expect(backdrop).toBeVisible({ timeout: 15_000 });
         await expect(backdrop).toHaveAttribute('data-theme', 'light');
-        await expect(backdrop.locator('.lw-dialog-title')).toContainText('已更新至 Luker v');
+        const dialogTitle = (await backdrop.locator('.lw-dialog-title').textContent()) || '';
+        expect(dialogTitle).toMatch(/Luker v/);
+        expect(dialogTitle).toMatch(/[\u4e00-\u9fff]/);
         await expect(backdrop.locator('.wn-range-pill')).toContainText('v2.9.0-rc.2 → v');
 
         // Verify whats-new.css wins over Workbench's @import of tokens.css (620px dialog, not shrunk to 480px).
@@ -136,9 +158,6 @@ test('multi-user mode waits for unread critical announcement before displaying W
 
         await server.restart();
 
-        await page.addInitScript(() => {
-            window.localStorage.setItem('language', 'en');
-        });
         await awaitMainUI(page, server.baseURL);
 
         // Critical announcement popup must appear first; What's New must NOT stack over it.
@@ -193,9 +212,6 @@ test('announcements fetch failure still resolves gate and allows What\'s New mod
             contentType: 'application/json',
             body: JSON.stringify({ error: 'simulated failure' }),
         }));
-        await page.addInitScript(() => {
-            window.localStorage.setItem('language', 'en');
-        });
         await awaitMainUI(page, server.baseURL);
 
         const backdrop = page.locator('.wn-backdrop');
@@ -214,6 +230,9 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
     markOnboarded({ dataRoot });
 
     try {
+        await awaitMainUI(page, server.baseURL);
+        await configureZhCnAndLightThemeViaUi(page);
+
         await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
@@ -224,10 +243,6 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
         });
         await server.restart();
 
-        await page.addInitScript(() => {
-            window.localStorage.setItem('language', 'zh-cn');
-            window.localStorage.setItem('workbench.prefs.v1', JSON.stringify({ theme: 'light' }));
-        });
         await awaitMainUI(page, server.baseURL);
 
         const backdrop = page.locator('.lw-dialog-backdrop.lw-surface.wn-backdrop');
@@ -311,12 +326,11 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
         expect(metrics.bodyScrollHeight).toBeGreaterThan(metrics.bodyClientHeight);
         expect(metrics.bodyTouchAction).toContain('pan-y');
         expect(metrics.bodyOverscroll).toBe('contain');
-        const scrolledTop = await page.evaluate(() => {
-            const body = document.querySelector('.wn-body');
-            body.scrollTop = 240;
-            return body.scrollTop;
-        });
-        expect(scrolledTop).toBeGreaterThan(0);
+        const bodyBox = await backdrop.locator('.wn-body').boundingBox();
+        expect(bodyBox).not.toBeNull();
+        await page.mouse.move(bodyBox.x + bodyBox.width / 2, bodyBox.y + bodyBox.height / 2);
+        await page.mouse.wheel(0, 240);
+        await expect.poll(() => page.evaluate(() => document.querySelector('.wn-body')?.scrollTop ?? 0)).toBeGreaterThan(0);
 
         // 4. Stacks above Workbench layer when present, and initial focus does not paint a stray ring on primary button.
         expect(metrics.backdropZ).toBeGreaterThan(metrics.wbZ);

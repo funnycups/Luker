@@ -298,7 +298,8 @@ test.describe('#98 — Orchestrator iter-studio character scope keeps a non-ASCI
 
         await expect.poll(chatRequestCount, { timeout: 30_000 }).toBeGreaterThan(requestsBeforeRegenerate);
         await expect(wbWin).toContainText(AFTER_REGENERATE, { timeout: 30_000 });
-        await expect(page.locator('#toast-container', { hasText: 'Regenerate aborted' })).toHaveCount(0);
+        await expect(page.locator('.wbench .wb-toast.is-error')).toHaveCount(0);
+        await expect(page.locator('#toast-container .toast-error')).toHaveCount(0);
         await expect.poll(() => readCardSpecEntry(server.dataRoot)?.presets?.[PRESET_KEY]?.systemPrompt || '', { timeout: 15_000 }).toBe(STORED_PRESET.systemPrompt);
         expect(readCardSpecEntry(server.dataRoot)).toEqual(storedEntry);
 

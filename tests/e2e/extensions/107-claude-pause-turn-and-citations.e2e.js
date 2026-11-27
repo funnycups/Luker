@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { test, expect } from '../../harness/playwright.js';
 import { startServer } from '../../harness/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { awaitMainUI, closeAnyOpenTopSettingsDrawer, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 
 function startScriptedAnthropicUpstream() {
     const requests = [];
@@ -135,6 +135,44 @@ test.afterAll(async () => {
     await upstream?.stop();
 });
 
+async function configureClaudePromptControlsViaUi(page, { stream, assistantPrefill, postHistoryInstruction } = {}) {
+    const panel = page.locator('#left-nav-panel');
+    if (await panel.evaluate(el => el.classList.contains('closedDrawer'))) {
+        await page.locator('#ai-config-button > .drawer-toggle > .drawer-icon').click();
+        await expect(panel).toHaveClass(/\bopenDrawer\b/, { timeout: 5_000 });
+    }
+    const ensureVisible = async (locator) => {
+        if (!(await locator.isVisible())) {
+            const drawer = panel.locator('.inline-drawer', { has: locator }).first();
+            await drawer.locator('> .inline-drawer-toggle').click();
+            await expect(locator).toBeVisible({ timeout: 5_000 });
+        }
+    };
+    if (typeof stream === 'boolean') {
+        const streamCheckbox = page.locator('#stream_toggle');
+        await ensureVisible(streamCheckbox);
+        if (stream) await streamCheckbox.check();
+        else await streamCheckbox.uncheck();
+    }
+    const webSearchCheckbox = page.locator('#openai_enable_web_search');
+    await ensureVisible(webSearchCheckbox);
+    await webSearchCheckbox.check();
+    const showThoughtsCheckbox = page.locator('#openai_show_thoughts');
+    await ensureVisible(showThoughtsCheckbox);
+    await showThoughtsCheckbox.check();
+    if (typeof assistantPrefill === 'string') {
+        const prefillArea = page.locator('#claude_assistant_prefill');
+        await ensureVisible(prefillArea);
+        await prefillArea.fill(assistantPrefill);
+    }
+    if (typeof postHistoryInstruction === 'string') {
+        const jbArea = page.locator('#jailbreak_prompt_quick_edit_textarea');
+        await ensureVisible(jbArea);
+        await jbArea.fill(postHistoryInstruction);
+    }
+    await closeAnyOpenTopSettingsDrawer(page);
+}
+
 test.describe('Claude pause_turn server-tool continuation and source citations UI', () => {
     test.describe.configure({ mode: 'serial' });
 
@@ -153,12 +191,9 @@ test.describe('Claude pause_turn server-tool continuation and source citations U
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 });
 
-        await page.evaluate(async () => {
-            const mod = await import('/scripts/openai.js');
-            mod.oai_settings.stream_openai = false;
-            mod.oai_settings.enable_web_search = true;
-            mod.oai_settings.show_thoughts = true;
-            mod.oai_settings.assistant_prefill = 'Prefill should be suppressed on pause_turn';
+        await configureClaudePromptControlsViaUi(page, {
+            stream: false,
+            assistantPrefill: 'Prefill should be suppressed on pause_turn',
         });
 
         const pausedContentBlocks = [
@@ -330,18 +365,10 @@ test.describe('Claude pause_turn server-tool continuation and source citations U
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 });
 
-        await page.evaluate(async () => {
-            const mod = await import('/scripts/openai.js');
-            mod.oai_settings.stream_openai = true;
-            mod.oai_settings.enable_web_search = true;
-            mod.oai_settings.show_thoughts = true;
-            mod.oai_settings.assistant_prefill = 'Suppressed streaming prefill';
-            // Also enable a non-empty Post-History Instruction to verify pause_turn
-            // continuation still keeps the paused assistant turn as the trailing message.
-            const jb = Array.isArray(mod.oai_settings.prompts)
-                ? mod.oai_settings.prompts.find(p => p?.identifier === 'jailbreak')
-                : null;
-            if (jb) jb.content = 'Keep replies grounded in verified coastal charts.';
+        await configureClaudePromptControlsViaUi(page, {
+            stream: true,
+            assistantPrefill: 'Suppressed streaming prefill',
+            postHistoryInstruction: 'Keep replies grounded in verified coastal charts.',
         });
 
         // Round 1 (streaming): thinking + server_tool_use + web_search_tool_result -> stop_reason: pause_turn
