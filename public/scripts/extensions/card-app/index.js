@@ -25,6 +25,8 @@ const STUDIO_SESSION_NAMESPACE = 'cardapp_studio_sessions';
 
 // State
 let isCardAppActive = false;
+let isContainerMounted = false;
+let activationGeneration = 0;
 let currentCtx = null;
 
 /**
@@ -57,22 +59,31 @@ function getCharId() {
  * Activate CardApp for the current character.
  */
 async function activateCardApp() {
+    const generation = ++activationGeneration;
+    const isCurrent = () => generation === activationGeneration;
+
     const config = getCardAppConfig();
     const charId = getCharId();
     if (!config || !charId) return;
+
+    const contextSnapshot = getContext();
+    const avatar = String(contextSnapshot?.characters?.[contextSnapshot.characterId]?.avatar || '').trim();
 
     console.log(`[${MODULE_NAME}] Activating CardApp for character: ${charId}`);
 
     // 1. Create container and hide default chat UI
     const container = createContainer();
+    isContainerMounted = true;
 
     // 2. Load and inject scoped CSS (if any CSS files exist)
     try {
         const cssFiles = await findCSSFiles(charId, config);
+        if (!isCurrent()) return;
         for (const cssContent of cssFiles) {
             injectScopedCSS(cssContent);
         }
     } catch (err) {
+        if (!isCurrent()) return;
         console.warn(`[${MODULE_NAME}] Failed to load CSS:`, err);
     }
 
@@ -85,14 +96,24 @@ async function activateCardApp() {
     let initSucceeded = false;
     try {
         const module = await loadEntryModule(charId, entry);
+        if (!isCurrent()) return;
 
         if (typeof module.init !== 'function') {
             throw new Error('CardApp entry module does not export an init() function');
         }
 
         await module.init(ctx);
+        if (!isCurrent()) {
+            try {
+                ctx._dispose();
+            } catch (disposeErr) {
+                console.error(`[${MODULE_NAME}] Context dispose error:`, disposeErr);
+            }
+            return;
+        }
         initSucceeded = true;
     } catch (err) {
+        if (!isCurrent()) return;
         console.error(`[${MODULE_NAME}] Failed to initialize CardApp:`, err);
         showError(container, err, () => deactivateCardApp());
         // Record the error so the next CardApp Studio session can read it as a
@@ -112,19 +133,22 @@ async function activateCardApp() {
                 '',
                 'This is an automatic diagnostic from the CardApp loader. The CardApp on disk does not run as written. Please read the failing file, identify the cause from the stack above, and patch the file so init() completes without throwing.',
             ].join('\n');
-            await recordCardAppDiagnosticForStudio(content);
+            await recordCardAppDiagnosticForStudio(content, avatar);
         } catch (recordErr) {
             console.warn(`[${MODULE_NAME}] Failed to record CardApp init error for Studio:`, recordErr);
         }
+        if (!isCurrent()) return;
         // Still mark as active so deactivate can clean up
     }
+
+    if (!isCurrent()) return;
 
     // Hook console.error and unhandled rejections so post-init runtime errors
     // (and AI debug output via console.error) also flow back into the Studio
     // session. Installed only after init succeeds — init throws are recorded
     // explicitly above, no need to double-record via the wrapper.
     if (initSucceeded) {
-        installCardAppRuntimeErrorHooks();
+        installCardAppRuntimeErrorHooks(avatar);
     }
 
     // 5. Activate renderer bridge to push messages to CardApp
@@ -139,11 +163,15 @@ async function activateCardApp() {
  * without the user having to inspect DevTools.
  *
  * @param {string} content Pre-formatted diagnostic body
+ * @param {string} [targetAvatar] Bound character avatar to avoid cross-card misrouting
  */
-async function recordCardAppDiagnosticForStudio(content) {
-    const context = getContext();
-    const character = context?.characters?.[context.characterId];
-    const avatar = String(character?.avatar || '').trim();
+async function recordCardAppDiagnosticForStudio(content, targetAvatar = '') {
+    let avatar = String(targetAvatar || '').trim();
+    if (!avatar) {
+        const context = getContext();
+        const character = context?.characters?.[context.characterId];
+        avatar = String(character?.avatar || '').trim();
+    }
     if (!avatar) return;
 
     const diagnosticMessage = {
@@ -224,7 +252,7 @@ let cardAppUnhandledRejectionHandler = null;
  * originated diagnostics into the Studio session. Pass-through to the original
  * console.error so DevTools and other listeners continue to see the message.
  */
-function installCardAppRuntimeErrorHooks() {
+function installCardAppRuntimeErrorHooks(targetAvatar = '') {
     if (consoleErrorWrapper) return;
 
     originalConsoleError = console.error;
@@ -247,7 +275,7 @@ function installCardAppRuntimeErrorHooks() {
         recording = true;
         try {
             const content = `console.error from CardApp at ${new Date().toISOString()}:\n${argText}`;
-            void recordCardAppDiagnosticForStudio(content).catch(() => { /* swallow */ });
+            void recordCardAppDiagnosticForStudio(content, targetAvatar).catch(() => { /* swallow */ });
         } catch {
             // ignore formatting errors
         } finally {
@@ -262,7 +290,7 @@ function installCardAppRuntimeErrorHooks() {
         const message = String(reason?.message ?? (reason ?? ''));
         if (!isCardAppOriginatedStack(stack) && !isCardAppOriginatedStack(message)) return;
         const content = `unhandledrejection from CardApp at ${new Date().toISOString()}:\n${message}\n${stack}`;
-        void recordCardAppDiagnosticForStudio(content).catch(() => { /* swallow */ });
+        void recordCardAppDiagnosticForStudio(content, targetAvatar).catch(() => { /* swallow */ });
     };
     window.addEventListener('unhandledrejection', cardAppUnhandledRejectionHandler);
 }
@@ -312,7 +340,9 @@ async function findCSSFiles(charId, config) {
  * Deactivate the current CardApp.
  */
 async function deactivateCardApp() {
-    if (!isCardAppActive) return;
+    // Always invalidate any in-flight activateCardApp() before checking state.
+    activationGeneration += 1;
+    if (!isCardAppActive && !isContainerMounted && !currentCtx) return;
 
     console.log(`[${MODULE_NAME}] Deactivating CardApp`);
 
@@ -336,6 +366,7 @@ async function deactivateCardApp() {
     // Remove container and restore default UI
     destroyContainer();
 
+    isContainerMounted = false;
     isCardAppActive = false;
 }
 

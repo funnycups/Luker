@@ -5,7 +5,6 @@
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const chat = __ctx.chat;
-const characters = __ctx.characters;
 const openCharacterChat = __ctx.openCharacterChat;
 const doNewChat = __ctx.doNewChat;
 const closeCurrentChat = __ctx.closeCurrentChat;
@@ -167,6 +166,49 @@ export function buildContext(container, charId, config) {
     };
     let scopedActivityGuard = null;
     let scopedActivityGuardBase = null;
+    let disposed = false;
+
+    const normalizedCharId = String(charId || '').trim();
+    const boundAvatar = normalizedCharId ? `${normalizedCharId}.png` : '';
+
+    function resolveBoundCharacter(lukerCtx = getContext()) {
+        const list = lukerCtx?.characters;
+        if (Array.isArray(list)) {
+            if (!normalizedCharId) return null;
+            const index = list.findIndex((character) => {
+                const avatar = String(character?.avatar || '');
+                return avatar === boundAvatar || avatar.replace(/\.png$/i, '') === normalizedCharId;
+            });
+            if (index < 0 || !list[index]) return null;
+            const character = list[index];
+            return {
+                characterId: index,
+                character,
+                avatar: String(character.avatar || '').trim(),
+            };
+        }
+        const fallbackId = lukerCtx?.characterId;
+        if (fallbackId !== undefined && fallbackId !== null && list?.[fallbackId]) {
+            const character = list[fallbackId];
+            const avatar = String(character.avatar || '').trim();
+            if (!avatar || !normalizedCharId || avatar === boundAvatar || avatar.replace(/\.png$/i, '') === normalizedCharId) {
+                return { characterId: fallbackId, character, avatar };
+            }
+        }
+        return null;
+    }
+
+    function requireActiveWriteTarget(operation) {
+        if (disposed) {
+            throw new Error(`[CardApp] Cannot ${operation} after CardApp was disposed`);
+        }
+        const lukerCtx = getContext();
+        const target = resolveBoundCharacter(lukerCtx);
+        if (!target) {
+            throw new Error(`[CardApp] Bound character "${normalizedCharId}" is not available`);
+        }
+        return { lukerCtx, ...target };
+    }
 
     // Renderer registered by the CardApp
     let renderer = null;
@@ -388,14 +430,11 @@ export function buildContext(container, charId, config) {
          * @returns {object|null}
          */
         getCharacterData() {
-            const context = getContext();
-            if (context.characterId === undefined || context.characterId === null) return null;
-            return context.characters[context.characterId] || null;
+            return resolveBoundCharacter()?.character || null;
         },
 
         /**
-         * Update character fields and save. Follows the same path as the popup editor:
-         * write to DOM form elements → trigger debounced save.
+         * Update character fields and save for this CardApp's bound character.
          *
          * Supported keys: name, description, personality, scenario, first_mes,
          * mes_example, system_prompt, post_history_instructions, creator_notes,
@@ -404,12 +443,10 @@ export function buildContext(container, charId, config) {
          *
          * @param {Object} fields - Key-value pairs of fields to update
          * @returns {Promise<void>}
-         * @throws {Error} If no active character
+         * @throws {Error} If disposed or bound character is unavailable
          */
         async updateCharacterFields(fields) {
-            if (__ctx.characterId === undefined || __ctx.characterId === null) {
-                throw new Error('[CardApp] No active character to update');
-            }
+            const { lukerCtx, characterId, character } = requireActiveWriteTarget('update character fields');
 
             // Form-level fields go through updateCharacterData (which feeds
             // /api/characters/edit and respects the form's deep-merge).
@@ -438,8 +475,6 @@ export function buildContext(container, charId, config) {
                 depth_prompt_role: ['depth_prompt', 'role'],
             };
 
-            const lukerCtx = getContext();
-            const character = lukerCtx.characters[__ctx.characterId];
             const prevExt = (character?.data?.extensions && typeof character.data.extensions === 'object')
                 ? character.data.extensions
                 : {};
@@ -499,11 +534,11 @@ export function buildContext(container, charId, config) {
             // Apply form-level changes (deep-merge path) first so they're
             // in memory before the extension writes flush.
             if (Object.keys(formPatch).length > 0) {
-                await lukerCtx.updateCharacterData(__ctx.characterId, formPatch);
+                await lukerCtx.updateCharacterData(characterId, formPatch);
             }
             // Apply each extension blob via writeExtensionField (replace semantics).
             for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
-                if (await lukerCtx.writeExtensionField(__ctx.characterId, topKey, value) === false) {
+                if (await lukerCtx.writeExtensionField(characterId, topKey, value) === false) {
                     throw new Error(`Failed to save character extension: ${topKey}`);
                 }
             }
@@ -651,10 +686,9 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<{ok: true, state: object|null} | {ok: false, state: null, reason: string, hint: string}>}
          */
         async getCharacterState(namespace) {
-            const character = characters[__ctx.characterId];
-            const avatar = String(character?.avatar || '').trim();
-            if (!avatar) throw new Error('[CardApp] No active character');
-            return await lukerGetCharacterState(avatar, namespace);
+            const target = resolveBoundCharacter();
+            if (!target?.avatar) throw new Error('[CardApp] No active character');
+            return await lukerGetCharacterState(target.avatar, namespace);
         },
 
         /**
@@ -673,8 +707,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<{ok: true, state: any} | {ok: false, reason: string, hint: string}>}
          */
         async setCharacterState(namespace, data) {
-            const character = characters[__ctx.characterId];
-            const avatar = String(character?.avatar || '').trim();
+            const { avatar } = requireActiveWriteTarget('set character state');
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerSetCharacterState(avatar, namespace, data);
         },
@@ -698,8 +731,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<{ok: true, state: object|null, updated: boolean, created?: boolean} | {ok: false, reason: string, hint: string}>}
          */
         async updateCharacterState(namespace, updater, options = {}) {
-            const character = characters[__ctx.characterId];
-            const avatar = String(character?.avatar || '').trim();
+            const { avatar } = requireActiveWriteTarget('update character state');
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerUpdateCharacterState(avatar, namespace, updater, options);
         },
@@ -717,8 +749,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
          */
         async deleteCharacterState(namespace) {
-            const character = characters[__ctx.characterId];
-            const avatar = String(character?.avatar || '').trim();
+            const { avatar } = requireActiveWriteTarget('delete character state');
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerDeleteCharacterState(avatar, namespace);
         },
@@ -739,9 +770,9 @@ export function buildContext(container, charId, config) {
          *   `size` — formatted file size from the server (string like "12.3 KB").
          */
         async getChatList() {
-            const context = getContext();
-            if (!context.characterId && context.characterId !== 0) return [];
-            const raw = await getPastCharacterChats(context.characterId);
+            const target = resolveBoundCharacter();
+            if (!target) return [];
+            const raw = await getPastCharacterChats(target.characterId);
             return (Array.isArray(raw) ? raw : []).map(item => ({
                 chatId: String(item?.file_id || String(item?.file_name || '').replace(/\.jsonl$/i, '') || ''),
                 preview: String(item?.mes || ''),
@@ -782,17 +813,16 @@ export function buildContext(container, charId, config) {
 
         /**
          * Delete a past chat by id. Accepts both the canonical `chatId`
-         * (no extension) and a raw `*.jsonl` filename. Operates on the
-         * currently active character; deletion is permanent.
+         * (no extension) and a raw `*.jsonl` filename. Operates on this
+         * CardApp's bound character; deletion is permanent.
          * @param {string} chatId
          * @returns {Promise<void>}
          */
         async deleteChat(chatId) {
             const id = String(chatId || '').replace(/\.jsonl$/i, '');
             if (!id) return;
-            const context = getContext();
-            if (context.characterId === undefined || context.characterId === null) return;
-            await deleteCharacterChatByName(String(context.characterId), id);
+            const { characterId } = requireActiveWriteTarget('delete chat');
+            await deleteCharacterChatByName(String(characterId), id);
         },
 
         /**
@@ -897,8 +927,8 @@ export function buildContext(container, charId, config) {
                 entries.push({ name: trimmed, source });
             };
             // Character-bound primary world book
-            const charData = characters[__ctx.characterId];
-            push(charData?.data?.extensions?.world, 'character');
+            const boundTarget = resolveBoundCharacter();
+            push(boundTarget?.character?.data?.extensions?.world, 'character');
             // Character-bound auxiliary world books (world_info.charLore[].extraBooks)
             for (const name of this.getCharacterAuxWorldBooks()) {
                 push(name, 'character_aux');
@@ -931,7 +961,9 @@ export function buildContext(container, charId, config) {
          * @returns {string[]}
          */
         getCharacterAuxWorldBooks(options = {}) {
-            const fileName = getCharaFilename(__ctx.characterId);
+            const boundTarget = resolveBoundCharacter();
+            if (!boundTarget) return [];
+            const fileName = getCharaFilename(boundTarget.characterId);
             return getCharaAuxWorlds(fileName, options);
         },
 
@@ -1265,8 +1297,7 @@ export function buildContext(container, charId, config) {
          */
         getOrchestratorOverride() {
             const lukerCtx = getContext();
-            const charData = characters[__ctx.characterId];
-            const avatar = String(charData?.avatar || '').trim();
+            const avatar = resolveBoundCharacter(lukerCtx)?.avatar || '';
             if (!avatar) return null;
             const orch = requireExtensionApi('orchestrator');
             const savedMode = orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar);
@@ -1295,9 +1326,7 @@ export function buildContext(container, charId, config) {
             if (!options || typeof options !== 'object' || typeof options.presetId !== 'string') {
                 throw new Error('[CardApp] setOrchestratorOverride requires { presetId: string }');
             }
-            const lukerCtx = getContext();
-            const charData = characters[__ctx.characterId];
-            const avatar = String(charData?.avatar || '').trim();
+            const { lukerCtx, avatar } = requireActiveWriteTarget('set orchestrator override');
             if (!avatar) throw new Error('[CardApp] No active character');
             const orch = requireExtensionApi('orchestrator');
             const result = await orch.setCharacterActivePresetForSavedMode(
@@ -1318,9 +1347,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<boolean>} true on success
          */
         async clearOrchestratorOverride() {
-            const lukerCtx = getContext();
-            const charData = characters[__ctx.characterId];
-            const avatar = String(charData?.avatar || '').trim();
+            const { lukerCtx, avatar } = requireActiveWriteTarget('clear orchestrator override');
             if (!avatar) throw new Error('[CardApp] No active character');
             const orch = requireExtensionApi('orchestrator');
             const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
@@ -1390,9 +1417,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<boolean>}
          */
         async setMemoryGraphSchema(schema) {
-            const lukerCtx = getContext();
-            const charData = characters[__ctx.characterId];
-            const avatar = String(charData?.avatar || '').trim();
+            const { lukerCtx, avatar } = requireActiveWriteTarget('set memory graph schema');
             if (!avatar) throw new Error('[CardApp] No active character');
             const mg = requireExtensionApi('memory-graph');
             if (schema === null || schema === undefined) {
@@ -1413,9 +1438,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<boolean>}
          */
         async setMemoryGraphAdvanced(advanced) {
-            const lukerCtx = getContext();
-            const charData = characters[__ctx.characterId];
-            const avatar = String(charData?.avatar || '').trim();
+            const { lukerCtx, avatar } = requireActiveWriteTarget('set memory graph advanced settings');
             if (!avatar) throw new Error('[CardApp] No active character');
             const mg = requireExtensionApi('memory-graph');
             if (advanced === null || advanced === undefined) {
@@ -1487,6 +1510,7 @@ export function buildContext(container, charId, config) {
      * Called internally when the CardApp is deactivated.
      */
     ctx._dispose = function () {
+        disposed = true;
         // Run user-registered dispose callbacks (snapshot so self-unregistering callbacks don't skip siblings)
         for (const fn of [...disposeCallbacks]) {
             try {
@@ -1498,12 +1522,12 @@ export function buildContext(container, charId, config) {
 
         // Clear all tracked intervals
         for (const id of intervals) {
-            window.clearInterval(id);
+            globalThis.clearInterval(id);
         }
 
         // Clear all tracked timeouts
         for (const id of timeouts) {
-            window.clearTimeout(id);
+            globalThis.clearTimeout(id);
         }
 
         // Remove all tracked event listeners
