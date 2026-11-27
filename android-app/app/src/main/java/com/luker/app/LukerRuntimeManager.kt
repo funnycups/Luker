@@ -515,17 +515,22 @@ object LukerRuntimeManager {
     }
 
     private fun readBundledTarTotalBytes(assetManager: AssetManager): Long {
-        val recorded = runCatching {
+        val rawText = try {
             assetManager.open(RUNTIME_BUNDLE_SIZE_ASSET_PATH).bufferedReader(Charsets.UTF_8).use {
-                it.readText().trim().toLongOrNull()
+                it.readText().trim()
             }
-        }.getOrNull()
+        } catch (err: Exception) {
+            Log.e(TAG, "Failed to read $RUNTIME_BUNDLE_SIZE_ASSET_PATH", err)
+            LukerDebugTrail.append("native", "runtime bundle size read failed: ${err.message ?: err.javaClass.simpleName}")
+            return 0L
+        }
+        val recorded = rawText.toLongOrNull()
         if (recorded != null && recorded > 0L) {
             return recorded
         }
-        return runCatching {
-            assetManager.openFd(RUNTIME_BUNDLE_TAR_ASSET_PATH).use { it.length }
-        }.getOrDefault(0L)
+        Log.e(TAG, "Invalid $RUNTIME_BUNDLE_SIZE_ASSET_PATH value: '$rawText'")
+        LukerDebugTrail.append("native", "runtime bundle size invalid: '$rawText'")
+        return 0L
     }
 
     private fun extractBundledTarArchive(
