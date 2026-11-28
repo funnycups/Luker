@@ -77,8 +77,8 @@ The app keeps everything it owns under a single directory:
 Inside it:
 
 - `config.yaml` — the server configuration file
-- `data/` — the chat, preset, and world storage root
-- `backups/` — chat backups
+- `data/` — per-user storage root containing chats, presets, worlds, and each user's automatic chat backups under `backups/`
+- `backups/` — server-level migration backup directory
 - `plugins/` — server plugins
 - `extensions/third-party/` — third-party extensions
 

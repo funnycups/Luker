@@ -77,8 +77,8 @@ SmartScreen 會顯示「Windows 已保護您的電腦」視窗，發行者顯示
 目錄內的內容：
 
 - `config.yaml`：伺服器設定檔
-- `data/`：聊天、預設、世界書的儲存根目錄
-- `backups/`：聊天備份
+- `data/`：各使用者的資料根目錄，存放聊天、預設、世界書以及各使用者 `backups/` 下的聊天自動備份
+- `backups/`：伺服器資料遷移備份目錄
 - `plugins/`：伺服器端外掛
 - `extensions/third-party/`：第三方擴充
 

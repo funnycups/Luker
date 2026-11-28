@@ -77,8 +77,8 @@ SmartScreen 会显示「Windows 已保护你的电脑」窗口，发布者显示
 目录内的内容：
 
 - `config.yaml`：服务端配置文件
-- `data/`：聊天、预设、世界书的存储根目录
-- `backups/`：聊天备份
+- `data/`：各用户的数据根目录，存放聊天、预设、世界书以及各用户 `backups/` 下的聊天自动备份
+- `backups/`：服务端数据迁移备份目录
 - `plugins/`：服务端插件
 - `extensions/third-party/`：第三方扩展
 
