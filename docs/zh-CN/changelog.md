@@ -2,7 +2,7 @@
 
 本更新日志覆盖 Luker 自 v1.0.0 起的每一个版本，直至当前开发版。
 
-## 未发布
+## v2.9.0 (2026-11-28)
 
 ### 文档
 
@@ -217,6 +217,16 @@
 - 修复了后台刷新打断提示词拖拽或引发列表闪烁、加载提示词管理器改动默认模板、组装提示词失败隐藏错误以及禁用 Horde 生成时切换回复锁死的问题。
 - 修复了 <span v-pre>`{{each}}`</span> 遍历含 <span v-pre>`}}`</span> 或紧贴结尾花括号的内联 JSON 字面量输出为空的问题，例如 <span v-pre>`{{each::{"a":1,"b":2}}}`</span>，以及分词器加载失败时计数估算报错的问题。
 - 修复了内置扩展译文覆盖核心界面与其他扩展、中文界面中记忆图与多 agent 编排名称不统一、移动端较长扩展设置面板内容缺失以及管理员面板「认证与限额」字段错位的问题，并在模糊强度为 0 时跳过空白背景模糊层。
+
+### 新贡献者
+* @MCSeekeri 在 https://github.com/funnycups/Luker/pull/44 中完成了第一次贡献
+* @AX995 在 https://github.com/funnycups/Luker/pull/49 中完成了第一次贡献
+* @xzhouzhou758 在 https://github.com/funnycups/Luker/pull/53 中完成了第一次贡献
+* @Archeb 在 https://github.com/funnycups/Luker/pull/64 中完成了第一次贡献
+* @suyunxing 在 https://github.com/funnycups/Luker/pull/69 中完成了第一次贡献
+* @Cis-Evo 在 https://github.com/funnycups/Luker/pull/72 中完成了第一次贡献
+
+**完整更新日志**：https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0
 
 ## v2.8.0 (2026-10-01)
 

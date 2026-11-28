@@ -2,7 +2,7 @@
 
 本更新日誌涵蓋 Luker 自 v1.0.0 起的每一個版本，直至目前開發版。
 
-## 未發布
+## v2.9.0 (2026-11-28)
 
 ### 文件
 
@@ -217,6 +217,16 @@
 - 修復了背景重新整理打斷提示詞拖曳或引發清單閃爍、載入提示詞管理器改動預設範本、組裝提示詞失敗隱藏錯誤以及停用 Horde 生成時切換回覆鎖死的問題。
 - 修復了 <span v-pre>`{{each}}`</span> 走訪含 <span v-pre>`}}`</span> 或緊貼結尾大括號的內嵌 JSON 字面值輸出為空的問題，例如 <span v-pre>`{{each::{"a":1,"b":2}}}`</span>，以及分詞器載入失敗時計數估算報錯的問題。
 - 修復了內建擴充功能譯文覆寫核心介面與其他擴充功能、中文介面中記憶圖與多 agent 編排名稱不統一、行動端較長擴充功能設定面板內容缺失以及管理員面板「認證與限額」欄位錯位的問題，並在模糊強度為 0 時略過空白背景模糊層。
+
+### 新貢獻者
+* @MCSeekeri 在 https://github.com/funnycups/Luker/pull/44 中完成了第一次貢獻
+* @AX995 在 https://github.com/funnycups/Luker/pull/49 中完成了第一次貢獻
+* @xzhouzhou758 在 https://github.com/funnycups/Luker/pull/53 中完成了第一次貢獻
+* @Archeb 在 https://github.com/funnycups/Luker/pull/64 中完成了第一次貢獻
+* @suyunxing 在 https://github.com/funnycups/Luker/pull/69 中完成了第一次貢獻
+* @Cis-Evo 在 https://github.com/funnycups/Luker/pull/72 中完成了第一次貢獻
+
+**完整更新日誌**：https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0
 
 ## v2.8.0 (2026-10-01)
 

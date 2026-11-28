@@ -168,7 +168,7 @@
         "type": "git",
         "url": "git+https://github.com/funnycups/Luker.git"
     },
-    "version": "2.9.0-rc.6",
+    "version": "2.9.0",
     "scripts": {
         "init": "node src/server-init.js",
         "start": "node server.js",

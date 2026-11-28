@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0 (2026-11-28)
 
 ### Documentation
 
@@ -217,6 +217,16 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed background Prompt Manager refreshes interrupting drags or causing flicker, fixed Prompt Manager modifying default templates on load, fixed prompt assembly failures hiding errors, and fixed stuck swipe locks when Horde generation is disallowed.
 - Fixed <span v-pre>`{{each}}`</span> rendering nothing for inline JSON literals containing <span v-pre>`}}`</span> or ending right before closing braces, such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>, and fixed token count estimation erroring when a tokenizer fails to load.
 - Fixed built-in extension translations overriding core UI and other extensions, aligned Chinese UI names for Memory Graph and Multi-Agent Orchestrator, fixed missing content in long mobile extension drawers, and fixed **Auth & Limits** admin tab alignment, while skipping empty blur layers when Blur Strength is set to zero.
+
+### New Contributors
+* @MCSeekeri made their first contribution in https://github.com/funnycups/Luker/pull/44
+* @AX995 made their first contribution in https://github.com/funnycups/Luker/pull/49
+* @xzhouzhou758 made their first contribution in https://github.com/funnycups/Luker/pull/53
+* @Archeb made their first contribution in https://github.com/funnycups/Luker/pull/64
+* @suyunxing made their first contribution in https://github.com/funnycups/Luker/pull/69
+* @Cis-Evo made their first contribution in https://github.com/funnycups/Luker/pull/72
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0
 
 ## v2.8.0 (2026-10-01)
 
