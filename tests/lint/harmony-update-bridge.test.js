@@ -60,7 +60,7 @@ test('the page registers openExternalUrl on the javaScriptProxy method list', ()
 test('the frontend opens the harmony release page before it falls back to the git flow', () => {
     const source = read(SCRIPT);
     const harmonyCall = source.indexOf('window.LukerHarmony.openExternalUrl(');
-    const gitCall = source.indexOf('runServerGitUpdateFlow();');
+    const gitCall = source.indexOf('await runServerGitUpdateFlow(');
 
     expect(harmonyCall).toBeGreaterThan(-1);
     expect(gitCall).toBeGreaterThan(-1);

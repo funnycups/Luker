@@ -23,7 +23,7 @@ import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './const
 import { serverDirectory } from './server-directory.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { isFirefox } from './express-common.js';
-import { fetchLatestRelease } from './updater.js';
+import { detectNpmGlobalPrefix, fetchLatestRelease } from './updater.js';
 import { compareSemver } from './semver.js';
 
 /**
@@ -197,10 +197,11 @@ export function resolveEnvGitMetadata(env = process.env) {
  * SillyTavern compatibility version, not the fork version. The fork version is `lukerVersion`.
  * Performs only local reads; use checkRemoteVersion() for the upstream tag comparison.
  * Does not read config.yaml, so it is safe to call before setConfigFilePath(), e.g. from webpack.config.js.
- * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, lukerVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isDocker: boolean}>} Version info object
+ * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, lukerVersion: string, packageName: string | null, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isDocker: boolean, isNpmPackage: boolean}>} Version info object
  */
 export async function getVersion() {
     let lukerVersion = 'UNKNOWN';
+    let packageName = null;
     let gitRevision = null;
     let gitBranch = null;
     let commitDate = null;
@@ -209,6 +210,7 @@ export async function getVersion() {
         const require = createRequire(import.meta.url);
         const pkgJson = require(path.join(serverDirectory, './package.json'));
         lukerVersion = pkgJson.version;
+        packageName = typeof pkgJson.name === 'string' ? pkgJson.name : null;
         if (commandExistsSync('git')) {
             const git = simpleGit({ baseDir: serverDirectory });
             try {
@@ -233,16 +235,21 @@ export async function getVersion() {
     const agent = `Luker:${lukerVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();
+    const isNpmPackage = !isDockerRuntime
+        && !gitRevision
+        && (Boolean(detectNpmGlobalPrefix(serverDirectory, packageName)) || globalThis.FORCE_GLOBAL_MODE === true);
     return {
         agent,
         compatAgent,
         stCompatVersion,
         pkgVersion: stCompatVersion,
         lukerVersion,
+        packageName,
         gitRevision,
         gitBranch,
         commitDate: commitDate?.trim() ?? null,
         isDocker: isDockerRuntime,
+        isNpmPackage,
     };
 }
 

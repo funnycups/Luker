@@ -1665,10 +1665,10 @@ async function showUpdateProgressPopup(title, runner) {
     }
 }
 
-function getGitUpdateStatusLabel(status) {
+function getGitUpdateStatusLabel(status, { isNpmPackage = false } = {}) {
     switch (status) {
         case 'running':
-            return t`Updating repository...`;
+            return isNpmPackage ? t`Updating npm package...` : t`Updating repository...`;
         case 'succeeded':
             return t`Update completed.`;
         case 'failed':
@@ -1678,12 +1678,19 @@ function getGitUpdateStatusLabel(status) {
     }
 }
 
-async function runServerGitUpdateFlow() {
+async function runServerGitUpdateFlow(versionData = null) {
     let finalState = null;
+    const isNpmPackage = versionData?.isNpmPackage === true;
     await showUpdateProgressPopup(t`Luker Update`, async ({ pushLog, setStatus }) => {
         setStatus(t`Submitting update request...`);
         try {
-            const startResult = await callLukerUpdateApi('start', {});
+            const payload = {
+                includePrerelease: power_user.luker_check_beta_updates !== false,
+            };
+            if (typeof versionData?.tagName === 'string' && versionData.tagName.trim()) {
+                payload.targetVersion = versionData.tagName.trim();
+            }
+            const startResult = await callLukerUpdateApi('start', payload);
             if (startResult?.started) {
                 pushLog(t`Update task started.`);
             }
@@ -1704,7 +1711,7 @@ async function runServerGitUpdateFlow() {
             }
 
             finalState = gitState;
-            setStatus(getGitUpdateStatusLabel(String(gitState.status || 'idle')));
+            setStatus(getGitUpdateStatusLabel(String(gitState.status || 'idle'), { isNpmPackage }));
 
             const logs = Array.isArray(gitState.logs) ? gitState.logs : [];
             for (const entry of logs) {
@@ -1864,17 +1871,23 @@ async function showLukerUpdatePrompt(versionData) {
     try {
         const branch = String(versionData.gitBranch || '').trim();
         const revision = String(versionData.gitRevision || '').trim();
+        const isNpmPackage = versionData.isNpmPackage === true;
         const environmentText = hasDesktopUpdateBridge()
             ? t`This instance is running inside the desktop app.`
             : hasAndroidUpdateBridge()
                 ? t`This instance is running inside the Android app.`
                 : hasHarmonyUpdateBridge()
                     ? t`This instance is running inside the HarmonyOS app.`
-                    : t`This instance is running in Node.js server mode.`;
+                    : isNpmPackage
+                        ? t`This instance is running from an npm package.`
+                        : t`This instance is running in Node.js server mode.`;
         const usesNativeUpdateBridge = hasDesktopUpdateBridge()
             || hasAndroidUpdateBridge()
             || hasHarmonyUpdateBridge();
-        const branchText = branch ? `${branch}${revision ? ` @ ${revision}` : ''}` : t`unknown branch`;
+        const npmSourceText = `${versionData.packageName || '@funnycups/luker'}@${versionData.lukerVersion || ''}${versionData.tagName ? ` → ${versionData.tagName}` : ''}`;
+        const branchText = isNpmPackage
+            ? npmSourceText
+            : (branch ? `${branch}${revision ? ` @ ${revision}` : ''}` : t`unknown branch`);
         const promptBody = `
             <div class="justifyLeft">
                 <div>${t`A Luker update is available.`}</div>
@@ -1902,7 +1915,7 @@ async function showLukerUpdatePrompt(versionData) {
         } else if (hasHarmonyUpdateBridge()) {
             await runHarmonyReleasePageFlow(versionData);
         } else {
-            await runServerGitUpdateFlow();
+            await runServerGitUpdateFlow(versionData);
         }
     } catch (error) {
         console.error('Luker update flow failed:', error);

@@ -39,6 +39,7 @@ import {
     fetchLatestApkReleaseInfo,
     fetchLatestRelease,
     getGitUpdateStatus,
+    normalizeNpmUpdateTarget,
     selectDesktopAsset,
     startGitUpdate,
 } from '../updater.js';
@@ -286,9 +287,18 @@ router.post('/update/status', requireAdminMiddleware, async (request, response) 
     }
 });
 
-router.post('/update/start', requireAdminMiddleware, async (_request, response) => {
+router.post('/update/start', requireAdminMiddleware, async (request, response) => {
     try {
-        const result = startGitUpdate();
+        const rawTargetVersion = request.body?.targetVersion;
+        let targetVersion = null;
+        if (rawTargetVersion !== undefined && rawTargetVersion !== null && rawTargetVersion !== '') {
+            targetVersion = normalizeNpmUpdateTarget(rawTargetVersion);
+            if (!targetVersion) {
+                return response.status(400).json({ error: 'Invalid target version' });
+            }
+        }
+        const includePrerelease = request.body?.includePrerelease !== false;
+        const result = startGitUpdate({ targetVersion, includePrerelease });
         if (!result.started) {
             return response.status(409).json({ error: String(result.reason || 'already_running'), ...result });
         }

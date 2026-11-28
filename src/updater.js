@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
 import { sync as commandExistsSync } from 'command-exists';
+import isDocker from 'is-docker';
 import { CheckRepoActions, default as simpleGit } from 'simple-git';
 import { serverDirectory } from './server-directory.js';
 import { compareSemver } from './semver.js';
@@ -10,6 +12,8 @@ import { compareSemver } from './semver.js';
 const MAX_LOG_ENTRIES = 1000;
 const DEFAULT_LOG_LIMIT = 400;
 const NPM_EXECUTABLE = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const NPM_PACKAGE_NAME_RE = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+const STRICT_SEMVER_TAG_RE = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 /**
  * @typedef {'idle'|'running'|'succeeded'|'failed'} GitUpdateStatus
@@ -162,14 +166,102 @@ function finishGitUpdateWithSuccess(result) {
 }
 
 /**
+ * Validates and strips a leading `v` from an npm update target version.
+ * Returns null when the input is not a strict SemVer release/prerelease string.
+ * @param {unknown} input
+ * @returns {string | null}
+ */
+export function normalizeNpmUpdateTarget(input) {
+    if (typeof input !== 'string') {
+        return null;
+    }
+    const match = input.trim().match(STRICT_SEMVER_TAG_RE);
+    return match ? match[1] : null;
+}
+
+/**
+ * Infers the global npm `--prefix` when `dir` is installed under
+ * `<prefix>/lib/node_modules/<pkg>` (POSIX) or `<prefix>/node_modules/<pkg>`
+ * (Windows). Returns null for git checkouts, Docker builds, or ephemeral `_npx` caches.
+ * @param {string} [dir]
+ * @param {string} [pkgName]
+ * @param {{ platform?: string }} [options]
+ * @returns {string | null}
+ */
+export function detectNpmGlobalPrefix(dir = serverDirectory, pkgName = packageJson?.name, { platform = process.platform } = {}) {
+    const normalizedPkg = String(pkgName || '').trim();
+    if (!dir || !NPM_PACKAGE_NAME_RE.test(normalizedPkg)) {
+        return null;
+    }
+
+    const pathImpl = platform === 'win32' ? path.win32 : path.posix;
+    const normalizedDir = pathImpl.resolve(String(dir));
+    const pkgSegments = normalizedPkg.split('/');
+    const tail = ['node_modules', ...pkgSegments];
+    const parsed = pathImpl.parse(normalizedDir);
+    const relativeSegments = normalizedDir.slice(parsed.root.length).split(pathImpl.sep).filter(Boolean);
+
+    if (relativeSegments.includes('_npx') || relativeSegments.length < tail.length) {
+        return null;
+    }
+
+    const dirTail = relativeSegments.slice(-tail.length);
+    for (let i = 0; i < tail.length; i++) {
+        const left = platform === 'win32' ? dirTail[i].toLowerCase() : dirTail[i];
+        const right = platform === 'win32' ? tail[i].toLowerCase() : tail[i];
+        if (left !== right) {
+            return null;
+        }
+    }
+
+    const parentSegments = relativeSegments.slice(0, -tail.length);
+    if (parentSegments.length === 0) {
+        return null;
+    }
+
+    if (platform !== 'win32' && parentSegments[parentSegments.length - 1] === 'lib') {
+        parentSegments.pop();
+    }
+
+    return parentSegments.length > 0
+        ? pathImpl.join(parsed.root, ...parentSegments)
+        : parsed.root;
+}
+
+/**
+ * Builds the `npm` CLI arguments for installing a specific global version.
+ * @param {{ packageName: string, targetVersion: string, prefix?: string | null }} params
+ * @returns {string[]}
+ */
+export function buildNpmGlobalUpdateArgs({ packageName, targetVersion, prefix = null }) {
+    const normalizedPkg = String(packageName || '').trim();
+    if (!NPM_PACKAGE_NAME_RE.test(normalizedPkg)) {
+        throw new Error(`Invalid package name for npm update: ${normalizedPkg || '(empty)'}`);
+    }
+
+    const normalizedVersion = normalizeNpmUpdateTarget(targetVersion);
+    if (!normalizedVersion) {
+        throw new Error(`Invalid target version for npm update: ${String(targetVersion)}`);
+    }
+
+    const args = ['install', '-g', '--no-audit', '--no-fund'];
+    if (prefix) {
+        args.push('--prefix', String(prefix));
+    }
+    args.push(`${normalizedPkg}@${normalizedVersion}`);
+    return args;
+}
+
+/**
  * @param {string} command
  * @param {string[]} args
+ * @param {{ cwd?: string }} [options]
  * @returns {Promise<void>}
  */
-function runCommandWithLogs(command, args) {
+function runCommandWithLogs(command, args, { cwd = serverDirectory } = {}) {
     return new Promise((resolve, reject) => {
         const processHandle = spawn(command, args, {
-            cwd: serverDirectory,
+            cwd,
             env: process.env,
             stdio: ['ignore', 'pipe', 'pipe'],
             shell: process.platform === 'win32',
@@ -194,17 +286,99 @@ function runCommandWithLogs(command, args) {
 }
 
 /**
+ * Updates a globally installed npm package deployment to the requested version.
  * @param {number} runId
+ * @param {{ targetVersion?: string | null, includePrerelease?: boolean }} [options]
  */
-async function runGitUpdateFlow(runId) {
+async function runNpmUpdateFlow(runId, { targetVersion = null, includePrerelease = true } = {}) {
+    if (!commandExistsSync(NPM_EXECUTABLE) && !commandExistsSync('npm')) {
+        throw new Error('npm is not installed on this server.');
+    }
+
+    const packageName = String(packageJson?.name || '').trim();
+    if (!NPM_PACKAGE_NAME_RE.test(packageName)) {
+        throw new Error(`Invalid package name for npm update: ${packageName || '(empty)'}`);
+    }
+
+    let normalizedVersion = null;
+    if (targetVersion !== null && targetVersion !== undefined && String(targetVersion).trim() !== '') {
+        normalizedVersion = normalizeNpmUpdateTarget(String(targetVersion));
+        if (!normalizedVersion) {
+            throw new Error(`Invalid target version: ${String(targetVersion)}`);
+        }
+    } else {
+        appendGitUpdateLog('info', 'Checking latest published release...');
+        const release = await fetchLatestRelease({ includePrerelease });
+        if (!release?.tagName) {
+            throw new Error('The repository has no published release.');
+        }
+        normalizedVersion = normalizeNpmUpdateTarget(release.tagName);
+        if (!normalizedVersion) {
+            throw new Error(`Latest release tag is not a valid version: ${release.tagName}`);
+        }
+    }
+
+    const currentVersion = String(packageJson?.version || '').trim();
+    appendGitUpdateLog('info', `Package: ${packageName}`);
+    appendGitUpdateLog('info', `Current version: ${currentVersion || 'unknown'}`);
+    appendGitUpdateLog('info', `Target version: ${normalizedVersion}`);
+
+    if (currentVersion && compareSemver(currentVersion, normalizedVersion) === 0) {
+        appendGitUpdateLog('info', 'Package is already at the target version.');
+        finishGitUpdateWithSuccess({ updated: false, restartRecommended: false });
+        return;
+    }
+
+    const prefix = detectNpmGlobalPrefix(serverDirectory, packageName);
+    const args = buildNpmGlobalUpdateArgs({
+        packageName,
+        targetVersion: normalizedVersion,
+        prefix,
+    });
+    const manualCommand = `npm install -g ${packageName}@${normalizedVersion}`;
+    appendGitUpdateLog('info', `Running: npm ${args.join(' ')}`);
+
     try {
-        if (!commandExistsSync('git')) {
-            throw new Error('Git is not installed on this server.');
+        await runCommandWithLogs(NPM_EXECUTABLE, args, { cwd: os.tmpdir() });
+    } catch (error) {
+        appendGitUpdateLog('warn', `If this failed due to permissions, run manually: ${manualCommand}`);
+        throw error;
+    }
+
+    if (runId !== gitUpdateState.runId) {
+        return;
+    }
+
+    finishGitUpdateWithSuccess({
+        updated: true,
+        restartRecommended: true,
+    });
+    appendGitUpdateLog('info', `Updated ${packageName} to ${normalizedVersion}. Restart Luker to run the new version.`);
+}
+
+/**
+ * @param {number} runId
+ * @param {{ targetVersion?: string | null, includePrerelease?: boolean }} [options]
+ */
+async function runGitUpdateFlow(runId, options = {}) {
+    try {
+        let isRepoRoot = false;
+        let repo = null;
+        if (commandExistsSync('git')) {
+            repo = simpleGit({ baseDir: serverDirectory });
+            isRepoRoot = await repo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
         }
 
-        const repo = simpleGit({ baseDir: serverDirectory });
-        const isRepoRoot = await repo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
         if (!isRepoRoot) {
+            const isNpmInstall = !isDocker()
+                && (Boolean(detectNpmGlobalPrefix(serverDirectory, packageJson?.name)) || globalThis.FORCE_GLOBAL_MODE === true);
+            if (isNpmInstall) {
+                await runNpmUpdateFlow(runId, options);
+                return;
+            }
+            if (!commandExistsSync('git')) {
+                throw new Error('Git is not installed on this server.');
+            }
             throw new Error('Current deployment is not a git repository.');
         }
 
@@ -349,7 +523,12 @@ export function getGitUpdateStatus(options = {}) {
     };
 }
 
-export function startGitUpdate() {
+/**
+ * Starts a server update flow (git pull for git checkouts, or global `npm install`
+ * for npm package installations).
+ * @param {{ targetVersion?: string | null, includePrerelease?: boolean }} [options]
+ */
+export function startGitUpdate(options = {}) {
     if (gitUpdateState.running) {
         return {
             started: false,
@@ -359,10 +538,10 @@ export function startGitUpdate() {
     }
 
     resetGitUpdateStateForRun();
-    appendGitUpdateLog('info', 'Git update requested.');
+    appendGitUpdateLog('info', 'Update requested.');
 
     const runId = gitUpdateState.runId;
-    void runGitUpdateFlow(runId);
+    void runGitUpdateFlow(runId, options);
 
     return {
         started: true,
