@@ -9,29 +9,46 @@ export const router = express.Router();
 router.post('/chat/get', async (request, response) => {
     try {
         const backupModels = [];
-        const backupFiles = await fsPromises
-            .readdir(request.user.directories.backups, { withFileTypes: true })
-            .then(d => d.filter(d => d.isFile() && path.extname(d.name) === '.jsonl' && d.name.startsWith(CHAT_BACKUPS_PREFIX)).map(d => d.name));
+        let dirEntries;
+        try {
+            dirEntries = await fsPromises.readdir(request.user.directories.backups, { withFileTypes: true });
+        } catch (error) {
+            if (error?.code === 'ENOENT') {
+                return response.json([]);
+            }
+            throw error;
+        }
+
+        const backupFiles = dirEntries
+            .filter(d => d.isFile() && path.extname(d.name) === '.jsonl' && d.name.startsWith(CHAT_BACKUPS_PREFIX))
+            .map(d => d.name);
 
         for (const name of backupFiles) {
             const filePath = path.join(request.user.directories.backups, name);
-            const info = await getChatInfo(filePath);
-            if (!info || !info.file_name) {
-                continue;
+            try {
+                const info = await getChatInfo(filePath);
+                if (!info || !info.file_name) {
+                    continue;
+                }
+                backupModels.push(info);
+            } catch (error) {
+                console.error(`Failed to read chat backup "${name}":`, error);
             }
-            backupModels.push(info);
         }
 
         return response.json(backupModels);
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(500).json({ error: error?.message || 'Failed to read chat backups' });
     }
 });
 
 router.post('/chat/delete', async (request, response) => {
     try {
-        const { name } = request.body;
+        const name = request.body?.name;
+        if (typeof name !== 'string' || !name.trim()) {
+            return response.sendStatus(400);
+        }
         const filePath = path.join(request.user.directories.backups, sanitize(name));
 
         if (!path.parse(filePath).base.startsWith(CHAT_BACKUPS_PREFIX)) {
@@ -53,7 +70,10 @@ router.post('/chat/delete', async (request, response) => {
 
 router.post('/chat/download', async (request, response) => {
     try {
-        const { name } = request.body;
+        const name = request.body?.name;
+        if (typeof name !== 'string' || !name.trim()) {
+            return response.sendStatus(400);
+        }
         const filePath = path.join(request.user.directories.backups, sanitize(name));
 
         if (!path.parse(filePath).base.startsWith(CHAT_BACKUPS_PREFIX)) {
