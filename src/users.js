@@ -24,6 +24,7 @@ import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
 import { getStorageEngine } from './storage/index.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from './storage/engine-backup-entries.js';
+import { classifyBackupDirEntry } from './storage/migration/selection-mapping.js';
 import { getInitialSeenVersionFields } from './whats-new.js';
 
 export const KEY_PREFIX = 'user:';
@@ -1390,17 +1391,26 @@ export function normalizeUserBackupSelection(selectionInput) {
  * @param {UserDirectoryList} directories User directories
  * @param {Record<string, boolean>} selection Selection object
  * @param {{ includeGlobalExtensions?: boolean }} [options] Additional target options
- * @returns {{ files: string[], directories: string[] }} Backup targets
+ * @returns {{ files: string[], directories: string[], filteredDirectories: { directory: string, match: (relPosixPath: string) => boolean, allMatched: boolean }[] }} Backup targets
  */
 export function getUserBackupTargets(directories, selection, options = {}) {
     const includeGlobalExtensions = options?.includeGlobalExtensions === true;
     const selectedFiles = new Set();
     const selectedDirectories = new Set();
+    /** @type {{ directory: string, match: (relPosixPath: string) => boolean, allMatched: boolean }[]} */
+    const filteredDirectories = [];
 
     if (selection.settings) {
         selectedFiles.add(path.join(directories.root, SETTINGS_FILE));
-        selectedDirectories.add(directories.backups);
         selectedDirectories.add(directories.states);
+    }
+
+    if (directories.backups && (selection.chats || selection.settings || selection.secrets)) {
+        filteredDirectories.push({
+            directory: directories.backups,
+            match: (relPosixPath) => Boolean(selection[classifyBackupDirEntry(relPosixPath)]),
+            allMatched: Boolean(selection.chats && selection.settings && selection.secrets),
+        });
     }
 
     if (selection.secrets) {
@@ -1459,7 +1469,37 @@ export function getUserBackupTargets(directories, selection, options = {}) {
     return {
         files: [...selectedFiles],
         directories: [...selectedDirectories],
+        filteredDirectories,
     };
+}
+
+/**
+ * Recursively collects regular files under `rootDirectory` whose relative
+ * POSIX path satisfies `match`. Symlinks are skipped.
+ * @param {string} rootDirectory Absolute directory path
+ * @param {(relPosixPath: string) => boolean} match Predicate on relative POSIX path
+ * @returns {string[]} Matched absolute file paths
+ */
+function collectMatchingDirectoryFiles(rootDirectory, match) {
+    /** @type {string[]} */
+    const matchedFiles = [];
+    const walk = (currentDir, relPrefix) => {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isSymbolicLink()) {
+                continue;
+            }
+            const fullPath = path.join(currentDir, entry.name);
+            const relPosixPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+                walk(fullPath, relPosixPath);
+            } else if (entry.isFile() && match(relPosixPath)) {
+                matchedFiles.push(fullPath);
+            }
+        }
+    };
+    walk(rootDirectory, '');
+    return matchedFiles;
 }
 
 /**
@@ -1500,7 +1540,7 @@ export async function createBackupArchive(handle, response, selectionInput = und
     const selection = normalizeUserBackupSelection(selectionInput);
     const targets = getUserBackupTargets(directories, selection, options);
 
-    if (targets.files.length === 0 && targets.directories.length === 0) {
+    if (targets.files.length === 0 && targets.directories.length === 0 && targets.filteredDirectories.length === 0) {
         throw new Error('At least one backup category must be selected.');
     }
 
@@ -1576,6 +1616,17 @@ export async function createBackupArchive(handle, response, selectionInput = und
 
         const archivePath = getBackupArchivePath(directories.root, directoryPath);
         archive.directory(directoryPath, archivePath);
+    }
+
+    for (const { directory, match } of targets.filteredDirectories) {
+        if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+            continue;
+        }
+
+        for (const filePath of collectMatchingDirectoryFiles(directory, match)) {
+            const archivePath = getBackupArchivePath(directories.root, filePath);
+            archive.file(filePath, { name: archivePath });
+        }
     }
 
     archive.finalize();

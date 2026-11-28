@@ -256,28 +256,36 @@ function toPosixRelativePath(basePath, targetPath) {
     return path.posix.normalize(relative.split(path.sep).join('/'));
 }
 
-function buildRestoreDirectoryAliases(rootPath, allowedDirectories) {
+function buildRestoreDirectoryAliases(rootPath, allowedDirectories, filteredDirectories = []) {
     const aliases = [];
     const globalExtensionsPath = path.resolve(PUBLIC_DIRECTORIES.globalExtensions);
 
-    for (const directory of allowedDirectories) {
+    const addDirectoryAliases = (directory, match = null) => {
         const resolvedDirectory = path.resolve(directory);
         const fromRoot = toPosixRelativePath(rootPath, resolvedDirectory);
         if (fromRoot) {
-            aliases.push({ prefix: fromRoot, directory: resolvedDirectory });
+            aliases.push({ prefix: fromRoot, directory: resolvedDirectory, match });
         }
 
         const fromCwd = toPosixRelativePath(process.cwd(), resolvedDirectory);
         if (fromCwd) {
-            aliases.push({ prefix: fromCwd, directory: resolvedDirectory });
+            aliases.push({ prefix: fromCwd, directory: resolvedDirectory, match });
         }
 
-        if (resolvedDirectory === globalExtensionsPath) {
-            aliases.push({ prefix: 'public/scripts/extensions/third-party', directory: resolvedDirectory });
-            aliases.push({ prefix: 'scripts/extensions/third-party', directory: resolvedDirectory });
-            aliases.push({ prefix: 'extensions/third-party', directory: resolvedDirectory });
-            aliases.push({ prefix: 'third-party', directory: resolvedDirectory });
+        if (!match && resolvedDirectory === globalExtensionsPath) {
+            aliases.push({ prefix: 'public/scripts/extensions/third-party', directory: resolvedDirectory, match: null });
+            aliases.push({ prefix: 'scripts/extensions/third-party', directory: resolvedDirectory, match: null });
+            aliases.push({ prefix: 'extensions/third-party', directory: resolvedDirectory, match: null });
+            aliases.push({ prefix: 'third-party', directory: resolvedDirectory, match: null });
         }
+    };
+
+    for (const directory of allowedDirectories) {
+        addDirectoryAliases(directory, null);
+    }
+
+    for (const { directory, match } of filteredDirectories) {
+        addDirectoryAliases(directory, match);
     }
 
     const deduplicated = new Map();
@@ -295,7 +303,7 @@ function buildRestoreDirectoryAliases(rootPath, allowedDirectories) {
     return [...deduplicated.values()];
 }
 
-function resolveAllowedRestorePath(normalizedEntryPath, rootPath, allowedFiles, allowedDirectories, directoryAliases = []) {
+function resolveAllowedRestorePath(normalizedEntryPath, rootPath, allowedFiles, allowedDirectories, directoryAliases = [], filteredDirectories = []) {
     const parts = normalizedEntryPath.split('/').filter(Boolean);
     const candidates = [];
 
@@ -332,6 +340,15 @@ function resolveAllowedRestorePath(normalizedEntryPath, rootPath, allowedFiles, 
             }
         }
 
+        for (const { directory, match } of filteredDirectories) {
+            if (resolved.startsWith(directory + path.sep)) {
+                const relPosix = toPosixRelativePath(directory, resolved);
+                if (relPosix && match(relPosix)) {
+                    return resolved;
+                }
+            }
+        }
+
         for (const alias of directoryAliases) {
             if (!candidate.startsWith(`${alias.prefix}/`)) {
                 continue;
@@ -339,6 +356,10 @@ function resolveAllowedRestorePath(normalizedEntryPath, rootPath, allowedFiles, 
 
             const suffix = candidate.slice(alias.prefix.length + 1);
             if (!suffix) {
+                continue;
+            }
+
+            if (typeof alias.match === 'function' && !alias.match(suffix)) {
                 continue;
             }
 
@@ -381,6 +402,10 @@ function buildRestoreCategoryTargets(directories, selection, options = {}) {
             name: category,
             files: new Set(categoryTargets.files.map(file => path.resolve(file))),
             directories: categoryTargets.directories.map(directory => path.resolve(directory)),
+            filteredDirectories: (categoryTargets.filteredDirectories || []).map(({ directory, match }) => ({
+                directory: path.resolve(directory),
+                match,
+            })),
         });
     }
     return categories;
@@ -397,12 +422,43 @@ function resolveRestoreCategoryByTargetPath(targetPath, categoryTargets) {
                 return category.name;
             }
         }
+
+        for (const { directory, match } of (category.filteredDirectories || [])) {
+            if (targetPath.startsWith(directory + path.sep)) {
+                const relPosix = toPosixRelativePath(directory, targetPath);
+                if (relPosix && match(relPosix)) {
+                    return category.name;
+                }
+            }
+        }
     }
 
     return '';
 }
 
-async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, onProgress = null) {
+async function collectFilteredFilesForSnapshot(rootDirectory, match) {
+    /** @type {string[]} */
+    const matchedFiles = [];
+    const walk = async (currentDir, relPrefix) => {
+        const entries = await fsPromises.readdir(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isSymbolicLink()) {
+                continue;
+            }
+            const fullPath = path.join(currentDir, entry.name);
+            const relPosixPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+                await walk(fullPath, relPosixPath);
+            } else if (entry.isFile() && match(relPosixPath)) {
+                matchedFiles.push(fullPath);
+            }
+        }
+    };
+    await walk(rootDirectory, '');
+    return matchedFiles;
+}
+
+async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, targetFilteredDirectories, categoryTargets, onProgress = null) {
     /** @type {Map<string, { targetPath: string, category: string }>} */
     const targetByNormalizedEntry = new Map();
     const categoryStats = Object.fromEntries(
@@ -424,7 +480,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
     };
     /** @type {object|null} Parsed contents of `_engine_meta.json`, or null if the archive has no engine dump. */
     let engineMeta = null;
-    const directoryAliases = buildRestoreDirectoryAliases(targetRoot, targetDirectories);
+    const directoryAliases = buildRestoreDirectoryAliases(targetRoot, targetDirectories, targetFilteredDirectories);
     const reportAnalyzeProgress = typeof onProgress === 'function'
         ? (entryCount) => {
             try { onProgress({ phase: 'analyze', current: report.totalEntries, total: entryCount }); } catch { /* sink errors ignored */ }
@@ -531,7 +587,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                     }
 
                     report.fileEntries += 1;
-                    const targetPath = resolveAllowedRestorePath(normalized, targetRoot, targetFiles, targetDirectories, directoryAliases);
+                    const targetPath = resolveAllowedRestorePath(normalized, targetRoot, targetFiles, targetDirectories, directoryAliases, targetFilteredDirectories);
                     if (!targetPath) {
                         report.skippedEntries += 1;
                         addRestoreReportSample(report, normalized, 'path_not_in_selected_categories');
@@ -701,14 +757,19 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const targetRoot = path.resolve(directories.root);
     const targetDirectories = backupTargets.directories.map(dir => path.resolve(dir));
     const targetFiles = new Set(backupTargets.files.map(file => path.resolve(file)));
+    const targetFilteredDirectories = (backupTargets.filteredDirectories || []).map(({ directory, match, allMatched }) => ({
+        directory: path.resolve(directory),
+        match,
+        allMatched: Boolean(allMatched),
+    }));
 
-    if (targetDirectories.length === 0 && targetFiles.size === 0) {
+    if (targetDirectories.length === 0 && targetFiles.size === 0 && targetFilteredDirectories.length === 0) {
         throw new Error('At least one restore category must be selected.');
     }
 
     const categoryTargets = buildRestoreCategoryTargets(directories, selection, options);
     const tAnalyze = Date.now();
-    const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, reportProgress);
+    const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, targetFilteredDirectories, categoryTargets, reportProgress);
     const analyzeMs = Date.now() - tAnalyze;
 
     // When the archive carries an engine dump, validate that the
@@ -771,9 +832,12 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     let snapshotMs = 0;
 
+    const snapshottedFilteredFiles = new Set();
+    const partialFilteredDirectories = targetFilteredDirectories.filter((entry) => !entry.allMatched);
+
     if (mode === 'overwrite') {
         const tSnap = Date.now();
-        const snapshotTotal = targetFiles.size + targetDirectories.length;
+        const snapshotTotal = targetFiles.size + targetDirectories.length + targetFilteredDirectories.length;
         let snapshotCurrent = 0;
         reportProgress({ phase: 'snapshot', current: 0, total: snapshotTotal });
 
@@ -791,16 +855,32 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                 reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
             }
 
-            for (const directoryPath of targetDirectories) {
+            for (const { directory: directoryPath, match, allMatched } of [
+                ...targetDirectories.map((directory) => ({ directory, match: null, allMatched: true })),
+                ...targetFilteredDirectories,
+            ]) {
                 snapshotCurrent += 1;
-                if (fs.existsSync(directoryPath)) {
-                    const snapshot = directoryPath + snapshotSuffix;
-                    await fsPromises.rename(directoryPath, snapshot);
-                    snapshots.push({ type: 'directory', original: directoryPath, snapshot });
+                if (allMatched) {
+                    if (fs.existsSync(directoryPath)) {
+                        const snapshot = directoryPath + snapshotSuffix;
+                        await fsPromises.rename(directoryPath, snapshot);
+                        snapshots.push({ type: 'directory', original: directoryPath, snapshot });
+                    } else {
+                        snapshots.push({ type: 'created', original: directoryPath, snapshot: null });
+                    }
+                    ensureDirectory(directoryPath);
+                } else if (fs.existsSync(directoryPath)) {
+                    const matchedFiles = await collectFilteredFilesForSnapshot(directoryPath, match);
+                    for (const filePath of matchedFiles) {
+                        const snapshot = filePath + snapshotSuffix;
+                        await fsPromises.rename(filePath, snapshot);
+                        snapshots.push({ type: 'file', original: filePath, snapshot });
+                        snapshottedFilteredFiles.add(filePath);
+                    }
                 } else {
                     snapshots.push({ type: 'created', original: directoryPath, snapshot: null });
+                    ensureDirectory(directoryPath);
                 }
-                ensureDirectory(directoryPath);
                 reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
             }
         } catch (snapshotError) {
@@ -899,6 +979,15 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
                         const targetPath = targetMapping.targetPath;
                         ensureDirectory(path.dirname(targetPath));
+
+                        if (mode === 'overwrite'
+                            && partialFilteredDirectories.length > 0
+                            && !snapshottedFilteredFiles.has(targetPath)
+                            && !touchedMergeTargets.has(targetPath)
+                            && partialFilteredDirectories.some(({ directory }) => targetPath.startsWith(directory + path.sep))) {
+                            touchedMergeTargets.add(targetPath);
+                            snapshots.push({ type: 'created', original: targetPath });
+                        }
 
                         // In merge mode when a DB restore follows, record an undo
                         // snapshot for each touched FS file so an invalid DB dump

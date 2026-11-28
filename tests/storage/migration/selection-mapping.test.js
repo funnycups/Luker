@@ -1,4 +1,25 @@
-import { FS_TREE_CATEGORIES, selectionToRunnerCategories } from '../../../src/storage/migration/selection-mapping.js';
+import {
+    FS_TREE_CATEGORIES,
+    classifyBackupDirEntry,
+    selectionToRunnerCategories,
+} from '../../../src/storage/migration/selection-mapping.js';
+
+describe('classifyBackupDirEntry', () => {
+    test('routes top-level chat_*.jsonl to chats', () => {
+        expect(classifyBackupDirEntry('chat_alice_20260101-120000.jsonl')).toBe('chats');
+        expect(classifyBackupDirEntry('chat______a1b2c3d4_20260101-120000.jsonl')).toBe('chats');
+    });
+
+    test('routes top-level secrets_migration_*.json to secrets', () => {
+        expect(classifyBackupDirEntry('secrets_migration_1700000000000.json')).toBe('secrets');
+    });
+
+    test('routes settings snapshots and nested backup artifacts to settings', () => {
+        expect(classifyBackupDirEntry('settings_default-user_20260101-120000.json')).toBe('settings');
+        expect(classifyBackupDirEntry('_sysprompt/default.json')).toBe('settings');
+        expect(classifyBackupDirEntry('nested/chat_alice_20260101-120000.jsonl')).toBe('settings');
+    });
+});
 
 describe('FS_TREE_CATEGORIES', () => {
     test('lists exactly the 6 pure fs-tree categories', () => {

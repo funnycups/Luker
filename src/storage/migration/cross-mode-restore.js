@@ -36,7 +36,7 @@ import { MigrationRunner } from './runner.js';
 import { snapshotUser, restoreFromSnapshot, removeSnapshot } from './backup.js';
 import { acquireMigrationLock, releaseMigrationLock, makeHolderId, startHeartbeat, stopHeartbeat } from './lock.js';
 import { materializeTransientSource } from './transient-source.js';
-import { selectionToRunnerCategories, FS_TREE_CATEGORIES } from './selection-mapping.js';
+import { selectionToRunnerCategories, FS_TREE_CATEGORIES, classifyBackupDirEntry } from './selection-mapping.js';
 import { RestoreDumpInvalidError } from '../errors.js';
 import {
     CrossModeScratchCredsRequiredError,
@@ -311,14 +311,15 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
         if (cat === 'globalExtensions' && !includeGlobalExtensions) continue;
         if (selection?.[cat]) enabled.add(cat);
     }
-    if (enabled.size === 0) {
+    const hasBackupSelection = Boolean(selection?.chats || selection?.settings || selection?.secrets);
+    if (enabled.size === 0 && !hasBackupSelection) {
         return { restoredCount: 0, failedCount: 0 };
     }
 
     // Each entry: { prefix: zip-entry-prefix (relative, posix), targetDir: absolute }.
     // Empty prefix means "exact filename" (settings.json, secrets.json, stats.json
     // — single-file categories).
-    const rules = buildFsTreeRules(enabled, dirs);
+    const rules = buildFsTreeRules(enabled, dirs, selection);
     if (rules.length === 0) {
         return { restoredCount: 0, failedCount: 0 };
     }
@@ -378,6 +379,10 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
                         try {
                             await fsPromises.chmod(target, 0o644).catch(() => {});
                             await pipeline(readStream, fs.createWriteStream(target, { mode: 0o644 }));
+                            const lastModDate = typeof entry.getLastModDate === 'function' ? entry.getLastModDate() : null;
+                            if (lastModDate instanceof Date && Number.isFinite(lastModDate.getTime())) {
+                                await fsPromises.utimes(target, lastModDate, lastModDate).catch(() => {});
+                            }
                             restoredCount += 1;
                             reportProgress(restoredCount + failedCount, extractTotal, false);
                             zipfile.readEntry();
@@ -407,7 +412,7 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
  *
  * The category→prefix map mirrors getUserBackupTargets in src/users.js.
  */
-function buildFsTreeRules(enabled, dirs) {
+function buildFsTreeRules(enabled, dirs, selection = {}) {
     const rules = [];
     if (enabled.has('secrets')) {
         rules.push({ prefix: 'secrets.json', targetPath: path.resolve(dirs.root, 'secrets.json'), exact: true });
@@ -442,6 +447,17 @@ function buildFsTreeRules(enabled, dirs) {
             rules.push({ prefix: 'third-party/', targetDir: path.resolve(dirs.globalExtensions), exact: false });
         }
     }
+    if (selection?.chats || selection?.settings || selection?.secrets) {
+        const backupsDir = dirs.backups ? path.resolve(dirs.backups) : (dirs.root ? path.resolve(dirs.root, 'backups') : null);
+        if (backupsDir) {
+            rules.push({
+                prefix: 'backups/',
+                targetDir: backupsDir,
+                exact: false,
+                match: (suffix) => Boolean(selection[classifyBackupDirEntry(suffix)]),
+            });
+        }
+    }
     return rules;
 }
 
@@ -458,6 +474,9 @@ function matchFsTreeRule(zipEntryName, rules) {
         if (zipEntryName.startsWith(rule.prefix)) {
             const suffix = zipEntryName.slice(rule.prefix.length);
             if (!suffix) continue;
+            if (typeof rule.match === 'function' && !rule.match(suffix)) {
+                continue;
+            }
             const resolved = path.resolve(rule.targetDir, suffix);
             const root = path.resolve(rule.targetDir);
             if (resolved !== root && !resolved.startsWith(root + path.sep)) {

@@ -496,6 +496,7 @@ describe('extractFsTreeCategories', () => {
     function buildDirs(root) {
         return {
             root,
+            backups: path.join(root, 'backups'),
             characters: path.join(root, 'characters'),
             avatars: path.join(root, 'User Avatars'),
             backgrounds: path.join(root, 'backgrounds'),
@@ -613,5 +614,113 @@ describe('extractFsTreeCategories', () => {
         fs.mkdirSync(path.join(liveRoot, 'secrets.json'), { recursive: true });
 
         await expect(extractFsTreeCategories(zipPath, dirs, { secrets: true }, {})).rejects.toThrow(/EISDIR|directory/i);
+    });
+
+    test('extracts backups/ entries according to chats, settings, and secrets selection', async () => {
+        const zipPath = path.join(dataRoot, 'backups-split.zip');
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append('{"chat_metadata":{}}\n{"name":"Alice","mes":"hi"}\n', { name: 'backups/chat_alice_20260101-120000.jsonl' });
+            arc.append('{"user_name":"snap"}', { name: 'backups/settings_default-user_20260101-120000.json' });
+            arc.append('{"name":"sys"}', { name: 'backups/_sysprompt/default.json' });
+            arc.append('{"api_key":"secret"}', { name: 'backups/secrets_migration_1700000000000.json' });
+            arc.finalize();
+        });
+
+        const chatsOnlyRoot = path.join(dataRoot, 'chats-only');
+        const chatsOnlyDirs = buildDirs(chatsOnlyRoot);
+        fs.mkdirSync(chatsOnlyRoot, { recursive: true });
+        const chatsResult = await extractFsTreeCategories(zipPath, chatsOnlyDirs, { chats: true }, {});
+        expect(chatsResult.restoredCount).toBe(1);
+        expect(fs.existsSync(path.join(chatsOnlyDirs.backups, 'chat_alice_20260101-120000.jsonl'))).toBe(true);
+        expect(fs.existsSync(path.join(chatsOnlyDirs.backups, 'settings_default-user_20260101-120000.json'))).toBe(false);
+        expect(fs.existsSync(path.join(chatsOnlyDirs.backups, '_sysprompt', 'default.json'))).toBe(false);
+        expect(fs.existsSync(path.join(chatsOnlyDirs.backups, 'secrets_migration_1700000000000.json'))).toBe(false);
+
+        const settingsOnlyRoot = path.join(dataRoot, 'settings-only');
+        const settingsOnlyDirs = buildDirs(settingsOnlyRoot);
+        fs.mkdirSync(settingsOnlyRoot, { recursive: true });
+        const settingsResult = await extractFsTreeCategories(zipPath, settingsOnlyDirs, { settings: true }, {});
+        expect(settingsResult.restoredCount).toBe(2);
+        expect(fs.existsSync(path.join(settingsOnlyDirs.backups, 'chat_alice_20260101-120000.jsonl'))).toBe(false);
+        expect(fs.existsSync(path.join(settingsOnlyDirs.backups, 'settings_default-user_20260101-120000.json'))).toBe(true);
+        expect(fs.existsSync(path.join(settingsOnlyDirs.backups, '_sysprompt', 'default.json'))).toBe(true);
+        expect(fs.existsSync(path.join(settingsOnlyDirs.backups, 'secrets_migration_1700000000000.json'))).toBe(false);
+
+        const secretsOnlyRoot = path.join(dataRoot, 'secrets-only');
+        const secretsOnlyDirs = buildDirs(secretsOnlyRoot);
+        fs.mkdirSync(secretsOnlyRoot, { recursive: true });
+        const secretsResult = await extractFsTreeCategories(zipPath, secretsOnlyDirs, { secrets: true }, {});
+        expect(secretsResult.restoredCount).toBe(1);
+        expect(fs.existsSync(path.join(secretsOnlyDirs.backups, 'secrets_migration_1700000000000.json'))).toBe(true);
+    });
+});
+
+describe('crossModeRestore — fs ZIP to sqlite preserves chat backups', () => {
+    let dataRoot;
+    let sqliteEngine;
+
+    beforeEach(() => {
+        dataRoot = makeTempRoot();
+    });
+
+    afterEach(async () => {
+        setReadOnly(false);
+        try { await sqliteEngine?.close(); } catch { /* ignore */ }
+        sqliteEngine = null;
+        fs.rmSync(dataRoot, { recursive: true, force: true });
+    });
+
+    test('restoring a legacy fs backup ZIP into sqlite restores backups/chat_*.jsonl when chats is selected', async () => {
+        const zipPath = path.join(dataRoot, 'legacy-fs.zip');
+        const chatBackupContent = '{"chat_metadata":{}}\n{"name":"Alice","mes":"from backup"}\n';
+        const settingsBackupContent = '{"theme":"classic"}';
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append('{"chat_metadata":{}}\n{"name":"Alice","mes":"live chat"}\n', { name: 'chats/Alice/c1.jsonl' });
+            arc.append(chatBackupContent, { name: 'backups/chat_alice_20260101-120000.jsonl' });
+            arc.append(settingsBackupContent, { name: 'backups/settings_default-user_20260101-120000.json' });
+            arc.finalize();
+        });
+
+        const liveRoot = path.join(dataRoot, 'realuser');
+        const liveDirs = {
+            root: liveRoot,
+            backups: path.join(liveRoot, 'backups'),
+            characters: path.join(liveRoot, 'characters'),
+            avatars: path.join(liveRoot, 'User Avatars'),
+            backgrounds: path.join(liveRoot, 'backgrounds'),
+            assets: path.join(liveRoot, 'assets'),
+            files: path.join(liveRoot, 'user', 'files'),
+            userImages: path.join(liveRoot, 'user', 'images'),
+            comfyWorkflows: path.join(liveRoot, 'user', 'workflows'),
+            extensions: path.join(liveRoot, 'extensions'),
+            vectors: path.join(liveRoot, 'vectors'),
+        };
+        fs.mkdirSync(liveDirs.backups, { recursive: true });
+        sqliteEngine = new SqliteEngine({ directoriesByHandle: () => liveDirs });
+
+        await crossModeRestore(
+            zipPath,
+            { engineKind: 'fs' },
+            liveDirs,
+            { chats: true, settings: false },
+            'merge',
+            { dataRoot, currentEngine: sqliteEngine },
+        );
+
+        const chatBackupPath = path.join(liveDirs.backups, 'chat_alice_20260101-120000.jsonl');
+        const settingsBackupPath = path.join(liveDirs.backups, 'settings_default-user_20260101-120000.json');
+        expect(fs.existsSync(chatBackupPath)).toBe(true);
+        expect(fs.readFileSync(chatBackupPath, 'utf8')).toBe(chatBackupContent);
+        expect(fs.existsSync(settingsBackupPath)).toBe(false);
     });
 });

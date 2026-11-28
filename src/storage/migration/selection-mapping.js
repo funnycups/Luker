@@ -39,6 +39,30 @@ export const FS_TREE_CATEGORIES = Object.freeze([
 ]);
 
 /**
+ * Classify a relative path inside a user's `backups/` directory into the
+ * backup selection category that owns it.
+ *
+ *   - top-level `chat_*.jsonl`             → `'chats'`
+ *   - top-level `secrets_migration_*.json` → `'secrets'`
+ *   - everything else (`settings_*.json`, `_sysprompt/*`, etc.) → `'settings'`
+ *
+ * @param {string} relPath Relative path inside `backups/` (POSIX or native separators).
+ * @returns {'chats'|'secrets'|'settings'}
+ */
+export function classifyBackupDirEntry(relPath) {
+    const normalized = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!normalized.includes('/')) {
+        if (normalized.startsWith('chat_') && normalized.endsWith('.jsonl')) {
+            return 'chats';
+        }
+        if (normalized.startsWith('secrets_migration_') && normalized.endsWith('.json')) {
+            return 'secrets';
+        }
+    }
+    return 'settings';
+}
+
+/**
  * Map a 10-key backup selection to the 7-key MigrationRunner categories
  * shape. All-true defaults are NOT applied here — missing or falsy
  * selection keys map to `false`, so the resulting object never enables a
