@@ -516,6 +516,7 @@ class PromptManager {
         /** Debounced version of render */
         this.renderDebounced = debounce(this.render.bind(this), debounce_timeout.relaxed);
         this.renderRequestId = 0;
+        this._listItemsPopulatedInShellRender = false;
         this.deferredTryGenerateRequestId = 0;
         /**
          * Schedules the dry-run Generate that powers token-count display.
@@ -1464,6 +1465,18 @@ class PromptManager {
     }
 
     /**
+     * Whether a third-party extension has replaced `renderPromptManagerListItems`
+     * on this instance or on the prototype. When overridden, the extension owns
+     * the list item DOM inside `#<prefix>prompt_manager_list`, so shell renders
+     * must invoke `renderPromptManagerListItems()` and in-place row mutators must
+     * fall back to a full render.
+     * @returns {boolean}
+     */
+    #hasCustomListItemRenderer() {
+        return this.renderPromptManagerListItems !== defaultRenderPromptManagerListItems;
+    }
+
+    /**
      * Main rendering function
      *
      * @param afterTryGenerate - Whether a dry run should be attempted before rendering
@@ -1492,6 +1505,13 @@ class PromptManager {
             if (!rendered || requestId !== this.renderRequestId) {
                 this.profileEnd(renderProfileId);
                 return;
+            }
+            if (!this._listItemsPopulatedInShellRender || this.#hasCustomListItemRenderer()) {
+                await this.renderPromptManagerListItems();
+                if (requestId !== this.renderRequestId) {
+                    this.profileEnd(renderProfileId);
+                    return;
+                }
             }
             this.makeDraggable();
             this.#setScrollPosition(scrollPosition);
@@ -1561,6 +1581,7 @@ class PromptManager {
      * @returns {boolean} True if the element was found and updated
      */
     updateToggleInPlace(promptID, enabled) {
+        if (this.#hasCustomListItemRenderer()) return false;
         const { prefix } = this.configuration;
         const li = this.listElement?.querySelector(`[data-pm-identifier="${CSS.escape(promptID)}"]`);
         if (!li) return false;
@@ -1603,6 +1624,7 @@ class PromptManager {
      * @returns {boolean} True if the element was found and updated
      */
     updatePluginExtraInPlace(promptID, isExtra) {
+        if (this.#hasCustomListItemRenderer()) return false;
         const li = this.listElement?.querySelector(`[data-pm-identifier="${CSS.escape(promptID)}"]`);
         if (!li) return false;
 
@@ -1645,6 +1667,7 @@ class PromptManager {
      * @returns {boolean} True if the element was found and removed
      */
     removePromptItemInPlace(promptID) {
+        if (this.#hasCustomListItemRenderer()) return false;
         const li = this.listElement?.querySelector(`[data-pm-identifier="${CSS.escape(promptID)}"]`);
         if (!li) return false;
         li.remove();
@@ -1772,6 +1795,7 @@ class PromptManager {
      * @returns {boolean} True if the element was found and replaced
      */
     replacePromptItemInPlace(promptID) {
+        if (this.#hasCustomListItemRenderer()) return false;
         const prompt = this.getPromptById(promptID);
         const listEntry = this.getPromptOrderEntry(this.activeCharacter, promptID);
         if (!prompt || !listEntry) return false;
@@ -1795,6 +1819,7 @@ class PromptManager {
      * @returns {boolean} True if the element was successfully inserted
      */
     insertPromptItemInPlace(promptID) {
+        if (this.#hasCustomListItemRenderer()) return false;
         const prompt = this.getPromptById(promptID);
         const listEntry = this.getPromptOrderEntry(this.activeCharacter, promptID);
         if (!prompt || !listEntry || !this.listElement) return false;
@@ -3636,7 +3661,7 @@ class PromptManager {
             footerHtml = await renderTemplateAsync('promptManagerFooter', { promptsHtml, prefix });
         }
 
-        const listHeaderHtml = this.serviceSettings.prompts
+        const listHeaderHtml = this.serviceSettings.prompts && !this.#hasCustomListItemRenderer()
             ? await renderTemplateAsync('promptManagerListHeader', { prefix })
             : null;
 
@@ -3737,8 +3762,13 @@ class PromptManager {
             this.renderGroupEditUI();
         }
 
-        if (listHeaderHtml !== null) {
+        if (this.#hasCustomListItemRenderer()) {
+            this._listItemsPopulatedInShellRender = false;
+        } else if (listHeaderHtml !== null) {
             this._populatePromptManagerListItemsSync(listHeaderHtml);
+            this._listItemsPopulatedInShellRender = true;
+        } else {
+            this._listItemsPopulatedInShellRender = false;
         }
 
         return true;
@@ -5201,6 +5231,8 @@ class PromptManager {
         }
     }
 }
+
+const defaultRenderPromptManagerListItems = PromptManager.prototype.renderPromptManagerListItems;
 
 const chatCompletionDefaultPrompts = {
     'prompts': [

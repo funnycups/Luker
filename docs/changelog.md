@@ -2,6 +2,12 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Third-party extensions
+
+- Fixed Prompt Manager refreshes bypassing third-party extensions that replace the prompt list renderer.
+
 ## v2.9.0-rc.6 (2026-11-27)
 
 ### Connections & Models
