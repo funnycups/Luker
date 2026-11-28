@@ -15,7 +15,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import ipMatching from 'ip-matching';
 
 import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, SETTINGS_FILE, UPLOADS_DIRECTORY } from './constants.js';
-import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, Cache, formatBytes, resolvePathWithinParent, isPathUnderParent, setPermissionsSync } from './util.js';
+import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, Cache, formatBytes, hasGitMetadataSegment, resolvePathWithinParent, isPathUnderParent, setPermissionsSync } from './util.js';
 import { readSecret, writeSecret, SECRETS_FILE } from './endpoints/secrets.js';
 import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
@@ -1615,7 +1615,9 @@ export async function createBackupArchive(handle, response, selectionInput = und
         }
 
         const archivePath = getBackupArchivePath(directories.root, directoryPath);
-        archive.directory(directoryPath, archivePath);
+        archive.directory(directoryPath, archivePath, (entry) => (
+            hasGitMetadataSegment(entry.name) ? false : entry
+        ));
     }
 
     for (const { directory, match } of targets.filteredDirectories) {

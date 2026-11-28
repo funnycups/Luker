@@ -203,6 +203,38 @@ describe('materializeTransientSource — fs', () => {
         )).rejects.toThrow();
         expect(fs.existsSync(path.join(dataRoot, '_storage-migrations', scratchHandle))).toBe(false);
     });
+
+    test('skips .git metadata and symlink entries when extracting fs source zip', async () => {
+        const zipPath = path.join(dataRoot, 'fs-git-symlink.zip');
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append(JSON.stringify({ schemaVersion: 1, handle: 'alice', selection: { settings: true } }), { name: 'manifest.json' });
+            arc.append(JSON.stringify({ user_name: 'safe' }), { name: 'settings.json' });
+            arc.append('[core]\n\tfsmonitor = evil\n', { name: 'extensions/demo/.git/config' });
+            arc.append('gitdir: /tmp/evil', { name: 'extensions/pointer/.git' });
+            arc.symlink('extensions/demo/link', '/etc/passwd');
+            arc.finalize();
+        });
+
+        const scratchHandle = makeScratchHandle();
+        const transient = await materializeTransientSource(
+            { engineKind: 'fs', handle: 'alice' },
+            zipPath,
+            { dataRoot, scratchHandle, scratchCreds: null },
+        );
+        try {
+            expect(fs.existsSync(path.join(transient.scratchDirs.root, 'settings.json'))).toBe(true);
+            expect(fs.existsSync(path.join(transient.scratchDirs.root, 'extensions', 'demo', '.git'))).toBe(false);
+            expect(fs.existsSync(path.join(transient.scratchDirs.root, 'extensions', 'pointer', '.git'))).toBe(false);
+            expect(fs.existsSync(path.join(transient.scratchDirs.root, 'extensions', 'demo', 'link'))).toBe(false);
+        } finally {
+            await transient.cleanup();
+        }
+    });
 });
 
 describe('materializeTransientSource — sqlite', () => {

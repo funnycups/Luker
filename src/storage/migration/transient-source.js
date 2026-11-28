@@ -32,6 +32,7 @@ import { MysqlEngine } from '../engines/mysql-engine.js';
 import { PgEngine } from '../engines/postgres-engine.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY, SCRATCH_HANDLE_PREFIX } from '../engine-backup-entries.js';
 import { USER_DIRECTORY_TEMPLATE } from '../../constants.js';
+import { hasGitMetadataSegment } from '../../util.js';
 import { CrossModeScratchConnectionError } from './cross-mode-errors.js';
 import { RestoreDumpInvalidError } from '../errors.js';
 
@@ -379,6 +380,11 @@ function extractZipTreeToScratch(zipPath, scratchRoot) {
                         zipfile.readEntry();
                         return;
                     }
+                    const unixFileType = (entry.externalFileAttributes >> 16) & 0o170000;
+                    if (unixFileType === 0o120000 || hasGitMetadataSegment(name)) {
+                        zipfile.readEntry();
+                        return;
+                    }
                     if (name.endsWith('/')) {
                         // Directory entry — create and move on.
                         const dir = safeJoin(scratchRoot, name);
@@ -502,9 +508,9 @@ async function extractEngineDumpToFile(zipPath, destPath) {
  */
 function safeJoin(scratchRoot, entryName) {
     if (typeof entryName !== 'string' || entryName.length === 0) return null;
-    if (entryName.startsWith('/') || entryName.includes('\0')) return null;
+    if (entryName.startsWith('/') || entryName.includes('\0') || hasGitMetadataSegment(entryName)) return null;
     const normalized = path.normalize(entryName).replace(/^([./\\])+/, '');
-    if (!normalized || normalized.startsWith('..') || normalized.includes(`..${path.sep}`)) return null;
+    if (!normalized || normalized.startsWith('..') || normalized.includes(`..${path.sep}`) || hasGitMetadataSegment(normalized)) return null;
     const target = path.resolve(scratchRoot, normalized);
     const root = path.resolve(scratchRoot);
     if (target !== root && !target.startsWith(root + path.sep)) return null;

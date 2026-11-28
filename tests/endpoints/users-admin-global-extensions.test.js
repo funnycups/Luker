@@ -23,7 +23,7 @@ import { makeEndpointHarness } from '../storage/harness/endpoint-harness.js';
 import { router as usersAdminRouter } from '../../src/endpoints/users-admin.js';
 import { PUBLIC_DIRECTORIES, setGlobalExtensionsDirectory } from '../../src/constants.js';
 
-const ZIP_ENTRY = 'extensions/third-party/repo/.git/objects/aa/bb';
+const ZIP_ENTRY = 'extensions/third-party/repo/assets/data.bin';
 
 function mountUploadMiddleware(app, uploadsDir) {
     // Mirrors server-main.js: multer.diskStorage + `.single('avatar')` is the
@@ -36,14 +36,16 @@ function mountUploadMiddleware(app, uploadsDir) {
     }).single('avatar'));
 }
 
-function buildExtensionsZip(zipPath) {
+function buildExtensionsZip(zipPath, entries = [{ name: ZIP_ENTRY, content: 'NEW-BYTES' }]) {
     return new Promise((resolve, reject) => {
         const out = fs.createWriteStream(zipPath);
         const arc = archiver('zip');
         arc.on('error', reject);
         out.on('close', resolve);
         arc.pipe(out);
-        arc.append('NEW-BYTES', { name: ZIP_ENTRY });
+        for (const item of entries) {
+            arc.append(item.content, { name: item.name });
+        }
         arc.finalize();
     });
 }
@@ -74,7 +76,7 @@ describe('users-admin /import/global-extensions', () => {
     });
 
     test('REGRESSION: overwrites a pre-existing read-only file', async () => {
-        const target = path.join(globalExtensionsDir, 'repo', '.git', 'objects', 'aa', 'bb');
+        const target = path.join(globalExtensionsDir, 'repo', 'assets', 'data.bin');
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, 'OLD');
         fs.chmodSync(target, 0o444);
@@ -89,5 +91,29 @@ describe('users-admin /import/global-extensions', () => {
         expect(res.status).toBe(200);
         expect(res.body.importedCount).toBe(1);
         expect(fs.readFileSync(target, 'utf8')).toBe('NEW-BYTES');
+    });
+
+    test('rejects .git metadata entries in uploaded extensions ZIP', async () => {
+        const zipPath = path.join(harness.dataRoot, 'extensions-with-git.zip');
+        await buildExtensionsZip(zipPath, [
+            { name: 'extensions/third-party/demo/manifest.json', content: '{"display_name":"Demo"}' },
+            { name: 'extensions/third-party/demo/.git/config', content: '[core]\n\tfsmonitor = evil\n' },
+            { name: 'extensions/third-party/demo/.GIT/HEAD', content: 'ref: refs/heads/main\n' },
+            { name: 'extensions/third-party/demo/.git./hooks/pre-commit', content: '#!/bin/sh\nevil\n' },
+            { name: 'extensions/third-party/pointer/.git', content: 'gitdir: /tmp/evil\n' },
+        ]);
+
+        const res = await request(harness.server)
+            .post('/api/users/import/global-extensions')
+            .attach('avatar', zipPath);
+
+        expect(res.status).toBe(200);
+        expect(res.body.importedCount).toBe(1);
+        expect(res.body.rejectedCount).toBe(4);
+        expect(fs.existsSync(path.join(globalExtensionsDir, 'demo', 'manifest.json'))).toBe(true);
+        expect(fs.existsSync(path.join(globalExtensionsDir, 'demo', '.git'))).toBe(false);
+        expect(fs.existsSync(path.join(globalExtensionsDir, 'demo', '.GIT'))).toBe(false);
+        expect(fs.existsSync(path.join(globalExtensionsDir, 'demo', '.git.'))).toBe(false);
+        expect(fs.existsSync(path.join(globalExtensionsDir, 'pointer', '.git'))).toBe(false);
     });
 });

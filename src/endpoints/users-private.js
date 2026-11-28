@@ -18,7 +18,7 @@ import { SETTINGS_FILE, PUBLIC_DIRECTORIES, UPLOADS_DIRECTORY } from '../constan
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { invalidateRecentChatIndex } from './chats.js';
 import { invalidateLegacyThemeMigration } from '../themes/theme-migration.js';
-import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
+import { color, Cache, getConfigValue, ensureDirectory, hasGitMetadataSegment, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
 import { listForUser, mergeReadIds } from '../announcements.js';
@@ -586,6 +586,13 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                         return;
                     }
 
+                    if (hasGitMetadataSegment(entry.fileName) || hasGitMetadataSegment(normalized)) {
+                        report.rejectedEntries += 1;
+                        addRestoreReportSample(report, normalized, 'git_metadata_rejected');
+                        zipfile.readEntry();
+                        return;
+                    }
+
                     report.fileEntries += 1;
                     const targetPath = resolveAllowedRestorePath(normalized, targetRoot, targetFiles, targetDirectories, directoryAliases, targetFilteredDirectories);
                     if (!targetPath) {
@@ -967,6 +974,11 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
                         const unixFileType = (entry.externalFileAttributes >> 16) & 0o170000;
                         if (unixFileType === 0o120000) {
+                            zipfile.readEntry();
+                            return;
+                        }
+
+                        if (hasGitMetadataSegment(entry.fileName) || hasGitMetadataSegment(normalized)) {
                             zipfile.readEntry();
                             return;
                         }

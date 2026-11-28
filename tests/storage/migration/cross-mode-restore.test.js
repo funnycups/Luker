@@ -555,31 +555,67 @@ describe('extractFsTreeCategories', () => {
             out.on('close', resolve);
             arc.pipe(out);
             arc.append('{}', { name: 'manifest.json' });
-            arc.append('NEW', { name: 'extensions/repo/.git/objects/aa/bb' });
+            arc.append('NEW', { name: 'extensions/repo/assets/data.bin' });
             arc.finalize();
         });
 
         const liveRoot = path.join(dataRoot, 'live');
         const dirs = buildDirs(liveRoot);
-        const gitObject = path.join(dirs.extensions, 'repo', '.git', 'objects', 'aa', 'bb');
-        fs.mkdirSync(path.dirname(gitObject), { recursive: true });
-        fs.writeFileSync(gitObject, 'OLD');
-        fs.chmodSync(gitObject, 0o444);
+        const readonlyFile = path.join(dirs.extensions, 'repo', 'assets', 'data.bin');
+        fs.mkdirSync(path.dirname(readonlyFile), { recursive: true });
+        fs.writeFileSync(readonlyFile, 'OLD');
+        fs.chmodSync(readonlyFile, 0o444);
 
         const result = await extractFsTreeCategories(zipPath, dirs, { extensions: true }, {});
         expect(result.restoredCount).toBe(1);
-        expect(fs.readFileSync(gitObject, 'utf8')).toBe('NEW');
+        expect(fs.readFileSync(readonlyFile, 'utf8')).toBe('NEW');
     });
 
-    test('refuses path-traversal entries', () => {
+    test('refuses .git metadata and symlink entries in fs-tree extraction', async () => {
+        const zipPath = path.join(dataRoot, 'git-and-symlink.zip');
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(zipPath);
+            const arc = archiver('zip');
+            arc.on('error', reject);
+            out.on('close', resolve);
+            arc.pipe(out);
+            arc.append('{}', { name: 'manifest.json' });
+            arc.append('{"display_name":"Demo"}', { name: 'extensions/demo/manifest.json' });
+            arc.append('[core]\n\tfsmonitor = evil\n', { name: 'extensions/demo/.git/config' });
+            arc.append('upper', { name: 'extensions/demo/.GIT/HEAD' });
+            arc.append('dot', { name: 'extensions/demo/.git./config' });
+            arc.append('gitdir: /tmp/evil', { name: 'extensions/pointer/.git' });
+            arc.symlink('extensions/demo/evil-link', '/etc/passwd');
+            arc.finalize();
+        });
+
+        const liveRoot = path.join(dataRoot, 'live');
+        const dirs = buildDirs(liveRoot);
+        fs.mkdirSync(liveRoot, { recursive: true });
+
+        const result = await extractFsTreeCategories(zipPath, dirs, { extensions: true }, {});
+        expect(result.restoredCount).toBe(1);
+        expect(fs.existsSync(path.join(dirs.extensions, 'demo', 'manifest.json'))).toBe(true);
+        expect(fs.existsSync(path.join(dirs.extensions, 'demo', '.git'))).toBe(false);
+        expect(fs.existsSync(path.join(dirs.extensions, 'demo', '.GIT'))).toBe(false);
+        expect(fs.existsSync(path.join(dirs.extensions, 'demo', '.git.'))).toBe(false);
+        expect(fs.existsSync(path.join(dirs.extensions, 'pointer', '.git'))).toBe(false);
+        expect(fs.existsSync(path.join(dirs.extensions, 'demo', 'evil-link'))).toBe(false);
+    });
+
+    test('refuses path-traversal and .git metadata entries', () => {
         // Pure unit on matchFsTreeRule for clarity.
         const rules = _internals.buildFsTreeRules(
-            new Set(['characters']),
+            new Set(['characters', 'extensions']),
             buildDirs('/tmp/fake'),
         );
         expect(_internals.matchFsTreeRule('characters/../../etc/passwd', rules)).toBeNull();
         expect(_internals.matchFsTreeRule('/etc/passwd', rules)).toBeNull();
         expect(_internals.matchFsTreeRule('characters\0sneaky', rules)).toBeNull();
+        expect(_internals.matchFsTreeRule('extensions/demo/.git/config', rules)).toBeNull();
+        expect(_internals.matchFsTreeRule('extensions/demo/.GIT/HEAD', rules)).toBeNull();
+        expect(_internals.matchFsTreeRule('extensions/demo/.git./config', rules)).toBeNull();
+        expect(_internals.matchFsTreeRule('extensions/demo/.git', rules)).toBeNull();
         expect(_internals.matchFsTreeRule('characters/Alice.png', rules)).toBe(path.resolve('/tmp/fake/characters/Alice.png'));
     });
 

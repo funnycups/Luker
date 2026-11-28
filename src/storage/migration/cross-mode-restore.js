@@ -31,6 +31,7 @@ import { NamedDocRepo } from '../repositories/named-doc-repo.js';
 import { GroupRepo } from '../repositories/group-repo.js';
 import { StatsRepo } from '../repositories/stats-repo.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY, SCRATCH_HANDLE_PREFIX } from '../engine-backup-entries.js';
+import { hasGitMetadataSegment } from '../../util.js';
 import { setReadOnly } from '../read-only-mode.js';
 import { MigrationRunner } from './runner.js';
 import { snapshotUser, restoreFromSnapshot, removeSnapshot } from './backup.js';
@@ -368,6 +369,11 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
                         zipfile.readEntry();
                         return;
                     }
+                    const unixFileType = (entry.externalFileAttributes >> 16) & 0o170000;
+                    if (unixFileType === 0o120000 || hasGitMetadataSegment(name)) {
+                        zipfile.readEntry();
+                        return;
+                    }
                     const target = matchFsTreeRule(name, rules);
                     if (!target) {
                         zipfile.readEntry();
@@ -462,8 +468,8 @@ function buildFsTreeRules(enabled, dirs, selection = {}) {
 }
 
 function matchFsTreeRule(zipEntryName, rules) {
-    // Refuse traversal-style entries.
-    if (zipEntryName.includes('..') || zipEntryName.startsWith('/') || zipEntryName.includes('\0')) {
+    // Refuse traversal-style entries and Git metadata paths.
+    if (zipEntryName.includes('..') || zipEntryName.startsWith('/') || zipEntryName.includes('\0') || hasGitMetadataSegment(zipEntryName)) {
         return null;
     }
     for (const rule of rules) {

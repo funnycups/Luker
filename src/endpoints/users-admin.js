@@ -49,7 +49,7 @@ import {
     updateAnnouncement,
     ValidationError as AnnouncementValidationError,
 } from '../announcements.js';
-import { ensureDirectory, getConfigFilePath, getConfigValue, normalizeZipEntryPath, reloadConfigCache } from '../util.js';
+import { ensureDirectory, getConfigFilePath, getConfigValue, hasGitMetadataSegment, normalizeZipEntryPath, reloadConfigCache } from '../util.js';
 import { persistBackupConfig, readBackupConfigState, validateBackupConfigPayload } from '../backup-config.js';
 import {
     installServerPlugin,
@@ -182,9 +182,21 @@ async function importGlobalExtensionsZip(uploadPath, originalName = '') {
                         return;
                     }
 
+                    if (hasGitMetadataSegment(entry.fileName) || hasGitMetadataSegment(normalized)) {
+                        result.rejectedCount += 1;
+                        zipfile.readEntry();
+                        return;
+                    }
+
                     const relativeTargetPath = toGlobalExtensionRelativePath(normalized, defaultFolderName);
                     if (!relativeTargetPath) {
                         result.skippedCount += 1;
+                        zipfile.readEntry();
+                        return;
+                    }
+
+                    if (hasGitMetadataSegment(relativeTargetPath)) {
+                        result.rejectedCount += 1;
                         zipfile.readEntry();
                         return;
                     }
