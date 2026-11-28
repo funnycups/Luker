@@ -60,6 +60,58 @@ docker compose pull
 docker compose up -d
 ```
 
+## npm
+
+Install Luker as a global CLI command. Requires Node.js >= 24.0.
+
+### 1. Install
+
+```bash
+npm install -g @funnycups/luker
+```
+
+To install a pre-release or development build, append a channel tag:
+
+```bash
+# Release candidate
+npm install -g @funnycups/luker@rc
+
+# Rolling development build from the release branch
+npm install -g @funnycups/luker@dev
+```
+
+::: tip SQLite Storage Engine
+npm 11 skips native addon install scripts by default. To use the SQLite storage engine, pass `--allow-scripts=better-sqlite3` when installing:
+
+```bash
+npm install -g --allow-scripts=better-sqlite3 @funnycups/luker
+```
+:::
+
+### 2. Start the Server
+
+```bash
+luker
+```
+
+### 3. Data Directory
+
+The `luker` command stores its configuration, user data, server plugins, backups, and global third-party extensions under a single application data directory:
+
+| Platform | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/Luker` |
+| Windows | `%LOCALAPPDATA%\Luker\Data` |
+| Linux | `~/.local/share/Luker` |
+
+### 4. Update
+
+When a new release is available, confirm the in-app update prompt to install the target version, then restart the `luker` process. You can also update from the command line:
+
+```bash
+npm install -g @funnycups/luker
+```
+
 ## Git Clone
 
 Best for users who want to manage and update manually. Requires Node.js >= 24.0 and Git.

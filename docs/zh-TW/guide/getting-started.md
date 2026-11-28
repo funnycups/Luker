@@ -60,6 +60,58 @@ docker compose pull
 docker compose up -d
 ```
 
+## npm
+
+透過全域 CLI 命令安裝並啟動 Luker，需要 Node.js >= 24.0。
+
+### 1. 安裝
+
+```bash
+npm install -g @funnycups/luker
+```
+
+如需安裝預發布版或開發快照，可在套件名稱後指定頻道標籤：
+
+```bash
+# 預發布版
+npm install -g @funnycups/luker@rc
+
+# release 分支最新開發快照
+npm install -g @funnycups/luker@dev
+```
+
+::: tip SQLite 儲存引擎
+npm 11 預設跳過原生擴充套件的安裝指令碼。如需使用 SQLite 儲存引擎，安裝時附帶 `--allow-scripts=better-sqlite3`：
+
+```bash
+npm install -g --allow-scripts=better-sqlite3 @funnycups/luker
+```
+:::
+
+### 2. 啟動服務
+
+```bash
+luker
+```
+
+### 3. 資料目錄
+
+`luker` 命令將設定檔、使用者資料、伺服端外掛、備份與全域第三方擴充功能統一存放在應用程式資料目錄下：
+
+| 平台 | 路徑 |
+| --- | --- |
+| macOS | `~/Library/Application Support/Luker` |
+| Windows | `%LOCALAPPDATA%\Luker\Data` |
+| Linux | `~/.local/share/Luker` |
+
+### 4. 更新
+
+發現新版本時，確認應用內更新提示即可安裝目標版本，完成後重啟 `luker` 程序。也可透過命令列直接更新：
+
+```bash
+npm install -g @funnycups/luker
+```
+
 ## Git Clone
 
 適合希望自行管理和更新的使用者，需要 Node.js >= 24.0 和 Git。
