@@ -169,6 +169,33 @@ export function flushChatBackups(directory) {
 }
 
 /**
+ * Serializes a chat document with its current integrity slug and schedules a
+ * throttled backup write into `backupDirectory`.
+ * @param {string} handle User handle
+ * @param {string} backupName Character directory name or group chat id used in the backup filename
+ * @param {string} backupDirectory Target backups directory
+ * @param {object} header Chat header object
+ * @param {object[]} body Chat message array
+ * @param {string} [integrity] Current chat integrity slug
+ * @param {string} [contextLabel] Context label for error logging
+ */
+function scheduleChatBackup(handle, backupName, backupDirectory, header, body, integrity, contextLabel = 'write') {
+    if (!handle || !backupName || !backupDirectory) {
+        return;
+    }
+    try {
+        const headerWithIntegrity = {
+            ...(header ?? {}),
+            chat_metadata: applyIntegrityToMetadata(header?.chat_metadata, integrity),
+        };
+        const jsonlData = [headerWithIntegrity, ...(Array.isArray(body) ? body : [])].map(m => JSON.stringify(m)).join('\n');
+        getBackupFunction(handle, backupName, backupDirectory)(backupDirectory, backupName, jsonlData);
+    } catch (backupErr) {
+        console.error(`Chat backup after ${contextLabel} failed`, backupErr);
+    }
+}
+
+/**
  * Gets a preview message from a chat message string.
  * @param {string} [lastMessage] - The message to truncate
  * @returns {string} A truncated preview of the last message or empty string if no messages
@@ -1698,7 +1725,7 @@ function buildIdempotentMessagePatchOperations(currentMessages, operations) {
 
 /**
  * Appends messages to an existing chat file, or creates a new chat file with header.
- * This path intentionally skips backup snapshots to keep append operations fast.
+ * Schedules a throttled chat backup when `backupDirectory` is supplied.
  * @param {object} args Append options.
  * @param {string} args.filePath Target chat file path.
  * @param {object[]} args.messages Messages to append.
@@ -1708,9 +1735,10 @@ function buildIdempotentMessagePatchOperations(currentMessages, operations) {
  * @param {string} [args.incomingGenerationId] Protocol-layer gen id from the
  *   request body. Used to dedup retries against the sidecar's last_generation_id;
  *   the field is intentionally NOT taken from the messages themselves anymore.
+ * @param {string} [args.backupDirectory] User backups directory for throttled chat backup writes.
  * @returns {Promise<{appended:number, created:boolean}>}
  */
-export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '', handle, charDir, name, isGroup, groupId }) {
+export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '', handle, charDir, name, isGroup, groupId, backupDirectory = '' }) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return { appended: 0, created: false, integrity: getCurrentChatIntegrity(filePath) };
     }
@@ -1730,6 +1758,8 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
         const existing = await repo.get(handle, charDir ?? '', name, { isGroup: !!isGroup, groupId });
         const cleanedMessages = messages.map(m => stripLukerGenerationIdFromMessage(_.cloneDeep(m)));
         const incomingId = String(incomingGenerationId || '').trim();
+        const backupName = isGroup ? (groupId || name) : (charDir || '');
+        const backupContext = isGroup ? 'group/append' : 'append';
 
         // Integrity gate: if provided, the slug must match the chat's current
         // integrity. Force=true skips. Missing chat = creation, which always
@@ -1746,6 +1776,7 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
             if (incomingId && filePath) {
                 writeLastChatGenerationId(filePath, incomingId);
             }
+            scheduleChatBackup(handle, backupName, backupDirectory, header, cleanedMessages, saved.integrity, backupContext);
             return { appended: cleanedMessages.length, created: true, integrity: saved.integrity };
         }
 
@@ -1787,6 +1818,7 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
         if (incomingId && filePath) {
             writeLastChatGenerationId(filePath, incomingId);
         }
+        scheduleChatBackup(handle, backupName, backupDirectory, existing.header, nextBody, saved.integrity, backupContext);
         return {
             appended: dedupedMessages.length,
             created: false,
@@ -2572,6 +2604,7 @@ router.post('/meta', validateAvatarUrlMiddleware, async function (request, respo
             // legacy "create on first /meta" behavior.
             const newHeader = createChatHeader({ chat_metadata: chatMetadata });
             const saved = await repo.save(handle, cardName, fileName, newHeader, [], null);
+            scheduleChatBackup(handle, cardName, request.user.directories.backups, newHeader, [], saved.integrity, 'meta');
             await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
             return response.send({ ok: true, updated: true, total_messages: 0, created: true, integrity: saved.integrity });
         }
@@ -2586,6 +2619,15 @@ router.post('/meta', validateAvatarUrlMiddleware, async function (request, respo
             }
             throw err;
         }
+        scheduleChatBackup(
+            handle,
+            cardName,
+            request.user.directories.backups,
+            { ...(existing.header ?? {}), chat_metadata: chatMetadata },
+            existing.body,
+            result.integrity,
+            'meta',
+        );
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
         return response.send({
             ok: true,
@@ -3514,6 +3556,7 @@ router.post('/group/save', async function (request, response) {
             }
             throw err;
         }
+        scheduleChatBackup(handle, id, request.user.directories.backups, header, messages, result.integrity, 'group/save');
         await refreshRecentChatIndexEntry(request, chatFilePath);
         acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildGroupPersistTargetHint(request));
         return response.send({ ok: true, integrity: result.integrity });
@@ -3679,26 +3722,8 @@ router.post('/group/append', async function (request, response) {
             name: id,
             isGroup: true,
             groupId: id,
+            backupDirectory: request.user.directories.backups,
         });
-
-        // Re-read the chat doc to compose a backup payload; appendMessagesToChatFile
-        // doesn't return the full header+body. Skip when the helper dedup'd
-        // everything (no save happened).
-        if (result?.created || (result?.appended ?? 0) > 0) {
-            try {
-                const chatDoc = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
-                if (chatDoc) {
-                    const headerWithIntegrity = {
-                        ...(chatDoc.header ?? {}),
-                        chat_metadata: applyIntegrityToMetadata(chatDoc.header?.chat_metadata, chatDoc.integrity),
-                    };
-                    const jsonlData = [headerWithIntegrity, ...(chatDoc.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-                    getBackupFunction(handle, id, request.user.directories.backups)(request.user.directories.backups, id, jsonlData);
-                }
-            } catch (backupErr) {
-                console.error('Chat backup after group/append failed', backupErr);
-            }
-        }
 
         await refreshRecentChatIndexEntry(request, chatFilePath);
         acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildGroupPersistTargetHint(request));
@@ -3833,6 +3858,7 @@ router.post('/group/meta', async function (request, response) {
             const newHeader = createChatHeader({ chat_metadata: chatMetadata });
             const saved = await repo.save(handle, '', id, newHeader, [], null,
                 { isGroup: true, groupId: id });
+            scheduleChatBackup(handle, id, request.user.directories.backups, newHeader, [], saved.integrity, 'group/meta');
             await refreshRecentChatIndexEntry(request, chatFilePath);
             return response.send({ ok: true, updated: true, total_messages: 0, created: true, integrity: saved.integrity });
         }
@@ -3848,6 +3874,15 @@ router.post('/group/meta', async function (request, response) {
             throw err;
         }
 
+        scheduleChatBackup(
+            handle,
+            id,
+            request.user.directories.backups,
+            { ...(existing.header ?? {}), chat_metadata: chatMetadata },
+            existing.body,
+            result.integrity,
+            'group/meta',
+        );
         await refreshRecentChatIndexEntry(request, chatFilePath);
         return response.send({
             ok: true,

@@ -111,7 +111,7 @@ describe('createGenerationJob', () => {
             },
             user: {
                 profile: { handle: 'alice' },
-                directories: { chats: '/tmp/chats', groupChats: '/tmp/groups' },
+                directories: { chats: '/tmp/chats', groupChats: '/tmp/groups', backups: '/tmp/backups' },
             },
         });
         const job = createGenerationJob(req, { job_id: jobId });
@@ -119,7 +119,7 @@ describe('createGenerationJob', () => {
             api: 'openai',
             char_name: 'Assistant',
             model: 'gpt-4',
-            directories: { chats: '/tmp/chats', groupChats: '/tmp/groups' },
+            directories: { chats: '/tmp/chats', groupChats: '/tmp/groups', backups: '/tmp/backups' },
         });
         expect(job.modelName).toBe('gpt-4');
     });
@@ -892,6 +892,62 @@ describe('disconnect fallback persistence metadata', () => {
         expect(saved.mes).toBe('I cannot fulfill that request.');
         expect(saved.extra.refusal).toBe('I cannot fulfill that request.');
         expect(saved.extra.finish_reason).toBe('content_filter');
+    });
+
+    test('persistGenerationJobIfUnacked creates chat backup files for solo and group chats', async () => {
+        const { flushChatBackups } = await import('../src/endpoints/chats.js');
+        const tempRoot = (await currentScopeForResources().directory('luker-gen-fallback-backup')).path;
+        const chatsDir = path.join(tempRoot, 'chats');
+        const groupChatsDir = path.join(tempRoot, 'group_chats');
+        const backupsDir = path.join(tempRoot, 'backups');
+        await fs.mkdir(path.join(chatsDir, 'Iris'), { recursive: true });
+        await fs.mkdir(groupChatsDir, { recursive: true });
+        await fs.mkdir(backupsDir, { recursive: true });
+        await initStorage({
+            mode: 'fs',
+            directoriesByHandle: () => ({ root: tempRoot, chats: chatsDir, groupChats: groupChatsDir, backups: backupsDir }),
+        });
+
+        try {
+            const soloChatFile = path.join(chatsDir, 'Iris', 'solo-chat.jsonl');
+            await fs.writeFile(soloChatFile, `${JSON.stringify({ chat_metadata: {} })}\n`, 'utf8');
+            const soloReq = baseRequest({
+                body: { model: 'gpt-5', chat_completion_source: 'openai' },
+                user: {
+                    profile: { handle: 'alice' },
+                    directories: { chats: chatsDir, groupChats: groupChatsDir, backups: backupsDir },
+                },
+            });
+            const soloJob = createGenerationJob(soloReq, {
+                job_id: uniqueJobId('fallback-backup-solo'),
+                persist_target: { kind: 'character', avatar_url: 'Iris.png', file_name: 'solo-chat.jsonl', char_name: 'Iris' },
+            });
+            await completeGenerationJobFromText(soloReq, soloJob, 'Server persisted solo reply.', 'gpt-5');
+            expect(await persistGenerationJobIfUnacked(soloJob)).toBe(true);
+
+            const groupId = 'group-fallback-backup';
+            const groupChatFile = path.join(groupChatsDir, `${groupId}.jsonl`);
+            await fs.writeFile(groupChatFile, `${JSON.stringify({ chat_metadata: {} })}\n`, 'utf8');
+            const groupReq = baseRequest({
+                body: { model: 'gpt-5', chat_completion_source: 'openai' },
+                user: {
+                    profile: { handle: 'alice' },
+                    directories: { chats: chatsDir, groupChats: groupChatsDir, backups: backupsDir },
+                },
+            });
+            const groupJob = createGenerationJob(groupReq, {
+                job_id: uniqueJobId('fallback-backup-group'),
+                persist_target: { kind: 'group', id: groupId, char_name: 'Iris' },
+            });
+            await completeGenerationJobFromText(groupReq, groupJob, 'Server persisted group reply.', 'gpt-5');
+            expect(await persistGenerationJobIfUnacked(groupJob)).toBe(true);
+
+            const backupFiles = await fs.readdir(backupsDir);
+            expect(backupFiles.some(f => f.startsWith('chat_iris_') && f.endsWith('.jsonl'))).toBe(true);
+            expect(backupFiles.some(f => f.startsWith('chat_group_fallback_backup_') && f.endsWith('.jsonl'))).toBe(true);
+        } finally {
+            flushChatBackups(backupsDir);
+        }
     });
 
     test('accumulates non-chat streaming SSE frames (Kobold/NovelAI/TextGen) into job.text', () => {

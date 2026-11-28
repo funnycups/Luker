@@ -503,6 +503,7 @@ function buildGenerationJobRequestMeta(request, persistTarget) {
         directories: {
             chats: String(request.user?.directories?.chats || ''),
             groupChats: String(request.user?.directories?.groupChats || ''),
+            backups: String(request.user?.directories?.backups || ''),
         },
     };
 }
@@ -843,6 +844,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
     const directories = job?.requestMeta?.directories;
     const chatsDirectory = String(directories?.chats || '');
     const groupChatsDirectory = String(directories?.groupChats || '');
+    const backupsDirectory = String(directories?.backups || '');
 
     if (persistTarget.kind === 'group') {
         const groupId = String(persistTarget.id || '');
@@ -865,6 +867,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             name: groupId,
             isGroup: true,
             groupId,
+            backupDirectory: backupsDirectory,
         });
         return true;
     }
@@ -892,6 +895,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             charDir: avatar,
             name: baseName,
             isGroup: false,
+            backupDirectory: backupsDirectory,
         });
         return true;
     }

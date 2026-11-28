@@ -111,6 +111,18 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         expect(listBackupFiles(harness, 'alice').length).toBeGreaterThan(0);
     });
 
+    test('REGRESSION: group /save triggers chat backup', async () => {
+        const gid = 'gsave';
+        const res = await request(harness.server)
+            .post('/api/chats/group/save')
+            .send({
+                id: gid,
+                chat: [HEADER, ...MESSAGES],
+            });
+        expect(res.status).toBe(200);
+        expect(listBackupFiles(harness, 'gsave').length).toBeGreaterThan(0);
+    });
+
     test('REGRESSION: group /append triggers chat backup', async () => {
         const gid = 'gappend';
         await getChatRepo().save(harness.handle, '', gid, HEADER, MESSAGES, null,
