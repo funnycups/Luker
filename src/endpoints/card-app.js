@@ -4,9 +4,14 @@ import fs from 'node:fs';
 import mime from 'mime-types';
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { createGitClient } from '../git/client.js';
+import { createGitClient, isValidGitCommitHash, resolveGitBackend } from '../git/client.js';
 
-import { resolvePathWithinParent } from '../util.js';
+import {
+    getConfigValue,
+    hasGitMetadataSegment,
+    isGitMetadataSegment,
+    resolvePathWithinParent,
+} from '../util.js';
 
 export const router = express.Router();
 
@@ -23,8 +28,68 @@ router.use((request, response, next) => {
 
 // ==================== Git Version Control ====================
 
-const gitClient = createGitClient();
-console.info(`[card-app] Git backend: ${gitClient.backend}`);
+/** @type {Map<string, import('../git/client.js').GitClient>} */
+const gitClientsByBackend = new Map();
+
+/**
+ * Resolves the active CardApp GitClient from `git.backend` configuration.
+ * @returns {import('../git/client.js').GitClient}
+ */
+function getGitClient() {
+    const preferred = getConfigValue('git.backend', 'auto');
+    const resolvedBackend = resolveGitBackend(preferred);
+    let client = gitClientsByBackend.get(resolvedBackend);
+    if (!client) {
+        client = createGitClient({ backend: resolvedBackend });
+        gitClientsByBackend.set(resolvedBackend, client);
+        console.info(`[card-app] Git backend: ${client.backend}`);
+    }
+    return client;
+}
+
+/**
+ * Decodes a wildcard route path parameter safely.
+ * @param {string} rawPath
+ * @returns {string | null}
+ */
+function decodeCardAppPath(rawPath) {
+    try {
+        return decodeURIComponent(String(rawPath ?? ''));
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Resolves a CardApp file or directory path strictly inside `charDir` and
+ * rejects `.git` metadata segments (both before and after normalization) as
+ * well as the `charDir` root itself.
+ * @param {string} charDir
+ * @param {string} requestedPath
+ * @returns {string | null}
+ */
+function resolveSafeCardAppPath(charDir, requestedPath) {
+    if (typeof requestedPath !== 'string' || !requestedPath || hasGitMetadataSegment(requestedPath)) {
+        return null;
+    }
+
+    const fullPath = resolvePathWithinParent(charDir, requestedPath);
+    if (!fullPath) {
+        return null;
+    }
+
+    const resolvedCharDir = path.resolve(charDir);
+    if (fullPath === resolvedCharDir) {
+        return null;
+    }
+
+    const relativeToCharDir = path.relative(resolvedCharDir, fullPath);
+    if (!relativeToCharDir || hasGitMetadataSegment(relativeToCharDir)) {
+        return null;
+    }
+
+    return fullPath;
+}
 
 /**
  * Ensure a CardApp directory has a git repo initialized.
@@ -36,11 +101,12 @@ async function ensureGitRepo(charDir) {
     }
     const gitDir = path.join(charDir, '.git');
     if (!fs.existsSync(gitDir)) {
+        const gitClient = getGitClient();
         await gitClient.init(charDir);
         await gitClient.setConfig(charDir, 'user.name', 'CardApp Studio');
         await gitClient.setConfig(charDir, 'user.email', 'studio@luker.local');
         // Initial commit if files exist
-        const files = fs.readdirSync(charDir).filter(f => f !== '.git');
+        const files = fs.readdirSync(charDir).filter(f => !isGitMetadataSegment(f));
         if (files.length > 0) {
             await gitClient.commitIfChanged(charDir, 'Initial commit');
         }
@@ -56,7 +122,7 @@ async function autoCommit(charDir, message) {
     try {
         const gitDir = path.join(charDir, '.git');
         if (!fs.existsSync(gitDir)) return;
-        await gitClient.commitIfChanged(charDir, message);
+        await getGitClient().commitIfChanged(charDir, message);
     } catch (err) {
         console.warn('[card-app] Auto-commit failed:', err.message);
     }
@@ -82,7 +148,7 @@ router.get('/:charId/files', (request, response) => {
         function walk(dir, prefix = '') {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.name === '.git') continue;
+                if (isGitMetadataSegment(entry.name)) continue;
                 const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
@@ -109,14 +175,14 @@ router.get('/:charId/files', (request, response) => {
 router.put('/:charId/*', express.json({ limit: '5mb' }), (request, response) => {
     try {
         const charId = sanitize(String(request.params.charId));
-        const filePath = decodeURIComponent(request.params[0]);
+        const filePath = decodeCardAppPath(request.params[0]);
 
         if (!charId || !filePath) {
-            return response.sendStatus(400);
+            return response.status(400).json({ error: 'Invalid file path' });
         }
 
         const charDir = path.join(request.user.directories.cardApps, charId);
-        const fullPath = resolvePathWithinParent(charDir, filePath);
+        const fullPath = resolveSafeCardAppPath(charDir, filePath);
 
         if (!fullPath) {
             return response.status(400).json({ error: 'Invalid file path' });
@@ -149,16 +215,20 @@ router.put('/:charId/*', express.json({ limit: '5mb' }), (request, response) => 
 router.delete('/:charId/*', (request, response) => {
     try {
         const charId = sanitize(String(request.params.charId));
-        const filePath = decodeURIComponent(request.params[0]);
+        const filePath = decodeCardAppPath(request.params[0]);
 
         if (!charId || !filePath) {
-            return response.sendStatus(400);
+            return response.status(400).json({ error: 'Invalid file path' });
         }
 
         const charDir = path.join(request.user.directories.cardApps, charId);
-        const fullPath = resolvePathWithinParent(charDir, filePath);
+        const fullPath = resolveSafeCardAppPath(charDir, filePath);
 
-        if (!fullPath || !fs.existsSync(fullPath)) {
+        if (!fullPath) {
+            return response.status(400).json({ error: 'Invalid file path' });
+        }
+
+        if (!fs.existsSync(fullPath)) {
             return response.sendStatus(404);
         }
 
@@ -192,8 +262,8 @@ router.post('/:charId/rename', express.json(), (request, response) => {
         }
 
         const charDir = path.join(request.user.directories.cardApps, charId);
-        const fullFrom = resolvePathWithinParent(charDir, fromPath);
-        const fullTo = resolvePathWithinParent(charDir, toPath);
+        const fullFrom = resolveSafeCardAppPath(charDir, fromPath);
+        const fullTo = resolveSafeCardAppPath(charDir, toPath);
 
         if (!fullFrom || !fullTo) {
             return response.status(400).json({ error: 'Invalid file path' });
@@ -232,7 +302,7 @@ router.post('/:charId/mkdir', express.json(), (request, response) => {
         }
 
         const charDir = path.join(request.user.directories.cardApps, charId);
-        const fullPath = resolvePathWithinParent(charDir, dirPath);
+        const fullPath = resolveSafeCardAppPath(charDir, dirPath);
 
         if (!fullPath) {
             return response.status(400).json({ error: 'Invalid directory path' });
@@ -262,7 +332,7 @@ router.get('/:charId/history', async (request, response) => {
         const charDir = path.join(request.user.directories.cardApps, charId);
         await ensureGitRepo(charDir);
 
-        const commits = await gitClient.log(charDir, 50);
+        const commits = await getGitClient().log(charDir, 50);
         return response.json({ commits });
     } catch (err) {
         console.error('[card-app] Error getting history:', err);
@@ -283,13 +353,17 @@ router.post('/:charId/rollback', express.json(), async (request, response) => {
             return response.status(400).json({ error: 'Missing charId or hash' });
         }
 
+        if (!isValidGitCommitHash(hash)) {
+            return response.status(400).json({ error: 'Invalid commit hash' });
+        }
+
         const charDir = path.join(request.user.directories.cardApps, charId);
         const gitDir = path.join(charDir, '.git');
         if (!fs.existsSync(gitDir)) {
             return response.status(400).json({ error: 'No git repository found' });
         }
 
-        await gitClient.resetHard(charDir, hash);
+        await getGitClient().resetHard(charDir, hash);
         return response.json({ ok: true });
     } catch (err) {
         console.error('[card-app] Error rolling back:', err);
@@ -310,13 +384,17 @@ router.get('/:charId/diff/:hash', async (request, response) => {
             return response.sendStatus(400);
         }
 
+        if (!isValidGitCommitHash(hash)) {
+            return response.status(400).json({ error: 'Invalid commit hash' });
+        }
+
         const charDir = path.join(request.user.directories.cardApps, charId);
         const gitDir = path.join(charDir, '.git');
         if (!fs.existsSync(gitDir)) {
             return response.status(400).json({ error: 'No git repository found' });
         }
 
-        const diff = await gitClient.diff(charDir, hash);
+        const diff = await getGitClient().diff(charDir, hash);
         return response.json({ diff });
     } catch (err) {
         console.error('[card-app] Error getting diff:', err);
@@ -331,16 +409,20 @@ router.get('/:charId/diff/:hash', async (request, response) => {
 router.get('/:charId/*', (request, response) => {
     try {
         const charId = sanitize(String(request.params.charId));
-        const filePath = decodeURIComponent(request.params[0]);
+        const filePath = decodeCardAppPath(request.params[0]);
 
         if (!charId || !filePath) {
-            return response.sendStatus(400);
+            return response.status(400).json({ error: 'Invalid file path' });
         }
 
         const charDir = path.join(request.user.directories.cardApps, charId);
-        const fullPath = resolvePathWithinParent(charDir, filePath);
+        const fullPath = resolveSafeCardAppPath(charDir, filePath);
 
-        if (!fullPath || !fs.existsSync(fullPath)) {
+        if (!fullPath) {
+            return response.status(400).json({ error: 'Invalid file path' });
+        }
+
+        if (!fs.existsSync(fullPath)) {
             return response.sendStatus(404);
         }
 
@@ -373,18 +455,35 @@ export function extractCardAppFiles(charData, charId, cardAppsDir) {
         return false;
     }
 
-    const charAppDir = path.join(cardAppsDir, sanitize(charId));
+    const safeCharId = sanitize(charId);
+    if (!safeCharId) {
+        return false;
+    }
+
+    const charAppDir = path.join(cardAppsDir, safeCharId);
+    const resolvedCharAppDir = path.resolve(charAppDir);
 
     for (const [filePath, content] of entries) {
         const normalizedPath = String(filePath || '').replace(/\\/g, '/');
-        const sanitizedPath = normalizedPath.split('/').map(segment => sanitize(segment)).join('/');
-        // Security: ensure path is within the character's card-app directory
-        const resolved = resolvePathWithinParent(charAppDir, normalizedPath);
+        // Security: reject paths escaping charAppDir or containing `.git`
+        // segments both before and after per-segment filename sanitization
+        // (e.g. `.g:it/config` becomes `.git/config` after sanitize()).
+        const resolved = resolveSafeCardAppPath(charAppDir, normalizedPath);
         if (!resolved) {
             console.warn(`[card-app] Skipping file with invalid path: ${filePath}`);
             continue;
         }
-        const fullPath = path.join(charAppDir, sanitizedPath);
+        const safeRelative = path.relative(resolvedCharAppDir, resolved).split(path.sep).join('/');
+        const sanitizedSegments = safeRelative.split('/').map(segment => sanitize(segment)).filter(Boolean);
+        if (sanitizedSegments.length === 0 || sanitizedSegments.some(isGitMetadataSegment)) {
+            console.warn(`[card-app] Skipping file with invalid path: ${filePath}`);
+            continue;
+        }
+        const fullPath = resolveSafeCardAppPath(charAppDir, sanitizedSegments.join('/'));
+        if (!fullPath) {
+            console.warn(`[card-app] Skipping file with invalid path: ${filePath}`);
+            continue;
+        }
 
         // Create parent directories
         const dir = path.dirname(fullPath);
@@ -439,7 +538,7 @@ export function packCardAppFiles(charData, charId, cardAppsDir) {
     function walkDir(dir, prefix = '') {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-            if (entry.name === '.git') continue;
+            if (isGitMetadataSegment(entry.name)) continue;
             const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
             const fullPath = path.join(dir, entry.name);
             if (entry.isDirectory()) {

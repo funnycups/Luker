@@ -2,7 +2,9 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from '../src/endpoints/card-app.js';
+import express from 'express';
+import request from 'supertest';
+import { router as cardAppRouter, extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from '../src/endpoints/card-app.js';
 
 // Use a temp directory for tests
 let tmpDir;
@@ -304,6 +306,180 @@ describe('extractCardAppFiles - edge cases', () => {
 
         // Valid file should exist
         expect(fs.existsSync(path.join(cardAppsDir, 'type-test', 'valid.js'))).toBe(true);
+    });
+
+    test('should skip .git directory, .git pointer file, case/dot/space variants, and sanitize-mangled .git paths', () => {
+        const charData = {
+            data: {
+                extensions: {
+                    card_app: {
+                        enabled: true,
+                        files: {
+                            '.git/config': '[core]\n\tfsmonitor = evil\n',
+                            '.git': 'gitdir: /tmp/evil\n',
+                            'nested/.git/HEAD': 'ref: refs/heads/main\n',
+                            '.GIT/config': 'upper',
+                            '.git./config': 'trailing-dot',
+                            '.git /config': 'trailing-space',
+                            '.g:it/config': 'colon-mangled',
+                            '.g*it/config': 'star-mangled',
+                            '.g?it/config': 'qmark-mangled',
+                            '.gitignore': 'node_modules\n',
+                            '.github/info.txt': 'ok',
+                            'safe.js': 'export const ok = true;',
+                        },
+                    },
+                },
+            },
+        };
+
+        const result = extractCardAppFiles(charData, 'git-filter-test', cardAppsDir);
+        expect(result).toBe(true);
+
+        const charDir = path.join(cardAppsDir, 'git-filter-test');
+        expect(fs.existsSync(path.join(charDir, 'safe.js'))).toBe(true);
+        expect(fs.existsSync(path.join(charDir, '.gitignore'))).toBe(true);
+        expect(fs.existsSync(path.join(charDir, '.github', 'info.txt'))).toBe(true);
+
+        const entries = fs.readdirSync(charDir);
+        expect(entries.some(name => /^\.git[. ]*$/i.test(name))).toBe(false);
+        expect(fs.existsSync(path.join(charDir, 'nested', '.git'))).toBe(false);
+    });
+});
+
+describe('card-app HTTP routes security', () => {
+    function buildApp() {
+        const app = express();
+        app.use((req, _res, next) => {
+            req.user = {
+                profile: { handle: 'alice', admin: false },
+                directories: { cardApps: cardAppsDir },
+            };
+            next();
+        });
+        app.use('/api/card-app', cardAppRouter);
+        return app;
+    }
+
+    test('rejects reading, writing, deleting, renaming, and creating .git paths with 400', async () => {
+        const app = buildApp();
+        const charId = 'sec-char';
+
+        const putOk = await request(app)
+            .put(`/api/card-app/${charId}/index.js`)
+            .send({ content: 'export const v = 1;\n' });
+        expect(putOk.status).toBe(200);
+
+        const hist = await request(app).get(`/api/card-app/${charId}/history`);
+        expect(hist.status).toBe(200);
+
+        const gitConfigPath = path.join(cardAppsDir, charId, '.git', 'config');
+        const originalConfig = fs.readFileSync(gitConfigPath, 'utf8');
+
+        const blockedPaths = [
+            '.git/config',
+            '.git/HEAD',
+            '.git',
+            '.GIT/config',
+            '.git./config',
+            'sub/.git/config',
+            'a/../.git/config',
+        ];
+
+        for (const badPath of blockedPaths) {
+            const encoded = badPath.split('/').map(encodeURIComponent).join('/');
+            const getRes = await request(app).get(`/api/card-app/${charId}/${encoded}`);
+            expect(getRes.status).toBe(400);
+
+            const putRes = await request(app)
+                .put(`/api/card-app/${charId}/${encoded}`)
+                .send({ content: '[core]\n\tfsmonitor = evil\n' });
+            expect(putRes.status).toBe(400);
+
+            const delRes = await request(app).delete(`/api/card-app/${charId}/${encoded}`);
+            expect(delRes.status).toBe(400);
+
+            const mkdirRes = await request(app)
+                .post(`/api/card-app/${charId}/mkdir`)
+                .send({ path: badPath });
+            expect(mkdirRes.status).toBe(400);
+
+            const renameFromRes = await request(app)
+                .post(`/api/card-app/${charId}/rename`)
+                .send({ from: badPath, to: 'escaped.txt' });
+            expect(renameFromRes.status).toBe(400);
+
+            const renameToRes = await request(app)
+                .post(`/api/card-app/${charId}/rename`)
+                .send({ from: 'index.js', to: badPath });
+            expect(renameToRes.status).toBe(400);
+        }
+
+        // Deleting charDir root itself ('.') must also be rejected.
+        const delRootRes = await request(app).delete(`/api/card-app/${charId}/.`);
+        expect(delRootRes.status).toBe(400);
+
+        expect(fs.readFileSync(gitConfigPath, 'utf8')).toBe(originalConfig);
+        expect(fs.existsSync(path.join(cardAppsDir, charId, 'index.js'))).toBe(true);
+    });
+
+    test('rejects option-like or non-hex commit hashes on diff and rollback with 400', async () => {
+        const app = buildApp();
+        const charId = 'hash-char';
+
+        await request(app).put(`/api/card-app/${charId}/index.js`).send({ content: 'v1\n' });
+        const hist1 = await request(app).get(`/api/card-app/${charId}/history`);
+        expect(hist1.status).toBe(200);
+        const validHash = hist1.body.commits[0].fullHash;
+
+        for (const badHash of ['--stat', '--output=pwn.txt', '-q', 'HEAD', 'abc', 'zzzz1234']) {
+            const diffRes = await request(app).get(`/api/card-app/${charId}/diff/${encodeURIComponent(badHash)}`);
+            expect(diffRes.status).toBe(400);
+
+            const rollbackRes = await request(app)
+                .post(`/api/card-app/${charId}/rollback`)
+                .send({ hash: badHash });
+            expect(rollbackRes.status).toBe(400);
+        }
+
+        expect(fs.existsSync(path.join(cardAppsDir, charId, 'pwn.txt'))).toBe(false);
+
+        const validDiff = await request(app).get(`/api/card-app/${charId}/diff/${validHash}`);
+        expect(validDiff.status).toBe(200);
+        const validRollback = await request(app)
+            .post(`/api/card-app/${charId}/rollback`)
+            .send({ hash: validHash });
+        expect(validRollback.status).toBe(200);
+    });
+
+    test('honors git.backend=builtin configuration for history and diff', async () => {
+        const prevBackend = process.env.LUKER_GIT_BACKEND;
+        process.env.LUKER_GIT_BACKEND = 'builtin';
+        try {
+            const app = buildApp();
+            const charId = 'builtin-char';
+
+            const putRes = await request(app)
+                .put(`/api/card-app/${charId}/index.js`)
+                .send({ content: 'export const n = 1;\n' });
+            expect(putRes.status).toBe(200);
+
+            const hist = await request(app).get(`/api/card-app/${charId}/history`);
+            expect(hist.status).toBe(200);
+            expect(hist.body.commits).toHaveLength(1);
+
+            // Builtin diff returns '(initial commit)' for root commit, proving
+            // the builtin IsomorphicGitClient handled the request instead of system git.
+            const diffRes = await request(app).get(`/api/card-app/${charId}/diff/${hist.body.commits[0].fullHash}`);
+            expect(diffRes.status).toBe(200);
+            expect(diffRes.body.diff).toBe('(initial commit)');
+        } finally {
+            if (prevBackend === undefined) {
+                delete process.env.LUKER_GIT_BACKEND;
+            } else {
+                process.env.LUKER_GIT_BACKEND = prevBackend;
+            }
+        }
     });
 });
 
