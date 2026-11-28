@@ -8,6 +8,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Now tracks SillyTavern 1.19.1.
 - Validated target user existence across admin backup, migration, and storage inspection actions.
+- Added npm CLI packaging and automated release publishing for @funnycups/luker, storing global mode data, plugins, backups, and extensions under the Luker application data directory.
 
 ### Third-party extensions
 

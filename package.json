@@ -138,9 +138,32 @@
     "allowScripts": {
         "better-sqlite3": true
     },
-    "name": "luker",
+    "name": "@funnycups/luker",
     "type": "module",
     "license": "AGPL-3.0",
+    "publishConfig": {
+        "access": "public"
+    },
+    "files": [
+        "server.js",
+        "plugins.js",
+        "recover.js",
+        "webpack.config.js",
+        "index.d.ts",
+        "src/",
+        "default/",
+        "public/",
+        "!public/scripts/extensions/third-party/**",
+        "public/scripts/extensions/third-party/.gitkeep",
+        "plugins/package.json",
+        "plugins/.gitkeep",
+        "scripts/install-sqlite.js",
+        "scripts/storage-migrate.js",
+        "scripts/audit-storage-names.js",
+        "docs/changelog.md",
+        "docs/zh-CN/changelog.md",
+        "docs/zh-TW/changelog.md"
+    ],
     "repository": {
         "type": "git",
         "url": "https://github.com/funnycups/Luker.git"

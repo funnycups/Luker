@@ -1,42 +1,90 @@
-# This workflow will run tests using node and then publish a package to GitHub Packages when a release is created
-# For more information see: https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Publish @funnycups/luker to npm via GitHub Actions OIDC Trusted Publishing:
+# - Tag push (`v*`): publishes stable (`latest`) or prerelease (`rc`, `beta`, ...).
+# - Push to `release`: publishes rolling `@dev` prerelease snapshot.
+# - Manual `workflow_dispatch`: retries a specific tag or publishes `@dev` from HEAD.
 
-name: Node.js Package
+name: Publish to npm
 
 on:
+  push:
+    branches:
+      - release
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (leave empty to publish @dev from current branch)
+        required: false
+        type: string
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/release' }}
+
+env:
+  PUBLISH_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag != 'dev' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+permissions:
+  id-token: write  # Required for npm OIDC Trusted Publishing
+  contents: read
 
 jobs:
-  build:
+  verify:
+    if: github.repository == 'funnycups/Luker'
     runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.meta.outputs.mode }}
+      publish_version: ${{ steps.meta.outputs.publish_version }}
+      dist_tag: ${{ steps.meta.outputs.dist_tag }}
+      mutate_version: ${{ steps.meta.outputs.mutate_version }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PUBLISH_REF }}
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm ci --omit=dev --ignore-scripts
+
+      - name: Resolve npm publish metadata
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: node .github/scripts/npm-release-meta.mjs
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev --ignore-scripts
+
+      - name: Dry-run package archive
+        run: npm pack --dry-run --allow-directory=all
 
   publish-npm:
-    needs: build
+    if: github.repository == 'funnycups/Luker'
+    needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PUBLISH_REF }}
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org/
-      - run: npm ci --omit=dev --ignore-scripts
-      - name: Resolve npm dist-tag
-        id: npm-dist-tag
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          if [[ "${VERSION}" == *-* ]]; then
-            DIST_TAG="${VERSION#*-}"
-            DIST_TAG="${DIST_TAG%%.*}"
-          else
-            DIST_TAG="latest"
-          fi
-          echo "dist_tag=${DIST_TAG}" >> "${GITHUB_OUTPUT}"
-      - run: npm publish --tag "${{ steps.npm-dist-tag.outputs.dist_tag }}"
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev --ignore-scripts
+
+      - name: Apply dev snapshot version
+        if: needs.verify.outputs.mutate_version == 'true'
         env:
-          NODE_AUTH_TOKEN: ${{secrets.npm_token}}
+          PUBLISH_VERSION: ${{ needs.verify.outputs.publish_version }}
+        run: npm version "${PUBLISH_VERSION}" --no-git-tag-version --allow-same-version
+
+      # https://github.com/npm/cli/issues/9755
+      - name: Publish package to npm
+        env:
+          DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
+        run: npm publish --access public --tag "${DIST_TAG}" --allow-directory=all

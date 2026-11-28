@@ -54,15 +54,20 @@ export class CommandLineParser {
      * @returns {CommandLineArguments} Default configuration values
      */
     getDefaultConfig(isGlobal) {
-        const appPaths = envPaths('SillyTavern', { suffix: '' });
+        const appPaths = envPaths('Luker', { suffix: '' });
         const configPath = isGlobal ? path.join(appPaths.data, 'config.yaml') : './config.yaml';
         const dataPath = isGlobal ? path.join(appPaths.data, 'data') : './data';
+        const serverPluginsPath = isGlobal ? path.join(appPaths.data, 'plugins') : './plugins';
+        const backupsPath = isGlobal ? path.join(appPaths.data, 'backups') : 'backups/';
+        const globalExtensionsPath = isGlobal
+            ? path.join(appPaths.data, 'extensions', 'third-party')
+            : './public/scripts/extensions/third-party';
         return Object.freeze({
             configPath: configPath,
             dataRoot: dataPath,
-            serverPluginsPath: './plugins',
-            backupsPath: 'backups/',
-            globalExtensionsPath: './public/scripts/extensions/third-party',
+            serverPluginsPath: serverPluginsPath,
+            backupsPath: backupsPath,
+            globalExtensionsPath: globalExtensionsPath,
             port: 8000,
             listen: false,
             listenAddressIPv6: '[::]',
@@ -317,9 +322,39 @@ export class CommandLineParser {
             console.warn(color.yellow(`Warning: Failed to create data root directory at ${dataRoot}. Please make sure the path is correct and writable.`), err);
         }
 
-        const serverPluginsPath = cliArguments.serverPluginsPath ?? getConfigValue('serverPluginsPath', defaultConfig.serverPluginsPath);
-        const backupsPath = cliArguments.backupsPath ?? getConfigValue('backupsPath', defaultConfig.backupsPath);
-        const globalExtensionsPath = cliArguments.globalExtensionsPath ?? getConfigValue('globalExtensionsPath', defaultConfig.globalExtensionsPath);
+        const localDefaults = isGlobal ? this.getDefaultConfig(false) : defaultConfig;
+        const resolvePathSetting = (cliValue, configKey, localDefault, effectiveDefault) => {
+            if (cliValue) {
+                return cliValue;
+            }
+            const configured = getConfigValue(configKey, null);
+            if (!isGlobal) {
+                return configured ?? localDefault;
+            }
+            if (!configured || configured === localDefault) {
+                return effectiveDefault;
+            }
+            return configured;
+        };
+
+        const serverPluginsPath = resolvePathSetting(
+            cliArguments.serverPluginsPath,
+            'serverPluginsPath',
+            localDefaults.serverPluginsPath,
+            defaultConfig.serverPluginsPath,
+        );
+        const backupsPath = resolvePathSetting(
+            cliArguments.backupsPath,
+            'backupsPath',
+            localDefaults.backupsPath,
+            defaultConfig.backupsPath,
+        );
+        const globalExtensionsPath = resolvePathSetting(
+            cliArguments.globalExtensionsPath,
+            'globalExtensionsPath',
+            localDefaults.globalExtensionsPath,
+            defaultConfig.globalExtensionsPath,
+        );
 
         /** @type {CommandLineArguments} */
         const result = {
