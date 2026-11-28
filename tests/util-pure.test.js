@@ -23,6 +23,8 @@ import {
     trimV1,
     trimTrailingSlash,
     mutateJsonString,
+    isGitMetadataSegment,
+    hasGitMetadataSegment,
     isPathUnderParent,
     isFileURL,
     getRequestURL,
@@ -40,6 +42,35 @@ import {
     buildLanBaseUrlCandidates,
     createDrainingThrottle,
 } from '../src/util';
+
+describe('isGitMetadataSegment & hasGitMetadataSegment', () => {
+    test.each([
+        '.git',
+        '.GIT',
+        '.Git',
+        '.git.',
+        '.git ',
+        '.git. . ',
+    ])('identifies %p as a git metadata segment', (segment) => {
+        expect(isGitMetadataSegment(segment)).toBe(true);
+        expect(hasGitMetadataSegment(segment)).toBe(true);
+        expect(hasGitMetadataSegment(`extensions/demo/${segment}/config`)).toBe(true);
+        expect(hasGitMetadataSegment(`extensions\\demo\\${segment}\\HEAD`)).toBe(true);
+    });
+
+    test.each([
+        '.gitignore',
+        '.github',
+        'my.git',
+        'repo.git',
+        'git',
+        'index.js',
+        '',
+    ])('allows non-.git segment %p', (segment) => {
+        expect(isGitMetadataSegment(segment)).toBe(false);
+        expect(hasGitMetadataSegment(`extensions/demo/${segment}`)).toBe(false);
+    });
+});
 
 describe('keyToEnv', () => {
     test('should convert dotted key to env var format', () => {

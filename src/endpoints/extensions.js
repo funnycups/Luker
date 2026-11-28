@@ -13,6 +13,7 @@ import {
     GIT_BACKENDS,
     canFallbackToBuiltinGit,
     createGitClient,
+    createHardenedSimpleGitOptions,
     isGitUnavailableError,
     shouldUseSystemGit,
 } from '../git/client.js';
@@ -25,6 +26,13 @@ const getConfiguredGitBackend = () => getConfigValue('git.backend', 'auto');
  * @type {Partial<import('simple-git').SimpleGitOptions>}
  */
 const OPTIONS = Object.freeze({ timeout: { block: 5 * 60 * 1000 } });
+
+/**
+ * @param {string} baseDir
+ */
+function createExtensionGit(baseDir) {
+    return simpleGit(createHardenedSimpleGitOptions({ baseDir, ...OPTIONS }));
+}
 
 async function getIsomorphicGitAuthor(extensionPath) {
     const configuredName = await isomorphicGit.getConfig({
@@ -602,7 +610,7 @@ function parseLsRemoteSha(output) {
  * @returns {Promise<Object>} - Returns the extension information as an object
  */
 async function checkIfRepoIsUpToDate(extensionPath) {
-    const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
+    const git = createExtensionGit(extensionPath);
     const currentBranch = await git.branch();
     const currentCommitHash = await git.revparse(['HEAD']);
     const branchName = currentBranch.current || '';
@@ -678,6 +686,10 @@ router.post('/install', async (request, response) => {
         const parsedUrl = new URL(url);
         if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
             return response.status(400).send('Bad Request: Only HTTP and HTTPS protocols are supported for the Extension URL.');
+        }
+
+        if (branch !== undefined && branch !== null && branch !== '' && (typeof branch !== 'string' || branch.trim().startsWith('-'))) {
+            return response.status(400).send('Bad Request: A valid branch name is required.');
         }
 
         const configuredBackend = getConfiguredGitBackend();
@@ -884,7 +896,7 @@ router.post('/update', async (request, response) => {
         let systemUpdateResult;
         try {
             const { isUpToDate, remoteUrl } = await checkIfRepoIsUpToDate(workPath);
-            const git = simpleGit({ baseDir: workPath, ...OPTIONS });
+            const git = createExtensionGit(workPath);
             const isRepo = await git.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
             if (!isRepo) {
                 throw new Error(`Directory is not a Git repository at ${extensionPath}`);
@@ -963,7 +975,7 @@ router.post('/branches', async (request, response) => {
         }
 
         try {
-            const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
+            const git = createExtensionGit(extensionPath);
             // Unshallow the repository if it is shallow
             const isShallow = await git.revparse(['--is-shallow-repository']) === 'true';
             if (isShallow) {
@@ -1003,8 +1015,12 @@ router.post('/switch', async (request, response) => {
 
         const { extensionName, branch, global } = request.body;
         const extensionNameSanitized = sanitize(extensionName);
-        if (!extensionNameSanitized || !branch) {
+        if (!extensionNameSanitized || typeof branch !== 'string' || !branch.trim() || branch.trim().startsWith('-')) {
             return response.status(400).send('Bad Request: A valid extensionName and branch are required in the request body.');
+        }
+
+        if (branch.startsWith('origin/') && branch.slice('origin/'.length).startsWith('-')) {
+            return response.status(400).send('Bad Request: A valid branch name is required.');
         }
 
         if (global && !request.user.profile.admin) {
@@ -1038,7 +1054,7 @@ router.post('/switch', async (request, response) => {
         }
 
         try {
-            const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
+            const git = createExtensionGit(extensionPath);
             const branches = await git.branchLocal();
 
             if (String(branch).startsWith('origin/')) {
@@ -1166,7 +1182,7 @@ router.post('/version', async (request, response) => {
             return response.send(await getVersionWithIsomorphic(extensionPath));
         }
 
-        const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
+        const git = createExtensionGit(extensionPath);
         try {
             const isRepo = await git.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
             if (!isRepo) {

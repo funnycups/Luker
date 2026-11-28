@@ -7,6 +7,73 @@ import http from 'isomorphic-git/http/node';
 import simpleGit from 'simple-git';
 
 import { IS_MOBILE_RUNTIME } from '../runtime-capabilities.js';
+import { isGitMetadataSegment } from '../util.js';
+
+export const GIT_COMMIT_HASH_RE = /^[0-9a-f]{4,40}$/i;
+
+/**
+ * Validates that a value is a hexadecimal Git commit hash (short or full SHA-1).
+ * Rejects option-like arguments (`--output=...`, `-q`, etc.) and ref expressions.
+ * @param {unknown} hash
+ * @returns {boolean}
+ */
+export function isValidGitCommitHash(hash) {
+    return typeof hash === 'string' && GIT_COMMIT_HASH_RE.test(hash);
+}
+
+/**
+ * @param {unknown} hash
+ * @returns {string}
+ */
+function assertValidGitCommitHash(hash) {
+    if (!isValidGitCommitHash(hash)) {
+        throw new Error('Invalid git commit hash.');
+    }
+    return /** @type {string} */ (hash);
+}
+
+const NULL_DEVICE_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+/**
+ * CLI-level `-c` overrides applied to every system `git` invocation so any
+ * untrusted repository `.git/config` cannot execute hooks, fsmonitor commands,
+ * ext transport helpers, or check out symlinks.
+ */
+export const HARDENED_SYSTEM_GIT_CONFIG = Object.freeze([
+    'core.symlinks=false',
+    'core.fsmonitor=false',
+    `core.hooksPath=${NULL_DEVICE_PATH}`,
+    'protocol.ext.allow=never',
+]);
+
+/**
+ * Pairing overrides for simple-git's `blockUnsafeOperationsPlugin`, scoped
+ * strictly to the three defensive `-c` keys above. All other unsafe operation
+ * guards (upload-pack, sshCommand, editor, alias, diff.external, filter, etc.)
+ * remain enforced.
+ */
+export const HARDENED_SYSTEM_GIT_UNSAFE_OVERRIDES = Object.freeze({
+    allowUnsafeFsMonitor: true,
+    allowUnsafeHooksPath: true,
+    allowUnsafeProtocolOverride: true,
+});
+
+/**
+ * Builds `simple-git` options with CLI-level command-execution hardening.
+ * @param {Partial<import('simple-git').SimpleGitOptions>} [options]
+ * @returns {Partial<import('simple-git').SimpleGitOptions>}
+ */
+export function createHardenedSimpleGitOptions(options = {}) {
+    const extraConfig = Array.isArray(options.config) ? options.config : [];
+    return {
+        ...options,
+        config: [...HARDENED_SYSTEM_GIT_CONFIG, ...extraConfig],
+        unsafe: {
+            ...HARDENED_SYSTEM_GIT_UNSAFE_OVERRIDES,
+            ...(options.unsafe || {}),
+        },
+    };
+}
 
 /** @type {{ AUTO: 'auto', SYSTEM: 'system', BUILTIN: 'builtin' }} */
 export const GIT_BACKENDS = {
@@ -160,7 +227,7 @@ async function listWorkdirFiles(dir) {
     async function walk(absDir, relPrefix) {
         const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
         for (const entry of entries) {
-            if (entry.name === '.git') continue;
+            if (isGitMetadataSegment(entry.name)) continue;
             const absChild = path.join(absDir, entry.name);
             const relChild = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
             if (entry.isDirectory()) {
@@ -205,7 +272,14 @@ export function createGitClient(options = {}) {
 class SimpleGitClient {
     constructor() {
         this.backend = GIT_BACKENDS.SYSTEM;
-        this.git = simpleGit();
+        this.git = simpleGit(createHardenedSimpleGitOptions());
+    }
+
+    /**
+     * @param {string} dir
+     */
+    #forDir(dir) {
+        return simpleGit(createHardenedSimpleGitOptions({ baseDir: dir }));
     }
 
     /**
@@ -215,7 +289,15 @@ class SimpleGitClient {
      * @returns {Promise<void>}
      */
     async clone(url, localPath, options = {}) {
+        if (typeof url !== 'string' || !url.trim() || url.trim().startsWith('-')) {
+            throw new Error('Invalid git repository URL.');
+        }
+
         const { depth, branch } = normalizeCloneOptions(options);
+        if (branch !== undefined && (typeof branch !== 'string' || branch.trim().startsWith('-'))) {
+            throw new Error('Invalid git branch name.');
+        }
+
         /** @type {Record<string, any>} */
         const cloneOptions = {};
 
@@ -232,17 +314,17 @@ class SimpleGitClient {
 
     /** @param {string} dir */
     async init(dir) {
-        await simpleGit({ baseDir: dir }).init();
+        await this.#forDir(dir).init();
     }
 
     /** @param {string} dir @param {string} key @param {string} value */
     async setConfig(dir, key, value) {
-        await simpleGit({ baseDir: dir }).addConfig(key, value);
+        await this.#forDir(dir).addConfig(key, value);
     }
 
     /** @param {string} dir */
     async addAll(dir) {
-        await simpleGit({ baseDir: dir }).add('-A');
+        await this.#forDir(dir).add('-A');
     }
 
     /**
@@ -252,7 +334,7 @@ class SimpleGitClient {
      * @returns {Promise<boolean>} Whether a commit was made
      */
     async commitIfChanged(dir, message) {
-        const sg = simpleGit({ baseDir: dir });
+        const sg = this.#forDir(dir);
         await sg.add('-A');
         const status = await sg.status();
         if (status.files.length === 0) return false;
@@ -266,7 +348,7 @@ class SimpleGitClient {
      * @returns {Promise<GitCommitInfo[]>}
      */
     async log(dir, maxCount = 50) {
-        const sg = simpleGit({ baseDir: dir });
+        const sg = this.#forDir(dir);
         const log = await sg.log({ maxCount });
         return log.all.map(entry => ({
             hash: entry.hash.substring(0, 7),
@@ -278,7 +360,8 @@ class SimpleGitClient {
 
     /** @param {string} dir @param {string} hash */
     async resetHard(dir, hash) {
-        await simpleGit({ baseDir: dir }).reset(['--hard', hash]);
+        const safeHash = assertValidGitCommitHash(hash);
+        await this.#forDir(dir).reset(['--hard', safeHash]);
     }
 
     /**
@@ -287,8 +370,10 @@ class SimpleGitClient {
      * @returns {Promise<string>}
      */
     async diff(dir, hash) {
-        const sg = simpleGit({ baseDir: dir });
-        return await sg.diff([`${hash}~1`, hash]).catch(() => sg.diff([hash]));
+        const safeHash = assertValidGitCommitHash(hash);
+        const sg = this.#forDir(dir);
+        return await sg.diff(['--no-ext-diff', '--no-textconv', `${safeHash}~1`, safeHash, '--'])
+            .catch(() => sg.diff(['--no-ext-diff', '--no-textconv', safeHash, '--']));
     }
 }
 
@@ -399,8 +484,9 @@ class IsomorphicGitClient {
 
     /** @param {string} dir @param {string} hash */
     async resetHard(dir, hash) {
-        await git.checkout({ fs, dir, ref: hash, force: true });
-        await git.writeRef({ fs, dir, ref: 'refs/heads/master', value: hash, force: true });
+        const safeHash = assertValidGitCommitHash(hash);
+        await git.checkout({ fs, dir, ref: safeHash, force: true });
+        await git.writeRef({ fs, dir, ref: 'refs/heads/master', value: safeHash, force: true });
     }
 
     /**
@@ -409,17 +495,18 @@ class IsomorphicGitClient {
      * @returns {Promise<string>}
      */
     async diff(dir, hash) {
+        const safeHash = assertValidGitCommitHash(hash);
         try {
-            const commit = await git.readCommit({ fs, dir, oid: hash });
+            const commit = await git.readCommit({ fs, dir, oid: safeHash });
             const parentOid = commit.commit.parent[0];
             if (!parentOid) return '(initial commit)';
-            const currentFiles = await git.listFiles({ fs, dir, ref: hash });
+            const currentFiles = await git.listFiles({ fs, dir, ref: safeHash });
             const parentFiles = await git.listFiles({ fs, dir, ref: parentOid });
             const allFiles = new Set([...currentFiles, ...parentFiles]);
             const changes = [];
             for (const filepath of allFiles) {
                 const curBlob = currentFiles.includes(filepath)
-                    ? await git.readBlob({ fs, dir, oid: hash, filepath }).catch(() => null)
+                    ? await git.readBlob({ fs, dir, oid: safeHash, filepath }).catch(() => null)
                     : null;
                 const parBlob = parentFiles.includes(filepath)
                     ? await git.readBlob({ fs, dir, oid: parentOid, filepath }).catch(() => null)

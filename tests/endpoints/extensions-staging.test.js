@@ -12,7 +12,8 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import http from 'node:http';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
@@ -28,15 +29,20 @@ fs.writeFileSync(emptyGitConfig, '');
 process.env.GIT_CONFIG_GLOBAL = emptyGitConfig;
 process.env.GIT_CONFIG_NOSYSTEM = '1';
 
+const execFileAsync = promisify(execFile);
 const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid'];
 const gitRun = (cwd, ...args) => execFileSync('git', [...IDENTITY, ...args], { cwd, encoding: 'utf8' }).trim();
+const gitRunAsync = (cwd, ...args) => execFileAsync('git', [...IDENTITY, ...args], { cwd, encoding: 'utf8' });
 
 /**
  * Serve every bare repository under `projectRoot` over smart HTTP through
  * the `git http-backend` CGI program.
  */
-function startGitHttpServer(projectRoot) {
+function startGitHttpServer(projectRoot, onRequest = null) {
     const server = http.createServer((req, res) => {
+        if (typeof onRequest === 'function') {
+            onRequest(req);
+        }
         const url = new URL(req.url, 'http://127.0.0.1');
         const child = spawn('git', ['http-backend'], {
             env: {
@@ -199,7 +205,6 @@ describe('staged extension install and update', () => {
     describe('update from a local origin', () => {
         let origin;
         let live;
-        let oldHead;
 
         function setUpUpdateCase(name) {
             setUpCase(name);
@@ -207,7 +212,6 @@ describe('staged extension install and update', () => {
             makeSourceRepo(origin, '1.0.0');
             live = path.join(extensionsDir, 'ext');
             gitRun(caseDir, 'clone', '-q', origin, live);
-            oldHead = gitRun(live, 'rev-parse', 'HEAD');
         }
 
         test('pulls the new commit into the live directory with no staging left and marks dirty once', async () => {
@@ -224,22 +228,44 @@ describe('staged extension install and update', () => {
         });
 
         test('returns 409 and keeps the live directory when it changes during the update', async () => {
-            setUpUpdateCase('update-changed');
-            // The hook is copied into the staged work copy with .git and runs
-            // after its pull, changing the live directory mid-update.
-            const hook = path.join(live, '.git', 'hooks', 'post-merge');
-            fs.writeFileSync(hook, `#!/bin/sh\necho changed > '${path.join(live, 'touched-by-hook.txt')}'\n`);
-            fs.chmodSync(hook, 0o755);
-            addCommit(origin, '1.1.0');
+            setUpCase('update-changed');
+            const srcDir = path.join(caseDir, 'http-src');
+            const httpRoot = path.join(caseDir, 'http-root');
+            const bareDir = path.join(httpRoot, 'ext.git');
+            makeSourceRepo(srcDir, '1.0.0');
+            gitRun(caseDir, 'clone', '-q', '--bare', srcDir, bareDir);
 
-            const res = await request(buildApp()).post('/update').send({ extensionName: 'ext' });
-            expect(res.status).toBe(409);
-            expect(res.text).toBe('The extension changed while it was updating. Retry the update.');
-            expect(fs.readFileSync(path.join(live, 'touched-by-hook.txt'), 'utf8').trim()).toBe('changed');
-            expect(gitRun(live, 'rev-parse', 'HEAD')).toBe(oldHead);
-            expect(JSON.parse(fs.readFileSync(path.join(live, 'manifest.json'), 'utf8')).version).toBe('1.0.0');
-            expect(stagingEntries(extensionsDir)).toEqual([]);
-            expect(dirtyCalls).toEqual([]);
+            let armed = false;
+            let mutated = false;
+            const liveDir = path.join(extensionsDir, 'ext');
+            const updateServer = await startGitHttpServer(httpRoot, (req) => {
+                // Mutate the live directory mid-update while git pull fetches from origin.
+                if (armed && !mutated && req.method === 'POST' && req.url.includes('git-upload-pack')) {
+                    mutated = true;
+                    fs.writeFileSync(path.join(liveDir, 'touched-mid-update.txt'), 'changed\n');
+                }
+            });
+            try {
+                const url = `http://127.0.0.1:${updateServer.address().port}/ext.git`;
+                await gitRunAsync(caseDir, 'clone', '-q', url, liveDir);
+                const beforeHead = gitRun(liveDir, 'rev-parse', 'HEAD');
+
+                addCommit(srcDir, '1.1.0');
+                gitRun(srcDir, 'push', '-q', bareDir, 'main:main');
+                armed = true;
+
+                const res = await request(buildApp()).post('/update').send({ extensionName: 'ext' });
+                expect(res.status).toBe(409);
+                expect(res.text).toBe('The extension changed while it was updating. Retry the update.');
+                expect(fs.readFileSync(path.join(liveDir, 'touched-mid-update.txt'), 'utf8').trim()).toBe('changed');
+                expect(gitRun(liveDir, 'rev-parse', 'HEAD')).toBe(beforeHead);
+                expect(JSON.parse(fs.readFileSync(path.join(liveDir, 'manifest.json'), 'utf8')).version).toBe('1.0.0');
+                expect(stagingEntries(extensionsDir)).toEqual([]);
+                expect(dirtyCalls).toEqual([]);
+            } finally {
+                updateServer.closeAllConnections?.();
+                await new Promise(resolve => updateServer.close(resolve));
+            }
         });
 
         test('overlapping updates retain the installed checkout and local untracked bytes', async () => {
@@ -253,6 +279,21 @@ describe('staged extension install and update', () => {
             expect(gitRun(live, 'rev-parse', 'HEAD')).toBe(head);
             expect(fs.readFileSync(path.join(live, 'local-only.txt'), 'utf8')).toBe('local bytes');
             expect(stagingEntries(extensionsDir)).toEqual([]);
+        });
+
+        test('/version does not execute poisoned .git/config ext protocol commands', async () => {
+            setUpUpdateCase('version-hardened');
+            const marker = path.join(caseDir, 'pwned-ext');
+            const payloadScript = path.join(caseDir, 'payload.sh');
+            fs.writeFileSync(payloadScript, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+            // Replace origin URL with a space-free ext:: transport command and
+            // opt into protocol.ext.allow inside repo config; CLI -c overrides must win.
+            gitRun(live, 'remote', 'set-url', 'origin', `ext::${payloadScript}`);
+            gitRun(live, 'config', 'protocol.ext.allow', 'always');
+
+            const res = await request(buildApp()).post('/version').send({ extensionName: 'ext' });
+            expect(res.status).toBe(200);
+            expect(fs.existsSync(marker)).toBe(false);
         });
     });
 });

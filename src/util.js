@@ -1843,6 +1843,33 @@ export function isPathUnderParent(parentPath, childPath) {
     return relativePath !== '..' && !relativePath.startsWith('..' + path.sep) && !path.isAbsolute(relativePath);
 }
 
+const GIT_METADATA_SEGMENT_RE = /^\.git[. ]*$/i;
+
+/**
+ * Checks whether a single filename or path segment refers to Git metadata
+ * (`.git`, case variants on case-insensitive filesystems, or Windows trailing
+ * dot/space forms that normalize to `.git`).
+ * @param {string} segment Path segment
+ * @returns {boolean}
+ */
+export function isGitMetadataSegment(segment) {
+    return typeof segment === 'string' && GIT_METADATA_SEGMENT_RE.test(segment);
+}
+
+/**
+ * Checks whether a path contains any `.git` metadata segment (either a `.git`
+ * directory segment or a `.git` file/gitdir pointer).
+ * @param {string} targetPath Path to inspect
+ * @returns {boolean}
+ */
+export function hasGitMetadataSegment(targetPath) {
+    if (typeof targetPath !== 'string' || !targetPath) {
+        return false;
+    }
+
+    return targetPath.split(/[\\/]+/).some(segment => GIT_METADATA_SEGMENT_RE.test(segment));
+}
+
 /**
  * Resolves a requested path under a parent directory and rejects path traversal.
  * Unlike filename sanitizers, this preserves platform-legal characters such as

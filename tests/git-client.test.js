@@ -143,11 +143,73 @@ function runRaceContract(backendLabel, makeClient) {
             const bBlob = await git.readBlob({ fs, dir, oid: headOid, filepath: 'sub/nested/b.txt' });
             expect(new TextDecoder().decode(bBlob.blob)).toBe('B2');
         });
+        test('rejects non-hex and option-like hashes in resetHard and diff', async () => {
+            const client = makeClient();
+            await client.init(dir);
+            await client.setConfig(dir, 'user.name', 'test');
+            await client.setConfig(dir, 'user.email', 'test@local');
+            fs.writeFileSync(path.join(dir, 'doc.txt'), 'v1', 'utf8');
+            await client.commitIfChanged(dir, 'v1');
+
+            for (const badHash of ['--stat', '--output=pwn.txt', '--hard', '-q', 'HEAD', 'abc', 'g'.repeat(40)]) {
+                await expect(client.resetHard(dir, badHash)).rejects.toThrow(/invalid.*hash/i);
+                await expect(client.diff(dir, badHash)).rejects.toThrow(/invalid.*hash/i);
+            }
+            expect(fs.existsSync(path.join(dir, 'pwn.txt'))).toBe(false);
+        });
     });
 }
 
 runRaceContract('builtin', () => createGitClient({ backend: 'builtin' }));
 runRaceContract('system', () => createGitClient({ backend: 'system' }));
+
+describe('system git client CLI hardening', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-git-hardening-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('blocks poisoned .git/config fsmonitor, hooksPath, hooks, and diff.external execution', async () => {
+        const client = createGitClient({ backend: 'system' });
+        const repoDir = path.join(tmpDir, 'repo');
+        const marker = path.join(tmpDir, 'pwned-marker');
+        fs.mkdirSync(repoDir, { recursive: true });
+
+        await client.init(repoDir);
+        await client.setConfig(repoDir, 'user.name', 'test');
+        await client.setConfig(repoDir, 'user.email', 'test@local');
+
+        const hooksDir = path.join(repoDir, '.git', 'hooks');
+        fs.mkdirSync(hooksDir, { recursive: true });
+        fs.writeFileSync(path.join(hooksDir, 'pre-commit'), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+        fs.appendFileSync(
+            path.join(repoDir, '.git', 'config'),
+            `\n[core]\n\tfsmonitor = touch '${marker}'\n\thooksPath = ${hooksDir}\n[diff]\n\texternal = touch '${marker}'\n`,
+        );
+
+        fs.writeFileSync(path.join(repoDir, 'file.txt'), 'first\n', 'utf8');
+        expect(await client.commitIfChanged(repoDir, 'c1')).toBe(true);
+        fs.writeFileSync(path.join(repoDir, 'file.txt'), 'second\n', 'utf8');
+        expect(await client.commitIfChanged(repoDir, 'c2')).toBe(true);
+
+        const log = await client.log(repoDir, 5);
+        const diffText = await client.diff(repoDir, log[0].fullHash);
+        expect(diffText).toContain('+second');
+        expect(fs.existsSync(marker)).toBe(false);
+    });
+
+    test('rejects option-like url or branch in clone', async () => {
+        const client = createGitClient({ backend: 'system' });
+        const dest = path.join(tmpDir, 'clone-dest');
+        await expect(client.clone('--upload-pack=evil', dest)).rejects.toThrow();
+        await expect(client.clone('https://example.invalid/repo.git', dest, { branch: '--upload-pack=evil' })).rejects.toThrow();
+    });
+});
 
 describe('git spawn error classification and backend policy', () => {
     test.each(['ENOENT', 'EACCES', 'EPERM', 'ENOSYS'])(
