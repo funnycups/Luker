@@ -64,12 +64,12 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         // Configure zh-cn language and Workbench light theme through real UI controls before upgrade.
         await configureZhCnAndLightThemeViaUi(page);
 
-        // 2. Simulate upgrading from 2.9.0-rc.2 to current version on restart.
+        // 2. Simulate upgrading from 2.6.0 to current version on restart.
         await server.stop();
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
-            user.lastSeenVersion = '2.9.0-rc.2';
+            user.lastSeenVersion = '2.6.0';
             user.lastSeenRevision = '111111111';
             await store.setItem('user:default-user', user);
         });
@@ -83,7 +83,7 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         const dialogTitle = (await backdrop.locator('.lw-dialog-title').textContent()) || '';
         expect(dialogTitle).toMatch(/Luker v/);
         expect(dialogTitle).toMatch(/[\u4e00-\u9fff]/);
-        await expect(backdrop.locator('.wn-range-pill')).toContainText('v2.9.0-rc.2 → v');
+        await expect(backdrop.locator('.wn-range-pill')).toContainText('v2.6.0 → v');
 
         // Verify whats-new.css wins over Workbench's @import of tokens.css (620px dialog, not shrunk to 480px).
         const desktopDialogWidth = await backdrop.locator('.wn-dialog').evaluate(el => Math.round(el.getBoundingClientRect().width));
@@ -97,9 +97,9 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         expect(codeColor).toBe('rgb(27, 29, 34)');
 
         const versionText = await backdrop.locator('.wn-body').textContent();
-        expect(versionText).toContain('v2.9.0-rc.4');
-        expect(versionText).toContain('v2.9.0-rc.3');
-        expect(versionText).not.toContain('v2.9.0-rc.2');
+        expect(versionText).toContain('v2.8.0');
+        expect(versionText).toContain('v2.7.0');
+        expect(versionText).not.toContain('v2.6.0');
         expect(versionText).not.toContain('<span v-pre>');
 
         const docLink = backdrop.locator('.wn-body a[href="https://luker.cups.moe/zh-CN/features/workbench"]');
@@ -140,7 +140,7 @@ test('multi-user mode waits for unread critical announcement before displaying W
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
-            user.lastSeenVersion = '2.9.0-rc.3';
+            user.lastSeenVersion = '2.8.0';
             user.lastSeenRevision = '111111111';
             user.readAnnouncementIds = [];
             await store.setItem('user:default-user', user);
@@ -171,7 +171,7 @@ test('multi-user mode waits for unread critical announcement before displaying W
 
         const backdrop = page.locator('.wn-backdrop');
         await expect(backdrop).toBeVisible({ timeout: 15_000 });
-        await expect(backdrop.locator('.wn-range-pill')).toContainText('v2.9.0-rc.3 → v');
+        await expect(backdrop.locator('.wn-range-pill')).toContainText('v2.8.0 → v');
 
         const ackPromise = page.waitForResponse(
             res => res.url().endsWith('/api/users/whats-new/ack') && res.status() === 204,
@@ -199,7 +199,7 @@ test('announcements fetch failure still resolves gate and allows What\'s New mod
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
-            user.lastSeenVersion = '2.9.0-rc.3';
+            user.lastSeenVersion = '2.8.0';
             user.lastSeenRevision = '111111111';
             await store.setItem('user:default-user', user);
         });
@@ -237,7 +237,7 @@ test('mobile viewport keeps What\'s New modal within viewport, covers full scree
         await mutateUserStorage(dataRoot, async (store) => {
             const user = await store.getItem('user:default-user');
             expect(user).toBeTruthy();
-            user.lastSeenVersion = '2.9.0-rc.2';
+            user.lastSeenVersion = '2.6.0';
             user.lastSeenRevision = '111111111';
             await store.setItem('user:default-user', user);
         });

@@ -499,7 +499,7 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
     test('multi-version upgrade, stale-tab ack rejection, valid ack, and dev revision update', async () => {
         activeHandle = 'default-user';
         const user = await storage.getItem(toKey('default-user'));
-        user.lastSeenVersion = '2.9.0-rc.2';
+        user.lastSeenVersion = '2.6.0';
         user.lastSeenRevision = '111111111';
         await storage.setItem(toKey('default-user'), user);
 
@@ -507,10 +507,10 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
         expect(upgrade.status).toBe(200);
         expect(upgrade.body.show).toBe(true);
         expect(upgrade.body.kind).toBe('release');
-        expect(upgrade.body.previousVersion).toBe('2.9.0-rc.2');
+        expect(upgrade.body.previousVersion).toBe('2.6.0');
         expect(upgrade.body.currentVersion).toBe(runtimeIdentity.version);
         const releaseVersions = upgrade.body.sections.filter(s => !s.unreleased).map(s => s.version);
-        expect(releaseVersions).toEqual(expect.arrayContaining(['2.9.0-rc.4', '2.9.0-rc.3']));
+        expect(releaseVersions).toEqual(expect.arrayContaining(['2.8.0', '2.7.0']));
 
         // Missing/empty version -> 400
         const badAck = await postJson('/api/users/whats-new/ack', { version: '' });
@@ -518,11 +518,11 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
 
         // Stale tab ack (older version) -> 204 without advancing stored version
         const staleAck = await postJson('/api/users/whats-new/ack', {
-            version: '2.9.0-rc.3',
+            version: '2.7.0',
             revision: runtimeIdentity.revision,
         });
         expect(staleAck.status).toBe(204);
-        expect((await storage.getItem(toKey('default-user'))).lastSeenVersion).toBe('2.9.0-rc.2');
+        expect((await storage.getItem(toKey('default-user'))).lastSeenVersion).toBe('2.6.0');
 
         // Matching ack -> persists version and clears prompt
         const okAck = await postJson('/api/users/whats-new/ack', {
@@ -561,7 +561,7 @@ describe('/api/users/whats-new HTTP endpoints and account seeding', () => {
     test('concurrent whats-new ack and announcements mark-read preserve both userRecord fields', async () => {
         activeHandle = 'default-user';
         const user = await storage.getItem(toKey('default-user'));
-        user.lastSeenVersion = '2.9.0-rc.3';
+        user.lastSeenVersion = '2.8.0';
         user.lastSeenRevision = '111111111';
         user.readAnnouncementIds = [];
         await storage.setItem(toKey('default-user'), user);
