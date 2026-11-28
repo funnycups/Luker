@@ -8,6 +8,7 @@ import { h } from './lens-shared/util.js';
 import { button, iconButton, sharedIcon } from './lens-shared/ui.js';
 import { fitToViewport } from './lens-shared/viewport.js';
 import { loadPrefs } from './workbench/prefs.js';
+import { formatCompactVersion } from './util/version-display.js';
 
 const TOKENS_CSS_ID = 'luker-lens-shared-tokens-css';
 const WHATS_NEW_CSS_ID = 'lw-whats-new-css';
@@ -281,9 +282,12 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
     const tr = makeTranslator(translate);
     const isDev = payload?.kind === 'dev';
 
+    const formattedCurrentVersion = formatCompactVersion(payload?.currentVersion);
+    const formattedPreviousVersion = formatCompactVersion(payload?.previousVersion);
+
     const titleText = isDev
-        ? tr('Updated to Luker dev build ${0}', payload.currentRevision || payload.currentVersion)
-        : tr('Updated to Luker v${0}', payload.currentVersion);
+        ? tr('Updated to Luker dev build ${0}', payload.currentRevision || formattedCurrentVersion)
+        : tr('Updated to Luker v${0}', formattedCurrentVersion);
 
     const pills = [];
     if (isDev && payload.previousRevision && payload.currentRevision) {
@@ -291,13 +295,13 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
             class: 'lw-pilltag wn-range-pill',
             text: `${payload.previousRevision} → ${payload.currentRevision}`,
         }));
-        if (payload.currentVersion) {
-            pills.push(h('span', { class: 'lw-pilltag', text: `v${payload.currentVersion}` }));
+        if (formattedCurrentVersion) {
+            pills.push(h('span', { class: 'lw-pilltag', text: `v${formattedCurrentVersion}` }));
         }
-    } else if (payload.previousVersion && payload.currentVersion) {
+    } else if (formattedPreviousVersion && formattedCurrentVersion) {
         pills.push(h('span', {
             class: 'lw-pilltag wn-range-pill',
-            text: `v${payload.previousVersion} → v${payload.currentVersion}`,
+            text: `v${formattedPreviousVersion} → v${formattedCurrentVersion}`,
         }));
     }
 

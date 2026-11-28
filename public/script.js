@@ -375,6 +375,7 @@ import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPro
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { initAnnouncements, whenCriticalAnnouncementsDone } from './scripts/announcements.js';
 import { initWhatsNew } from './scripts/whats-new.js';
+import { formatCompactVersion, formatLukerDisplayVersion } from './scripts/util/version-display.js';
 import { event_types, eventSource } from './scripts/events.js';
 import {
     settleChatChanged,
@@ -1487,12 +1488,11 @@ async function getClientVersion() {
         CLIENT_VERSION = data.agent;
         EXTENSIONS_CLIENT_VERSION = data.compatAgent || data.agent || EXTENSIONS_CLIENT_VERSION;
         const lukerVersion = data.lukerVersion || data.pkgVersion;
-        displayVersion = `Luker ${lukerVersion}`;
+        displayVersion = formatLukerDisplayVersion(lukerVersion, {
+            gitBranch: data.gitBranch,
+            gitRevision: data.gitRevision,
+        });
         currentVersion = lukerVersion;
-
-        if (data.gitRevision && data.gitBranch) {
-            displayVersion += ` '${data.gitBranch}' (${data.gitRevision})`;
-        }
 
         const stCompatVersion = data.stCompatVersion || '1.19.1';
         $('#version_display').text(`${displayVersion} · SillyTavern ${stCompatVersion}`);
@@ -1884,7 +1884,7 @@ async function showLukerUpdatePrompt(versionData) {
         const usesNativeUpdateBridge = hasDesktopUpdateBridge()
             || hasAndroidUpdateBridge()
             || hasHarmonyUpdateBridge();
-        const npmSourceText = `${versionData.packageName || '@funnycups/luker'}@${versionData.lukerVersion || ''}${versionData.tagName ? ` → ${versionData.tagName}` : ''}`;
+        const npmSourceText = `${versionData.packageName || '@funnycups/luker'}@${formatCompactVersion(versionData.lukerVersion || '')}${versionData.tagName ? ` → ${versionData.tagName}` : ''}`;
         const branchText = isNpmPackage
             ? npmSourceText
             : (branch ? `${branch}${revision ? ` @ ${revision}` : ''}` : t`unknown branch`);
