@@ -499,3 +499,67 @@ test.describe('activity-guard: idle /newchat command', () => {
         expect(await readErrorToasts(page)).toEqual([]);
     });
 });
+
+test.describe('activity-guard: streaming error releases processor and chat-switch guard', () => {
+    let server, mock;
+
+    test.beforeAll(async ({ workerResources }, testInfo) => {
+        const scope = await workerResources.scenario(testInfo.file);
+        mock = await startMockLLM();
+        mock.setChatCompletionFailure(() => ({
+            status: 200,
+            body: 'data: {"error":{"message":"upstream mid-stream failure"}}\n\n',
+        }));
+        server = await startServer({ scope, batchKey: 'generation', scenarioId: 'activity-guard-stream-error' });
+        await seedStandardDataRoot(server.dataRoot, mock.baseURL);
+    });
+
+    test.afterAll(async () => {
+        await mock?.stop();
+    });
+
+    test.setTimeout(120_000);
+
+    test('closing chat after a streaming protocol/provider error does not warn that generation is still in progress', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await connectCustomApiViaUI(page);
+        await selectCharacterByName(page, 'Seraphina');
+        await page.locator('#chat .mes').first().waitFor({ state: 'visible', timeout: 30_000 });
+
+        await page.locator('#send_textarea').fill('Check the barometer before the squall arrives.');
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
+        await page.locator('#send_but').click();
+
+        await expect.poll(async () => (await readErrorToasts(page)).length, {
+            timeout: 30_000,
+            intervals: [100, 200, 300],
+        }).toBeGreaterThanOrEqual(1);
+
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 15_000 });
+        await expect(page.locator('#mes_stop')).toBeHidden();
+
+        await expect.poll(async () => readGuardState(page), {
+            timeout: 10_000,
+            intervals: [100, 200, 300],
+        }).toMatchObject({
+            characterName: 'Seraphina',
+            isGeneratingDom: false,
+            hasStreamingProcessor: false,
+            activeSources: [],
+        });
+
+        expect(await dispatchCancelableBeforeUnload(page)).toBe(false);
+
+        await page.locator('#options_button').click();
+        const closeChatOption = page.locator('#options a#option_close_chat:not(.displayNone)').first();
+        await closeChatOption.waitFor({ state: 'visible', timeout: 10_000 });
+        await closeChatOption.click();
+
+        await expect.poll(async () => (await readGuardState(page)).characterId, {
+            timeout: 10_000,
+            intervals: [100, 200, 300],
+        }).toBeUndefined();
+
+        await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
+    });
+});

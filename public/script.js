@@ -7260,6 +7260,9 @@ class StreamingProcessor {
     onErrorStreaming() {
         this.abortController.abort();
         this.isStopped = true;
+        if (streamingProcessor === this) {
+            streamingProcessor = null;
+        }
 
         if (this.isStaleEpoch()) {
             return;
@@ -9633,176 +9636,174 @@ async function generateInternalAfterCommands({ type, automatic_trigger, force_na
                     streamingProcessor = null;
                 }
             };
-            if (isContinue) {
-                // Save reply does add cycle text to the prompt, so it's not needed here
-                streamProcessor.firstMessageText = '';
-            }
+            try {
+                if (isContinue) {
+                    // Save reply does add cycle text to the prompt, so it's not needed here
+                    streamProcessor.firstMessageText = '';
+                }
 
-            streamProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
-            if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                clearStreamingProcessorIfOwned();
-                return Object.defineProperties(new String(''), {
-                    'messageChunk': { value: '' },
-                    'fromStream': { value: true },
-                });
-            }
-
-            hideSwipeButtons();
-            let getMessage = await streamProcessor.generate();
-            if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                clearStreamingProcessorIfOwned();
-                return Object.defineProperties(new String(''), {
-                    'messageChunk': { value: '' },
-                    'fromStream': { value: true },
-                });
-            }
-            let messageChunk = cleanUpMessage({
-                getMessage: getMessage,
-                isImpersonate: isImpersonate,
-                isContinue: isContinue,
-                displayIncompleteSentences: false,
-            });
-
-            if (isContinue) {
-                getMessage = continue_mag + getMessage;
-            }
-
-            const isStreamFinished = !streamProcessor.isStopped && streamProcessor.isFinished;
-            const isStreamWithToolCalls = Array.isArray(streamProcessor.toolCalls) && streamProcessor.toolCalls.length;
-            if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
-                const lastMessage = chat[chat.length - 1];
-                const hasToolCalls = ToolManager.hasToolCalls(streamProcessor.toolCalls);
-                const onlyHadPreview = shouldSkipIntermediaryFinalizeForToolPreview({
-                    showingToolCallPreview: streamProcessor.showingToolCallPreview,
-                    result: streamProcessor.result,
-                });
-                const shouldDeleteMessage = type !== 'swipe'
-                    && (['', '...'].includes(lastMessage?.mes) || onlyHadPreview)
-                    && !lastMessage?.extra?.reasoning
-                    && (['', '...'].includes(streamProcessor.result) || onlyHadPreview);
-                hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
+                streamProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
                 if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                    clearStreamingProcessorIfOwned();
                     return Object.defineProperties(new String(''), {
                         'messageChunk': { value: '' },
                         'fromStream': { value: true },
                     });
                 }
-                if (hasToolCalls && !shouldDeleteMessage && !onlyHadPreview) {
-                    await streamProcessor.finalizeIntermediaryMessage(streamProcessor.messageId, getMessage, { unlockUI: false });
-                    if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                        clearStreamingProcessorIfOwned();
-                        return Object.defineProperties(new String(''), {
-                            'messageChunk': { value: '' },
-                            'fromStream': { value: true },
-                        });
-                    }
-                }
-                const invocationResult = await ToolManager.invokeFunctionTools(streamProcessor.toolCalls, {
-                    reasoningText: streamProcessor.reasoningHandler.reasoning,
-                });
+
+                hideSwipeButtons();
+                let getMessage = await streamProcessor.generate();
                 if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                    clearStreamingProcessorIfOwned();
                     return Object.defineProperties(new String(''), {
                         'messageChunk': { value: '' },
                         'fromStream': { value: true },
                     });
                 }
-                const shouldStopGeneration = (!invocationResult.invocations.length && shouldDeleteMessage) || invocationResult.stealthCalls.length;
-                if (hasToolCalls) {
-                    if (shouldStopGeneration) {
-                        if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
-                            ToolManager.showToolCallError(invocationResult.errors);
-                        }
-                        unblockThisGeneration(type);
-                        clearStreamingProcessorIfOwned();
-                        return;
-                    }
+                let messageChunk = cleanUpMessage({
+                    getMessage: getMessage,
+                    isImpersonate: isImpersonate,
+                    isContinue: isContinue,
+                    displayIncompleteSentences: false,
+                });
 
-                    clearStreamingProcessorIfOwned();
-                    depth = depth + 1;
-                    await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
-                    if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                        return Object.defineProperties(new String(''), {
-                            'messageChunk': { value: '' },
-                            'fromStream': { value: true },
-                        });
-                    }
-                    return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+                if (isContinue) {
+                    getMessage = continue_mag + getMessage;
                 }
-            }
 
-            if (isStreamFinished) {
-                const streamFinishReason = streamProcessor.finishReason ?? null;
-                const willContinuePausedTurn = !isImpersonate
-                    && streamFinishReason === 'pause_turn'
-                    && depth < ToolManager.RECURSE_LIMIT
-                    && Array.isArray(streamProcessor.nativeContentBlocks)
-                    && streamProcessor.nativeContentBlocks.length > 0;
-                const willAutoContinue = willContinuePausedTurn || (!streamProcessor.showingToolCallPreview && shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate));
-                if (willAutoContinue) {
-                    // Middle round of an auto-continue-on-truncated chain.
-                    // Finalize DOM / chat[i].mes state locally but do NOT
-                    // emit MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED,
-                    // do NOT persist to disk, do NOT release the send lock,
-                    // do NOT play the completion sound. Then recursively
-                    // invoke Generate('continue') so the next round appends
-                    // to the same chat[i] via the existing continue path.
-                    // Downstream extensions see one MESSAGE_RECEIVED for the
-                    // merged final reply after the chain terminates.
-                    await streamProcessor.onFinishStreaming(streamProcessor.messageId, getMessage, { suppress: true });
-                    clearStreamingProcessorIfOwned();
+                const isStreamFinished = !streamProcessor.isStopped && streamProcessor.isFinished;
+                const isStreamWithToolCalls = Array.isArray(streamProcessor.toolCalls) && streamProcessor.toolCalls.length;
+                if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
+                    const lastMessage = chat[chat.length - 1];
+                    const hasToolCalls = ToolManager.hasToolCalls(streamProcessor.toolCalls);
+                    const onlyHadPreview = shouldSkipIntermediaryFinalizeForToolPreview({
+                        showingToolCallPreview: streamProcessor.showingToolCallPreview,
+                        result: streamProcessor.result,
+                    });
+                    const shouldDeleteMessage = type !== 'swipe'
+                        && (['', '...'].includes(lastMessage?.mes) || onlyHadPreview)
+                        && !lastMessage?.extra?.reasoning
+                        && (['', '...'].includes(streamProcessor.result) || onlyHadPreview);
+                    hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
                     if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
                         return Object.defineProperties(new String(''), {
                             'messageChunk': { value: '' },
                             'fromStream': { value: true },
                         });
                     }
-                    // Re-check abort AFTER the suppress-finalize (which is
-                    // async and can await through several ticks: reasoning
-                    // finish, token count, DOM sync) and BEFORE the recursive
-                    // Generate() call. If the user clicked stop during that
-                    // window, entering Generate() would deactivateSendButtons
-                    // → showStopButton and flash the stop button on-screen
-                    // before the recursive Generate's own abort check kicks
-                    // in. Bail here to keep the stop click visually clean.
-                    if (abortController?.signal?.aborted) {
-                        console.debug('[auto-continue-on-truncated] aborted between middle-round finalize and recursive Generate; honoring stop');
-                        // Emit the events the suppressed path skipped so
-                        // extensions see the interrupted reply as a completed
-                        // message (matching the streaming-abort semantics of
-                        // the plain path where a stop mid-stream still fires
-                        // MESSAGE_RECEIVED for the partial).
-                        await eventSource.emit(event_types.MESSAGE_RECEIVED, chat.length - 1, type);
+                    if (hasToolCalls && !shouldDeleteMessage && !onlyHadPreview) {
+                        await streamProcessor.finalizeIntermediaryMessage(streamProcessor.messageId, getMessage, { unlockUI: false });
                         if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
                             return Object.defineProperties(new String(''), {
                                 'messageChunk': { value: '' },
                                 'fromStream': { value: true },
                             });
                         }
-                        await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat.length - 1, type);
-                        return Object.defineProperties(new String(getMessage), {
-                            'messageChunk': { value: messageChunk },
+                    }
+                    const invocationResult = await ToolManager.invokeFunctionTools(streamProcessor.toolCalls, {
+                        reasoningText: streamProcessor.reasoningHandler.reasoning,
+                    });
+                    if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
+                        return Object.defineProperties(new String(''), {
+                            'messageChunk': { value: '' },
                             'fromStream': { value: true },
                         });
                     }
-                    return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
+                    const shouldStopGeneration = (!invocationResult.invocations.length && shouldDeleteMessage) || invocationResult.stealthCalls.length;
+                    if (hasToolCalls) {
+                        if (shouldStopGeneration) {
+                            if (Array.isArray(invocationResult.errors) && invocationResult.errors.length) {
+                                ToolManager.showToolCallError(invocationResult.errors);
+                            }
+                            unblockThisGeneration(type);
+                            return;
+                        }
+
+                        clearStreamingProcessorIfOwned();
+                        depth = depth + 1;
+                        await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
+                        if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
+                            return Object.defineProperties(new String(''), {
+                                'messageChunk': { value: '' },
+                                'fromStream': { value: true },
+                            });
+                        }
+                        return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+                    }
                 }
-                await streamProcessor.onFinishStreaming(streamProcessor.messageId, getMessage);
-                clearStreamingProcessorIfOwned();
-                if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
-                    return Object.defineProperties(new String(''), {
-                        'messageChunk': { value: '' },
+
+                if (isStreamFinished) {
+                    const streamFinishReason = streamProcessor.finishReason ?? null;
+                    const willContinuePausedTurn = !isImpersonate
+                        && streamFinishReason === 'pause_turn'
+                        && depth < ToolManager.RECURSE_LIMIT
+                        && Array.isArray(streamProcessor.nativeContentBlocks)
+                        && streamProcessor.nativeContentBlocks.length > 0;
+                    const willAutoContinue = willContinuePausedTurn || (!streamProcessor.showingToolCallPreview && shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate));
+                    if (willAutoContinue) {
+                        // Middle round of an auto-continue-on-truncated chain.
+                        // Finalize DOM / chat[i].mes state locally but do NOT
+                        // emit MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED,
+                        // do NOT persist to disk, do NOT release the send lock,
+                        // do NOT play the completion sound. Then recursively
+                        // invoke Generate('continue') so the next round appends
+                        // to the same chat[i] via the existing continue path.
+                        // Downstream extensions see one MESSAGE_RECEIVED for the
+                        // merged final reply after the chain terminates.
+                        await streamProcessor.onFinishStreaming(streamProcessor.messageId, getMessage, { suppress: true });
+                        clearStreamingProcessorIfOwned();
+                        if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
+                            return Object.defineProperties(new String(''), {
+                                'messageChunk': { value: '' },
+                                'fromStream': { value: true },
+                            });
+                        }
+                        // Re-check abort AFTER the suppress-finalize (which is
+                        // async and can await through several ticks: reasoning
+                        // finish, token count, DOM sync) and BEFORE the recursive
+                        // Generate() call. If the user clicked stop during that
+                        // window, entering Generate() would deactivateSendButtons
+                        // → showStopButton and flash the stop button on-screen
+                        // before the recursive Generate's own abort check kicks
+                        // in. Bail here to keep the stop click visually clean.
+                        if (abortController?.signal?.aborted) {
+                            console.debug('[auto-continue-on-truncated] aborted between middle-round finalize and recursive Generate; honoring stop');
+                            // Emit the events the suppressed path skipped so
+                            // extensions see the interrupted reply as a completed
+                            // message (matching the streaming-abort semantics of
+                            // the plain path where a stop mid-stream still fires
+                            // MESSAGE_RECEIVED for the partial).
+                            await eventSource.emit(event_types.MESSAGE_RECEIVED, chat.length - 1, type);
+                            if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
+                                return Object.defineProperties(new String(''), {
+                                    'messageChunk': { value: '' },
+                                    'fromStream': { value: true },
+                                });
+                            }
+                            await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat.length - 1, type);
+                            return Object.defineProperties(new String(getMessage), {
+                                'messageChunk': { value: messageChunk },
+                                'fromStream': { value: true },
+                            });
+                        }
+                        return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
+                    }
+                    await streamProcessor.onFinishStreaming(streamProcessor.messageId, getMessage);
+                    clearStreamingProcessorIfOwned();
+                    if (isStaleEpoch() || streamProcessor.isStaleEpoch()) {
+                        return Object.defineProperties(new String(''), {
+                            'messageChunk': { value: '' },
+                            'fromStream': { value: true },
+                        });
+                    }
+                    if (!streamProcessor.showingToolCallPreview) {
+                        triggerAutoContinue(messageChunk, isImpersonate);
+                    }
+                    return Object.defineProperties(new String(getMessage), {
+                        'messageChunk': { value: messageChunk },
                         'fromStream': { value: true },
                     });
                 }
-                if (!streamProcessor.showingToolCallPreview) {
-                    triggerAutoContinue(messageChunk, isImpersonate);
-                }
-                return Object.defineProperties(new String(getMessage), {
-                    'messageChunk': { value: messageChunk },
-                    'fromStream': { value: true },
-                });
+            } finally {
+                clearStreamingProcessorIfOwned();
             }
         } else {
             return await sendGenerationRequest(type, generate_data, { jsonSchema }, generationAbortController.signal);
