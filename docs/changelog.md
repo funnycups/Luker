@@ -4,742 +4,219 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
-### Platform
+### Documentation
 
-- Now tracks SillyTavern 1.19.1.
-- Validated target user existence across admin backup, migration, and storage inspection actions.
-- Added npm CLI packaging, automated release publishing, and in-app npm updates for @funnycups/luker, storing global mode data, plugins, backups, and extensions under the Luker application data directory.
+- Added the [Workbench guide](/features/workbench), [Image Generation & AI Illustration guide](/features/image-generation), [Server Plugins guide](/guide/server-plugins), [iOS guide](/guide/ios), [HarmonyOS guide](/guide/harmonyos), [Desktop app guide](/guide/desktop), [S3 Sync guide](/improvements/s3-sync), [Workbench API reference](/development/extension-api/workbench), [Image Generation API reference](/development/extension-api/image-generation), and [Run Panel API reference](/development/extension-api/run-panel).
+- Updated the Getting Started, Memory Graph, Multi-Agent Orchestrator, Search Tools, Completion Preset Assistant, Character Editor Assistant, Skills, State System, and Iteration Library guides to match current installation methods, entry points, tools, and interfaces, and removed descriptions of unimplemented APIs and features.
 
-### Third-party extensions
+### Workbench
 
-- Fixed Prompt Manager refreshes bypassing third-party extensions that replace the prompt list renderer.
+- Added a draggable, resizable floating Workbench window across desktop and mobile with prompt token breakdown, local configuration suggestions, read-only AI Q&A backed by diagnostics and built-in Luker documentation lookup, and per-session conversation management.
+- Unified AI iteration for Memory graph config, Memory graph content, Multi-Agent Orchestrator, Image Generation, chat completion presets, character cards, and world books inside Workbench, with live zoomable diffs, lossless image attachments, persistent drafts across reloads, Change history undo, example preset import and derivation, and global unsaved-changes indicators.
+- Added a shared draggable Run panel that adapts automatically between desktop sidebar and drawer modes to track live orchestration, pre-request search, and image generation runs with inline illustration previews.
+- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in extension and Workbench settings panels.
+- Added visible stored defaults and individual reset controls to extension prompt settings, and removed retired Completion Preset Assistant AI connection and preset overrides.
+- Fixed rolling back or regenerating an AI iteration step running its approved skill and custom tool changes a second time, and fixed approving a skill rewrite or deletion overwriting later external changes.
+- Fixed pending AI iteration changes failing to apply after a page reload or server restart, fixed restored rollbacks overwriting overlapping external edits, and fixed repeated model tool-call ids affecting sibling turns.
 
-## v2.9.0-rc.6 (2026-11-27)
+### Image Generation
+
+- Added AI Illustration for automatic or on-demand assistant message illustrations with inline locking, version switching, source image editing, generation presets, dynamic LoRA selection, and session-only failure badges.
+- Added Image Studio for free image generation and source image editing with lossless chat image attachments, a global Character Archive with Danbooru tag lookup and conversational AI Profile Builder, and connection profile binding including OpenAI-compatible multimodal chat image backends.
+- Added cross-backend character reference images, style and mood references, and img2img switches with live backend compatibility conflict warnings, alongside Workbench ComfyUI API-format workflow AI iteration and sandboxed prompt simulation review.
+- Removed the 10-minute ComfyUI generation timeout.
+- Fixed character image prompt sharing updates silently ignoring failed saves or overwriting another character's settings after switching characters.
 
 ### Connections & Models
 
-- Centralized provider capability rules, lifted outdated Gemini image-mode restrictions on system prompts and supported web search, and rejected unsupported capability combinations explicitly instead of dropping parameters silently.
-- Updated model lists, capability rules, and context and output limits across Gemini, Claude, OpenAI, Azure OpenAI, xAI, and MiniMax, adding gpt-6.1-sol, gemini-3.1-flash-lite-image, and gemini-nano-banana-2.1, Gemini image-model thinking levels, 1M context limits for supported Claude and MiniMax models, OpenAI, Azure, and xAI reasoning effort gating, and Claude Haiku 5 thinking summaries.
+- Added Gemini 4, gpt-6.1-sol, gemini-3.1-flash-lite-image, and gemini-nano-banana-2.1 support, updated model lists, 1M context limits for supported Claude and MiniMax models, Gemini image-model thinking levels, and Claude Haiku 5 thinking summaries, and centralized provider capability rules to reject unsupported combinations explicitly.
+- Decoupled **Reasoning Effort** from **Show chain of thought** visibility across providers without artificial effort clamps, aligned chat-completion sampling, reasoning, and tool parameters with each provider's API, and extended **Additional Parameters** to every chat completion source.
 - Preserved lossless multi-turn thinking signatures, native protocol parts, and token usage across Gemini, Claude, OpenAI Chat, and OpenAI Responses while stripping incompatible replay fields when switching providers.
 - Restored verbatim native HTTP response passthrough for streaming and OpenAI Chat completions, returned compatibility supersets with native fields by default for other non-streaming providers with explicit native-only opt-in, and delivered internal generation metadata over a dedicated WebSocket channel.
 - Moved plain-text function calling orchestration, trigger management, history normalization, strict parsing, and format-correction retries to the backend, and enabled plain-text tool calls on models without native tool support.
-- Added live chat streaming previews for designated string tool-call arguments across Gemini, Claude, OpenAI Chat, OpenAI Responses, Cohere, and plain-text function calling, including native Gemini and Claude argument streaming, reconnect preview recovery, and clean exclusion of length-truncated unfinished tool calls.
-- Added automatic continuation for paused Claude server-tool turns, preserving native content blocks and reasoning across continuation rounds.
-- Added source citation display below assistant messages for providers that return citations, merging sources across continuations.
-- Preserved full turn metadata, including citations, finish reasons, and refusal replies, when the server saves a generation after a client disconnect.
+- Added live chat streaming previews for designated string tool-call arguments across Gemini, Claude, OpenAI Chat, OpenAI Responses, Cohere, and plain-text function calling, with native Gemini and Claude argument streaming and reconnect recovery.
+- Added automatic continuation for paused Claude server-tool turns, source citation display below assistant messages merged across continuations, and full turn metadata preservation when the server saves a generation after a client disconnect.
+- Added per-profile network proxy settings to chat completion connection profiles, multi-select deletion to the connection-profile picker, official base URL normalization across chat, embedding, and rerank profiles, model list fetching and connection tests for embedding and rerank profiles, and a warning when both Base URL and a legacy proxy URL are configured.
 - Removed the upper limit on LLM tool-call retry counts across plain-text function calling, built-in extensions, and TTS NPC attribution.
-- Fixed older Claude models keeping thinking enabled when falling back to a forced JSON-schema tool.
-
-### Performance
-
-- Bounded concurrent bulk resource reads across named settings collections, presets, characters, world books, extension manifests, and state batches, and resolved individual world book loads independently of slower siblings in the same batch.
-- Unblocked extension startup from full preset library preloading, hydrated presets on demand during switching, generation, export, and deletion, and deferred low-concurrency background preloading scoped to the active API and Chat Completion until after startup finishes.
-- Deferred loading of non-selected Advanced Formatting templates and all MovingUI presets during startup, hydrating each entry on demand when selected and reporting load failures explicitly.
-
-### Request Inspector
-
-- Unified strict wire-protocol parsing across generation, persistence, and the Request Inspector, displaying protocol mismatches and malformed responses as parse errors with collapsible raw diagnostic payloads.
-- Added plain-text function call inspection showing parsed calls, parse failures, format-correction retry chains, and per-region raw text toggling without altering preceding thinking or reply text.
-- Removed the 8192-character search snippet limit in the Request Inspector so list search covers full request and response text, and surfaced list and detail load failures with error notices while preserving the previous view.
-
-### Workbench
-
-- Added lossless image attachment support via file picker, clipboard paste, and drag-and-drop to Workbench Q&A and AI iteration, with multi-turn replay, copy-on-branch isolation, and automatic cleanup on conversation deletion.
-- Added live diff previews with zoomable inline diffs for character card and chat completion preset AI iteration, plus a full replacement diff preview during post-replace review.
-- Preserved pending AI iteration drafts across reloads, pinned active iteration targets against mid-session switches, and removed arbitrary read truncation in shared AI inspection tools and expanded tool-call cards.
-- Removed Workbench Q&A's 10-round tool-calling limit, 10-turn history cap, tool output and reader truncations, send-preview truncation, and request counter cap, and surfaced an error notice when opening a request record fails.
-- Removed retired Completion Preset Assistant AI connection and preset overrides so chat completion preset AI iteration follows Workbench AI settings.
-- Adapted the Run panel automatically between desktop sidebar and drawer modes based on Chat Width, showing the reopen pill when the side space is too narrow.
-- Fixed opening Workbench on mobile shifting the screen horizontally.
-- Fixed regenerating a reply in Workbench Q&A or AI iteration losing the previous turn and pending drafts when sending is cancelled, switched away from, or fails before saving.
-- Fixed the collapsed Run panel pill wrapping onto multiple lines on desktop or drifting from the right edge as its text or viewport changed.
-- Fixed rolling back or regenerating an AI iteration step running its approved skill and custom tool changes a second time.
-- Fixed pending AI iteration changes, and later changes to the same content, failing to apply when approved after the page was reloaded or the server restarted.
-- Fixed rolling back restored AI iteration changes overwriting overlapping external edits, requiring a new proposal for restored array edits that lack drift expectations.
-- Fixed pending turn approval counts including changes whose proposal kind is no longer available, and invalid saved timestamps displaying an invalid time.
-- Fixed approving, rejecting, or rolling back one turn's changes in AI iteration also acting on other turns when the model repeated a tool call id.
-- Fixed approving an AI iteration skill file rewrite or skill deletion overwriting changes made to the skill after the proposal.
-
-### Image generation
-
-- Added lossless chat image attachments to Image Studio and the AI Profile Builder dialog so the AI can visually inspect user images, derive character descriptions, or reuse attached images directly as references, alongside on-demand inspection of draft and archive reference images.
-- Added prompt preset creation and deletion to Image Generation AI iteration in Workbench.
-- Moved the prompt preset selector to the Image Studio toolbar, placed the new session button in the session list header, and added empty-state guidance explaining that Studio sessions are separate from chat illustrations.
-- Removed the 10-minute ComfyUI generation timeout so image generations wait until completion or manual cancellation.
-- Fixed failed Image Studio session saves leaving unpersisted messages or images in memory, losing the draft, or leaving uploaded attachments behind, and separated post-save session list refresh errors from turn rollback.
-- Fixed regenerating an inline illustration not displaying the activity capsule and Run panel progress.
-- Fixed clicking an inline illustration blocking the action dialog on a backend workflow request.
-- Fixed regenerating an inline illustration interrupting other active regenerations in the same message.
-- Fixed character image prompt sharing updates silently ignoring failed saves or overwriting another character's settings after switching characters.
+- Fixed older Claude models keeping thinking enabled when falling back to a forced JSON-schema tool, and fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.
+- Fixed Gemini chat completions failing on multiple tool calls in one turn and dropping multi-turn tool call and response pairing ids.
+- Fixed Vertex AI requests to the `us` and `eu` multi-regions using an invalid hostname, and fixed embedding profiles rejecting Vertex AI service-account authentication.
+- Fixed a timed-out request's retry reusing the same generation id, fixed OpenRouter streamed reasoning details accumulating per delta, fixed plain-text function calling stripping unparsed call markup from reply text, fixed mismatched stream payload shapes losing text, and fixed legacy proxy preset migration losing the profile proxy password.
 
 ### Multi-Agent Orchestrator
 
-- Standardized missing-id tool failures in the orchestrator's Iteration Studio to distinguish invalid arguments from missing targets with separate action details.
-- Removed the "Orchestrator running..." toast from spec, agenda, loop, and single-agent runs, leaving run status and the Stop button in the run panel.
-- Removed duplicate hidden planner instructions from agenda mode so editable prompt settings serve as the single source.
-- Fixed orchestrator runs in spec, agenda, loop, and single-agent modes showing as failed in the run panel after you stopped them.
-- Fixed approving and rolling back world book entry changes in the orchestrator's Iteration Studio failing.
-- Fixed CardApps and CardApp Studio being unable to read or switch the card's orchestration preset.
-- Fixed external card preset switches leaving stale orchestration editor drafts that could overwrite the selected preset.
-- Fixed rolling back or regenerating an approved orchestration preset change in the orchestrator's Iteration Studio failing with a conflict.
-- Fixed rolling back an approved AI iteration change that created a character's first orchestration card override leaving an active override behind instead of restoring the previous preset state.
-- Fixed the default custom tools returning to a spec orchestration preset after all of its custom tools were removed and the preset was saved again.
-- Fixed agent presets, stages, and nodes whose ids contain Chinese or other non-ASCII characters being renamed, the orchestrator's Iteration Studio creating a duplicate when editing such a preset, copying agenda agents into spec dropping non-ASCII final agent ids, node references breaking after applying to global, and regenerating failing with a conflict.
-- Fixed nodes whose agent preset id contains Chinese or other non-ASCII characters running without their preset after applying to global in v2.8.0, relinking unambiguous matches on load.
-- Fixed the orchestrator's Iteration Studio editing only the first of several stages or nodes that share an id.
-- Fixed adding or removing stages, nodes, agent presets, agents, or tool overrides in the orchestration editor discarding other unsaved edits.
-- Fixed switching connection profile, changing chat, editing the character card, editing or deleting messages, or finishing an orchestration run discarding unsaved edits in the orchestration editor.
-- Fixed character-scoped runtime-limit and custom-tool auto-saves causing a later host refresh to discard other unsaved orchestration edits.
-- Fixed global preset changes misdirecting unsaved drafts, delayed saves discarding later edits, and preset skill operations using an unacknowledged source name, being skipped after unrelated selections, or running before persistence succeeded.
-- Fixed failed character preset switches, override clearing, and auto-saves being treated as successful writes.
-- Fixed overlapping character preset switches and auto-saves acknowledging changed sources or restoring unsuccessful pending changes.
-- Fixed the orchestrator's Iteration Studio setting an agent's API or prompt preset without access to the available connection profiles and chat completion presets.
-- Fixed a director mode reply being lost after a page reload, and the Stop button disappearing or failing to stop the reply, when the Prompt Manager recounted tokens or another feature such as background **Auto-select** generated text while the reply was being generated.
+- Embedded the orchestration flow editor, run inspector, run history, timing statistics, presets, skills, custom tools, and plot notes into Workbench.
+- Removed the "Orchestrator running..." toast from spec, agenda, loop, and single-agent runs, removed duplicate hidden planner instructions from agenda mode, and standardized missing-id iteration tool errors.
+- Fixed orchestrator runs in spec, agenda, loop, and single-agent modes showing as failed in the Run panel after being manually stopped, and fixed agenda and director profiles ignoring worker concurrency, run limit, and abort-discard settings.
+- Fixed CardApps and CardApp Studio being unable to read or switch the card's orchestration preset, and fixed external card preset switches leaving stale orchestration editor drafts.
+- Fixed agent presets, stages, and nodes with non-ASCII ids breaking across editing, global apply, agenda-to-spec copy, and regeneration, and relinked unambiguous v2.8.0 node matches on load.
+- Fixed the default custom tools returning to a spec preset after removing all custom tools, fixed spec AI iteration failing on string-shorthand nodes, and fixed editing duplicate stage or node ids modifying only the first entry.
+- Fixed unsaved orchestration editor edits being discarded by structural edits, host refreshes, chat or profile switches, or character auto-saves, and fixed failed or overlapping preset writes, global draft misdirection, and preset skill sequencing.
+- Fixed orchestration Iteration Studio setting an agent's API or prompt preset without access to available connection profiles and chat completion presets.
+- Fixed director and takeover replies being lost or losing their Stop button when the Prompt Manager recounted tokens or a background task such as **Auto-select** ran concurrently.
 
 ### Memory Graph
 
-- Removed hidden recall selection constraints so editable Memory Graph prompts control recall behavior directly.
-- Removed the 600 upper limit on the Memory Graph **RPM limit** setting, and surfaced global settings load errors in the Schema view.
-- Added missing Chinese translations for graph inspection and extraction messages.
-- Fixed a delayed global advanced-settings save clearing the dirty marker for later edits.
-- Fixed clearing the Memory Graph **Tool-call retries** field setting the retry count to 0 instead of the default.
-- Fixed leaving **Exclude recent assistant turns** or **Max merges per type** blank in the Memory Graph manual compression modal submitting 0 or 1 instead of the displayed defaults.
+- Embedded the Memory Graph network, timeline, data table, schema editor, and settings workspace into Workbench, and added a configuration studio for reviewable AI edits to schema, prompts, node text, and character-delta parameters.
+- Unified hierarchical and cross-depth compression onto a single-summary rollup model across all node types with direct failure reporting, partial manual-compression saves, an unlimited **Compress until done** option, and Workbench rollup compaction.
+- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a live animated preview, visibility-gap warnings, a default cadence of every 2 AI replies, and a standalone **Extraction Mode & Crawl** section.
+- Added **Concurrent extraction** mode, editable **Extraction Template** and **Edge Rules** settings, a from-floor rebuild mode in the range rebuild modal, unlimited crawl candidate limits when set to 0, separate World Info toggles for extraction and LLM recall, and failure-reason retry notices, while recording an opening event on rounds without narrative.
+- Removed hidden recall selection constraints, recent-turn exclusion filtering, and the 600 upper limit on **RPM limit**, and aligned extraction, crawl, and compression prompts with runtime fields.
+- Fixed Memory Graph automatic and manual compression loops stopping at a fixed round cap, and fixed manual compression being skipped when **Auto compression** is disabled.
+- Fixed Memory Graph extraction, rebuild, fill, and compression errors being mislabeled as recall injection failures, fixed full rebuild omitting edit and delete tools, fixed node edits rejecting title changes, and fixed extraction writing duplicate reverse edges.
+- Fixed Memory Graph LLM recall failing to drill into always-inject event rollups, fixed RAG recall applying the per-type quota before filtering always-inject nodes, and fixed recall caching fallback or empty results on failure, running on empty graphs, or leaking across turns.
+- Fixed Memory Graph schema iteration failing on read-only fields, fixed **Force Update** types failing with a cadence, fixed rejected extraction operations being dropped, fixed retry prompts contradicting the validator, and fixed regenerating a turn during extraction processing deleted content.
+- Fixed clearing **Tool-call retries** submitting 0 instead of the default, fixed blank **Exclude recent assistant turns** and **Max merges per type** fields submitting 0 or 1, and added missing Chinese translations for graph inspection and extraction messages.
 
-### CardApp
+### Request Inspector
 
-- Fixed CardApp delayed initialization and character writes targeting the newly selected character after switching characters.
-
-### Character Editor Assistant
-
-- Added lossless image attachment support to CardApp Studio AI chat with multi-turn replay and automatic cleanup when clearing or deleting sessions.
-- Pinned CardApp Studio AI editing tools to the studio's target character, prevented session load errors and CardApp diagnostic writes from overwriting saved sessions, and removed the session count limit.
-- Removed the **History** block from the settings panel.
-- Fixed CardApp Studio file and session attributes breaking when their values contain quotes.
-- Fixed CardApp Studio AI file creation reporting false drift for missing files and mishandling quoted file paths.
-- Fixed CardApp Studio AI file editing treating non-404 file read errors as missing files.
-- Corrected the post-replace instructions to name the available world book editing tools, and guarded rollback cleanup against deleting modified or bound world books.
-- Fixed a tool-call retry count of 0 being reset to 2.
-- Fixed settings fields losing the value being typed when another setting was saved.
-
-### Search Tools
-
-- Removed the 10-entry read cap from the pre-request search agent's managed-entry read tool, preserved multi-turn thinking signatures and native protocol parts, and fixed its untranslated status line on Chinese locales.
-
-### TTS
-
-- Added a **Connection profile** selector and binding status to Google Gemini TTS in the TTS drawer, forwarded custom Google AI Studio endpoints when following the chat connection, normalized custom endpoint paths, and improved handling of non-JSON upstream errors.
-
-### Skills
-
-- Added optional bundling of a character's skills into exported character cards, prompting whether to include them when the character has skills.
-- Standardized skill drift refusals to return HTTP 409 conflict responses.
-- Fixed preset export confirms showing untranslated scope labels.
-- Fixed chat completion preset export not offering to bundle the preset's skills when the Multi-Agent Orchestrator extension was disabled.
-- Fixed skills bundled in a card-bound preset not being offered for installation when an imported card was first opened.
-- Fixed exporting a chat completion or orchestration preset with Skip, or with no confirm because the preset had no skills, still carrying the skills bundled into the preset when it was imported.
-- Fixed the first save in the Skill Manager file editor overwriting a file that was changed elsewhere after the editor opened it.
-- Fixed "+ New file" in the Skill Manager file editor emptying an existing file when its path was entered.
-- Fixed opening the Skill Manager replacing some Chinese translations elsewhere in the UI with its own wording.
-- Fixed filesystem permission and I/O errors during skill operations being silently treated as missing skills or empty lists.
-
-### Chat
-
-- Added the **Expand input bar on long drafts** setting, enabled by default, which moves the message input onto its own full-width row when a draft wraps or contains line breaks.
-- Fixed character edits triggered during a character switch overwriting the newly selected character card with the previous character's form fields.
-- Fixed out-of-order solo chat loads overwriting the newly selected character's chat state during rapid character switching.
-- Fixed clicks in the merge chats and split chat dialogs being ignored while the dialog was still opening, such as **+ Add chat** not opening the chat picker.
-- Fixed a stopped streaming reply not being saved when a feature such as background **Auto-select** had failed to generate text while the reply streamed.
-
-### Themes
-
-- Added missing Chinese translations for theme save, delete, and import notifications and prompts.
-- Fixed theme migration dropping legacy custom palettes when no custom CSS was set.
-- Fixed failed or overlapping theme switches leaving inconsistent theme state, and preserved built-in theme stylesheets when generating a theme from background colors.
-- Fixed failed theme edits, theme updates, theme deletions, and built-in stylesheet loads failing silently instead of rolling back and showing an error, and guarded theme startup, patching, and migration against corrupt settings or theme files.
-
-### Notifications
-
-- Fixed custom themes styling notifications directly rendering layered double boxes or mismatched accents, and adapted the built-in Lens theme to match its palettes.
-- Fixed notifications auto-dismissing or closing on click while an input inside the notification is focused, leaving empty containers behind after closing, or failing with multi-class icon or position options.
-
-### Update Notice
-
-- Fixed post-update changelog notices displaying raw formatting tags around macro examples.
-
-### World Info
-
-- Fixed concurrent World Info saves and reads overwriting newer edits, retaining failed writes in cache, or repopulating caches after a world book was deleted.
-- Fixed auxiliary world books being lost during character card creation, and added a warning when an imported embedded world book cannot confirm its character binding.
-- Fixed the World Info page counter showing in English on Traditional Chinese.
-
-### Regex
-
-- Fixed global, character-scoped, and preset regex persistence silently swallowing write failures, leaving toggle switches flipped after rejected saves, or removing the source entry before a cross-scope move succeeded.
-- Fixed invalid regex entries triggering automatic modifications to saved settings, cards, or presets instead of being skipped with a notice, fixed actions on scripts missing an id, and fixed clicking edit on read-only plugin rules in the Regex Debugger opening the editable editor.
+- Unified strict wire-protocol parsing across generation, persistence, and the Request Inspector, surfacing protocol mismatches and malformed responses with collapsible raw diagnostic payloads.
+- Added plain-text function call inspection with parsed arguments, failure diagnostics, retry chains, and per-region raw text toggling, and added an **Abort** button to terminate in-flight requests on both client and server.
+- Added a **Tools** section with expandable scrollable parameter tables, inline image previews with elided base64 in **Wire Request**, outbound reasoning effort and network proxy display, and generated images in image generation records.
+- Added a tunable `requestInspector.byteBudgetBytes` buffer budget, removed the 8192-character list search truncation, and surfaced list and detail load failures while preserving the previous view.
+- Fixed the Inspector showing the stored provider key instead of an overridden auth header, fixed streamed reasoning details rendering per fragment instead of merged entries, and fixed image generation records missing prompts and parameters.
 
 ### Storage & Sync
 
-- Extended the Clean-Up tool to scan chat, character, and preset state data for image references.
-- Fixed immediate settings saves acknowledging older or unsaved payloads.
-- Fixed cross-mode restore failures before destination writes incorrectly reporting partially modified or restored data.
-- Fixed cross-mode restore refusals concealing a failed snapshot rollback and its recovery location.
-- Fixed LAN Sync status messages, the panel description, and other translated strings showing in English on Chinese locales.
-- Fixed restoring a corrupt backup on SQLite, MySQL, and PostgreSQL storage, or a backup interrupted by a database connection error on MySQL and PostgreSQL storage, erasing the existing data.
-- Fixed restoring a backup on MySQL and PostgreSQL storage running arbitrary SQL statements from the backup file, which let a crafted backup change other accounts' data.
-- Fixed restoring a SQLite, MySQL, or PostgreSQL backup into an account other than the one it was made from leaving that account empty.
-- Fixed restoring a corrupt backup from another storage mode reporting a failed conversion that might have left the existing data partially changed, instead of rejecting the backup.
-- Fixed restoring a backup on SQLite storage whose database file is not a Luker database erasing the existing data.
-- Fixed restoring a backup on MySQL storage failing when the database runs in the NO_BACKSLASH_ESCAPES SQL mode and the data contains quotes or backslashes.
-- Fixed SQLite backup restore accepting databases with missing required columns or unsupported triggers.
-- Fixed SQLite backup restore failing when temporary files and user data are on different volumes.
+- Added encrypted [S3 Sync](/improvements/s3-sync) and a unified [Sync panel](/improvements/sync) with [automatic sync](/improvements/sync#automatic-sync-and-schedule), schedule settings, [pending sync decisions](/improvements/sync#pending-decisions), [chat branches and restoration notices](/improvements/sync#chat-branches-and-restored-chats), change-tree conflict previews with secret masking, device label retention, cross-device **Undo last sync**, and [administrator private-address controls](/guide/configuration#sync-private-addresses).
+- Added per-namespace global state storage across quotas, backups, migrations, and sync, added an admin **Backup Settings** page in the Account window with immediate runtime reload, and extended the **Clean-Up** tool to scan state data while rendering categories lazily on expansion.
+- Automated merging of character stats, group files, and character-card recent-chat metadata across synced devices, embedded detected LAN addresses in pairing links, verified reverse connections before pairing, and surfaced LAN sync errors via notifications and debug logs.
+- Excluded `.git` metadata entries from user backup archives and rejected `.git` paths and symbolic links across backup restores, cross-mode restores, global extension archive imports, and sync directory walks.
+- Fixed user backup archives and restores grouping the entire `backups/` directory under settings instead of partitioning chat, secret, and settings backups by category, and preserved modification timestamps in cross-mode restore.
+- Fixed SQLite, MySQL, and PostgreSQL backup restores erasing existing data on corrupt archives, database connection errors, or non-Luker SQLite files, fixed cross-account DB restores leaving target accounts empty, fixed MySQL restores under `NO_BACKSLASH_ESCAPES`, fixed SQLite restores accepting invalid schemas or failing across volumes, and prevented crafted SQL backup files from executing arbitrary SQL statements.
+- Fixed cross-mode restore reporting partial modifications when failing before destination writes and concealing failed snapshot rollbacks, and fixed failed storage migrations locking the **Storage Backend** page without a reset action.
+- Fixed LAN Sync pairing authentication with user accounts enabled, fixed file-backed category omissions, missing deletions, and cross-engine conflicts on SQL storage, fixed false success reports on peer write failure, fixed character stats overwrites, background folder conflicts, and initial settings conflicts, and fixed Chinese translations for LAN Sync status messages.
+- Fixed sync following symbolic links outside data directories, fixed filesystem name aliases, `.luker-state.` preset collisions, unreadable sync settings or image indexes being overwritten, SQL sync omitting dot-prefixed or double-dot names, and deleted character Data Bank attachments reappearing.
+- Fixed ZIP restores stalling on large files or misclassifying bundled built-in extensions as third-party extensions, fixed onboarding overwriting Data ZIP profiles and personas, fixed immediate settings saves acknowledging stale payloads, and fixed the media deletion preview overflowing the screen.
 
 ### Client Apps
 
-- Split Android builds into per-architecture and universal APKs, matched the in-app updater to the device architecture, compressed the bundled Android runtime archive, and trimmed duplicate and test files from mobile runtime packages.
-- Fixed iOS system bar colors not re-syncing after delayed stylesheets finish loading.
+- Added native [iOS](/guide/ios), [HarmonyOS](/guide/harmonyos), and Windows, macOS, and Linux [Desktop](/guide/desktop) apps with background keep-running on Windows and macOS, tray menus, custom data directory migration, native endpoint recovery dialogs, external-link system browser handling, and a **Check for pre-release updates** setting.
+- Split Android builds into per-architecture and universal APKs with architecture-matched in-app updates, compressed the bundled Android runtime, optimized first-launch startup and storage usage, and added renderer heap snapshot and performance trace capture to Android and HarmonyOS diagnostics bundles.
+- Moved client app **Refresh** and **Endpoint** actions to the top bar of User Settings.
+- Fixed the Android app compiling frontend bundles at startup instead of using packaged assets, fixed Android startup failures after interrupted local service preparation, fixed Android update checks never reporting new versions, fixed Android crash reports not appearing after abnormal exits, and prevented the saved-key autosuggest popup from firing in the Android app.
 
-### Documentation
+### Performance
 
-- Updated the card editor docs to match the editor assistant's current entry points, settings, tools, and version history, and removed the Character Editor Assistant API page, which described an API Luker does not provide.
-- Rewrote the Iteration Library page as the reference for the iteration library modules extensions can use.
-- Updated the Skills and Completion Preset Assistant docs to match the current Skill Manager tabs, import flows, export confirms, and install dialog, and removed descriptions of features Luker does not provide.
+- Split settings, presets, characters, world books, and other stored data into account-scoped resources with ETag revalidation, bounded concurrent bulk resource reads, and resolved individual world book loads independently of slower siblings.
+- Deferred loading of non-selected global presets, Advanced Formatting templates, and MovingUI presets until needed while running low-concurrency background preloading after startup finishes.
+- Optimized first-screen startup, settings saving, hidden Prompt Manager rendering, and in-place prompt group collapse and expand.
 
-### Extension API
+### Themes
 
-- Fixed preset extension writes failing to update card-bound presets and their active read cache, skipping unloaded lazy global presets, creating unintended global presets, and reporting success after a dependent save failed or its global target changed.
-- Updated `saveSettings` to return saved, failed, or deferred outcomes with the acknowledged payload, establish its baseline strictly from complete stored sources, and preserve later saves and live edits across overlapping server reads.
-- Updated `writeExtensionField` to return HTTP success as a boolean, reject stale callbacks after target changes or conflicting edits, preserve the character creation buffer on acknowledgement, and reject non-OK bulk extension writes instead of returning an empty summary.
-- Propagated failed character extension writes for character-bound presets, CardApp field updates, and Memory Graph overrides while preserving queued changes during concurrent preset additions, legacy binding migration, and override removal.
-- Removed `storage`, `ui.apply`, `ui.toolcall`, `zoomOverlay.closeExpandedDiff`, `zoomOverlay.beginLineDiffResize`, `runner.abortUtils.isNoToolCallExtractionError`, `tools.lorebookWrites.applyLorebookCommit`, `tools.lorebookWrites.applyLorebookProposal`, and ProposalBus `hasPendingSiblingsFor` from `ctx.iterationLibrary`.
-- Added ProposalBus `listEntries` and `discardEntries`, tool-call id collection, strict abort detection, inline text diff rendering, skill target registration, and request routing options to `ctx.iterationLibrary`, switched `lorebookWrite` to the `orch-lorebook` target type, and marked `skillAuthor` and `customToolAuthor` as non-reversible.
-- Added `createScopedI18n`, `character.presets.rename`, `stateErrors.CONFLICT_CODES`, live getters for `streamingProcessor`, `tags`, and `tagMap`, and proxy-unwrapping lookups on `ctx.characters`, and added character saved-mode and preset override helpers on the orchestrator extension API.
-- Added `sha256` to `context.skills.readFile`, `expectAbsent` to `context.skills.writeFile`, and `expectedInstalledHash` to `context.skills.delete`.
-- Removed the legacy `prompt_json` alias from `context.generateTask` `functionCallMode`, supported macro substitution inside multimodal array messages, prioritized forced schema tool results over preamble text in JSON mode, preserved null raw finish reasons on streams without a finish reason, and fixed `ChatCompletionService` source overrides and reasoning extraction parameters.
-- Added streaming tool-reply preview opt-in via `streamingPreviewArgument` on `registerFunctionTool`, `ToolManager.getStreamingPreviewTargets`, preset `extensions.luker.streaming_tool_reply`, and request-hook `luker_streaming_tool_reply`, along with `toolCallPreview` and `showingToolCallPreview` on `StreamingProcessor`.
-- Added `PresetManager.ensurePresetHydrated` for on-demand preset hydration and updated `ChatCompletionService`, `TextCompletionService`, and `context.generateTask` to hydrate presets on demand while non-selected global presets and Advanced Formatting templates remain unhydrated during startup.
+- Added declarative theme palette switching and the built-in **Lens** theme with Night, Mist, Ink, Paper, and system-following modes, and separated built-in themes into read-only version-managed assets with on-demand loading and standalone theme derivation.
+- Fixed failed or overlapping theme edits, switches, updates, and deletions failing silently instead of rolling back and showing an error, and added missing Chinese translations for theme notifications and prompts.
 
-### Fixes
+### Notifications
 
-- Fixed card-bound presets sharing a name with a global preset returning the inactive global preset instead of the active card-bound preset.
-- Fixed cold startup failing to hydrate the matching preset when its name differed only in letter case or Unicode normalization, or failing to hydrate a fallback preset when the saved preset was deleted on disk.
-- Fixed character export warnings displaying garbled world book names containing non-ASCII characters.
-- Fixed character cards copied directly into the characters folder losing their first extension data change.
-- Fixed the untouched Default chat completion preset reading as having unsaved changes on a new install, which raised the unsaved-changes dialog on the first director-mode turn and on the first preset switch.
-- Fixed built-in plugin translations overriding matching text in the core UI and in other plugins.
-- Fixed parts of the run panel and AI iteration showing in English on Chinese locales when only one plugin, such as Memory Graph, Search Tools, or the Completion Preset Assistant, is enabled.
-- Fixed some Chinese UI text not using the Memory Graph and Multi-Agent Orchestrator names 记忆图 and 多智能体编排.
-- Fixed <span v-pre>`{{each}}`</span> rendering nothing for an inline JSON literal that contains <span v-pre>`}}`</span> or ends right before the closing braces, such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>.
-- Fixed missing content in long mobile extension settings drawers and skipped empty blur layers when Blur Strength is set to zero.
-- Fixed Completion Preset Assistant advanced prompt fields losing text being typed when settings refresh.
-- Fixed failed settings saves still proceeding with page reloads, redirects, or `/forcesave` success notices.
-- Fixed Prompt Manager list flicker and stale drag handles during concurrent renders, and fixed a stuck swipe lock when Horde generation is disallowed.
-- Fixed failed serialized user-record writes for announcement and update-notice state causing unhandled promise rejections on the server.
-
-### New Contributors
-* @Cis-Evo made their first contribution in https://github.com/funnycups/Luker/pull/72
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.5...v2.9.0-rc.6
-
-## v2.9.0-rc.5 (2026-11-25)
-
-### Workbench
-
-- Expanded Workbench Q&A diagnostics with World Info activation traces, variables, regex scripts, connection profiles, skills, runtime environment details, Memory Graph search and schema, Orchestrator plot notes, image and embedding request inspection, built-in Luker documentation lookup, and clickable Request Inspector links.
-- Added single-conversation deletion to Workbench AI iteration and Q&A, and per-scope bulk clearing to AI iteration.
-- Split Workbench conversation indexes and bodies into per-session state with on-demand loading and automatic cleanup of migrated legacy global iteration sessions.
-- Renamed the Memory Graph AI iteration targets to Memory graph config and Memory graph content across Workbench, and added settings source resolution and Change history filtering for Memory graph content.
+- Replaced the built-in toast notifications with a theme-aware notification engine supporting drag-to-reposition, compact capsule minimization for persistent notifications, card enter and exit transitions, and display above modal dialogs.
+- Added collapsible notification stacking with viewport-adaptive stepped edge peeking, severity dots and alert highlighting on the stack badge, and paused countdown timers for occluded cards.
 
 ### Update Notice
 
 - Added a post-update modal displaying localized changelogs for all versions and dev builds since the last visit.
 
-### Notifications
-
-- Replaced the built-in toast notifications with a theme-aware notification engine supporting collapsible stacking, drag-to-reposition, compact capsule minimization for persistent notifications, and display above modal dialogs.
-
-### Memory Graph
-
-- Unified Memory Graph hierarchical and cross-depth compression onto a single-summary rollup model across all node types in the graph, inspector, table view, and prompt injection, and prevented extraction edits from altering non-summary fields on rollup nodes.
-- Made Memory Graph compression surface errors directly instead of failing silently, saving completed rounds on partial manual compression failures.
-- Added an unlimited compress-until-done option and a live behavioral summary card to the Memory Graph manual compression modal.
-- Added rollup node compaction to Memory graph content AI iteration in Workbench.
-- Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.
-- Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
-- Fixed Memory Graph automatic and manual compression loops stopping early at a fixed round cap.
-- Fixed Memory Graph manual compression being skipped when Auto compression is disabled.
-- Fixed Memory Graph extraction, rebuild, fill, and compression errors being mislabeled as recall injection failures.
-- Fixed the Memory Graph inspector listing the same event multiple times across different relation edges, merging them into one row with relation tags.
-- Fixed flattened CJK event summaries with arrow-separated or parenthesized locations failing to split the place header from the prose body.
-- Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
-
-### Multi-Agent Orchestrator
-
-- Fixed agenda and director orchestration profiles ignoring configured worker concurrency, run limit, and abort-discard settings.
-
 ### Background Keep-Alive
 
-- Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with cancellation of active chat-scoped tasks across message generation, group chats, Memory Graph, image generation, CardApp Studio, Workbench, vectorization, translation, image captioning, and data sync.
-- Replaced the Leave-page confirmation setting with automatic page-leave warnings whenever active tasks, pending saves, open message edits, or unsent input are present.
-
-### Plugin Settings
-
-- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in plugin and Workbench settings panels.
-
-### Themes
-
-- Separated built-in themes into read-only version-managed assets with on-demand theme loading, standalone theme derivation, and direct theme-level persistence for custom CSS and palettes.
-- Fixed the stop generation button icon alignment in the Lens theme.
-
-### Extension API
-
-- Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
-- Exposed unified background activity guards on `context.activityGuard` and lifecycle-scoped CardApp `ctx.activityGuard`, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
-- Exposed `context.readFloorStateSnapshot`, `context.chatWorldInfo.getActivationTrace`, and `context.openRequestInspector` for extensions.
-- Removed the `fields` option from Memory Graph `compactNodes` so rollup compaction writes only the unified `summary` field.
-
-### Fixes
-
-- Fixed truncated or malformed server responses clearing chat integrity state or being treated as empty chats, and deduplicated snapshot fetches during chat save-conflict recovery.
-- Fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.
-- Fixed packaged Docker, desktop, and mobile builds omitting built-in documentation files.
-- Fixed login sessions expiring after updating a Docker image.
-- Fixed iOS background action menu buttons closing without triggering when tapped.
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.4...v2.9.0-rc.5
-
-## v2.9.0-rc.4 (2026-11-23)
-
-### Workbench
-
-- Replaced mobile bottom sheets with a draggable, resizable floating Workbench window and a draggable floating Run panel, added default small and large window size preferences, synchronized Run panel settings across panels, and made position reset take effect immediately.
-- Added example import, re-import with confirmation, and derivation actions below plugin preset selectors, and reworked Workbench Settings to show the shared AI configuration, per-target overrides, and the resolved source of each connection and preset.
-- Added Workbench-wide unsaved-changes indicators across view save bars, sub-tabs, left-rail workspace tabs, the collapsed pill, and non-blocking return reminders when switching tabs or collapsing the window.
-- Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
-- Fixed Workbench AI iteration controls overlapping under the mobile keyboard or in narrow windows.
-
-### Memory Graph
-
-- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, updating the default extraction cadence to every 2 AI replies.
-- Removed recent-turn exclusion filtering from memory injection and recall.
-- Split the world info toggle into separate controls for extraction and LLM recall requests under their respective settings sections.
-- Fixed full graph rebuild omitting edit and delete tools for editable node types.
-- Fixed Memory Graph extraction ignoring or rejecting title changes during node edits.
-- Fixed searching for a node outside the current tab or clicking Locate in graph from non-graph Memory Graph tabs failing to switch to the Graph tab and center the node.
-- Fixed the Memory Graph topbar search box overlapping view tabs at medium desktop widths.
-- Fixed mobile Memory Graph views rendering blank, dialogs overflowing the Workbench window, and the sticky settings save bar covering settings controls.
-
-### Image generation
-
-- Simplified Character Archive profiles to a unified plain-text description and flat labeled reference images with automatic one-time migration and Danbooru character name tag lookup.
-- Added preset-scoped switches for character reference delivery modes, style references, and img2img editing with live backend compatibility conflict warnings.
-- Added a default prompt style selector alongside visible stored default prompts and per-field reset controls in Image Generation settings.
-- Added a conversational AI Character Profile Builder dialog with an explicit source selector, live draft editing and conflict handling, reference image saving on confirmation, and automatic cleanup of unsaved temporary images.
-- Focused Image Studio on free image generation and source image editing, retired the legacy character design prompt override with an export or discard migration dialog, and unified the wand menu label to Image Studio.
-- Added sandboxed illustration and character profile prompt simulation in Workbench Image Generation AI iteration with image previews, trace inspection, inline annotations, and re-run support in Simulation Review.
-- Displayed completed illustration images in the Run panel while remaining images are still generating.
-
-### Themes
-
-- Added declarative theme palette switching and the built-in Lens theme with Night, Mist, Ink, Paper, and system-following modes.
-
-### Prompt settings
-
-- Added visible stored defaults and individual reset controls to extension prompt settings.
-
-### Storage & Sync
-
-- Added an admin Backup Settings page in the Account window for editing `config.yaml` backup retention, chat auto-backup, integrity check, and full-data download settings with immediate runtime reload.
-- Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted, and added a Reset migration state action.
-
-### Client Apps
-
-- Fixed the HarmonyOS app system bars and safe areas not following the active interface theme color or adapting system bar icon contrast.
-
-### Extension API
-
-- Added `captureTaskPromptContext` on `context` and CardApp `ctx`, and added isolated prompt-context snapshots and prepared-request inspection hooks to `generateTask` and `generateTaskStream`.
-- Added Run panel preference reading, updating, subscription, and position-reset helpers on `context.runPanel`.
-
-### Fixes
-
-- Fixed the loading screen getting stuck on iOS and iPadOS Safari.
-- Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
-- Fixed settings save failures not displaying an error.
-- Fixed mid-chat message deletion, insertion, and reordering leaving subsequent floor-bound extension state out of sync.
-- Fixed broken state log recovery misidentifying the failing floor after a full-replacement patch.
-
-### New Contributors
-* @Archeb made their first contribution in https://github.com/funnycups/Luker/pull/64
-* @suyunxing made their first contribution in https://github.com/funnycups/Luker/pull/69
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.3...v2.9.0-rc.4
-
-## v2.9.0-rc.3 (2026-11-21)
-
-### Workbench
-
-- Added the responsive floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
-- Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, Image Generation, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
-
-### Multi-Agent Orchestrator
-
-- Embedded the orchestration flow editor, run inspector, run history, timing statistics, presets, skills, custom tools, and plot notes into Workbench.
-- Added a shared floating Run panel for live orchestration, pre-request search, and image generation runs.
-- Fixed spec mode AI iteration failing to edit stage nodes written in string shorthand.
-
-### Documentation
-
-- Added the [Workbench guide](/features/workbench), [Image Generation & AI Illustration guide](/features/image-generation), [Workbench API reference](/development/extension-api/workbench), [Image Generation API reference](/development/extension-api/image-generation), and [Run Panel API reference](/development/extension-api/run-panel), and updated the Memory Graph, Multi-Agent Orchestrator, Search Tools, Preset Assistant, Character Card Editor Assistant, and State System guides.
-
-### Connections & Models
-
-- Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
-- Fixed switching APIs incorrectly prompting to reload the chat for preset regex scripts.
-- Fixed the reasoning effort setting not updating when switching chat completion presets or API sources.
-- Fixed Vertex AI requests to the `us` and `eu` multi-regions using an invalid hostname.
-- Fixed Gemini multi-turn tool calls dropping the call and response pairing id.
-
-### Image generation
-
-- Added connection profile binding and OpenAI-compatible multimodal chat image generation to Image Generation.
-- Added generation presets for saving and switching image generation settings.
-- Added character reference image, style reference image, and source image editing support across supported image backends.
-- Embedded Image Studio, the global Character Archive, and illustration run traces into Workbench, supporting fanwork character exploration and original character reference design.
-- Added AI iteration for ComfyUI API-format workflows in Workbench with live node introspection, template node wiring, draft test generation, and per-node diff review.
-- Added inline illustration locking, version switching, and source image editing to AI Illustration.
-- Failed AI illustrations keep their failure badge for the current session only and are no longer written to the chat file.
-- Fixed AI Illustration settings labels being squeezed into vertical text.
-
-### Search Tools
-
-- Added image search and webpage image extraction tools and cross-plugin search APIs to Search Tools.
-
-### Character Cards
-
-- Fixed character card replacement failing when importing tags.
-- Fixed reading and editing character cards whose filenames retain leading spaces or punctuation.
-- Fixed reading empty-named root properties from character cards.
-- Fixed deleting nested character card extension fields leaving internal sentinel objects behind.
+- Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with automatic task cancellation across generation, plugins, and sync, replacing the **Leave-page confirmation** setting.
+- Added a streaming picture-in-picture window showing the current character, generation status, and live reply with a reopen button.
+- Fixed picture-in-picture keep-alive failing to start on iOS and background keep-alive failing to exit after generation ended.
 
 ### CardApp
 
-- Fixed CardApp failing to list and read preset documents.
+- Blocked access to `.git` metadata paths across CardApp file endpoints and character card imports, validated commit hashes on diff and rollback endpoints, and honored the configured Git backend.
+- Fixed CardApp delayed initialization and character writes targeting the newly selected character after switching characters.
 
-### Memory Graph
+### Character Editor Assistant
 
-- Embedded the Memory Graph network, timeline, data table, schema editor, and settings workspace into Workbench.
-- Allowed Memory Graph crawl candidate limit to be set to 0 for no limit.
-- Changed Memory Graph read API view fields to snake_case.
-- Aligned Memory Graph extraction, crawl, and compression prompts with the fields the runtime provides.
-
-### Request Inspector
-
-- Added the network proxy used by a chat request to the request detail view.
-
-### Third-party extensions
-
-- Fixed third-party extensions that read the SillyTavern version receiving the Luker version.
-- Fixed checking versions, switching branches, and updating third-party extensions and server plugins failing in mobile apps, environments where running external Git processes is restricted, and repositories whose configured remote URL omits the `.git` suffix.
-- Fixed third-party extension version checks clearing local branch and commit information when the remote repository cannot be reached.
-- Fixed narrow screens truncating third-party extension version and branch details in Manage extensions and non-Git extension folders appending an empty branch suffix.
-- Fixed third-party extensions failing to read and save chat completion presets and losing request message references across generation events.
-- Fixed non-streaming generation responses carrying an event-stream content-type header and character-bound preset switches failing to update the active preset name.
-- Fixed third-party extensions receiving duplicate preset names.
-
-### Fixes
-
-- Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
-- Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
-- Fixed the Diagnostics menu overflowing the right edge on narrow screens.
-- Fixed chat rename failures not showing the server's reason.
-- Fixed renaming chats failing in the Android app and on filesystems without hard link support.
-- Fixed background Prompt Manager refreshes interrupting an active prompt drag.
-- Fixed the Prompt Manager modifying the default prompt templates when loading.
-- Fixed prompt assembly failures showing a generic token-counting error, dispatching an empty context, and omitting cross-frame error details from diagnostics logs.
-- Fixed preset switching and background preset loading overwriting another preset's regex rules and settings.
-- Fixed saving one world book dropping another world book's pending save.
-
-### Storage & Sync
-
-- Added per-namespace global state storage across account storage quotas, settings backups, storage migrations, and LAN and S3 sync.
-- Fixed character card field edits bypassing sync locking and account storage quotas.
-- Fixed reading SQL settings strings starting with quotes and extension keys containing control characters.
-- Fixed sync status checks failing immediately on an interrupted request or alerting accounts without configured sync backends.
-- Fixed the Secrets category being disabled in the Account window's backup and restore pages.
-- Fixed backup, restore, and migration selections and progress resetting when the Account window is reopened.
-
-### Client Apps
-
-- Optimized first-launch startup speed and storage usage in the iOS and Android apps.
-- Fixed the app failing to start when local service preparation was interrupted in the iOS and Android apps.
-- Fixed app updates wiping installed server plugins and third-party extensions in the HarmonyOS app.
-- Added retry and diagnostics export actions to the startup failure screen in the HarmonyOS app.
-- Added a crash recovery screen with reload and diagnostics export actions when the HarmonyOS app web page exits abnormally.
-- Preserved partial performance recordings when the renderer exits or reloads in the HarmonyOS and Android apps.
-- Included the newest performance trace in HarmonyOS and Android diagnostics bundles.
-- Fixed automatic browser launch and external npm probing running during startup and server plugin dependency installation in the iOS and HarmonyOS apps.
-- Fixed launching the desktop app while already running starting a duplicate process.
-- Fixed unsaved-change guards in the desktop app silently blocking page reloads and preventing quitting from the tray.
-- Restored page reload keyboard shortcuts in the Windows and Linux desktop apps.
-- Fixed the desktop app ignoring the configured server port and failing to step past reserved or occupied listen addresses.
-- Added the startup log, port configuration, retry, and open data directory actions to the startup failure screen in the desktop app.
-- Moved the client app Refresh and Endpoint buttons to the top action bar in User Settings.
-
-### iOS App
-
-- Fixed full-screen pages and custom themes overlapping the status bar and bottom area in the iOS app.
-- Synced the iOS status bar and bottom area separately to the rendered top and bottom bar colors.
-
-### Extension API
-
-- Added Workbench registration APIs for embedded workspaces, AI iteration targets, Q&A read providers, and local suggestion rules, alongside global state read and patch helpers.
-- Exposed structured image generation on `context.imageGeneration` and CardApp `ctx.imageGeneration`.
-- Exposed runtime regex provider registration and scoped regex script management on `context.regex`.
-
-### Performance
-
-- Optimized first-screen startup, resource revalidation, settings saving, and hidden Prompt Manager rendering.
-- Optimized prompt group collapse and expand in the Prompt Manager.
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.2...v2.9.0-rc.3
-
-## v2.9.0-rc.2 (2026-11-11)
-
-### Connections & Models
-
-- Additional Parameters now applies to every chat completion source.
-- Fixed audio attachments for Gemini 4 models.
-
-### Image generation
-
-- Added AI Illustration, which generates illustrations for assistant messages automatically or on demand, with prompt presets and an image iteration studio.
-
-### Character Cards
-
-- Replacing a character card now renames the character and its chats to the new card name.
-
-### Client Apps
-
-- Added a **Check for pre-release updates** switch to User Settings, on by default.
-- Fixed the iOS, HarmonyOS and desktop apps not prompting for HTTP Basic authentication when the endpoint requires it.
-- Added a data directory setting that moves existing data and restarts the app when changed.
-
-### Android App
-
-- Fixed server plugin dependency installation failing on Android.
-- Fixed the Android app compiling frontend bundles at startup instead of using the bundles packaged in the APK.
-
-### iOS App
-
-- Added a startup-failure report on the next launch.
-- Fixed the missing scene configuration.
-- Fixed the iOS app showing the system background in the status bar and the bottom area instead of the interface theme.
-- Added the external link setting to the iOS app.
-- Fixed the iOS app showing a "No app can open this link" alert when a page loads an iframe.
-
-### Storage & Sync
-
-- Fixed extension updates failing when several updates run at the same time.
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.1...v2.9.0-rc.2
-
-## v2.9.0-rc.1 (2026-11-09)
-
-### Server Plugins
-
-- Fixed Android server plugins failing to load host modules through relative paths.
-- Added on-demand installation of server plugin npm dependencies, including optional dependencies, on desktop and Android, with an install prompt after install or update and an **Install dependencies** button on plugin rows with missing dependencies, plus a new [Server Plugins guide](/guide/server-plugins).
+- Added lossless image attachment support to CardApp Studio AI chat with multi-turn replay and automatic cleanup, pinned editing tools to the target character, removed the session count and 10-round tool-calling limits, and removed the **History** block from the settings panel.
+- Fixed CardApp Studio file and session attributes breaking on quotes, fixed AI file creation reporting false drift or mishandling quoted paths, fixed non-404 read errors being treated as missing files, and guarded session saves against load errors or diagnostic writes.
+- Corrected post-replace world book tool instructions, guarded rollback cleanup against deleting modified or bound world books, fixed a tool-call retry count of 0 resetting to 2, and fixed settings fields losing input during refreshes.
 
 ### Search Tools
 
-- Reworked the pre-request search agent into a tool-call loop that ends when it stops calling tools, added a read tool for managed entries, and showed the run in the run panel.
-- Added Tavily, Exa, Serper, SerpApi, and Z.AI as search providers and routed every provider through a unified `/api/search/query` endpoint, restoring the upstream raw-HTML `/api/search/searxng` endpoint.
-- Added DeepSeek as a search provider.
-- Editing a message no longer discards the search results.
-- Fixed the search agent discarding entries written before a failed round.
+- Reworked the pre-request search agent into a tool-call loop displayed in the Run panel with uncapped managed-entry reads, preserved multi-turn thinking signatures, and message edits retaining search results.
+- Added Tavily, Exa, Serper, SerpApi, Z.AI, and DeepSeek search providers through a unified `/api/search/query` endpoint while restoring upstream `/api/search/searxng`, and added image search and webpage image extraction tools.
+- Fixed the search agent discarding entries written before a failed round or on a text-free final round, and fixed its untranslated status line on Chinese locales.
 
-### Server
+### Skills
 
-- Added a byte budget to the request inspector and the captured server log buffers, evicting the oldest records once the budget is exceeded; the inspector budget is tunable via `requestInspector.byteBudgetBytes` in `config.yaml`.
-- Fixed a denial-of-service vulnerability that let unauthenticated clients make the server buffer and parse request bodies up to 500 MB before authentication and access control checks ran; request bodies are now parsed after every access check, and the pre-login account routes cap request bodies at 100 KB.
+- Added optional bundling of a character's skills into exported character cards and standardized external modification conflicts to HTTP 409 responses.
+- Fixed preset export confirms showing untranslated scope labels, fixed chat completion preset export skipping skill bundling when Multi-Agent Orchestrator is disabled, fixed newly opened cards not offering bundled preset skills, and fixed skipped or skill-less preset exports retaining previously imported skills.
+- Fixed the Skill Manager file editor overwriting concurrent external changes on first save, fixed **+ New file** emptying an existing file, fixed opening Skill Manager overriding translations elsewhere in the UI, and fixed filesystem I/O errors being treated as missing skills.
 
-### Performance
+### TTS
 
-- Settings, presets, characters, world books, and other stored data are now split into account-scoped resources with ETag revalidation, so unchanged data reuses the browser cache.
-
-### Request Inspector
-
-- Added an **Abort** button to running requests in the inspector, stopping the request on the server and on the client.
-- Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
-- Added a **Tools** section to the request detail that lists the tools sent to the model, each expanding into a parameter table. Tool definitions no longer appear under **Other Params**.
-- Long tool parameter descriptions in the **Tools** section scroll inside a compact block instead of stretching the parameter table.
-- Fixed long tool names hiding the tool description in the **Tools** summary; narrow screens give the description its own line with its own scroll area, and the expanded card shows the complete text in a scrollable block.
-- Parameters without a description show a dash instead of a blank cell.
-- Fixed streamed reasoning details rendering one row per fragment with empty bodies in the request and response views; fragments now merge into complete entries showing their text, summary, and signature, and the duplicated plain reasoning block is dropped.
-- Inlined images in request and response messages render as image previews that load when the message is expanded; the **Wire Request** view elides long base64 payloads.
-- Fixed image generation records showing an empty prompt or missing generation parameters.
-- Image generation records now show the generated image.
-
-### Connections & Models
-
-- Added Gemini 4 model support
-- Fixed Gemini chat completions failing when the model made multiple tool calls in one turn.
-- Aligned chat-completion sampling, reasoning, and tool parameters with each provider's API: unsupported parameters are hidden and no longer sent, and parameters the API accepts but the UI lacked now have controls.
-- Fixed a timed-out request's retry reusing the same generation id, which made the retry read the previous attempt's buffered error as its own result and left the previous attempt running in parallel.
-- Fixed the deprecated proxy preset migration losing the profile proxy password and leaving migrated profiles to authenticate with the active provider key.
-- Added a warning in the API settings when Base URL and a legacy proxy URL are both set, since the proxy URL takes precedence.
-- Fixed OpenRouter streamed reasoning details accumulating as one fragment per delta instead of merging into complete entries.
-- Fixed plain-text function calling stripping unparsed function_calls from the reply text.
-- The connection-profile picker now supports multi-select deletion.
-- Fixed the connection-profile picker's delete controls missing Chinese translations.
-- Added model list fetching and a connection test to embedding and rerank profiles.
-- Fixed embedding profiles rejecting Vertex AI service-account authentication as unsupported.
-- Chat-completion, embedding, and rerank connection profiles now normalize the entered URL against each provider's documented base URL.
-
-### Storage & Sync
-
-- Sync conflicts show a change tree grouped by preset sections, world book entries, character card fields and chat messages, with values loaded on demand and reordered entries marked as moves.
-- Conflict previews mask secret values and compare embedded character-card data.
-- Fixed group conversation renames failing or leaving the renamed chat inaccessible, with complete messages, metadata, state and pins retained and occupied destinations protected.
-- Fixed group chats losing displayed greetings on save, reporting patch conflicts on edits, or overwriting or clearing a conversation after a failed load or delayed chat switch.
-- Added encrypted [S3 Sync](/improvements/s3-sync) and a unified [Sync panel](/improvements/sync) for [LAN pairing](/improvements/lan-sync), backend editing, key repair, removal, scheduling and device labels. A backend-labelled capsule shows indeterminate activity and keeps errors or pending decisions accessible, coordinated with other activity. Failed reads retain loaded configuration and mark uncertain status.
-- Sync retains originating device labels in version choices and chat notices after device relabeling.
-- LAN pairing now verifies the reverse connection before accepting a pairing code and applies the private-address policy to LAN requests.
-- Sync settings changes now wait for active work to finish; incoming LAN sync reports a temporary maintenance error while settings are updating.
-- Added [administrator controls for private sync destinations](/guide/configuration#sync-private-addresses), with current account checks and TLS hostname verification for LAN and S3 connections.
-- Fixed sync reading, writing, or deleting outside its data directories through symbolic links in category roots or migrated workdirs.
-- Fixed sync accepting filesystem name aliases and propagating a missing spelling as a deletion.
-- Fixed presets whose names contain `.luker-state.` being confused with preset state during storage and sync.
-- Fixed unreadable sync settings appearing empty and being replaced by ordinary configuration changes.
-- Reduced redundant pack validation during unchanged S3 sync polls while retaining full integrity checks.
-- Fixed SQL sync omitting accepted dot-leading names, names containing double dots, and preset state whose preset is absent.
-- Fixed metadata generation, folder edits, and cache cleanup replacing an unreadable synchronized image index.
-- Fixed deleted character Data Bank attachments remaining in saved settings and reappearing after reloading.
-- Fixed LAN Sync pairing failing with an authentication error on instances with user accounts enabled.
-- Fixed LAN Sync on SQLite, MySQL, and PostgreSQL storage ignoring file-backed categories such as characters, and deleting them when database-backed categories synced.
-- Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
-- Fixed LAN Sync between MySQL or PostgreSQL storage and SQLite or file storage reporting conflicts on identical worlds, presets, and other records.
-- Fixed the Docker image shipping without the SQLite native binding, which made switching the storage backend to SQLite fail.
-- Fixed the media deletion preview overflowing the screen.
-- The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
-- Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
-- LAN Sync failures now appear as a toast and are written to the debug log.
-- LAN Sync pairing links now embed a detected LAN address instead of a localhost address, and the generating device can pick another address.
-- LAN Sync now reports the underlying network error when the other device is unreachable.
-- Added [automatic sync](/improvements/sync#automatic-sync-and-schedule) at startup, after writes go idle, at a configured interval and on LAN change notifications, with manual Sync now available. Both ends must be upgraded.
-- Fixed character stats synced from another device being overwritten by this device's periodic save.
-- Fixed background folders repeatedly conflicting in LAN Sync between two devices, which discarded the folder assignments of the version not chosen.
-- Changed character stats edited on two devices to merge automatically.
-- Fixed the first LAN Sync of the settings between two devices reporting a conflict on settings.json when the settings were otherwise identical.
-- Changed group files and character cards edited on two devices to merge the last opened chat and dates automatically instead of reporting a conflict.
-- Added [pending sync decisions](/improvements/sync#pending-decisions) with origin-labelled previews, shared-path grouping, stale overwrite confirmation and propagated choices. Pending items reopen on page load; unreadable records remain unknown rather than resolved, and files sync cannot update stay listed.
-- Added [chat branches and restoration notices](/improvements/sync#chat-branches-and-restored-chats) for character and group chats, retaining their owning group when needed. Dismissing a notice leaves the saved content intact; unsuccessful or unreadable dismissals remain pending.
-- Added sync schedule settings for the wait after the last edit and the interval for checking other devices.
-- Changed Undo last sync to revert the files the last sync changed on every synced device and keep files edited after it.
-- Fixed ZIP restores stalling while extracting large files.
-- Fixed ZIP restores importing the built-in extensions as third-party extensions when the archive contains the source tree, which made every built-in extension fail to load.
-- Fixed onboarding completion overwriting API connection profiles and personas imported from a Data ZIP.
-
-### iOS App
-
-- Added a native iOS app that bundles the full Luker server and interface. See the [iOS guide](/guide/ios).
-
-### HarmonyOS App
-
-- Added a native HarmonyOS app that bundles the full Luker server and interface and runs standalone on the device, built from source and signed with your Huawei developer account. See the [HarmonyOS guide](/guide/harmonyos).
-
-### Desktop App
-
-- Added native Windows/macOS app support. See the [Desktop app guide](/guide/desktop).
-- Closing the window keeps the app running instead of quitting, so a reply in flight finishes in the background and the window reopens on the page it was on.
-- Added a tray menu on Windows and Linux with commands to show the window, open the data directory, and quit the app, and an **Open data directory** item in the macOS application menu.
-- Added Linux packages: an AppImage, a `.deb`, and an `.rpm` for x64 and arm64, published alongside the macOS and Windows installers. Closing the window quits the app on Linux, and the update prompt picks the package that matches how the app was installed.
-
-### Client Apps
-
-- Added **Refresh** and **Endpoint** entries to the user settings drawer in the Android, iOS, and HarmonyOS apps.
-- Added a native recovery dialog when a custom endpoint fails to load, with endpoint switch, retry, and cancel actions.
-- The iOS app now applies endpoint changes immediately and starts or stops the local service for the selected endpoint.
-- Third-party links in the desktop, Android, and HarmonyOS apps now open in the system browser instead of replacing the Luker page, with an **Open external links in the system browser** toggle in user settings. Popups that request window features open as an in-app floating window, so third-party authorization flows keep working.
-- Fixed the crash report not appearing after the app exited abnormally.
-
-### Character Cards
-
-- Fixed the client crashing from memory exhaustion when deleting a large character card.
-
-### Memory Graph
-
-- Fixed Memory Graph schema iteration failing to apply valid node-type edits because the read tool exposed fields the set tool's schema does not accept.
-- Memory Graph extraction and recall retries now show an info toast naming the failure reason: a failed request, an incomplete result, or an invalid result.
-- The extraction prompt is now editable as the **Extraction Template** and **Edge Rules** settings.
-- Rounds without narrative now record an opening event instead of being skipped.
-- Fixed **Force Update** types with a cadence failing every extraction round; the schema editor no longer offers them a cadence.
-- Fixed rejected extraction operations being silently dropped.
-- Fixed the extraction retry message contradicting the validator.
-- Added the **Concurrent extraction** mode, which extracts per active node type in parallel.
-- Added a configuration studio that edits the schema, extraction and recall prompts, node-type text, and behavior parameters through reviewable AI proposals; character-scoped parameter writes now store only values that differ from the global settings.
-- Fixed regenerating a turn during its Memory Graph extraction leaving the extraction processing the deleted content.
-- Fixed RAG recall running on a graph with no nodes.
-- Fixed Memory Graph LLM recall falling back to every candidate node and caching the result when recall failed.
-- Fixed Memory Graph RAG recall caching an empty result on failure.
-- Fixed a previous turn's Memory Graph recall result leaking into the next prompt.
-
-### Iteration Studio
-
-- Messages now render one unified collapsible thinking block, fed from the model's reasoning output or from think tags in the body.
-
-### Regex
-
-- Added a **Performance detection** switch to the regex settings, enabled by default.
-- Plugin regex rules can target plugin requests and plugin replies separately.
-- Fixed the **Allow anyway** choice in the slow-regex warning not applying to the current message and being forgotten after toggling the script; the choice is now saved on the regex and applies immediately.
-- Fixed plugin-registered regex rules with a capture group and no trim strings aborting the entire regex pass.
-- Fixed a character with a bound chat-completion preset rendering the first message of a chat with the previous preset's regex rules.
-
-### Background Keep-Alive
-
-- Added a picture-in-picture window that shows the character, the generation status and the reply as it streams.
-- Added a button that reopens picture-in-picture after the window closes during a generation.
-- Fixed picture-in-picture keep-alive failing to start on iOS.
-- Fixed the background keep-alive failing to exit after a generation ended.
-
-### World Info
-
-- The world-book picker now supports multi-select deletion.
-- The world-book picker now supports multi-select export as a zip.
-
-### Presets
-
-- Preset and template pickers now support multi-select deletion.
-- Preset and template pickers now support multi-select export as a zip.
-- Improved performance when a preset is bound to a character card.
-- Fixed Completion Preset Assistant changes to a card-bound preset not reaching the active settings and the rendered controls.
+- Added a **Connection profile** selector and binding status to Google Gemini TTS in the TTS drawer, forwarding custom Google AI Studio endpoints, normalizing custom paths, and improving non-JSON upstream error handling.
 
 ### Chat
 
-- Added an **Arrow key swipes** switch to User Settings.
-- The **Swipe gestures** switch is now shown on mobile only.
+- Added the **Expand input bar on long drafts** setting enabled by default and the **Arrow key swipes** setting, and scoped the **Swipe gestures** switch to mobile devices.
+- Fixed failed streaming generations leaving the streaming state active, blocking quiet generations and triggering false leave warnings, and fixed stopped streaming replies not being saved after a failed concurrent **Auto-select** generation.
+- Fixed automatic chat backups not firing on metadata, group save, and server-side reply persistence paths, fixed missing backup directories or unreadable files breaking chat backup listing, added empty and error states to the chat backups browser, and prevented the chat backups list from collapsing in tall chat lists.
+- Fixed group conversation renames, greeting loss, patch conflicts, and failed-load overwrites, and fixed chat rename failures hiding server errors or failing on Android and filesystems without hard links.
+- Fixed character-switch form overwrites, out-of-order solo chat loads, ignored clicks while merge or split chat dialogs are opening, empty-input Send not continuing when **Press Send to continue** is enabled, and spurious "Chat save aborted" alerts on startup.
+- Escaped closing tags inside sanitized message style blocks.
+
+### Character Cards
+
+- Updated character card replacement to rename the character and its chats to the new card name.
+- Fixed client memory exhaustion when deleting large character cards, fixed card replacement failing on tag imports, fixed deleting nested extension fields leaving internal sentinel objects, fixed export warnings garbling non-ASCII world book names, fixed directly copied cards losing their first extension change, and validated folder names for imported CharX and BYAF character assets.
+
+### World Info
+
+- Added multi-select deletion and zip export to the world-book picker.
+- Fixed concurrent World Info saves and reads overwriting newer edits, retaining failed writes, dropping sibling pending saves, or repopulating caches after deletion.
+- Fixed auxiliary world books being lost during character creation with a warning on unconfirmed embedded bindings, fixed the bulk-set-field dropdown menu styling and clipping, fixed HTML in world book names rendering as page content, and fixed the Traditional Chinese page counter.
+
+### Presets
+
+- Added multi-select deletion and zip export to preset and template pickers, and improved performance for card-bound presets.
+- Fixed card-bound presets sharing a name with a global preset returning the inactive global preset, fixed concurrent preset switches overwriting another preset's regex rules and settings, fixed untouched Default presets showing unsaved changes on new installs, fixed Completion Preset Assistant edits not syncing to active controls, and fixed Completion Preset Assistant advanced prompt fields losing input during refreshes.
+
+### Regex
+
+- Added a **Performance detection** switch enabled by default, and allowed plugin regex rules to target plugin requests and replies separately.
+- Fixed global, character, and preset regex saves silently swallowing failures, leaving switches flipped, or removing sources before cross-scope moves succeed.
+- Fixed invalid regex entries automatically modifying saved data, fixed missing-id script actions, fixed clicking edit on read-only plugin rules in the Regex Debugger, fixed **Allow anyway** not applying or persisting, fixed capture-group plugin rules without trim strings aborting regex execution, and fixed card-bound preset chats rendering the first message with the previous preset's regex.
+
+### Server Plugins
+
+- Added on-demand npm dependency installation including optional dependencies for server plugins on desktop and Android.
+- Fixed Android server plugins failing to load host modules through relative paths.
+
+### Third-Party Extensions
+
+- Hardened system Git invocations for extension management with restrictive configuration overrides and branch argument validation.
+- Fixed Prompt Manager refreshes bypassing third-party extensions that replace the prompt list renderer, and fixed third-party extensions reading the SillyTavern version receiving the Luker version.
+- Fixed checking versions, switching branches, and updating extensions and server plugins in mobile apps, restricted Git environments, and repositories whose remote URL omits `.git`, and prevented unreachable remotes from clearing local branch and commit info.
+- Fixed narrow screens truncating extension version details, fixed non-Git folders showing an empty branch suffix, fixed lost request message references across generation events, fixed non-streaming responses carrying an event-stream content-type, fixed card-bound preset switches not updating the active preset name, and fixed duplicate preset names.
+
+### Platform
+
+- Updated SillyTavern compatibility to 1.19.1, and unified the Account, Backup & Restore, Sync, Storage, and Admin panels into one Account window.
+- Added `@funnycups/luker` npm CLI packaging, automated release publishing, in-app npm updates, dev version label formatting, and unified Luker application data directory storage for global mode.
+- Added `disableUpdateCheck` and `LUKER_` environment variable overrides for configuration, a **Diagnostics** menu, a server log buffer byte budget, and Docker image Git build metadata.
+- Validated target user existence across admin delete, backup, migration, and storage inspection actions, and fixed an unauthenticated request body parsing denial-of-service vulnerability by parsing bodies after access checks and capping pre-login account routes at 100 KB.
+- Fixed Docker images omitting the SQLite native binding and built-in documentation files, and fixed Docker login sessions expiring after image updates.
+
+### Extension API
+
+- Added Workbench registration APIs on `context.workbench`, Run panel helpers on `context.runPanel`, structured image generation on `context.imageGeneration` and CardApp `ctx.imageGeneration`, runtime regex management on `context.regex`, live behavioral summary builders on `context.behaviorSummary`, and unified background activity guards on `context.activityGuard` and CardApp `ctx.activityGuard`.
+- Added global state helpers, `captureTaskPromptContext`, `readFloorStateSnapshot`, `chatWorldInfo.getActivationTrace`, `openRequestInspector`, `createScopedI18n`, `character.presets.rename`, `stateErrors.CONFLICT_CODES`, `connectionProfiles.embedding`, `connectionProfiles.rerank`, `PresetManager.ensurePresetHydrated`, live getters for `streamingProcessor`, `tags`, and `tagMap`, proxy-unwrapping `ctx.characters` lookups, and orchestrator character saved-mode and preset override helpers.
+- Added streaming tool-reply preview opt-in via `registerFunctionTool` `streamingPreviewArgument`, `ToolManager.getStreamingPreviewTargets`, preset `extensions.luker.streaming_tool_reply`, request-hook `luker_streaming_tool_reply`, and `StreamingProcessor` `toolCallPreview` and `showingToolCallPreview`.
+- Added `sha256` to `context.skills.readFile`, `expectAbsent` to `context.skills.writeFile`, `expectedInstalledHash` to `context.skills.delete`, World Info post-activation hooks and isolated prompt-context snapshots to `generateTask`, and `listEntries`, `discardEntries`, tool-call id collection, strict abort detection, inline diff rendering, skill target registration, and request routing to `ctx.iterationLibrary`.
+- Updated `saveSettings` and `writeExtensionField` with explicit outcomes, strict baselines, and stale-write protection, propagated failed character extension writes, fixed preset extension writes for card-bound presets, and changed Memory Graph read API fields to `snake_case`.
+- Removed retired `ctx.iterationLibrary` exports including `storage`, `ui.apply`, `ui.toolcall`, `zoomOverlay.closeExpandedDiff`, `zoomOverlay.beginLineDiffResize`, `runner.abortUtils.isNoToolCallExtractionError`, `tools.lorebookWrites.applyLorebookCommit`, `tools.lorebookWrites.applyLorebookProposal`, and ProposalBus `hasPendingSiblingsFor`, removed `prompt_json` from `generateTask`, and removed `fields` from Memory Graph `compactNodes`.
 
 ### Fixes
 
-- Fixed editing group chat messages failing with a chat patch conflict.
-- Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.
-- Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.
-- Fixed token count estimation erroring out when a tokenizer fails to load.
-- Fixed a spurious "Chat save aborted" alert appearing when Luker opens.
-- Fixed World Info book names containing HTML being rendered as page content.
-- Fixed the update check never reporting an available update on Android and HarmonyOS.
-- Fixed state replay dropping full-replacement patches, which could lose stored extension data when a large change was saved.
-- Fixed the **Auth & Limits** admin tab rendering its fields centered and misaligned.
-- Fixed a click between two checkboxes in the multi-select pickers switching the active item.
-- Fixed takeover replies being dropped when a token estimate or a background generation overlaps.
-
-### New Contributors
-* @MCSeekeri made their first contribution in https://github.com/funnycups/Luker/pull/44
-* @AX995 made their first contribution in https://github.com/funnycups/Luker/pull/49
-* @Pixcj made their first contribution in https://github.com/funnycups/Luker/pull/53
-
-**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0-rc.1
+- Fixed the loading screen getting stuck on iOS and iPadOS Safari, and fixed iOS Safari background action menu buttons closing without triggering.
+- Fixed generation progress notifications playing the system sound in the background, and fixed settings save failures hiding errors or still proceeding with reloads, redirects, or `/forcesave` success notices.
+- Fixed mid-chat message deletion, insertion, and reordering desyncing floor-bound extension state, fixed state replay dropping full-replacement patches, and fixed broken state log recovery misidentifying failing floors.
+- Fixed background Prompt Manager refreshes interrupting drags or causing flicker, fixed Prompt Manager modifying default templates on load, fixed prompt assembly failures hiding errors, and fixed stuck swipe locks when Horde generation is disallowed.
+- Fixed <span v-pre>`{{each}}`</span> rendering nothing for inline JSON literals containing <span v-pre>`}}`</span> or ending right before closing braces, such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>, and fixed token count estimation erroring when a tokenizer fails to load.
+- Fixed built-in extension translations overriding core UI and other extensions, aligned Chinese UI names for Memory Graph and Multi-Agent Orchestrator, fixed missing content in long mobile extension drawers, and fixed **Auth & Limits** admin tab alignment, while skipping empty blur layers when Blur Strength is set to zero.
 
 ## v2.8.0 (2026-10-01)
 
