@@ -1,6 +1,7 @@
 .chatBackupsList {
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
     gap: 5px;
     transition: height var(--animation-duration) ease;
     max-height: min(25dvh, 250px);
