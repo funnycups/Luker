@@ -9,8 +9,10 @@ import {
     computeAnchoredRect,
     computeDeckLayout,
     computeParkedCapsulePositions,
+    resolveDeckFanDirection,
     resolveToastPolicy,
     extractCapsuleLabel,
+    summarizeBehindSeverities,
 } from './luker-toast-layout.js';
 
 const TOASTR_VERSION = '2.1.4-luker';
@@ -310,7 +312,7 @@ export function createToastEngine() {
     function syncGlobalListeners() {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-        const needResize = hasFloatingEntries();
+        const needResize = hasFloatingEntries() || getDockedEntries().length >= 2;
         if (needResize && !resizeListenersBound) {
             window.addEventListener('resize', scheduleResizeClamp);
             window.visualViewport?.addEventListener('resize', scheduleResizeClamp);
@@ -345,7 +347,6 @@ export function createToastEngine() {
         deckPinned = false;
         deckHovered = false;
         refreshLayout();
-        resumeDockedTimers();
         syncGlobalListeners();
     }
 
@@ -398,18 +399,61 @@ export function createToastEngine() {
         const borderY = cs ? ((parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)) : 0;
         const padY = cs ? ((parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)) : 0;
         if (el.classList.contains('luker-toast-deck-clipped')) {
+            // Clipped behind cards carry an explicit height equal to frontHeight;
+            // prefer unstretched surfaceEl height so short cards don't inherit tall scrollHeight.
+            const fromSurface = surfaceHeight > 0 ? Math.ceil(surfaceHeight + padY + borderY) : 0;
+            if (fromSurface > 0) {
+                return fromSurface;
+            }
             const scrollH = el.scrollHeight || 0;
             const fromScroll = scrollH > 0 ? Math.ceil(scrollH + borderY) : 0;
-            const fromSurface = surfaceHeight > 0 ? Math.ceil(surfaceHeight + padY + borderY) : 0;
-            if (fromScroll > 0 || fromSurface > 0) {
-                return Math.max(fromScroll, fromSurface);
+            if (fromScroll > 0) {
+                return fromScroll;
             }
         }
-        const elHeight = measureElementSize(el, false).height;
+        const elHeight = el.offsetHeight > 0 ? el.offsetHeight : measureElementSize(el, false).height;
         if (surfaceHeight > 0) {
             return Math.max(elHeight, Math.ceil(surfaceHeight + padY + borderY));
         }
         return elHeight;
+    }
+
+    function measureAvailableDeckSpace(positionClass, fanDirection) {
+        const viewport = getViewportSize();
+        const topSafeInset = getTopSafeInset();
+        const isBottom = String(positionClass || '').includes('toast-bottom');
+        const rect = containerEl?.getBoundingClientRect?.();
+        const hasRealRect = Boolean(rect && rect.width > 0);
+
+        let availableHorizontalSpace;
+        if (hasRealRect) {
+            availableHorizontalSpace = fanDirection === 'left'
+                ? Math.max(0, Math.floor(rect.left - VIEWPORT_EDGE_MARGIN_PX))
+                : Math.max(0, Math.floor(viewport.width - rect.right - VIEWPORT_EDGE_MARGIN_PX));
+        } else {
+            const pos = String(positionClass || '');
+            // cap-ok: mirrors #toast-container CSS min(560px/340px/320px, 100vw - margin) container width in public/css/luker-toast.css when layout rect is unmeasured
+            const cssMaxWidth = pos.includes('full-width') ? 560 : (viewport.width <= 480 ? 320 : 340);
+            const cssMargin = (!pos.includes('full-width') && viewport.width <= 480) ? 20 : 24;
+            const defaultWidth = Math.min(cssMaxWidth, viewport.width - cssMargin);
+            if (pos.includes('-center') || pos.includes('-full-width')) {
+                availableHorizontalSpace = Math.max(0, Math.floor((viewport.width - defaultWidth) / 2) - VIEWPORT_EDGE_MARGIN_PX);
+            } else {
+                availableHorizontalSpace = Math.max(0, Math.floor(viewport.width - defaultWidth - 12 - VIEWPORT_EDGE_MARGIN_PX));
+            }
+        }
+
+        const badgeReserve = 36;
+        let availableVerticalSpace;
+        if (isBottom) {
+            const anchorBottom = hasRealRect ? rect.bottom : (viewport.height - 12);
+            availableVerticalSpace = Math.max(0, Math.floor(anchorBottom - topSafeInset - badgeReserve));
+        } else {
+            const anchorTop = hasRealRect ? rect.top : topSafeInset;
+            availableVerticalSpace = Math.max(0, Math.floor(viewport.height - anchorTop - VIEWPORT_EDGE_MARGIN_PX - badgeReserve));
+        }
+
+        return { availableHorizontalSpace, availableVerticalSpace };
     }
 
     function isTouchHoverSuppressed() {
@@ -513,20 +557,25 @@ export function createToastEngine() {
         }
     }
 
-    function startEntryTimer(entry, durationMs) {
+    function startEntryTimer(entry, durationMs, { totalDurationMs = durationMs } = {}) {
         clearEntryTimers(entry);
         const ms = Math.max(0, Number(durationMs) || 0);
         if (ms <= 0 || entry.exiting) {
             return;
         }
+        const total = Math.max(ms, Number(totalDurationMs) || ms);
+        entry.remainingTimeMs = ms;
+        entry.totalDurationMs = total;
         entry.hideEta = Date.now() + ms;
-        entry.maxHideTime = ms;
+        entry.maxHideTime = total;
         entry.hideTimer = setTimeout(() => {
+            entry.remainingTimeMs = 0;
             hideEntry(entry, { forced: false });
         }, ms);
 
         if (entry.progressEl) {
-            entry.progressEl.style.width = '100%';
+            const initialPct = total > 0 ? (ms / total) * 100 : 100;
+            entry.progressEl.style.width = `${initialPct}%`;
             entry.progressInterval = setInterval(() => {
                 if (!entry.progressEl || entry.exiting) return;
                 const remaining = Math.min(entry.maxHideTime, Math.max(0, entry.hideEta - Date.now()));
@@ -536,7 +585,10 @@ export function createToastEngine() {
         }
     }
 
-    function pauseEntryTimer(entry) {
+    function pauseEntryTimer(entry, { preserveRemaining = false } = {}) {
+        if (preserveRemaining && entry.hideTimer && entry.hideEta > 0) {
+            entry.remainingTimeMs = Math.max(0, entry.hideEta - Date.now());
+        }
         if (entry.hideTimer) {
             clearTimeout(entry.hideTimer);
             entry.hideTimer = null;
@@ -547,23 +599,47 @@ export function createToastEngine() {
         }
     }
 
-    function pauseDockedTimers() {
-        for (const entry of entries.values()) {
-            if (!entry.exiting && entry.state === 'docked' && entry.options.closeOnHover !== false) {
-                pauseEntryTimer(entry);
-            }
-        }
-    }
-
-    function resumeDockedTimers() {
-        if (deckHovered || deckPinned) return;
-        for (const entry of entries.values()) {
-            if (!entry.exiting && entry.state === 'docked' && !entry.hovered && !entry.policy.isPersistent && !entry.hideTimer) {
-                if (entry.policy.effectiveExtendedTimeOut > 0) {
-                    startEntryTimer(entry, entry.policy.effectiveExtendedTimeOut);
-                } else if (entry.policy.rawTimeOut > 0) {
-                    startEntryTimer(entry, entry.policy.rawTimeOut);
+    function syncDockedTimers(docked, expanded) {
+        if (expanded) {
+            for (const entry of docked) {
+                entry.occluded = false;
+                if (entry.options.closeOnHover !== false) {
+                    pauseEntryTimer(entry, { preserveRemaining: true });
+                    entry.pausedByHover = true;
                 }
+            }
+            return;
+        }
+
+        for (let i = 0; i < docked.length; i++) {
+            const entry = docked[i];
+            if (entry.exiting || entry.policy.isPersistent) {
+                entry.occluded = i > 0;
+                continue;
+            }
+            if (i > 0) {
+                // Occluded behind cards never drain their countdown unseen; preserve remaining duration.
+                entry.occluded = true;
+                pauseEntryTimer(entry, { preserveRemaining: true });
+                continue;
+            }
+            // Front card (index 0)
+            entry.occluded = false;
+            if (entry.hovered || (activeDrag && activeDrag.entry === entry) || entry.hideTimer) {
+                continue;
+            }
+            if (entry.pausedByHover) {
+                entry.pausedByHover = false;
+                const resumeMs = entry.policy.effectiveExtendedTimeOut > 0
+                    ? entry.policy.effectiveExtendedTimeOut
+                    : (entry.remainingTimeMs > 0 ? entry.remainingTimeMs : entry.policy.rawTimeOut);
+                if (resumeMs > 0) {
+                    startEntryTimer(entry, resumeMs);
+                }
+            } else if (entry.remainingTimeMs > 0) {
+                startEntryTimer(entry, entry.remainingTimeMs, {
+                    totalDurationMs: entry.totalDurationMs || entry.policy.rawTimeOut,
+                });
             }
         }
     }
@@ -600,7 +676,8 @@ export function createToastEngine() {
         });
     }
 
-    function ensureStackBadge(container, dockedCount, expanded, positionClass) {
+    function ensureStackBadge(container, docked, expanded, positionClass) {
+        const dockedCount = docked.length;
         if (dockedCount < 2) {
             if (stackBadgeEl) {
                 stackBadgeEl.remove();
@@ -619,9 +696,6 @@ export function createToastEngine() {
                 deckPinned = !deckPinned;
                 if (!deckPinned) {
                     deckHovered = false;
-                    resumeDockedTimers();
-                } else {
-                    pauseDockedTimers();
                 }
                 refreshLayout();
                 syncGlobalListeners();
@@ -641,7 +715,36 @@ export function createToastEngine() {
 
         const extraCount = dockedCount - 1;
         const label = expanded ? tr('Collapse notifications') : tr('Expand notifications');
-        stackBadgeEl.textContent = expanded ? '−' : `+${extraCount}`;
+        const { highestSeverity, dotTypes } = summarizeBehindSeverities(docked.slice(1).map(entry => entry.type));
+
+        stackBadgeEl.textContent = '';
+        if (expanded) {
+            stackBadgeEl.textContent = '−';
+            stackBadgeEl.removeAttribute('data-highest-severity');
+        } else {
+            if (dotTypes.length > 0) {
+                const dotsWrap = document.createElement('span');
+                dotsWrap.className = 'luker-toast-stack-dots';
+                dotsWrap.setAttribute('aria-hidden', 'true');
+                for (const type of dotTypes) {
+                    const dot = document.createElement('span');
+                    dot.className = 'luker-toast-stack-dot';
+                    dot.setAttribute('data-toast-type', type);
+                    dotsWrap.appendChild(dot);
+                }
+                stackBadgeEl.appendChild(dotsWrap);
+            }
+            const countSpan = document.createElement('span');
+            countSpan.className = 'luker-toast-stack-count';
+            countSpan.textContent = `+${extraCount}`;
+            stackBadgeEl.appendChild(countSpan);
+
+            if (highestSeverity === 'error' || highestSeverity === 'warning') {
+                stackBadgeEl.setAttribute('data-highest-severity', highestSeverity);
+            } else {
+                stackBadgeEl.removeAttribute('data-highest-severity');
+            }
+        }
         stackBadgeEl.title = label;
         stackBadgeEl.setAttribute('aria-label', label);
         stackBadgeEl.setAttribute('aria-expanded', String(expanded));
@@ -651,12 +754,14 @@ export function createToastEngine() {
 
     function onDockPointerEnter() {
         cancelCollapseGraceTimer();
-        if (getDockedEntries().length >= 2) {
+        const docked = getDockedEntries();
+        if (docked.length >= 2) {
             if (!deckHovered) {
                 deckHovered = true;
                 refreshLayout();
+            } else {
+                syncDockedTimers(docked, true);
             }
-            pauseDockedTimers();
         }
     }
 
@@ -678,7 +783,6 @@ export function createToastEngine() {
             if (activeDrag) return;
             deckHovered = false;
             refreshLayout();
-            resumeDockedTimers();
         }, DECK_COLLAPSE_GRACE_MS);
     }
 
@@ -702,10 +806,24 @@ export function createToastEngine() {
         }
 
         const expanded = isDeckExpanded();
+        const fanDirection = resolveDeckFanDirection(positionClass);
         containerEl.setAttribute('data-deck-expanded', String(expanded));
         containerEl.setAttribute('data-docked-count', String(docked.length));
+        containerEl.setAttribute('data-fan-dir', fanDirection);
         containerEl.style.setProperty('--luker-toast-top-offset', `${getTopSafeInset()}px`);
 
+        // Clear clipping on cards that must be measured at natural height (front card or all expanded cards).
+        if (docked.length > 0) {
+            const unclipTargets = expanded ? docked : [docked[0]];
+            for (const target of unclipTargets) {
+                if (target.el.classList.contains('luker-toast-deck-clipped')) {
+                    target.el.style.removeProperty('--toast-clip-height');
+                    target.el.classList.remove('luker-toast-deck-clipped');
+                }
+            }
+        }
+
+        const { availableHorizontalSpace, availableVerticalSpace } = measureAvailableDeckSpace(positionClass, fanDirection);
         const deckItems = docked.map(entry => ({
             id: entry.id,
             height: measureDockedHeight(entry),
@@ -714,6 +832,8 @@ export function createToastEngine() {
             items: deckItems,
             expanded,
             positionClass,
+            availableHorizontalSpace,
+            availableVerticalSpace,
         });
         const layoutById = new Map(deckLayout.map(item => [item.id, item]));
 
@@ -725,6 +845,11 @@ export function createToastEngine() {
             const el = entry.el;
             el.setAttribute('data-toast-state', 'docked');
             el.setAttribute('data-stack-index', String(spec.index));
+            if (!expanded && spec.index > 0) {
+                el.setAttribute('data-toast-behind', 'true');
+            } else {
+                el.removeAttribute('data-toast-behind');
+            }
             el.style.left = '';
             el.style.top = '';
             el.style.zIndex = String(spec.zIndex);
@@ -736,6 +861,7 @@ export function createToastEngine() {
                 el.removeAttribute('data-stack-hidden');
             }
             el.style.setProperty('--toast-index', String(spec.index));
+            el.style.setProperty('--toast-offset-x', `${spec.offsetX}px`);
             el.style.setProperty('--toast-offset-y', `${spec.offsetY}px`);
             el.style.setProperty('--toast-scale', String(spec.scale));
             if (spec.clipHeight !== null) {
@@ -752,11 +878,13 @@ export function createToastEngine() {
             }
         }
 
-        ensureStackBadge(containerEl, docked.length, expanded, positionClass);
+        ensureStackBadge(containerEl, docked, expanded, positionClass);
         if (stackBadgeEl) {
-            const badgeOffset = deckSpanHeight + 6;
+            const badgeOffset = deckSpanHeight + 7;
             stackBadgeEl.style.setProperty('--deck-badge-offset-y', `${isBottom ? -badgeOffset : badgeOffset}px`);
         }
+
+        syncDockedTimers(docked, expanded);
 
         // Layout parked dock-origin minimized capsules without colliding with custom floating ones.
         const parkedCapsules = [];
@@ -853,17 +981,20 @@ export function createToastEngine() {
     function applyFloatingPosition(entry, x, y) {
         entry.x = x;
         entry.y = y;
+        entry.occluded = false;
         const el = entry.el;
         el.style.left = `${x}px`;
         el.style.top = `${y}px`;
         el.style.opacity = '';
         el.style.pointerEvents = '';
+        el.style.removeProperty('--toast-offset-x');
         el.style.removeProperty('--toast-offset-y');
         el.style.removeProperty('--toast-scale');
         el.style.removeProperty('--toast-clip-height');
-        el.classList.remove('luker-toast-deck-clipped');
+        el.classList.remove('luker-toast-deck-clipped', 'luker-toast-entering');
         el.removeAttribute('data-stack-index');
         el.removeAttribute('data-stack-hidden');
+        el.removeAttribute('data-toast-behind');
         el.style.zIndex = String(FLOATING_BASE_Z_INDEX + entry.zOrder);
     }
 
@@ -884,17 +1015,20 @@ export function createToastEngine() {
 
         syncCapsuleLabel(entry);
         entry.state = 'minimized';
+        entry.occluded = false;
         entry.zOrder = ++floatingZSeq;
         el.setAttribute('data-toast-state', 'minimized');
         el.classList.add('luker-toast-minimized');
         el.style.opacity = '';
         el.style.pointerEvents = '';
+        el.style.removeProperty('--toast-offset-x');
         el.style.removeProperty('--toast-offset-y');
         el.style.removeProperty('--toast-scale');
         el.style.removeProperty('--toast-clip-height');
-        el.classList.remove('luker-toast-deck-clipped');
+        el.classList.remove('luker-toast-deck-clipped', 'luker-toast-entering');
         el.removeAttribute('data-stack-index');
         el.removeAttribute('data-stack-hidden');
+        el.removeAttribute('data-toast-behind');
 
         if (prevState === 'detached' && anchorRect) {
             entry.hasCustomPosition = true;
@@ -1070,7 +1204,7 @@ export function createToastEngine() {
                 if (!entry.hovered) {
                     const resumeMs = entry.policy.effectiveExtendedTimeOut > 0
                         ? entry.policy.effectiveExtendedTimeOut
-                        : entry.policy.rawTimeOut;
+                        : (entry.remainingTimeMs > 0 ? entry.remainingTimeMs : entry.policy.rawTimeOut);
                     if (resumeMs > 0) {
                         startEntryTimer(entry, resumeMs);
                     }
@@ -1101,9 +1235,6 @@ export function createToastEngine() {
             }
 
             refreshLayout();
-            if (!deckHovered && !deckPinned) {
-                resumeDockedTimers();
-            }
         }
     }
 
@@ -1122,7 +1253,7 @@ export function createToastEngine() {
             }
             drag.dragging = true;
             const entry = drag.entry;
-            pauseEntryTimer(entry);
+            pauseEntryTimer(entry, { preserveRemaining: true });
 
             const rect = entry.el.getBoundingClientRect?.() || { left: entry.x || 0, top: entry.y || 0 };
             drag.originLeft = Number.isFinite(rect.left) ? rect.left : (entry.x || 0);
@@ -1240,7 +1371,8 @@ export function createToastEngine() {
                 onDockPointerEnter();
             }
             if (entry.options.closeOnHover !== false) {
-                pauseEntryTimer(entry);
+                pauseEntryTimer(entry, { preserveRemaining: true });
+                entry.pausedByHover = true;
             }
         });
 
@@ -1252,10 +1384,18 @@ export function createToastEngine() {
             if (entry.exiting || entry.policy.isPersistent) return;
             if (entry.state === 'docked' && isDeckExpanded()) return;
             if (activeDrag && activeDrag.entry === entry) return;
+            if (entry.state === 'docked') {
+                syncDockedTimers(getDockedEntries(), false);
+                return;
+            }
             if (entry.options.closeOnHover !== false && entry.policy.effectiveExtendedTimeOut > 0) {
+                entry.pausedByHover = false;
                 startEntryTimer(entry, entry.policy.effectiveExtendedTimeOut);
-            } else if (entry.policy.rawTimeOut > 0 && !entry.hideTimer) {
-                startEntryTimer(entry, entry.policy.rawTimeOut);
+            } else if (!entry.hideTimer) {
+                const resumeMs = entry.remainingTimeMs > 0 ? entry.remainingTimeMs : entry.policy.rawTimeOut;
+                if (resumeMs > 0) {
+                    startEntryTimer(entry, resumeMs, { totalDurationMs: entry.totalDurationMs || entry.policy.rawTimeOut });
+                }
             }
         });
 
@@ -1266,6 +1406,10 @@ export function createToastEngine() {
                 if (isHeldByCallerInputFocus(entry)) return;
                 entry.deferredAutoHide = false;
                 if (entry.hovered || (entry.state === 'docked' && isDeckExpanded())) return;
+                if (entry.state === 'docked' && getDockedEntries()[0] !== entry) {
+                    entry.pausedByHover = true;
+                    return;
+                }
                 const resumeMs = entry.policy.effectiveExtendedTimeOut > 0
                     ? entry.policy.effectiveExtendedTimeOut
                     : entry.policy.rawTimeOut;
@@ -1293,7 +1437,6 @@ export function createToastEngine() {
             const stackIndex = Number(el.getAttribute('data-stack-index'));
             if (entry.state === 'docked' && !isDeckExpanded() && Number.isFinite(stackIndex) && stackIndex > 0) {
                 deckPinned = true;
-                pauseDockedTimers();
                 refreshLayout();
                 syncGlobalListeners();
                 return;
@@ -1555,6 +1698,10 @@ export function createToastEngine() {
             exitTimer: null,
             hideEta: 0,
             maxHideTime: 0,
+            remainingTimeMs: policy.rawTimeOut,
+            totalDurationMs: policy.rawTimeOut,
+            occluded: false,
+            pausedByHover: false,
             suppressNextClick: false,
             suppressClickUntil: 0,
         };
@@ -1566,6 +1713,11 @@ export function createToastEngine() {
         }
         attachToastInteractions(entry);
 
+        const reducedMotion = typeof window !== 'undefined'
+            && typeof window.matchMedia === 'function'
+            && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const animateEnter = !reducedMotion && Number(options.showDuration) > 0;
+
         suppressedContainerObserver = true;
         if (options.newestOnTop !== false && container.firstChild) {
             container.insertBefore(el, container.firstChild);
@@ -1574,10 +1726,14 @@ export function createToastEngine() {
         }
         suppressedContainerObserver = false;
 
+        // Compute deck layout BEFORE adding entering transform so frontHeight
+        // measures the true unscaled border-box height of the new card.
         refreshLayout();
 
-        if (!policy.isPersistent && policy.rawTimeOut > 0 && !isDeckExpanded()) {
-            startEntryTimer(entry, policy.rawTimeOut);
+        if (animateEnter && el.getAttribute('data-stack-index') === '0') {
+            el.classList.add('luker-toast-entering');
+            void el.offsetWidth;
+            el.classList.remove('luker-toast-entering');
         }
 
         if (typeof options.onShown === 'function') {

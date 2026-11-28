@@ -1066,6 +1066,21 @@ body.swipeAllMessages #chat .mes:not(.last_mes) {
     box-shadow: var(--lt-shadow);
 }
 
+#toast-container .luker-toast-stack-badge[data-highest-severity="error"] {
+    border-color: color-mix(in srgb, var(--lt-bad) 76%, transparent);
+    background-color: color-mix(in srgb, var(--lt-bad) 14%, rgb(from var(--lt-surface) r g b / 1));
+}
+
+#toast-container .luker-toast-stack-badge[data-highest-severity="warning"] {
+    border-color: color-mix(in srgb, #d99026 76%, transparent);
+    background-color: color-mix(in srgb, #d99026 14%, rgb(from var(--lt-surface) r g b / 1));
+}
+
+#toast-container .luker-toast-stack-dot[data-toast-type="info"] { background-color: var(--lt-accent); }
+#toast-container .luker-toast-stack-dot[data-toast-type="success"] { background-color: var(--lt-good); }
+#toast-container .luker-toast-stack-dot[data-toast-type="warning"] { background-color: #d99026; }
+#toast-container .luker-toast-stack-dot[data-toast-type="error"] { background-color: var(--lt-bad); }
+
 #toast-container .luker-toast-stack-badge:hover,
 #toast-container .luker-toast-stack-badge:focus-visible {
     border-color: var(--lt-accent);

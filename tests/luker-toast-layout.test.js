@@ -8,6 +8,7 @@ import {
     CAPSULE_STACK_GAP_PX,
     DECK_COLLAPSE_GAP_PX,
     DECK_EXPANDED_GAP_PX,
+    DECK_FAN_STEP_X_PX,
     DRAG_THRESHOLD_PX,
     VIEWPORT_EDGE_MARGIN_PX,
     clampToastPosition,
@@ -16,14 +17,17 @@ import {
     computeParkedCapsulePositions,
     extractCapsuleLabel,
     resolveCapsuleParkingSide,
+    resolveDeckFanDirection,
     resolveToastPolicy,
+    summarizeBehindSeverities,
 } from '../public/scripts/luker-toast-layout.js';
 
 describe('luker-toast-layout constants', () => {
     test('exports spec-defined geometry constants', () => {
         expect(DRAG_THRESHOLD_PX).toBe(6);
         expect(VIEWPORT_EDGE_MARGIN_PX).toBe(8);
-        expect(DECK_COLLAPSE_GAP_PX).toBe(10);
+        expect(DECK_COLLAPSE_GAP_PX).toBe(8);
+        expect(DECK_FAN_STEP_X_PX).toBe(8);
         expect(DECK_EXPANDED_GAP_PX).toBe(8);
         expect(CAPSULE_STACK_GAP_PX).toBe(8);
     });
@@ -264,6 +268,37 @@ describe('computeAnchoredRect', () => {
     });
 });
 
+describe('resolveDeckFanDirection & summarizeBehindSeverities', () => {
+    test('fans rightward for left-anchored docks and leftward otherwise', () => {
+        expect(resolveDeckFanDirection('toast-top-left')).toBe('right');
+        expect(resolveDeckFanDirection('toast-bottom-left')).toBe('right');
+        expect(resolveDeckFanDirection('toast-top-center')).toBe('left');
+        expect(resolveDeckFanDirection('toast-top-right')).toBe('left');
+        expect(resolveDeckFanDirection('toast-top-full-width')).toBe('left');
+        expect(resolveDeckFanDirection('toast-bottom-center')).toBe('left');
+        expect(resolveDeckFanDirection('toast-bottom-right')).toBe('left');
+    });
+
+    test('summarizes behind-card severities in priority order with unique dot types', () => {
+        expect(summarizeBehindSeverities(['info', 'success'])).toEqual({
+            highestSeverity: 'normal',
+            dotTypes: ['success', 'info'],
+        });
+        expect(summarizeBehindSeverities(['info', 'warning', 'info'])).toEqual({
+            highestSeverity: 'warning',
+            dotTypes: ['warning', 'info'],
+        });
+        expect(summarizeBehindSeverities(['info', 'warning', 'error', 'success', 'error'])).toEqual({
+            highestSeverity: 'error',
+            dotTypes: ['error', 'warning', 'success', 'info'],
+        });
+        expect(summarizeBehindSeverities([])).toEqual({
+            highestSeverity: 'normal',
+            dotTypes: [],
+        });
+    });
+});
+
 describe('computeDeckLayout', () => {
     const fiveItems = [
         { id: 1, height: 64 },
@@ -273,33 +308,92 @@ describe('computeDeckLayout', () => {
         { id: 5, height: 60 },
     ];
 
-    test('computes collapsed top-anchored deck with front clipping and hiding beyond 3', () => {
+    test('fans 5 collapsed top-center cards leftward with full stepped visibility and front height matching', () => {
         const layout = computeDeckLayout({
             items: fiveItems,
             expanded: false,
             positionClass: 'toast-top-center',
+            availableHorizontalSpace: 400,
+            availableVerticalSpace: 600,
         });
 
         expect(layout).toEqual([
-            { id: 1, index: 0, offsetY: 0, scale: 1, opacity: 1, zIndex: 100, pointerEvents: 'auto', clipHeight: null },
-            { id: 2, index: 1, offsetY: 10, scale: 0.95, opacity: 0.92, zIndex: 99, pointerEvents: 'auto', clipHeight: 64 },
-            { id: 3, index: 2, offsetY: 20, scale: 0.9, opacity: 0.82, zIndex: 98, pointerEvents: 'auto', clipHeight: 64 },
-            { id: 4, index: 3, offsetY: 26, scale: 0.86, opacity: 0, zIndex: 97, pointerEvents: 'none', clipHeight: 64 },
-            { id: 5, index: 4, offsetY: 26, scale: 0.86, opacity: 0, zIndex: 96, pointerEvents: 'none', clipHeight: 64 },
+            { id: 1, index: 0, offsetX: 0, offsetY: 0, scale: 1, opacity: 1, zIndex: 100, pointerEvents: 'auto', clipHeight: null, fanDirection: 'left' },
+            { id: 2, index: 1, offsetX: -8, offsetY: 8, scale: 0.985, opacity: 0.94, zIndex: 99, pointerEvents: 'auto', clipHeight: 64, fanDirection: 'left' },
+            { id: 3, index: 2, offsetX: -16, offsetY: 16, scale: 0.97, opacity: 0.88, zIndex: 98, pointerEvents: 'auto', clipHeight: 64, fanDirection: 'left' },
+            { id: 4, index: 3, offsetX: -22, offsetY: 22, scale: 0.955, opacity: 0.82, zIndex: 97, pointerEvents: 'auto', clipHeight: 64, fanDirection: 'left' },
+            { id: 5, index: 4, offsetX: -28, offsetY: 28, scale: 0.94, opacity: 0.76, zIndex: 96, pointerEvents: 'auto', clipHeight: 64, fanDirection: 'left' },
         ]);
     });
 
-    test('inverts offset direction for bottom-anchored collapsed deck', () => {
+    test('compresses horizontal fan to fit narrow mobile viewport gutters and falls back to vertical-only when gutter < 4px', () => {
+        const narrow = computeDeckLayout({
+            items: Array.from({ length: 6 }, (_, i) => ({ id: i + 1, height: 64 })),
+            expanded: false,
+            positionClass: 'toast-top-center',
+            availableHorizontalSpace: 20,
+            availableVerticalSpace: 600,
+        });
+
+        const visible = narrow.filter(x => x.opacity > 0);
+        expect(visible.length).toBe(6);
+        for (const spec of visible) {
+            expect(Math.abs(spec.offsetX)).toBeLessThanOrEqual(20);
+        }
+        expect(narrow[5].offsetX).toBeLessThan(0);
+
+        const zeroGutter = computeDeckLayout({
+            items: fiveItems,
+            expanded: false,
+            positionClass: 'toast-top-full-width',
+            availableHorizontalSpace: 2,
+            availableVerticalSpace: 600,
+        });
+        expect(zeroGutter.map(x => x.offsetX)).toEqual([0, 0, 0, 0, 0]);
+        expect(zeroGutter[1].offsetY).toBe(8);
+    });
+
+    test('hides cards beyond the vertical compactness budget or contrast opacity floor', () => {
+        const twelveItems = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, height: 64 }));
         const layout = computeDeckLayout({
+            items: twelveItems,
+            expanded: false,
+            positionClass: 'toast-top-center',
+            availableHorizontalSpace: 400,
+            availableVerticalSpace: 600,
+        });
+
+        // Indices 0..8 stay >= 0.50 opacity and within 54px vertical compactness budget; 9+ hide cleanly.
+        expect(layout[8].opacity).toBeGreaterThanOrEqual(0.5);
+        expect(layout[8].pointerEvents).toBe('auto');
+        expect(layout[9].opacity).toBe(0);
+        expect(layout[9].pointerEvents).toBe('none');
+        expect(layout[11].opacity).toBe(0);
+    });
+
+    test('fans rightward for toast-top-left and inverts Y direction for bottom-anchored decks', () => {
+        const leftAnchor = computeDeckLayout({
+            items: fiveItems.slice(0, 3),
+            expanded: false,
+            positionClass: 'toast-top-left',
+            availableHorizontalSpace: 400,
+            availableVerticalSpace: 600,
+        });
+        expect(leftAnchor.map(x => x.offsetX)).toEqual([0, 8, 16]);
+        expect(leftAnchor.map(x => x.fanDirection)).toEqual(['right', 'right', 'right']);
+
+        const bottomRight = computeDeckLayout({
             items: fiveItems.slice(0, 4),
             expanded: false,
             positionClass: 'toast-bottom-right',
+            availableHorizontalSpace: 400,
+            availableVerticalSpace: 600,
         });
-
-        expect(layout.map(x => x.offsetY)).toEqual([0, -10, -20, -26]);
+        expect(bottomRight.map(x => x.offsetY)).toEqual([0, -8, -16, -22]);
+        expect(bottomRight.map(x => x.offsetX)).toEqual([0, -8, -16, -22]);
     });
 
-    test('computes cumulative expanded offsets for top and bottom anchors', () => {
+    test('computes cumulative expanded offsets with zero horizontal fan for top and bottom anchors', () => {
         const three = [
             { id: 1, height: 60 },
             { id: 2, height: 80 },
@@ -312,9 +406,9 @@ describe('computeDeckLayout', () => {
             positionClass: 'toast-top-center',
         });
         expect(topLayout).toEqual([
-            { id: 1, index: 0, offsetY: 0, scale: 1, opacity: 1, zIndex: 100, pointerEvents: 'auto', clipHeight: null },
-            { id: 2, index: 1, offsetY: 68, scale: 1, opacity: 1, zIndex: 99, pointerEvents: 'auto', clipHeight: null },
-            { id: 3, index: 2, offsetY: 156, scale: 1, opacity: 1, zIndex: 98, pointerEvents: 'auto', clipHeight: null },
+            { id: 1, index: 0, offsetX: 0, offsetY: 0, scale: 1, opacity: 1, zIndex: 100, pointerEvents: 'auto', clipHeight: null, fanDirection: 'left' },
+            { id: 2, index: 1, offsetX: 0, offsetY: 68, scale: 1, opacity: 1, zIndex: 99, pointerEvents: 'auto', clipHeight: null, fanDirection: 'left' },
+            { id: 3, index: 2, offsetX: 0, offsetY: 156, scale: 1, opacity: 1, zIndex: 98, pointerEvents: 'auto', clipHeight: null, fanDirection: 'left' },
         ]);
 
         const bottomLayout = computeDeckLayout({
@@ -323,6 +417,7 @@ describe('computeDeckLayout', () => {
             positionClass: 'toast-bottom-center',
         });
         expect(bottomLayout.map(x => x.offsetY)).toEqual([0, -68, -156]);
+        expect(bottomLayout.map(x => x.offsetX)).toEqual([0, 0, 0]);
     });
 });
 

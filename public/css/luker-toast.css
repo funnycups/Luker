@@ -19,8 +19,8 @@
 :root {
     --luker-toast-radius: 10px;
     --luker-toast-capsule-radius: 999px;
-    --luker-toast-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-    --luker-toast-dur: 180ms;
+    --luker-toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --luker-toast-dur: 220ms;
     --luker-toast-edge: 12px;
 }
 
@@ -171,6 +171,7 @@ body.activity-pill-visible #toast-container.toast-top-right {
     transition:
         transform var(--luker-toast-dur) var(--luker-toast-ease),
         opacity var(--luker-toast-dur) var(--luker-toast-ease),
+        height var(--luker-toast-dur) var(--luker-toast-ease),
         max-height var(--luker-toast-dur) var(--luker-toast-ease);
 }
 
@@ -183,8 +184,8 @@ body.activity-pill-visible #toast-container.toast-top-right {
 }
 
 /* Docked deck alignment per container anchor (collapsed deck overlays cards
- * from the container origin; expanded deck switches to a viewport-bounded
- * scrollable flex column so notification bursts stay reachable). */
+ * from the container origin with adaptive stepped horizontal fan-out; expanded
+ * deck switches to a viewport-bounded scrollable flex column). */
 #toast-container.toast-top-left .luker-toast[data-toast-state="docked"],
 #toast-container.toast-top-right .luker-toast[data-toast-state="docked"],
 #toast-container.toast-top-center .luker-toast[data-toast-state="docked"],
@@ -192,8 +193,15 @@ body.activity-pill-visible #toast-container.toast-top-right {
     top: 0;
     left: 0;
     width: 100%;
-    transform-origin: top center;
-    transform: translateY(var(--toast-offset-y, 0px)) scale(var(--toast-scale, 1));
+    transform-origin: bottom left;
+    transform: translate(var(--toast-offset-x, 0px), var(--toast-offset-y, 0px)) scale(var(--toast-scale, 1));
+}
+
+#toast-container[data-fan-dir="right"].toast-top-left .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-top-right .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-top-center .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-top-full-width .luker-toast[data-toast-state="docked"] {
+    transform-origin: bottom right;
 }
 
 #toast-container.toast-bottom-left .luker-toast[data-toast-state="docked"],
@@ -203,8 +211,15 @@ body.activity-pill-visible #toast-container.toast-top-right {
     bottom: 0;
     left: 0;
     width: 100%;
-    transform-origin: bottom center;
-    transform: translateY(var(--toast-offset-y, 0px)) scale(var(--toast-scale, 1));
+    transform-origin: top left;
+    transform: translate(var(--toast-offset-x, 0px), var(--toast-offset-y, 0px)) scale(var(--toast-scale, 1));
+}
+
+#toast-container[data-fan-dir="right"].toast-bottom-left .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-bottom-right .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-bottom-center .luker-toast[data-toast-state="docked"],
+#toast-container[data-fan-dir="right"].toast-bottom-full-width .luker-toast[data-toast-state="docked"] {
+    transform-origin: top right;
 }
 
 #toast-container[data-deck-expanded="true"] {
@@ -232,17 +247,16 @@ body.activity-pill-visible #toast-container.toast-top-right {
     left: auto;
     right: auto;
     width: 100%;
+    height: auto;
     flex: none;
     order: var(--toast-index, 0);
     transform: none;
-}
-
-#toast-container .luker-toast[data-toast-state="docked"] {
     content-visibility: auto;
     contain-intrinsic-size: auto 60px;
 }
 
 #toast-container .luker-toast.luker-toast-deck-clipped {
+    height: var(--toast-clip-height);
     max-height: var(--toast-clip-height);
     overflow: hidden;
 }
@@ -251,6 +265,25 @@ body.activity-pill-visible #toast-container.toast-top-right {
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
+}
+
+/* Entering & leaving motion for docked cards */
+#toast-container.toast-top-left .luker-toast.luker-toast-entering,
+#toast-container.toast-top-right .luker-toast.luker-toast-entering,
+#toast-container.toast-top-center .luker-toast.luker-toast-entering,
+#toast-container.toast-top-full-width .luker-toast.luker-toast-entering {
+    opacity: 0 !important;
+    transform: translate(0px, -14px) scale(0.96) !important;
+    transition: none !important;
+}
+
+#toast-container.toast-bottom-left .luker-toast.luker-toast-entering,
+#toast-container.toast-bottom-right .luker-toast.luker-toast-entering,
+#toast-container.toast-bottom-center .luker-toast.luker-toast-entering,
+#toast-container.toast-bottom-full-width .luker-toast.luker-toast-entering {
+    opacity: 0 !important;
+    transform: translate(0px, 14px) scale(0.96) !important;
+    transition: none !important;
 }
 
 /* Detached floating cards and minimized capsules use viewport-fixed coordinates. */
@@ -280,6 +313,20 @@ body.activity-pill-visible #toast-container.toast-top-right {
 #toast-container .luker-toast.luker-toast-leaving {
     opacity: 0 !important;
     pointer-events: none !important;
+}
+
+#toast-container.toast-top-left .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-top-right .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-top-center .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-top-full-width .luker-toast.luker-toast-leaving[data-toast-state="docked"] {
+    transform: translate(var(--toast-offset-x, 0px), calc(var(--toast-offset-y, 0px) - 10px)) scale(0.96) !important;
+}
+
+#toast-container.toast-bottom-left .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-bottom-right .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-bottom-center .luker-toast.luker-toast-leaving[data-toast-state="docked"],
+#toast-container.toast-bottom-full-width .luker-toast.luker-toast-leaving[data-toast-state="docked"] {
+    transform: translate(var(--toast-offset-x, 0px), calc(var(--toast-offset-y, 0px) + 10px)) scale(0.96) !important;
 }
 
 /* Transparent inner flex layout container (visual card styling belongs on .toast). */
@@ -482,6 +529,7 @@ body.activity-pill-visible #toast-container.toast-top-right {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 5px;
     min-width: 34px;
     height: 22px;
     padding: 0 9px;
@@ -489,7 +537,20 @@ body.activity-pill-visible #toast-container.toast-top-right {
     font-weight: 600;
     line-height: 1;
     cursor: pointer;
-    transition: transform var(--luker-toast-dur) var(--luker-toast-ease), border-color 120ms ease;
+    transition: transform var(--luker-toast-dur) var(--luker-toast-ease), border-color 120ms ease, background-color 120ms ease;
+}
+
+#toast-container .luker-toast-stack-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+#toast-container .luker-toast-stack-dot {
+    width: 6.5px;
+    height: 6.5px;
+    border-radius: 999px;
+    flex: none;
 }
 
 #toast-container .luker-toast-stack-badge:focus-visible {
@@ -632,6 +693,21 @@ body.activity-pill-visible #toast-container.toast-top-right {
     #toast-container .luker-toast.toast-warning { --toast-accent: #e5a028; }
     #toast-container .luker-toast.toast-error { --toast-accent: #e05a5a; }
 
+    /* Strengthen stepped behind-card edge tint & accent bar so stacked severities stay legible. */
+    #toast-container .luker-toast[data-toast-behind="true"] {
+        border-left-width: 4px;
+        border-bottom-color: color-mix(in srgb, var(--toast-accent) 60%, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.16)));
+        background-color: color-mix(
+            in srgb,
+            var(--toast-accent) 15%,
+            rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1)
+        );
+    }
+
+    #toast-container[data-fan-dir="right"] .luker-toast[data-toast-behind="true"] {
+        border-right: 4px solid var(--toast-accent);
+    }
+
     body:not(.no-blur) #toast-container .luker-toast {
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
@@ -743,6 +819,21 @@ body.activity-pill-visible #toast-container.toast-top-right {
         color: var(--SmartThemeBodyColor, #e8e8ee);
         box-shadow: 0 3px 10px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.4));
     }
+
+    #toast-container .luker-toast-stack-badge[data-highest-severity="error"] {
+        border-color: color-mix(in srgb, #e05a5a 78%, transparent);
+        background-color: color-mix(in srgb, #e05a5a 16%, rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1));
+    }
+
+    #toast-container .luker-toast-stack-badge[data-highest-severity="warning"] {
+        border-color: color-mix(in srgb, #e5a028 78%, transparent);
+        background-color: color-mix(in srgb, #e5a028 16%, rgb(from var(--SmartThemeBlurTintColor, #1a1c24) r g b / 1));
+    }
+
+    #toast-container .luker-toast-stack-dot[data-toast-type="info"] { background-color: #3b9ec4; }
+    #toast-container .luker-toast-stack-dot[data-toast-type="success"] { background-color: #3fb97c; }
+    #toast-container .luker-toast-stack-dot[data-toast-type="warning"] { background-color: #e5a028; }
+    #toast-container .luker-toast-stack-dot[data-toast-type="error"] { background-color: #e05a5a; }
 
     #toast-container .luker-toast-stack-badge:hover,
     #toast-container .luker-toast-stack-badge:focus-visible {

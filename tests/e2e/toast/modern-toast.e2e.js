@@ -369,6 +369,19 @@ test.describe('modern toast system', () => {
         expect(frontBox.x).toBeGreaterThanOrEqual(0);
         expect(frontBox.x + frontBox.width).toBeLessThanOrEqual(390);
 
+        // Stepped behind cards must also stay inside the narrow 390px viewport.
+        const behindBounds = await page.evaluate(() => {
+            const cards = Array.from(document.querySelectorAll('#toast-container .toast[data-toast-state="docked"]'));
+            return cards.map(c => {
+                const r = c.getBoundingClientRect();
+                return { index: Number(c.dataset.stackIndex), left: r.left, right: r.right };
+            });
+        });
+        for (const card of behindBounds) {
+            expect(card.left).toBeGreaterThanOrEqual(7);
+            expect(card.right).toBeLessThanOrEqual(390);
+        }
+
         // Expand & collapse via badge tap
         await badge.click();
         await expect(container).toHaveAttribute('data-deck-expanded', 'true');
@@ -598,5 +611,76 @@ test.describe('modern toast system', () => {
         expect(lensMetrics.radius).toBe('12px');
         expect(lensMetrics.borderLeft).toBe('rgb(43, 125, 233)');
         expect(lensMetrics.iconColor).toBe('rgb(43, 125, 233)');
+    });
+
+    test('fans stepped behind cards visibly, signals behind errors on badge, and pauses occluded error until promoted', async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+
+        // 1. Issue #83 burst: error followed quickly by info.
+        await sendSlashCommand(
+            page,
+            '/echo severity=error timeout=1600 title="Chat Completion API" Upstream request failed with HTTP 500 Internal Server Error. Inspect logs for details. | /delay 150 | /echo severity=info timeout=1600 title="Operation Finished" Parsing completed',
+        );
+
+        const container = page.locator('#toast-container');
+        const infoToast = container.locator('.toast-info', { hasText: 'Parsing completed' });
+        const errorToast = container.locator('.toast-error', { hasText: 'Upstream request failed with HTTP 500' });
+        const badge = container.locator('.luker-toast-stack-badge');
+
+        await expect(infoToast).toBeVisible({ timeout: 10_000 });
+        await expect(errorToast).toBeVisible({ timeout: 10_000 });
+        await expect(infoToast).toHaveAttribute('data-stack-index', '0');
+        await expect(errorToast).toHaveAttribute('data-stack-index', '1');
+        await expect(badge).toHaveText('+1');
+        await expect(badge).toHaveAttribute('data-highest-severity', 'error');
+        await expect(badge.locator('.luker-toast-stack-dot[data-toast-type="error"]')).toHaveCount(1);
+
+        // Stepped left fan-out exposes error card's left edge and bottom edge cleanly.
+        const fanBoxes = await page.evaluate(() => {
+            const front = document.querySelector('#toast-container .toast[data-stack-index="0"]').getBoundingClientRect();
+            const behind = document.querySelector('#toast-container .toast[data-stack-index="1"]').getBoundingClientRect();
+            return {
+                frontLeft: front.left,
+                behindLeft: behind.left,
+                frontBottom: front.bottom,
+                behindBottom: behind.bottom,
+            };
+        });
+        expect(fanBoxes.behindLeft).toBeLessThan(fanBoxes.frontLeft - 3);
+        expect(fanBoxes.behindBottom).toBeGreaterThan(fanBoxes.frontBottom + 3);
+
+        // When front info auto-dismisses, occluded error MUST still be alive, promote to index 0 unclipped, and later auto-dismiss.
+        await expect(infoToast).toHaveCount(0, { timeout: 6_000 });
+        await expect(errorToast).toBeVisible();
+        await expect(errorToast).toHaveAttribute('data-stack-index', '0');
+        await expect(errorToast).not.toHaveClass(/luker-toast-deck-clipped/);
+        const unclipped = await errorToast.evaluate(el => ({
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+        }));
+        expect(unclipped.scrollHeight).toBeLessThanOrEqual(unclipped.clientHeight + 2);
+        await expect(errorToast).toHaveCount(0, { timeout: 6_000 });
+
+        // 2. 4-toast burst: 4th card (error at index 3) stays visibly fanned out instead of hidden.
+        await sendSlashCommand(
+            page,
+            '/echo severity=error timeout=60000 title="Critical Failure" Request failed with HTTP 500 | /echo severity=info timeout=60000 title="Step 1" Notice one | /echo severity=info timeout=60000 title="Step 2" Notice two | /echo severity=info timeout=60000 title="Step 3" Notice three',
+        );
+
+        const fourthError = container.locator('.toast-error', { hasText: 'Request failed with HTTP 500' });
+        await expect(fourthError).toHaveAttribute('data-stack-index', '3', { timeout: 10_000 });
+        await expect(fourthError).not.toHaveAttribute('data-stack-hidden', 'true');
+        const fourthStyle = await fourthError.evaluate(el => ({
+            opacity: parseFloat(getComputedStyle(el).opacity),
+            visibility: getComputedStyle(el).visibility,
+        }));
+        expect(fourthStyle.opacity).toBeGreaterThan(0.5);
+        expect(fourthStyle.visibility).toBe('visible');
+        await expect(badge).toHaveText('+3');
+        await expect(badge).toHaveAttribute('data-highest-severity', 'error');
+        await expect(badge.locator('.luker-toast-stack-dot[data-toast-type="error"]')).toHaveCount(1);
+        await expect(badge.locator('.luker-toast-stack-dot[data-toast-type="info"]')).toHaveCount(1);
     });
 });

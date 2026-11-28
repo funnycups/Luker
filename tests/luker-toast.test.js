@@ -495,10 +495,15 @@ describe('final review regression fixes', () => {
         expect($t3.attr('data-toast-state')).toBe('detached');
         expect(container.getAttribute('data-deck-expanded')).toBe('false');
 
-        // Remaining docked toasts must resume their auto-dismiss timers instead of staying frozen
+        // Front remaining docked toast ($t2) resumes immediately and dismisses after extendedTimeOut (1500ms);
+        // occluded behind toast ($t1) stays paused until $t2 clears, then promotes to slot 0 and dismisses cleanly.
+        jest.advanceTimersByTime(1600);
+        expect(document.body.contains($t2[0])).toBe(false);
+        expect(document.body.contains($t1[0])).toBe(true);
+        expect($t1.attr('data-stack-index')).toBe('0');
+
         jest.advanceTimersByTime(1600);
         expect(document.body.contains($t1[0])).toBe(false);
-        expect(document.body.contains($t2[0])).toBe(false);
     });
 
     test('ignores touch-emulated mouseenter so mobile tap on behind-card expands deck and tap on front card does not freeze deck open', () => {
@@ -620,21 +625,103 @@ describe('final review regression fixes', () => {
         expect($t1[0].classList.contains('luker-toast-dragging')).toBe(false);
     });
 
-    test('marks 4th+ collapsed docked cards with data-stack-hidden and clears it on expand or detach', () => {
-        const $t1 = toastr.info('Oldest 1', '', { timeOut: 60000 });
-        toastr.info('Card 2', '', { timeOut: 60000 });
-        toastr.info('Card 3', '', { timeOut: 60000 });
-        const $t4 = toastr.info('Front 4', '', { timeOut: 60000 });
+    test('marks deeply stacked collapsed cards beyond visible budget with data-stack-hidden and clears it on expand', () => {
+        const toasts = [];
+        for (let i = 1; i <= 11; i++) {
+            toasts.push(toastr.info(`Card ${i}`, '', { timeOut: 60000 }));
+        }
+        const $oldest = toasts[0];
+        const $fourthFromFront = toasts[toasts.length - 4];
+        const $front = toasts[toasts.length - 1];
         const container = document.getElementById('toast-container');
 
-        expect($t4[0].getAttribute('data-stack-hidden')).toBeNull();
-        expect($t1[0].getAttribute('data-stack-hidden')).toBe('true');
+        // Front card and 4th card stay visibly fanned out; 11th (deepest beyond opacity/compactness budget) is hidden.
+        expect($front[0].getAttribute('data-stack-hidden')).toBeNull();
+        expect($fourthFromFront[0].getAttribute('data-stack-hidden')).toBeNull();
+        expect($oldest[0].getAttribute('data-stack-hidden')).toBe('true');
 
         container.querySelector('.luker-toast-stack-badge').click();
-        expect($t1[0].getAttribute('data-stack-hidden')).toBeNull();
+        expect($oldest[0].getAttribute('data-stack-hidden')).toBeNull();
 
         container.querySelector('.luker-toast-stack-badge').click();
-        expect($t1[0].getAttribute('data-stack-hidden')).toBe('true');
+        expect($oldest[0].getAttribute('data-stack-hidden')).toBe('true');
+    });
+
+    test('pauses auto-dismiss timers for all occluded behind cards and resumes remaining duration on promotion', () => {
+        jest.useFakeTimers();
+
+        const $err = toastr.error('Upstream HTTP 500', 'Chat Completion API', { timeOut: 4000, extendedTimeOut: 10000 });
+        jest.advanceTimersByTime(200);
+        expect(document.body.contains($err[0])).toBe(true);
+
+        // Trailing info covers error at t=200ms -> error pauses with 3800ms left.
+        const $info = toastr.info('Parsing completed', 'Status', { timeOut: 4000, extendedTimeOut: 10000 });
+        expect($info.attr('data-stack-index')).toBe('0');
+        expect($err.attr('data-stack-index')).toBe('1');
+        expect($err[0].style.getPropertyValue('--toast-offset-x')).toBe('-8px');
+
+        // At t=4050ms (past error's original 4000ms), error must STILL be alive behind info!
+        jest.advanceTimersByTime(3850);
+        expect(document.body.contains($info[0])).toBe(true);
+        expect(document.body.contains($err[0])).toBe(true);
+
+        // At t=4250ms, info expires -> error promotes to slot 0 and resumes its remaining ~3800ms (NOT 10000ms extended).
+        jest.advanceTimersByTime(200);
+        expect(document.body.contains($info[0])).toBe(false);
+        expect(document.body.contains($err[0])).toBe(true);
+        expect($err.attr('data-stack-index')).toBe('0');
+        expect($err[0].style.getPropertyValue('--toast-offset-x')).toBe('0px');
+
+        // Still visible 3500ms after promotion, then expires around 3800ms after promotion.
+        jest.advanceTimersByTime(3500);
+        expect(document.body.contains($err[0])).toBe(true);
+        jest.advanceTimersByTime(400);
+        expect(document.body.contains($err[0])).toBe(false);
+    });
+
+    test('renders behind-card severity dots and alert state on stack badge while keeping textContent equal to +N', () => {
+        const $err = toastr.error('HTTP 500', 'API', { timeOut: 60000 });
+        const $warn = toastr.warning('Budget low', 'Context', { timeOut: 60000 });
+        const $info = toastr.info('Saved', 'Notice', { timeOut: 60000 });
+        const container = document.getElementById('toast-container');
+        const badge = container.querySelector('.luker-toast-stack-badge');
+
+        expect(badge).not.toBeNull();
+        expect(badge.textContent).toBe('+2');
+        expect(badge.getAttribute('data-highest-severity')).toBe('error');
+        const dotTypes = Array.from(badge.querySelectorAll('.luker-toast-stack-dot')).map(d => d.getAttribute('data-toast-type'));
+        expect(dotTypes).toEqual(['error', 'warning']);
+
+        // Clearing the occluded error downgrades badge severity to warning
+        toastr.clear($err);
+        expect(badge.textContent).toBe('+1');
+        expect(badge.getAttribute('data-highest-severity')).toBe('warning');
+        expect(Array.from(badge.querySelectorAll('.luker-toast-stack-dot')).map(d => d.getAttribute('data-toast-type'))).toEqual(['warning']);
+
+        // Clearing warning leaves only info -> badge unmounts
+        toastr.clear($warn);
+        expect(container.querySelector('.luker-toast-stack-badge')).toBeNull();
+        expect(document.body.contains($info[0])).toBe(true);
+    });
+
+    test('newestOnTop: false keeps new behind card paused until front card dismisses', () => {
+        jest.useFakeTimers();
+        toastr.options.newestOnTop = false;
+
+        const $first = toastr.info('First front', '', { timeOut: 2000 });
+        const $second = toastr.error('Second queued behind', '', { timeOut: 3000 });
+        expect($first.attr('data-stack-index')).toBe('0');
+        expect($second.attr('data-stack-index')).toBe('1');
+
+        jest.advanceTimersByTime(2050);
+        expect(document.body.contains($first[0])).toBe(false);
+        expect(document.body.contains($second[0])).toBe(true);
+        expect($second.attr('data-stack-index')).toBe('0');
+
+        jest.advanceTimersByTime(2800);
+        expect(document.body.contains($second[0])).toBe(true);
+        jest.advanceTimersByTime(300);
+        expect(document.body.contains($second[0])).toBe(false);
     });
 
     test('measureDockedHeight accounts for outer .toast padding and border when padding lives on .toast', () => {

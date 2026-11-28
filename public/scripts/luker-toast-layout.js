@@ -11,8 +11,11 @@ export const VIEWPORT_EDGE_MARGIN_PX = 8;
 /** Corner parking horizontal margin for dock-origin minimized capsules. */
 export const CAPSULE_PARKING_EDGE_PX = 12;
 
-/** Vertical peek offset between cards in a collapsed docked deck. */
-export const DECK_COLLAPSE_GAP_PX = 10;
+/** Vertical peek step (px) for the first behind cards in a collapsed docked deck. */
+export const DECK_COLLAPSE_GAP_PX = 8;
+
+/** Horizontal stepped fan-out base step (px) exposing behind cards' colored edge. */
+export const DECK_FAN_STEP_X_PX = 8;
 
 /** Vertical gap between cards when the docked deck is expanded. */
 export const DECK_EXPANDED_GAP_PX = 8;
@@ -23,13 +26,14 @@ export const CAPSULE_STACK_GAP_PX = 8;
 /** Base z-index ceiling for the docked deck (newest gets this value). */
 const DECK_TOP_Z_INDEX = 100;
 
-/** Collapsible deck visual steps for index 0, 1, 2, and 3+. */
-const COLLAPSED_DECK_STEPS = [
-    { offset: 0, scale: 1, opacity: 1, pointerEvents: 'auto' },
-    { offset: DECK_COLLAPSE_GAP_PX, scale: 0.95, opacity: 0.92, pointerEvents: 'auto' },
-    { offset: DECK_COLLAPSE_GAP_PX * 2, scale: 0.9, opacity: 0.82, pointerEvents: 'auto' },
-    { offset: 26, scale: 0.86, opacity: 0, pointerEvents: 'none' },
-];
+/** Minimum horizontal gutter (px) needed before fanning behind cards sideways. */
+const MIN_HORIZONTAL_FAN_GUTTER_PX = 4;
+
+/** Contrast floor below which deeper translucent cards hide cleanly behind the stack. */
+const MIN_VISIBLE_DECK_OPACITY = 0.5;
+
+/** Severity display order for behind-card dots on the stack badge. */
+const SEVERITY_DOT_ORDER = ['error', 'warning', 'success', 'info'];
 
 /** Selectors excluded when extracting single-line text for minimized capsules. */
 const CAPSULE_EXCLUDED_SELECTOR = 'button, .action-loader-stop, .luker-toast-stop-button, .prompt-manager-toggle-undo-button';
@@ -231,50 +235,207 @@ export function computeAnchoredRect({
 }
 
 /**
- * Computes per-card vertical offset, scale, opacity, stacking z-index, pointer
- * interactivity, and optional height clipping for docked toasts.
+ * Picks horizontal fan direction for collapsed behind cards so stepped borders
+ * stay inside the viewport rather than clipping past the nearest screen edge.
  *
- * @param {{ items: Array<{ id: number, height: number }>, expanded: boolean, positionClass: string }} params
- * @returns {Array<{ id: number, index: number, offsetY: number, scale: number, opacity: number, zIndex: number, pointerEvents: 'auto' | 'none', clipHeight: number | null }>}
+ * @param {string} positionClass
+ * @returns {'left' | 'right'}
  */
-export function computeDeckLayout({ items, expanded, positionClass }) {
+export function resolveDeckFanDirection(positionClass) {
+    const pos = String(positionClass || '');
+    return (pos.includes('toast-top-left') || pos.includes('toast-bottom-left')) ? 'right' : 'left';
+}
+
+/**
+ * Summarizes behind-card severities for the collapsed deck badge without
+ * dropping higher-severity alerts when many notifications queue behind them.
+ *
+ * @param {string[]} types
+ * @returns {{ highestSeverity: 'error' | 'warning' | 'normal', dotTypes: string[] }}
+ */
+export function summarizeBehindSeverities(types) {
+    const present = new Set(Array.isArray(types) ? types : []);
+    const dotTypes = SEVERITY_DOT_ORDER.filter(type => present.has(type));
+    const highestSeverity = present.has('error')
+        ? 'error'
+        : (present.has('warning') ? 'warning' : 'normal');
+    return { highestSeverity, dotTypes };
+}
+
+/**
+ * Progressive step decay factor for collapsed deck layers so deeper cards
+ * tighten gently like a physical card stack.
+ *
+ * @param {number} depth 1-based depth behind front card
+ * @returns {number}
+ */
+function getDeckLayerStepFactor(depth) {
+    if (depth <= 2) return 1;
+    if (depth <= 4) return 0.75;
+    return 0.625;
+}
+
+/**
+ * Computes per-card horizontal/vertical offset, scale, opacity, stacking
+ * z-index, pointer interactivity, height matching, and fan direction for
+ * docked toasts.
+ *
+ * Visible collapsed depth adapts to three concrete UI space constraints rather
+ * than a fixed 3-card cutoff:
+ * 1. Vertical compactness: cumulative peek stays under one extra card height
+ *    (`frontHeight - 10`, floor `24px`) and within `availableVerticalSpace`.
+ * 2. Visual legibility: cards whose stepped opacity drops below 0.50 hide
+ *    cleanly behind the deepest visible layer (`opacity: 0`, `pointerEvents: 'none'`).
+ * 3. Horizontal viewport safety: stepped horizontal reach compresses to fit
+ *    within `availableHorizontalSpace`, or falls back to vertical-only peeking
+ *    when less than 4px of horizontal gutter exists.
+ *
+ * @param {{ items: Array<{ id: number, height: number }>, expanded: boolean, positionClass: string, availableHorizontalSpace?: number, availableVerticalSpace?: number }} params
+ * @returns {Array<{ id: number, index: number, offsetX: number, offsetY: number, scale: number, opacity: number, zIndex: number, pointerEvents: 'auto' | 'none', clipHeight: number | null, fanDirection: 'left' | 'right' }>}
+ */
+export function computeDeckLayout({
+    items,
+    expanded,
+    positionClass,
+    availableHorizontalSpace = Infinity,
+    availableVerticalSpace = Infinity,
+}) {
     if (!Array.isArray(items) || items.length === 0) {
         return [];
     }
 
     const isBottom = String(positionClass || '').includes('toast-bottom');
-    const dir = isBottom ? -1 : 1;
+    const dirY = isBottom ? -1 : 1;
+    const fanDirection = resolveDeckFanDirection(positionClass);
+    const dirX = fanDirection === 'left' ? -1 : 1;
     const frontHeight = Math.max(1, Number(items[0]?.height) || 56);
 
     if (expanded) {
         let cumulative = 0;
         return items.map((item, index) => {
-            const offsetY = cumulative === 0 ? 0 : cumulative * dir;
+            const offsetY = cumulative === 0 ? 0 : cumulative * dirY;
             cumulative += Math.max(1, Number(item.height) || 56) + DECK_EXPANDED_GAP_PX;
             return {
                 id: item.id,
                 index,
+                offsetX: 0,
                 offsetY,
                 scale: 1,
                 opacity: 1,
                 zIndex: Math.max(1, DECK_TOP_Z_INDEX - index),
                 pointerEvents: 'auto',
                 clipHeight: null,
+                fanDirection,
             };
         });
     }
 
+    const safeVerticalSpace = Number.isFinite(availableVerticalSpace)
+        ? Math.max(0, availableVerticalSpace)
+        : Infinity;
+    const compactnessPeekBudget = Math.max(24, frontHeight - 10);
+    const maxVerticalPeek = Math.min(compactnessPeekBudget, safeVerticalSpace);
+
+    const safeHorizontalSpace = Number.isFinite(availableHorizontalSpace)
+        ? Math.max(0, availableHorizontalSpace)
+        : Infinity;
+
+    // First pass: determine visible behind layers within vertical & opacity bounds.
+    const visibleSteps = [];
+    let accY = 0;
+    let desiredReachX = 0;
+    for (let index = 1; index < items.length; index++) {
+        const factor = getDeckLayerStepFactor(index);
+        const stepY = Math.round(DECK_COLLAPSE_GAP_PX * factor);
+        const rawStepX = Math.round(DECK_FAN_STEP_X_PX * factor);
+        const opacity = Number((1 - index * 0.06).toFixed(3));
+        if (opacity < MIN_VISIBLE_DECK_OPACITY || (accY + stepY) > maxVerticalPeek) {
+            break;
+        }
+        accY += stepY;
+        desiredReachX += rawStepX;
+        visibleSteps.push({
+            index,
+            rawStepX,
+            accY,
+            scale: Number(Math.max(0.88, 1 - index * 0.015).toFixed(3)),
+            opacity,
+        });
+    }
+
+    // Second pass: fit horizontal fan steps strictly inside availableHorizontalSpace.
+    const canFanHorizontally = safeHorizontalSpace >= MIN_HORIZONTAL_FAN_GUTTER_PX && desiredReachX > 0;
+    const xRatio = (canFanHorizontally && Number.isFinite(safeHorizontalSpace) && desiredReachX > safeHorizontalSpace)
+        ? (safeHorizontalSpace / desiredReachX)
+        : 1;
+
+    const visibleByIndex = new Map();
+    let accX = 0;
+    let lastVisibleY = 0;
+    let lastVisibleScale = 1;
+    for (const step of visibleSteps) {
+        if (canFanHorizontally) {
+            const scaledDx = xRatio < 1 ? Math.floor(step.rawStepX * xRatio) : step.rawStepX;
+            const boundedDx = Number.isFinite(safeHorizontalSpace)
+                ? Math.min(scaledDx, Math.max(0, safeHorizontalSpace - accX))
+                : scaledDx;
+            accX += boundedDx;
+        }
+        lastVisibleY = step.accY;
+        lastVisibleScale = step.scale;
+        visibleByIndex.set(step.index, {
+            offsetX: accX === 0 ? 0 : accX * dirX,
+            offsetY: step.accY === 0 ? 0 : step.accY * dirY,
+            scale: step.scale,
+            opacity: step.opacity,
+        });
+    }
+
+    const tuckedOffsetX = accX === 0 ? 0 : accX * dirX;
+    const tuckedOffsetY = (lastVisibleY + 2) * dirY;
+    const tuckedScale = Number(Math.max(0.86, lastVisibleScale - 0.015).toFixed(3));
+
     return items.map((item, index) => {
-        const step = COLLAPSED_DECK_STEPS[Math.min(index, COLLAPSED_DECK_STEPS.length - 1)];
+        if (index === 0) {
+            return {
+                id: item.id,
+                index: 0,
+                offsetX: 0,
+                offsetY: 0,
+                scale: 1,
+                opacity: 1,
+                zIndex: DECK_TOP_Z_INDEX,
+                pointerEvents: 'auto',
+                clipHeight: null,
+                fanDirection,
+            };
+        }
+        const visible = visibleByIndex.get(index);
+        if (visible) {
+            return {
+                id: item.id,
+                index,
+                offsetX: visible.offsetX,
+                offsetY: visible.offsetY,
+                scale: visible.scale,
+                opacity: visible.opacity,
+                zIndex: Math.max(1, DECK_TOP_Z_INDEX - index),
+                pointerEvents: 'auto',
+                clipHeight: frontHeight,
+                fanDirection,
+            };
+        }
         return {
             id: item.id,
             index,
-            offsetY: step.offset === 0 ? 0 : step.offset * dir,
-            scale: step.scale,
-            opacity: step.opacity,
+            offsetX: tuckedOffsetX,
+            offsetY: tuckedOffsetY,
+            scale: tuckedScale,
+            opacity: 0,
             zIndex: Math.max(1, DECK_TOP_Z_INDEX - index),
-            pointerEvents: step.pointerEvents,
-            clipHeight: index === 0 ? null : frontHeight,
+            pointerEvents: 'none',
+            clipHeight: frontHeight,
+            fanDirection,
         };
     });
 }
