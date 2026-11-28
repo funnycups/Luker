@@ -6,7 +6,7 @@ import {
     mergeNormalizedUsage,
     normalizeOpenAIResponsesUsage,
 } from '../protocol.js';
-import { cloneValue, coerceToolArgs, parseSseJsonFrame } from './common.js';
+import { cloneValue, coerceToolArgs, describeForeignPayloadShape, parseSseJsonFrame } from './common.js';
 import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.OPENAI_RESPONSES;
@@ -23,45 +23,6 @@ function extractResponsesAnnotations(annotations, target, seenKeys) {
         added = true;
     }
     return added;
-}
-
-function assertNotForeignPayload(payload, location) {
-    if (Array.isArray(payload.choices)) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Responses payload, received OpenAI Chat choices shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.candidates) || payload.promptFeedback) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Responses payload, received Gemini candidates shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.content) || (typeof payload.type === 'string' && /^(message_|content_block_)/.test(payload.type))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Responses payload, received Anthropic Messages shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (payload.message && typeof payload.message === 'object') {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Responses payload, received Cohere message shape.',
-            rawDiagnostic: payload,
-        });
-    }
 }
 
 function resolveResponsesFinishReason({ status, incompleteReason, hasToolCalls, hasRefusal, hasText }) {
@@ -109,13 +70,15 @@ export function parseOpenAIResponsesResponse(payload) {
             rawDiagnostic: payload,
         });
     }
-    assertNotForeignPayload(payload, 'root');
     if (!Array.isArray(payload.output) && payload.object !== 'response' && typeof payload.status !== 'string') {
+        const foreign = describeForeignPayloadShape(payload, PROTOCOL);
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
-            location: 'output',
-            message: 'OpenAI Responses payload is missing output[] and response status.',
+            location: foreign ? 'root' : 'output',
+            message: foreign
+                ? `Expected OpenAI Responses payload, received ${foreign}.`
+                : 'OpenAI Responses payload is missing output[] and response status.',
             rawDiagnostic: payload,
         });
     }
@@ -250,6 +213,8 @@ export function createOpenAIResponsesStreamParser() {
     let frameIndex = 0;
     let sawFrames = false;
     let sawTerminal = false;
+    /** @type {{ location: string, payload: object }|null} */
+    let firstUnrecognizedFrame = null;
 
     function flushPendingText() {
         if (pendingText) {
@@ -356,17 +321,12 @@ export function createOpenAIResponsesStreamParser() {
             });
         }
 
-        assertNotForeignPayload(parsed, location);
-
         const type = typeof parsed.type === 'string' ? parsed.type : '';
         if (!type.startsWith('response.')) {
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'protocol_mismatch',
-                location,
-                message: `Expected OpenAI Responses "response.*" event type, got "${type || '(missing)'}" at ${location}.`,
-                rawDiagnostic: parsed,
-            });
+            if (!firstUnrecognizedFrame) {
+                firstUnrecognizedFrame = { location, payload: parsed };
+            }
+            return { textDelta: '', reasoningDelta: '', refusalDelta: '', imagesDelta: [], logprobsPayload: null, hasMetadataUpdate: false };
         }
 
         sawFrames = true;
@@ -603,6 +563,18 @@ export function createOpenAIResponsesStreamParser() {
     }
 
     function finish() {
+        if (!sawFrames && firstUnrecognizedFrame) {
+            const foreign = describeForeignPayloadShape(firstUnrecognizedFrame.payload, PROTOCOL);
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'protocol_mismatch',
+                location: firstUnrecognizedFrame.location,
+                message: foreign
+                    ? `Expected OpenAI Responses payload, received ${foreign}.`
+                    : `OpenAI Responses SSE stream contained no "response.*" events (first unrecognized event at ${firstUnrecognizedFrame.location}).`,
+                rawDiagnostic: firstUnrecognizedFrame.payload,
+            });
+        }
         const isPrematureEof = sawFrames && !sawTerminal;
         const isLengthTruncated = !isPrematureEof && status === 'incomplete' && incompleteReason !== 'content_filter';
         for (const idx of toolOrder) {

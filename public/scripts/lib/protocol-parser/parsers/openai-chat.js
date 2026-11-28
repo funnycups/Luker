@@ -7,50 +7,10 @@ import {
     mergeNormalizedUsage,
     normalizeOpenAIChatUsage,
 } from '../protocol.js';
-import { cloneValue, coerceToolArgs, parseSseJsonFrame } from './common.js';
+import { cloneValue, coerceToolArgs, describeForeignPayloadShape, parseSseJsonFrame } from './common.js';
 import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.OPENAI_CHAT;
-
-function assertNotForeignPayload(payload, location) {
-    if (Array.isArray(payload.candidates) || payload.promptFeedback) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Chat Completions payload, received Gemini candidates shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.output) || payload.object === 'response' || (typeof payload.type === 'string' && payload.type.startsWith('response.'))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Chat Completions payload, received OpenAI Responses shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.content) || (typeof payload.type === 'string' && /^(message_|content_block_)/.test(payload.type))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Chat Completions payload, received Anthropic Messages shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if ((payload.message && typeof payload.message === 'object')
-        || (typeof payload.type === 'string' && /^(message-|content-|tool-call-|tool-plan-|citation-)/.test(payload.type))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected OpenAI Chat Completions payload, received Cohere shape.',
-            rawDiagnostic: payload,
-        });
-    }
-}
 
 /**
  * Extract text, reasoning, and images from OpenAI Chat string or array content
@@ -143,24 +103,12 @@ function buildParts({ text, reasoning, reasoningDetails, reasoningBlocks, images
     return parts;
 }
 
-const OPENAI_CHAT_BENIGN_FRAME_KEYS = new Set([
-    'id',
-    'object',
-    'created',
-    'model',
-    'system_fingerprint',
-    'service_tier',
-    'prompt_filter_results',
-    'content_filter_results',
-    'provider',
-]);
-
 function extractAlternateOpenAIError(payload) {
     if (!payload || typeof payload !== 'object') return null;
     if (payload.quota_error != null) {
         return { location: 'quota_error', error: payload.quota_error };
     }
-    if (payload.moderation != null) {
+    if (payload.moderation != null && !Array.isArray(payload.choices)) {
         return { location: 'moderation', error: payload.moderation };
     }
     if (payload.detail != null && !Array.isArray(payload.choices)) {
@@ -170,13 +118,6 @@ function extractAlternateOpenAIError(payload) {
         return { location: 'message', error: payload.message };
     }
     return null;
-}
-
-function isBenignMetadataOnlyChunk(parsed) {
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    const keys = Object.keys(parsed);
-    if (keys.length === 0) return true;
-    return keys.every(key => OPENAI_CHAT_BENIGN_FRAME_KEYS.has(key));
 }
 
 /**
@@ -214,13 +155,15 @@ export function parseOpenAIChatResponse(payload) {
             rawDiagnostic: payload,
         });
     }
-    assertNotForeignPayload(payload, 'root');
     if (!Array.isArray(payload.choices)) {
+        const foreign = describeForeignPayloadShape(payload, PROTOCOL);
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
-            location: 'choices',
-            message: 'OpenAI Chat Completions response is missing choices[] array.',
+            location: foreign ? 'root' : 'choices',
+            message: foreign
+                ? `Expected OpenAI Chat Completions payload, received ${foreign}.`
+                : 'OpenAI Chat Completions response is missing choices[] array.',
             rawDiagnostic: payload,
         });
     }
@@ -375,6 +318,8 @@ export function createOpenAIChatStreamParser() {
     let frameIndex = 0;
     let sawFrames = false;
     let sawTerminal = false;
+    /** @type {{ location: string, payload: object }|null} */
+    let firstUnrecognizedFrame = null;
 
     function ensureToolSlot(idx) {
         let slot = toolCallsByIndex.get(idx);
@@ -505,27 +450,22 @@ export function createOpenAIChatStreamParser() {
             });
         }
 
-        assertNotForeignPayload(parsed, location);
-
-        if (!Array.isArray(parsed.choices) && parsed.usage == null) {
-            if (isBenignMetadataOnlyChunk(parsed)) {
-                return {
-                    textDelta: '',
-                    choiceTextDeltas: {},
-                    reasoningDelta: '',
-                    refusalDelta: '',
-                    imagesDelta: [],
-                    logprobsPayload: null,
-                    hasMetadataUpdate: false,
-                };
+        const hasChoices = Array.isArray(parsed.choices);
+        const hasUsage = parsed.usage != null && typeof parsed.usage === 'object';
+        const hasCitations = Array.isArray(parsed.citations) && parsed.citations.length > 0;
+        if (!hasChoices && !hasUsage && !hasCitations) {
+            if (!firstUnrecognizedFrame) {
+                firstUnrecognizedFrame = { location, payload: parsed };
             }
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'protocol_mismatch',
-                location,
-                message: `OpenAI Chat SSE ${location} is missing choices[] and usage.`,
-                rawDiagnostic: parsed,
-            });
+            return {
+                textDelta: '',
+                choiceTextDeltas: {},
+                reasoningDelta: '',
+                refusalDelta: '',
+                imagesDelta: [],
+                logprobsPayload: null,
+                hasMetadataUpdate: false,
+            };
         }
 
         sawFrames = true;
@@ -698,6 +638,18 @@ export function createOpenAIChatStreamParser() {
     }
 
     function finish() {
+        if (!sawFrames && firstUnrecognizedFrame) {
+            const foreign = describeForeignPayloadShape(firstUnrecognizedFrame.payload, PROTOCOL);
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'protocol_mismatch',
+                location: firstUnrecognizedFrame.location,
+                message: foreign
+                    ? `Expected OpenAI Chat Completions payload, received ${foreign}.`
+                    : `OpenAI Chat SSE stream contained no valid choices[] or usage frames (first unrecognized frame at ${firstUnrecognizedFrame.location}).`,
+                rawDiagnostic: firstUnrecognizedFrame.payload,
+            });
+        }
         for (const idx of toolOrder) {
             const slot = toolCallsByIndex.get(idx);
             if (slot && !slot.name) {

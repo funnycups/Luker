@@ -7,7 +7,7 @@ import {
     normalizeCohereUsage,
     normalizeFinishReason,
 } from '../protocol.js';
-import { cloneValue, coerceToolArgs, parseSseJsonFrame } from './common.js';
+import { cloneValue, coerceToolArgs, describeForeignPayloadShape, parseSseJsonFrame } from './common.js';
 import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.COHERE;
@@ -27,45 +27,6 @@ const COHERE_STREAM_EVENTS = new Set([
     'debug',
     'error',
 ]);
-
-function assertNotForeignPayload(payload, location) {
-    if (Array.isArray(payload.choices)) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Cohere v2 payload, received OpenAI Chat choices shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.candidates) || payload.promptFeedback) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Cohere v2 payload, received Gemini candidates shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.output) || payload.object === 'response' || (typeof payload.type === 'string' && payload.type.startsWith('response.'))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Cohere v2 payload, received OpenAI Responses shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.content) || (typeof payload.type === 'string' && /^(message_|content_block_)/.test(payload.type))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Cohere v2 payload, received Anthropic Messages shape.',
-            rawDiagnostic: payload,
-        });
-    }
-}
 
 /**
  * Parse a non-streaming Cohere v2 Chat response strictly.
@@ -101,13 +62,15 @@ export function parseCohereResponse(payload) {
             rawDiagnostic: payload,
         });
     }
-    assertNotForeignPayload(payload, 'root');
     if (!payload.message || typeof payload.message !== 'object') {
+        const foreign = describeForeignPayloadShape(payload, PROTOCOL);
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
-            location: 'message',
-            message: 'Cohere v2 response is missing message object.',
+            location: foreign ? 'root' : 'message',
+            message: foreign
+                ? `Expected Cohere v2 payload, received ${foreign}.`
+                : 'Cohere v2 response is missing message object.',
             rawDiagnostic: payload,
         });
     }
@@ -215,6 +178,8 @@ export function createCohereStreamParser() {
     let frameIndex = 0;
     let sawFrames = false;
     let sawMessageEnd = false;
+    /** @type {{ location: string, payload: object }|null} */
+    let firstUnrecognizedFrame = null;
 
     function getSnapshot() {
         const parts = [];
@@ -288,17 +253,12 @@ export function createCohereStreamParser() {
             });
         }
 
-        assertNotForeignPayload(parsed, location);
-
         const type = typeof parsed.type === 'string' ? parsed.type : String(eventName || '');
         if (!COHERE_STREAM_EVENTS.has(type)) {
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'protocol_mismatch',
-                location,
-                message: `Unrecognized Cohere SSE event type "${type || '(missing)'}" at ${location}.`,
-                rawDiagnostic: parsed,
-            });
+            if (!firstUnrecognizedFrame) {
+                firstUnrecognizedFrame = { location, payload: parsed };
+            }
+            return { textDelta: '', reasoningDelta: '', refusalDelta: '', imagesDelta: [], logprobsPayload: null, hasMetadataUpdate: false };
         }
 
         sawFrames = true;
@@ -421,6 +381,18 @@ export function createCohereStreamParser() {
     }
 
     function finish() {
+        if (!sawFrames && firstUnrecognizedFrame) {
+            const foreign = describeForeignPayloadShape(firstUnrecognizedFrame.payload, PROTOCOL);
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'protocol_mismatch',
+                location: firstUnrecognizedFrame.location,
+                message: foreign
+                    ? `Expected Cohere v2 payload, received ${foreign}.`
+                    : `Cohere SSE stream contained no recognized Cohere events (first unrecognized event at ${firstUnrecognizedFrame.location}).`,
+                rawDiagnostic: firstUnrecognizedFrame.payload,
+            });
+        }
         const isPrematureEof = sawFrames && !sawMessageEnd;
         const isLengthTruncated = !isPrematureEof && normalizeFinishReason(PROTOCOL, nativeFinishReason) === 'length';
         for (const idx of toolOrder) {

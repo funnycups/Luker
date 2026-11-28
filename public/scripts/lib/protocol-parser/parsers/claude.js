@@ -7,7 +7,7 @@ import {
     normalizeClaudeUsage,
     normalizeFinishReason,
 } from '../protocol.js';
-import { cloneValue, parseSseJsonFrame } from './common.js';
+import { cloneValue, describeForeignPayloadShape, parseSseJsonFrame } from './common.js';
 import { createJsonToolPreviewTracker } from './json-argument-preview.js';
 import { getValueAtArgumentPath } from '../../streaming-tool-reply.js';
 
@@ -25,45 +25,6 @@ const CLAUDE_STREAM_EVENTS = new Set([
     'ping',
     'error',
 ]);
-
-function assertNotForeignPayload(payload, location) {
-    if (Array.isArray(payload.choices)) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Anthropic Messages payload, received OpenAI Chat choices shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.candidates) || payload.promptFeedback) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Anthropic Messages payload, received Gemini candidates shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.output) || payload.object === 'response' || (typeof payload.type === 'string' && payload.type.startsWith('response.'))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Anthropic Messages payload, received OpenAI Responses shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (payload.message && typeof payload.message === 'object' && payload.type !== 'message_start') {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Anthropic Messages payload, received Cohere message shape.',
-            rawDiagnostic: payload,
-        });
-    }
-}
 
 function buildParsedTurnFromBlocks({
     nativeContentBlocks,
@@ -190,13 +151,15 @@ export function parseClaudeResponse(payload) {
             rawDiagnostic: payload,
         });
     }
-    assertNotForeignPayload(payload, 'root');
     if (!Array.isArray(payload.content)) {
+        const foreign = describeForeignPayloadShape(payload, PROTOCOL);
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
-            location: 'content',
-            message: 'Anthropic Messages response is missing a content[] array.',
+            location: foreign ? 'root' : 'content',
+            message: foreign
+                ? `Expected Anthropic Messages payload, received ${foreign}.`
+                : 'Anthropic Messages response is missing a content[] array.',
             rawDiagnostic: payload,
         });
     }
@@ -226,6 +189,8 @@ export function createClaudeStreamParser() {
     let frameIndex = 0;
     let sawFrames = false;
     let sawMessageStop = false;
+    /** @type {{ location: string, payload: object }|null} */
+    let firstUnrecognizedFrame = null;
 
     function orderedBlocks() {
         const out = [];
@@ -275,17 +240,12 @@ export function createClaudeStreamParser() {
             });
         }
 
-        assertNotForeignPayload(parsed, location);
-
         const type = typeof parsed.type === 'string' ? parsed.type : '';
         if (!CLAUDE_STREAM_EVENTS.has(type)) {
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'protocol_mismatch',
-                location,
-                message: `Unrecognized Anthropic SSE event type "${type || '(missing)'}" at ${location}.`,
-                rawDiagnostic: parsed,
-            });
+            if (!firstUnrecognizedFrame) {
+                firstUnrecognizedFrame = { location, payload: parsed };
+            }
+            return { textDelta: '', reasoningDelta: '', refusalDelta: '', imagesDelta: [], logprobsPayload: null, hasMetadataUpdate: false };
         }
 
         sawFrames = true;
@@ -516,6 +476,18 @@ export function createClaudeStreamParser() {
     }
 
     function finish() {
+        if (!sawFrames && firstUnrecognizedFrame) {
+            const foreign = describeForeignPayloadShape(firstUnrecognizedFrame.payload, PROTOCOL);
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'protocol_mismatch',
+                location: firstUnrecognizedFrame.location,
+                message: foreign
+                    ? `Expected Anthropic Messages payload, received ${foreign}.`
+                    : `Anthropic SSE stream contained no recognized Anthropic events (first unrecognized event at ${firstUnrecognizedFrame.location}).`,
+                rawDiagnostic: firstUnrecognizedFrame.payload,
+            });
+        }
         const isPrematureEof = sawFrames && !sawMessageStop;
         const isLengthTruncated = !isPrematureEof
             && (nativeFinishReason === 'max_tokens' || nativeFinishReason === 'model_context_window_exceeded');

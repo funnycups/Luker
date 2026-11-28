@@ -991,4 +991,138 @@ describe('Strict protocol mismatch, malformed JSON, tool correlation, and premat
             { id: 'co_3', type: 'function', function: { name: 'lookup', arguments: '{"q":"ok"}' } },
         ]);
     });
+
+    test('non-streaming parsers accept valid protocol payloads that carry extra top-level fields', () => {
+        const oai = parseProtocolResponse('openai', {
+            id: 'cmpl-extra',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'OpenAI reply' }, finish_reason: 'stop' }],
+            promptFeedback: { safetyRatings: [] },
+            candidates: [],
+            moderation: { flagged: false },
+        });
+        expect(oai.text).toBe('OpenAI reply');
+
+        const gemini = parseProtocolResponse('makersuite', {
+            candidates: [{ content: { role: 'model', parts: [{ text: 'Gemini reply' }] }, finishReason: 'STOP' }],
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ignored' } }],
+        });
+        expect(gemini.text).toBe('Gemini reply');
+
+        const claude = parseProtocolResponse('claude', {
+            id: 'msg-extra',
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Claude reply' }],
+            stop_reason: 'end_turn',
+            choices: [],
+            promptFeedback: { safetyRatings: [] },
+        });
+        expect(claude.text).toBe('Claude reply');
+
+        const cohere = parseProtocolResponse('cohere', {
+            id: 'coh-extra',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'Cohere reply' }] },
+            finish_reason: 'COMPLETE',
+            choices: [],
+            promptFeedback: { safetyRatings: [] },
+        });
+        expect(cohere.text).toBe('Cohere reply');
+
+        const responses = parseProtocolResponse('openai_responses', {
+            id: 'resp-extra',
+            object: 'response',
+            status: 'completed',
+            output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Responses reply' }] }],
+            choices: [],
+            promptFeedback: { safetyRatings: [] },
+        });
+        expect(responses.text).toBe('Responses reply');
+    });
+
+    test('streaming parsers parse canonical frames with extra fields and skip unrecognized non-error frames', () => {
+        const oai = createProtocolStreamParser('openai');
+        oai.feedFrame(JSON.stringify({ id: 'cmpl-1', obfuscation: 'abc', timings: { predicted_ms: 12 } }));
+        oai.feedFrame(JSON.stringify({
+            choices: [{ index: 0, delta: { content: 'Hello ' } }],
+            promptFeedback: { safetyRatings: [] },
+            candidates: [],
+        }));
+        oai.feedFrame(JSON.stringify({ promptFeedback: { safetyRatings: [] } }));
+        oai.feedFrame(JSON.stringify({ id: 'cmpl-1', citations: ['https://example.test/ref'] }));
+        oai.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { content: 'world' }, finish_reason: 'stop' }] }));
+        oai.feedFrame('[DONE]');
+        const oaiTurn = oai.finish();
+        expect(oaiTurn.text).toBe('Hello world');
+        expect(oaiTurn.citations).toEqual(['https://example.test/ref']);
+
+        const gemini = createProtocolStreamParser('makersuite');
+        gemini.feedFrame(JSON.stringify({ modelVersion: 'gemini-3.0-pro' }));
+        gemini.feedFrame(JSON.stringify({
+            candidates: [{ content: { role: 'model', parts: [{ text: 'Gemini stream' }] }, finishReason: 'STOP' }],
+            choices: [],
+        }));
+        expect(gemini.finish().text).toBe('Gemini stream');
+
+        const claude = createProtocolStreamParser('claude');
+        claude.feedFrame(JSON.stringify({ type: 'message_heartbeat', ts: 1 }));
+        claude.feedFrame(JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+        claude.feedFrame(JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Claude stream' }, choices: [] }));
+        claude.feedFrame(JSON.stringify({ type: 'content_block_stop', index: 0 }));
+        claude.feedFrame(JSON.stringify({ type: 'message_stop' }));
+        expect(claude.finish().text).toBe('Claude stream');
+
+        const cohere = createProtocolStreamParser('cohere');
+        cohere.feedFrame(JSON.stringify({ type: 'stream-keepalive' }));
+        cohere.feedFrame(JSON.stringify({ type: 'content-delta', delta: { message: { content: { text: 'Cohere stream' } } }, choices: [] }));
+        cohere.feedFrame(JSON.stringify({ type: 'message-end', delta: { finish_reason: 'COMPLETE' } }));
+        expect(cohere.finish().text).toBe('Cohere stream');
+
+        const responses = createProtocolStreamParser('openai_responses');
+        responses.feedFrame(JSON.stringify({ type: 'proxy.keepalive' }));
+        responses.feedFrame(JSON.stringify({ type: 'response.output_text.delta', delta: 'Responses stream', choices: [] }));
+        responses.feedFrame(JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+        expect(responses.finish().text).toBe('Responses stream');
+    });
+
+    test('streaming parsers reject pure foreign-protocol streams with zero canonical frames instead of falling back', () => {
+        const oai = createProtocolStreamParser('openai');
+        oai.feedFrame(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'wrong' }] }, finishReason: 'STOP' }] }));
+        expect(oai.getSnapshot().text).toBe('');
+        expect(() => oai.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'protocol_mismatch',
+        }));
+
+        const gemini = createProtocolStreamParser('makersuite');
+        gemini.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { content: 'wrong' }, finish_reason: 'stop' }] }));
+        expect(gemini.getSnapshot().text).toBe('');
+        expect(() => gemini.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'protocol_mismatch',
+        }));
+
+        const claude = createProtocolStreamParser('claude');
+        claude.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { content: 'wrong' }, finish_reason: 'stop' }] }));
+        expect(claude.getSnapshot().text).toBe('');
+        expect(() => claude.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'protocol_mismatch',
+        }));
+
+        const cohere = createProtocolStreamParser('cohere');
+        cohere.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { content: 'wrong' }, finish_reason: 'stop' }] }));
+        expect(cohere.getSnapshot().text).toBe('');
+        expect(() => cohere.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'protocol_mismatch',
+        }));
+
+        const responses = createProtocolStreamParser('openai_responses');
+        responses.feedFrame(JSON.stringify({ choices: [{ index: 0, delta: { content: 'wrong' }, finish_reason: 'stop' }] }));
+        expect(responses.getSnapshot().text).toBe('');
+        expect(() => responses.finish()).toThrow(expect.objectContaining({
+            name: 'ProtocolParseError',
+            stage: 'protocol_mismatch',
+        }));
+    });
 });

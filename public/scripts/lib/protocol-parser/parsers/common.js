@@ -60,3 +60,37 @@ export function parseSseJsonFrame(rawData, { protocol, location, label }) {
 
     return parsed;
 }
+
+/**
+ * Describe a recognizable foreign wire protocol shape when a payload lacks the
+ * declared protocol's required structure, purely for actionable diagnostics.
+ * Never call before checking whether the payload can be parsed as the declared
+ * protocol.
+ *
+ * @param {*} payload
+ * @param {string} currentProtocol
+ * @returns {string|null}
+ */
+export function describeForeignPayloadShape(payload, currentProtocol) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    if (currentProtocol !== 'openai-chat' && Array.isArray(payload.choices)) {
+        return 'OpenAI Chat choices shape';
+    }
+    if (currentProtocol !== 'gemini' && (Array.isArray(payload.candidates) || payload.promptFeedback)) {
+        return 'Gemini candidates shape';
+    }
+    if (currentProtocol !== 'openai-responses'
+        && (Array.isArray(payload.output) || payload.object === 'response' || (typeof payload.type === 'string' && payload.type.startsWith('response.')))) {
+        return 'OpenAI Responses shape';
+    }
+    if (currentProtocol !== 'claude'
+        && (Array.isArray(payload.content) || (typeof payload.type === 'string' && /^(message_|content_block_)/.test(payload.type)))) {
+        return 'Anthropic Messages shape';
+    }
+    if (currentProtocol !== 'cohere'
+        && ((payload.message && typeof payload.message === 'object')
+            || (typeof payload.type === 'string' && /^(message-|content-|tool-call-|tool-plan-|citation-)/.test(payload.type)))) {
+        return 'Cohere shape';
+    }
+    return null;
+}

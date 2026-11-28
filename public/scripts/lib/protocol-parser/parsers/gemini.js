@@ -9,48 +9,9 @@ import {
     normalizeGeminiUsage,
 } from '../protocol.js';
 import { createGeminiFunctionArgumentStream } from './gemini-function-arguments.js';
-import { cloneValue, parseSseJsonFrame } from './common.js';
+import { cloneValue, describeForeignPayloadShape, parseSseJsonFrame } from './common.js';
 
 const PROTOCOL = WIRE_PROTOCOLS.GEMINI;
-
-function assertNotForeignPayload(payload, location) {
-    if (Array.isArray(payload.choices)) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Gemini GenerateContent payload, received OpenAI Chat choices shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.output) || payload.object === 'response' || (typeof payload.type === 'string' && payload.type.startsWith('response.'))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Gemini GenerateContent payload, received OpenAI Responses shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (Array.isArray(payload.content) || (typeof payload.type === 'string' && /^(message_|content_block_)/.test(payload.type))) {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Gemini GenerateContent payload, received Anthropic Messages shape.',
-            rawDiagnostic: payload,
-        });
-    }
-    if (payload.message && typeof payload.message === 'object') {
-        throw new ProtocolParseError({
-            protocol: PROTOCOL,
-            stage: 'protocol_mismatch',
-            location,
-            message: 'Expected Gemini GenerateContent payload, received Cohere message shape.',
-            rawDiagnostic: payload,
-        });
-    }
-}
 
 function makeFallbackCallId(index) {
     return `gemini_call_${index}`;
@@ -346,13 +307,15 @@ export function parseGeminiResponse(payload) {
             rawDiagnostic: payload,
         });
     }
-    assertNotForeignPayload(payload, 'root');
     if (!Array.isArray(payload.candidates) && !payload.promptFeedback && !payload.usageMetadata) {
+        const foreign = describeForeignPayloadShape(payload, PROTOCOL);
         throw new ProtocolParseError({
             protocol: PROTOCOL,
             stage: 'protocol_mismatch',
-            location: 'candidates',
-            message: 'Gemini GenerateContent response is missing candidates[], usageMetadata, and promptFeedback.',
+            location: foreign ? 'root' : 'candidates',
+            message: foreign
+                ? `Expected Gemini GenerateContent payload, received ${foreign}.`
+                : 'Gemini GenerateContent response is missing candidates[], usageMetadata, and promptFeedback.',
             rawDiagnostic: payload,
         });
     }
@@ -397,6 +360,8 @@ export function createGeminiStreamParser() {
     let sawAnyCandidate = false;
     let promptBlockReason = '';
     let lastBlockedPayload = null;
+    /** @type {{ location: string, payload: object }|null} */
+    let firstUnrecognizedFrame = null;
 
     function feedFrame(rawData, eventName = '') {
         const location = `frame[${frameIndex}]${eventName ? `(${eventName})` : ''}`;
@@ -420,16 +385,11 @@ export function createGeminiStreamParser() {
             });
         }
 
-        assertNotForeignPayload(parsed, location);
-
         if (!Array.isArray(parsed.candidates) && !parsed.usageMetadata && !parsed.promptFeedback) {
-            throw new ProtocolParseError({
-                protocol: PROTOCOL,
-                stage: 'protocol_mismatch',
-                location,
-                message: `Gemini SSE ${location} is missing candidates[], usageMetadata, and promptFeedback.`,
-                rawDiagnostic: parsed,
-            });
+            if (!firstUnrecognizedFrame) {
+                firstUnrecognizedFrame = { location, payload: parsed };
+            }
+            return { textDelta: '', reasoningDelta: '', refusalDelta: '', imagesDelta: [], logprobsPayload: null, hasMetadataUpdate: false };
         }
 
         sawFrames = true;
@@ -459,6 +419,18 @@ export function createGeminiStreamParser() {
     }
 
     function finish() {
+        if (!sawFrames && firstUnrecognizedFrame) {
+            const foreign = describeForeignPayloadShape(firstUnrecognizedFrame.payload, PROTOCOL);
+            throw new ProtocolParseError({
+                protocol: PROTOCOL,
+                stage: 'protocol_mismatch',
+                location: firstUnrecognizedFrame.location,
+                message: foreign
+                    ? `Expected Gemini GenerateContent payload, received ${foreign}.`
+                    : `Gemini SSE stream contained no valid candidates[], usageMetadata, or promptFeedback frames (first unrecognized frame at ${firstUnrecognizedFrame.location}).`,
+                rawDiagnostic: firstUnrecognizedFrame.payload,
+            });
+        }
         if (sawFrames && !sawTerminalSignal) {
             throw new ProtocolParseError({
                 protocol: PROTOCOL,
