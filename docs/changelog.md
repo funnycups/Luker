@@ -4,6 +4,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Platform
+
+- Now tracks SillyTavern 1.19.1.
+- Validated target user existence across admin backup, migration, and storage inspection actions.
+
 ### Third-party extensions
 
 - Fixed Prompt Manager refreshes bypassing third-party extensions that replace the prompt list renderer.

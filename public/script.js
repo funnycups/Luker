@@ -1026,7 +1026,7 @@ export const system_avatar = 'img/logo.png';
 export const comment_avatar = 'img/quill.png';
 export const default_user_avatar = 'img/user-default.png';
 export let CLIENT_VERSION = 'Luker:UNKNOWN:Cohee#1207'; // For Horde header
-export let EXTENSIONS_CLIENT_VERSION = 'Luker:1.19.0:Cohee#1207';
+export let EXTENSIONS_CLIENT_VERSION = 'Luker:1.19.1:Cohee#1207';
 let optionsPopper = Popper.createPopper(document.getElementById('options_button'), document.getElementById('options'), {
     placement: 'top-start',
 });
@@ -1494,7 +1494,7 @@ async function getClientVersion() {
             displayVersion += ` '${data.gitBranch}' (${data.gitRevision})`;
         }
 
-        const stCompatVersion = data.stCompatVersion || '1.19.0';
+        const stCompatVersion = data.stCompatVersion || '1.19.1';
         $('#version_display').text(`${displayVersion} · SillyTavern ${stCompatVersion}`);
         $('#version_display_welcome').text(displayVersion);
 

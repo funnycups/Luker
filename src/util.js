@@ -229,7 +229,7 @@ export async function getVersion() {
         if (!gitBranch) gitBranch = envMeta.gitBranch;
     }
 
-    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.19.0').trim() || '1.19.0';
+    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.19.1').trim() || '1.19.1';
     const agent = `Luker:${lukerVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();

@@ -999,7 +999,7 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
 
 router.post('/delete', requireAdminMiddleware, async (request, response) => {
     try {
-        if (!request.body.handle) {
+        if (!request.body.handle || typeof request.body.handle !== 'string') {
             console.warn('Delete user failed: Missing required fields');
             return response.status(400).json({ error: 'Missing required fields' });
         }
@@ -1014,18 +1014,26 @@ router.post('/delete', requireAdminMiddleware, async (request, response) => {
             return response.status(400).json({ error: 'Sorry, but the default user cannot be deleted. It is required as a fallback.' });
         }
 
-        await storage.removeItem(toKey(request.body.handle));
+        const userKey = toKey(request.body.handle);
+        const user = await storage.getItem(userKey);
 
-        // Order: keyv first (admin can no longer log in even if a later step
-        // throws), then engine rows, then the optional fs.rm dir wipe. If
-        // engine.deleteUser throws after the keyv removal, the user is
-        // half-deleted (auth gone, engine rows survive). engine.deleteUser
-        // is idempotent on every engine (fs/sqlite are no-ops per design
-        // spec §4.1 / §5.3; mysql/postgres run a transactional sweep and
-        // already have ECONNRESET/deadlock retry baked in), so an admin
-        // can simply re-POST /delete to complete the cleanup. The engine
-        // call runs BEFORE the optional fs.rm so sqlite can close+evict
-        // its cached Database handle without racing the directory rm.
+        if (!user) {
+            console.warn('Delete user failed: User not found');
+            return response.status(404).json({ error: 'User not found' });
+        }
+
+        // Order: disable the user in keyv first (locks out every auth path
+        // immediately even if a later step throws, while keeping the keyv
+        // record present so an admin can re-POST /delete after a transient
+        // failure without hitting the 404 existence check), then sweep engine
+        // rows, then run the optional fs.rm dir wipe, and finally remove the
+        // keyv record. engine.deleteUser runs BEFORE fs.rm so sqlite can
+        // close+evict its cached Database handle without racing the directory rm.
+        if (user.enabled) {
+            user.enabled = false;
+            await storage.setItem(userKey, user);
+        }
+
         await getStorageEngine().deleteUser(request.body.handle);
 
         if (request.body.purge) {
@@ -1033,6 +1041,8 @@ router.post('/delete', requireAdminMiddleware, async (request, response) => {
             console.info('Deleting data directories for', request.body.handle);
             await fsPromises.rm(directories.root, { recursive: true, force: true });
         }
+
+        await storage.removeItem(userKey);
 
         return response.sendStatus(204);
     } catch (error) {
@@ -1534,6 +1544,11 @@ router.post('/storage/inspect-any', requireAdminMiddleware, async (request, resp
         }
 
         // Specific user 模式
+        const knownTarget = target === request.user?.profile?.handle || Boolean(await storage.getItem(toKey(target)));
+        if (!knownTarget) {
+            return response.status(404).json({ error: { code: 'E_TARGET_NOT_FOUND', message: `user ${target} not found` } });
+        }
+
         const dirs = getUserDirectories(target);
         try {
             await fsPromises.access(dirs.root);

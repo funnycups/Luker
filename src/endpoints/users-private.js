@@ -1276,7 +1276,7 @@ router.post('/backup', async (request, response) => {
 
         const handle = request.body.handle;
 
-        if (!handle) {
+        if (!handle || typeof handle !== 'string') {
             console.warn('Backup failed: Missing required fields');
             return response.status(400).json({ error: 'Missing required fields' });
         }
@@ -1284,6 +1284,11 @@ router.post('/backup', async (request, response) => {
         if (handle !== request.user.profile.handle && !request.user.profile.admin) {
             console.error('Backup failed: Unauthorized');
             return response.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
+            console.warn('Backup failed: User not found');
+            return response.status(404).json({ error: 'User not found' });
         }
 
         const isAdminUser = Boolean(request.user?.profile?.admin);
@@ -1302,13 +1307,18 @@ router.post('/backup', async (request, response) => {
 
 router.post('/lan-migration/offer', async (request, response) => {
     try {
-        const handle = String(request.body?.handle || '').trim();
+        const rawHandle = request.body?.handle;
+        const handle = typeof rawHandle === 'string' ? rawHandle.trim() : '';
         if (!handle) {
             return response.status(400).json({ error: 'Missing required fields' });
         }
 
         if (handle !== request.user.profile.handle && !request.user.profile.admin) {
             return response.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
+            return response.status(404).json({ error: 'User not found' });
         }
 
         const isAdminUser = Boolean(request.user?.profile?.admin);
@@ -1366,12 +1376,16 @@ async function loadRestoreUploadSession(request, response, { requireArchive = fa
 
 router.post('/restore-backup/uploads', async (request, response) => {
     try {
-        const handle = String(request.body?.handle || '').trim();
+        const rawHandle = request.body?.handle;
+        const handle = typeof rawHandle === 'string' ? rawHandle.trim() : '';
         if (!handle) {
             return response.status(400).json({ error: 'Missing required fields' });
         }
         if (handle !== request.user.profile.handle && !request.user.profile.admin) {
             return response.status(403).json({ error: 'Unauthorized' });
+        }
+        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
+            return response.status(404).json({ error: 'User not found' });
         }
         const fileName = String(request.body?.fileName || '');
         if (!fileName.toLowerCase().endsWith('.zip')) {
@@ -1574,7 +1588,7 @@ router.post('/restore-backup', async (request, response) => {
 
     try {
         const handle = request.body.handle;
-        if (!handle) {
+        if (!handle || typeof handle !== 'string') {
             console.warn('Restore failed: Missing required fields');
             return response.status(400).json({ error: 'Missing required fields' });
         }
@@ -1582,6 +1596,11 @@ router.post('/restore-backup', async (request, response) => {
         if (handle !== request.user.profile.handle && !request.user.profile.admin) {
             console.error('Restore failed: Unauthorized');
             return response.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
+            console.warn('Restore failed: User not found');
+            return response.status(404).json({ error: 'User not found' });
         }
 
         session = await loadRestoreUploadSession(request, response, { requireArchive: true });
@@ -1676,13 +1695,18 @@ router.post('/lan-migration/import', async (request, response) => {
     let stream = null;
 
     try {
-        const handle = String(request.body?.handle || '').trim();
+        const rawHandle = request.body?.handle;
+        const handle = typeof rawHandle === 'string' ? rawHandle.trim() : '';
         if (!handle) {
             return response.status(400).json({ error: 'Missing required fields' });
         }
 
         if (handle !== request.user.profile.handle && !request.user.profile.admin) {
             return response.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (handle !== request.user.profile.handle && !(await storage.getItem(toKey(handle)))) {
+            return response.status(404).json({ error: 'User not found' });
         }
 
         const rawUrl = String(request.body?.url || '').trim();

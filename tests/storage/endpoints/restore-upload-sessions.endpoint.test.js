@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import storage from 'node-persist';
 import request from 'supertest';
 
 import { makeEndpointHarness } from '../harness/endpoint-harness.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
+import { toKey } from '../../../src/users.js';
 
 const ZIP_BYTES = Buffer.from('PK\u0003\u0004fake-zip-payload-for-sessions', 'binary');
 
@@ -157,6 +160,21 @@ describe('restore upload session endpoints', () => {
     });
 
     test('non-admin cannot touch another user session', async () => {
+        await storage.init({
+            dir: path.join(harness.dataRoot, '_storage'),
+            ttl: false,
+            expiredInterval: 0,
+        });
+        await storage.setItem(toKey('other'), {
+            handle: 'other',
+            name: 'Other',
+            created: 0,
+            password: '',
+            salt: '',
+            admin: false,
+            enabled: true,
+        });
+
         const res = await request(harness.server)
             .post('/api/users/restore-backup/uploads')
             .send({ handle: 'other', fileName: 'backup.zip', size: 4 });
