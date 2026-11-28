@@ -52,3 +52,16 @@
 .chatBackupsListItemActions .right_menu_button {
     font-size: var(--mainFontSize);
 }
+
+.chatBackupsListEmpty,
+.chatBackupsListError {
+    text-align: center;
+    padding: 8px 10px;
+    font-size: smaller;
+    opacity: 0.75;
+}
+
+.chatBackupsListError {
+    opacity: 1;
+    color: color-mix(in srgb, #e55353 80%, var(--SmartThemeBodyColor));
+}

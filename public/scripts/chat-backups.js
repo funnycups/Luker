@@ -153,19 +153,48 @@ class BackupsBrowser {
 
         this.#backupsListElement.innerHTML = '';
 
-        const response = await fetch('/api/backups/chat/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            signal,
-        });
+        /** @type {import('../../src/endpoints/chats.js').ChatInfo[]} */
+        let backupsList;
+        try {
+            const response = await fetch('/api/backups/chat/get', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                signal,
+            });
 
-        if (!response.ok) {
-            console.error('Failed to load chat backups list:', response.statusText);
+            if (!response.ok) {
+                throw new Error(response.statusText || `HTTP ${response.status}`);
+            }
+
+            backupsList = await response.json();
+            if (!Array.isArray(backupsList)) {
+                throw new Error('Unexpected response format for chat backups list.');
+            }
+        } catch (error) {
+            if (signal?.aborted || error?.name === 'AbortError') {
+                return;
+            }
+            console.error('Failed to load chat backups list:', error);
+            const errorText = t`Failed to load chat backups, try again later.`;
+            toastr.error(errorText);
+            const errorElement = document.createElement('div');
+            errorElement.classList.add('chatBackupsListError');
+            errorElement.textContent = errorText;
+            this.#backupsListElement.appendChild(errorElement);
             return;
         }
 
-        /** @type {import('../../src/endpoints/chats.js').ChatInfo[]} */
-        const backupsList = await response.json();
+        if (signal?.aborted) {
+            return;
+        }
+
+        if (backupsList.length === 0) {
+            const emptyElement = document.createElement('div');
+            emptyElement.classList.add('chatBackupsListEmpty');
+            emptyElement.textContent = t`No chat backups found.`;
+            this.#backupsListElement.appendChild(emptyElement);
+            return;
+        }
 
         for (const backup of backupsList.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)))) {
             const listItem = document.createElement('div');
@@ -203,6 +232,12 @@ class BackupsBrowser {
                 const isDeleted = await this.deleteBackup(backup.file_name);
                 if (isDeleted) {
                     listItem.remove();
+                    if (this.#backupsListElement.children.length === 0) {
+                        const emptyElement = document.createElement('div');
+                        emptyElement.classList.add('chatBackupsListEmpty');
+                        emptyElement.textContent = t`No chat backups found.`;
+                        this.#backupsListElement.appendChild(emptyElement);
+                    }
                 }
             });
 

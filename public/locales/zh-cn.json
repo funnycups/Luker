@@ -1789,6 +1789,8 @@
     "Import all tags from selected characters": "从所选角色导入全部标签",
     "Import existing tags from selected characters": "从所选角色导入已有标签",
     "Failed to download backup, try again later.": "下载备份失败，请稍后再试。",
+    "Failed to load chat backups, try again later.": "加载聊天备份失败，请稍后再试。",
+    "No chat backups found.": "未找到聊天备份。",
     "Failed to parse backup content.": "解析备份内容失败。",
     "Only .jsonl files are supported for chat imports.": "聊天导入仅支持 .jsonl 文件。",
     "Failed to import chat backup, try again later.": "导入聊天备份失败，请稍后再试。",
