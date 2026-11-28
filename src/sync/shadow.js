@@ -13,6 +13,7 @@ import { authorForDevice } from './pipeline/commit-provenance.js';
 import { assertConfinedPath } from '../storage/path-confinement.js';
 import { assertDistinctFsDestinations } from './pipeline/path-identity.js';
 import { buildPresetIdentityView } from './preset-projection.js';
+import { isGitMetadataSegment } from '../util.js';
 
 export const PEER_ID_PATTERN = /^[A-Za-z0-9._@-]+$/;
 
@@ -344,7 +345,7 @@ async function walkLiveDir(absDir, liveRoot, desired, directories) {
     assertConfinedPath({ boundary: liveRoot, absolutePath: absDir });
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
+        if (isGitMetadataSegment(entry.name) || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         if (entry.isDirectory()) {
             await walkLiveDir(abs, liveRoot, desired, directories);
@@ -408,7 +409,7 @@ async function pruneWorkdir(dir, prefix, desired, kept) {
     for (const entry of entries) {
         // Defensive: the shadow's .git is a sibling of workdir, not inside it,
         // but skipping any stray .git keeps us aligned with the live walker.
-        if (entry.name === '.git') continue;
+        if (isGitMetadataSegment(entry.name)) continue;
         const abs = path.join(dir, entry.name);
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
@@ -496,7 +497,7 @@ async function collectWorkdirFiles(dir, prefix, out, directories) {
     if (!fs.existsSync(dir)) return;
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
+        if (isGitMetadataSegment(entry.name) || isStagingEntryName(entry.name)) continue;
         const abs = path.join(dir, entry.name);
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
@@ -695,7 +696,7 @@ async function walkShadowForDesired(absDir, prefix, desired, directories) {
     for (const entry of entries) {
         // Defensive: the shadow's .git is a sibling of workdir, not inside it,
         // but a stray .git in the workdir would taint the desired set.
-        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
+        if (isGitMetadataSegment(entry.name) || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         // Mirror snapshot-side walkers (walkLiveDir / pruneWorkdir /
         // collectWorkdirFiles): ternary form prevents leading-slash rel paths
@@ -733,7 +734,7 @@ async function walkLiveForDeletions(absDir, prefix, desired, deleted, directorie
     for (const entry of entries) {
         // card-apps and any other live directory may host
         // per-content git repos we must never touch.
-        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
+        if (isGitMetadataSegment(entry.name) || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         // Mirror snapshot-side walkers (see walkShadowForDesired): ternary
         // form prevents leading-slash rel paths if this walker is ever entered

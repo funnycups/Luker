@@ -4,6 +4,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import writeFileAtomic from 'write-file-atomic';
 import { failpoint } from './pipeline/failpoints.js';
+import { isGitMetadataSegment } from '../util.js';
 
 /**
  * Staging for writes that are prepared slowly (network downloads, git
@@ -201,7 +202,7 @@ export async function fingerprintDirectory(dir) {
     const walk = async (abs, rel) => {
         const entries = (await fs.promises.readdir(abs, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
         for (const entry of entries) {
-            if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
+            if (isGitMetadataSegment(entry.name) || isStagingEntryName(entry.name)) continue;
             const childAbs = path.join(abs, entry.name);
             const childRel = rel ? `${rel}/${entry.name}` : entry.name;
             if (entry.isDirectory()) {
